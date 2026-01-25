@@ -1,0 +1,28 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Root BUILD file for Bureau."""
+
+load("@gazelle//:def.bzl", "gazelle")
+
+# Gazelle configuration for Go
+# Run: bazel run //:gazelle
+gazelle(name = "gazelle")
+
+# Update Go dependencies from go.mod
+# Run: bazel run //:gazelle-update-repos
+gazelle(
+    name = "gazelle-update-repos",
+    args = [
+        "-from_file=go.mod",
+        "-to_macro=deps.bzl%go_dependencies",
+        "-prune",
+    ],
+    command = "update-repos",
+)
+
+# Export go.mod for bzlmod
+exports_files([
+    "go.mod",
+    "go.sum",
+])

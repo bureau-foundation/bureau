@@ -1,0 +1,168 @@
+# Bureau .gitignore
+# Comprehensive ignore patterns for Go, Python, Bazel, and tooling
+
+# =============================================================================
+# Bazel
+# =============================================================================
+/bazel-*
+/.bazel-*
+*.runfiles/
+bazel-out/
+.bazelrc.user
+user.bazelrc
+
+# =============================================================================
+# Go
+# =============================================================================
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+*.cover
+*.prof
+
+# Go workspace (if used)
+go.work
+go.work.sum
+
+# =============================================================================
+# Python
+# =============================================================================
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+.eggs/
+wheels/
+*.whl
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.pytype/
+.pyre/
+
+# =============================================================================
+# Editors and IDEs
+# =============================================================================
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# =============================================================================
+# OS files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =============================================================================
+# Bureau-specific
+# =============================================================================
+# Private notes and design scratch
+/.notes/
+# Local configuration overrides
+*.local.yaml
+*.local.json
+config.local.*
+.envrc.local
+
+# Secrets (never commit)
+secrets/
+.secrets/
+*.key
+*.pem
+*.crt
+!*.example.key
+
+# Data directories (runtime data lives outside repo)
+/data/
+/workspaces/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Generated documentation
+/site/
+
+# Local development scripts
+.local/
+
+# =============================================================================
+# Testing and CI
+# =============================================================================
+# Test outputs
+test-results/
+junit*.xml
+
+# Benchmark results (keep committed ones in specific locations)
+*.bench.txt
+
+# =============================================================================
+# Direnv
+# =============================================================================
+.envrc
+!.envrc.example
+.direnv/

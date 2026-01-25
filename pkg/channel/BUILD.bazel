@@ -1,0 +1,11 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "channel",
+    srcs = ["channel.go"],
+    importpath = "github.com/benvanik/bureau/pkg/channel",
+    visibility = ["//visibility:public"],
+)

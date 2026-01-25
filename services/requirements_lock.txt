@@ -1,0 +1,22 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Python requirements lock file for Bazel.
+# Generate with: pip-compile --generate-hashes services/requirements.in
+#
+# Core dependencies for Bureau Python services.
+
+matrix-nio==0.24.0 \
+    --hash=sha256:placeholder
+
+litellm==1.0.0 \
+    --hash=sha256:placeholder
+
+pyyaml==6.0.2 \
+    --hash=sha256:placeholder
+
+python-dotenv==1.0.1 \
+    --hash=sha256:placeholder
+
+httpx==0.27.2 \
+    --hash=sha256:placeholder

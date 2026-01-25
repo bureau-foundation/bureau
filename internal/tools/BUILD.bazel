@@ -1,0 +1,11 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tools",
+    srcs = ["tools.go"],
+    importpath = "github.com/benvanik/bureau/internal/tools",
+    visibility = ["//:__subpackages__"],
+)

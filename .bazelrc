@@ -1,0 +1,78 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Bureau Bazel configuration
+# See https://bazel.build/run/bazelrc for documentation.
+
+# =============================================================================
+# Common settings
+# =============================================================================
+
+# Enable bzlmod (default in Bazel 7+, but explicit for clarity)
+common --enable_bzlmod
+
+# Use a shared, persistent action cache
+build --disk_cache=~/.cache/bazel-disk-cache
+
+# Show timestamps in output
+common --show_timestamps
+
+# Enable colors
+common --color=yes
+
+# =============================================================================
+# Build settings
+# =============================================================================
+
+# Stricter builds
+build --incompatible_strict_action_env
+
+# Stamping for release builds (disabled by default for caching)
+build --nostamp
+build:release --stamp
+
+# =============================================================================
+# Test settings
+# =============================================================================
+
+# Show test output on failure
+test --test_output=errors
+
+# Run tests in verbose mode when explicitly requested
+test:verbose --test_output=all
+
+# Test timeout defaults
+test --test_timeout=60,300,900,3600
+
+# =============================================================================
+# Performance
+# =============================================================================
+
+# Use all available cores
+build --jobs=auto
+
+# Keep going on error to see all failures
+build --keep_going
+
+# =============================================================================
+# Go-specific
+# =============================================================================
+
+# Use the Go SDK from the module
+build --@rules_go//go/config:static=false
+
+# =============================================================================
+# CI configuration
+# =============================================================================
+
+# CI-specific settings (disk_cache inherited from default, mounted by GitHub Actions)
+build:ci --color=no
+build:ci --curses=no
+test:ci --test_output=errors
+
+# =============================================================================
+# Local development overrides
+# =============================================================================
+
+# Import user-specific settings (gitignored)
+try-import %workspace%/user.bazelrc

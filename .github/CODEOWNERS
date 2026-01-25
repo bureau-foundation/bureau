@@ -1,0 +1,26 @@
+# Bureau CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: Ben owns everything
+* @benvanik
+
+# Core infrastructure requires explicit review
+/cmd/ @benvanik
+/internal/ @benvanik
+/pkg/ @benvanik
+
+# Python services can have domain owners (add as team grows)
+/services/watchers/ @benvanik
+/services/agents/ @benvanik
+
+# Security-sensitive areas
+/config/policies/ @benvanik
+/.github/ @benvanik
+
+# Build system
+/MODULE.bazel @benvanik
+/.bazelrc @benvanik
+BUILD.bazel @benvanik
+
+# Documentation - more permissive, but still needs review
+/docs/ @benvanik

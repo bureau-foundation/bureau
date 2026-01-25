@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(bazel *)",
+      "Bash(go *)",
+      "Bash(python *)",
+      "Bash(pytest *)",
+      "Bash(pre-commit *)",
+      "Bash(git *)",
+      "Bash(gh *)"
+    ],
+    "deny": [
+      "Bash(bazel clean*)",
+      "Bash(rm -rf /)*"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary")
+
+go_binary(
+    name = "bureau",
+    srcs = ["main.go"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,55 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bureau Bazel module definition."""
+
+module(
+    name = "bureau",
+    version = "0.0.1",
+)
+
+# =============================================================================
+# Go
+# =============================================================================
+
+bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "gazelle", version = "0.47.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.25.5")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+
+# =============================================================================
+# Python
+# =============================================================================
+
+bazel_dep(name = "rules_python", version = "1.8.2")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.12",
+)
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "pip",
+    python_version = "3.12",
+    requirements_lock = "//services:requirements_lock.txt",
+)
+use_repo(pip, "pip")
+
+# =============================================================================
+# Protocol Buffers
+# =============================================================================
+
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "protobuf", version = "33.4")
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+
+bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1")

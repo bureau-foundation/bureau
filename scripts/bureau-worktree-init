@@ -468,19 +468,10 @@ fi
 
 cd "$WORKTREE_PATH"
 
-# Set up .claude directory.
-if [ -d .claude ]; then
-    rm -rf .claude
-fi
-mkdir -p .claude
-
-# Symlink shared Claude settings.
-if [ -f "$MAIN_WORKTREE/.claude/settings.json" ]; then
-    ln -s "$MAIN_WORKTREE/.claude/settings.json" ".claude/settings.json"
-    info "Symlinked: .claude/settings.json"
-fi
-
 # Create agent-specific settings.
+# The worktree already has .claude/ from the repo (settings.json, styles/, etc.)
+# We just add settings.local.json for agent-specific overrides.
+mkdir -p .claude
 cat > .claude/settings.local.json << EOF
 {
   "\$schema": "https://json.schemastore.org/claude-code-settings.json",

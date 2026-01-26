@@ -82,6 +82,17 @@ repos:
         files: ^services/
 
   # =============================================================================
+  # Shell
+  # =============================================================================
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck --severity=warning
+        language: system
+        types: [shell]
+
+  # =============================================================================
   # Go
   # =============================================================================
   - repo: https://github.com/dnephin/pre-commit-golang
@@ -115,3 +126,15 @@ repos:
     hooks:
       - id: yamllint
         args: [-d, "{extends: relaxed, rules: {line-length: disable}}"]
+
+  # =============================================================================
+  # Beads (local-only, flush to JSONL before commit)
+  # =============================================================================
+  - repo: local
+    hooks:
+      - id: bd-flush
+        name: bd flush
+        entry: bash -c 'command -v bd >/dev/null && bd sync --flush-only || true'
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -40,6 +40,10 @@ jobs:
           restore-keys: |
             pre-commit-${{ runner.os }}-
 
+      # Ensure shellcheck is available (pre-installed on ubuntu-latest, but be explicit)
+      - name: Verify shellcheck
+        run: shellcheck --version
+
       - uses: pre-commit/action@v3.0.1
 
   build:

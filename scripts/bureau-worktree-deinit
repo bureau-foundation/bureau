@@ -1,0 +1,321 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Removes a Bureau agent worktree and archives beads.
+#
+# Usage: bureau-worktree-deinit <worktree-name>
+#
+# Examples:
+#   bureau-worktree-deinit alice-issue-42
+#   bureau-worktree-deinit --force alice-issue-42
+#
+# This removes:
+#   - Git worktree at $BUREAU_ROOT/worktrees/<path>/
+#   - Associated systemd scope (if any agent processes running)
+#
+# This archives (not deletes):
+#   - issues.jsonl (beads), .notes/, AGENT.md, CLAUDE.local.md
+#   - To: $BUREAU_ROOT/archives/<path>/<timestamp>/
+
+set -euo pipefail
+
+# Colors.
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info() { printf "${GREEN}[bureau-worktree]${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}[bureau-worktree]${NC} %s\n" "$1"; }
+error() { printf "${RED}[bureau-worktree]${NC} %s\n" "$1" >&2; }
+header() { printf "${CYAN}[bureau-worktree]${NC} %s\n" "$1"; }
+
+show_help() {
+    cat << 'EOF'
+bureau-worktree-deinit - Remove a Bureau agent worktree
+
+USAGE
+    bureau-worktree-deinit [options] <path>
+
+ARGUMENTS
+    <path>      Worktree path under $BUREAU_ROOT/worktrees/
+                Examples: agent/alice/issue/2, feature/matrix-client
+
+OPTIONS
+    --force         Remove even if there are uncommitted changes
+    --no-archive    Skip archival (destructive)
+    --kill          Kill any running agent processes in the scope
+    -h, --help      Show this help
+
+EXAMPLES
+    bureau-worktree-deinit agent/alice/issue/2
+        Archives beads/.notes and removes worktree
+
+    bureau-worktree-deinit --force --kill agent/alice/issue/2
+        Kills processes, archives, removes worktree
+
+WHAT IT DOES
+    1. Stops any agent processes in the systemd scope (with --kill)
+    2. Archives .beads/, .notes/, AGENT.md, CLAUDE.local.md
+    3. Removes the git worktree
+    4. Prunes stale worktree references
+
+ARCHIVAL
+    Archives mirror the worktree path structure:
+        worktrees/agent/alice/issue/2  →  archives/agent/alice/issue/2
+
+    Contents archived:
+        .beads/         - Issue tracker state
+        .notes/         - Any notes/documentation
+        AGENT.md        - Agent identity and mission
+        CLAUDE.local.md - Agent-specific instructions
+
+    Use --no-archive to skip (destructive).
+
+ENVIRONMENT
+    BUREAU_ROOT           Base directory (default: ~/.cache/bureau)
+                          Worktrees: $BUREAU_ROOT/worktrees/
+                          Archives:  $BUREAU_ROOT/archives/
+
+SEE ALSO
+    bureau-worktree-init    Create new worktree
+EOF
+}
+
+# Parse arguments.
+FORCE=false
+NO_ARCHIVE=false
+KILL_PROCESSES=false
+WORKTREE_NAME=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
+        --no-archive)
+            NO_ARCHIVE=true
+            shift
+            ;;
+        --kill)
+            KILL_PROCESSES=true
+            shift
+            ;;
+        -*)
+            error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            WORKTREE_NAME="$1"
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$WORKTREE_NAME" ]; then
+    error "Worktree name required"
+    show_help
+    exit 1
+fi
+
+# Configuration (same as worktree-init).
+if [ -n "${BUREAU_ROOT:-}" ]; then
+    : # Use env var as-is
+else
+    BUREAU_ROOT="$HOME/.cache/bureau"
+fi
+AGENTS_ROOT="$BUREAU_ROOT/worktrees"
+ARCHIVES_ROOT="$BUREAU_ROOT/archives"
+
+# Find the main repo.
+MAIN_WORKTREE="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [ -z "$MAIN_WORKTREE" ]; then
+    error "Not in a git repository. Run from the bureau repo."
+    exit 1
+fi
+
+# Handle input: can be absolute path, relative path under worktrees/, or branch name.
+if [[ "$WORKTREE_NAME" == /* ]]; then
+    # Absolute path provided.
+    WORKTREE_PATH="$WORKTREE_NAME"
+    # Extract relative path from AGENTS_ROOT for archive naming.
+    WORKTREE_REL_PATH="${WORKTREE_PATH#$AGENTS_ROOT/}"
+elif [[ "$WORKTREE_NAME" == */* ]]; then
+    # Path-like input (e.g., agent/alice/issue/2) - treat as relative to AGENTS_ROOT.
+    WORKTREE_PATH="$AGENTS_ROOT/$WORKTREE_NAME"
+    WORKTREE_REL_PATH="$WORKTREE_NAME"
+else
+    # Simple name - try to find it.
+    WORKTREE_PATH="$AGENTS_ROOT/$WORKTREE_NAME"
+    WORKTREE_REL_PATH="$WORKTREE_NAME"
+fi
+
+# Verify worktree exists.
+if [ ! -d "$WORKTREE_PATH" ]; then
+    error "Worktree not found at $WORKTREE_PATH"
+    exit 1
+fi
+
+# Verify it's a git worktree.
+if [ ! -f "$WORKTREE_PATH/.git" ]; then
+    error "$WORKTREE_PATH does not appear to be a git worktree"
+    error "(Expected .git file pointing to main repo)"
+    exit 1
+fi
+
+# Check for uncommitted changes.
+cd "$WORKTREE_PATH"
+if [ "$FORCE" = false ]; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        error "Worktree has uncommitted changes"
+        error "Commit or stash changes, or use --force to discard"
+        echo ""
+        git status --short
+        exit 1
+    fi
+
+    # Check for untracked files (excluding directories we archive).
+    UNTRACKED=$(git ls-files --others --exclude-standard | grep -vE '^(\.beads|\.notes)/' | head -5)
+    if [ -n "$UNTRACKED" ]; then
+        warn "Worktree has untracked files (will be deleted):"
+        echo "$UNTRACKED"
+        echo ""
+        read -p "Continue anyway? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+fi
+
+header "Removing worktree: $WORKTREE_NAME"
+echo "  Location: $WORKTREE_PATH"
+echo ""
+
+# Kill agent processes if requested.
+if [ "$KILL_PROCESSES" = true ]; then
+    # Try systemd scope first (for agents launched via systemd-run --scope).
+    # Note: bureau-worktree-init doesn't currently create scopes, so this is
+    # primarily for future use or manual systemd-run invocations. The pgrep
+    # fallback below handles the common case.
+    # Escape worktree name for systemd: slashes become dashes in unit names.
+    SCOPE_NAME="bureau-agent-${WORKTREE_NAME//\//-}"
+    SCOPES=$(systemctl list-units --type=scope --state=running --no-legend 2>/dev/null | grep -F "$SCOPE_NAME" | awk '{print $1}' || true)
+
+    if [ -n "$SCOPES" ]; then
+        for scope in $SCOPES; do
+            info "Stopping systemd scope: $scope"
+            systemctl stop "$scope" 2>/dev/null || true
+        done
+    fi
+
+    # Belt and suspenders: kill any processes with worktree in cmdline.
+    PIDS=$(pgrep -f "$WORKTREE_PATH" 2>/dev/null || true)
+    if [ -n "$PIDS" ]; then
+        info "Killing processes in worktree..."
+        for pid in $PIDS; do
+            # Don't kill ourselves.
+            if [ "$pid" != "$$" ]; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        done
+        # Give them a moment to die.
+        sleep 1
+        # Force kill any remaining.
+        for pid in $PIDS; do
+            if [ "$pid" != "$$" ]; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+fi
+
+# Archive beads, notes, and context.
+# Archive path: archives/agent/alice/issue/2/20240115-143022/
+# Timestamp prevents overwriting previous archives on re-init.
+if [ "$NO_ARCHIVE" = false ]; then
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    ARCHIVE_DIR="$ARCHIVES_ROOT/$WORKTREE_REL_PATH/$TIMESTAMP"
+    HAS_CONTENT=false
+
+    # Archive beads JSONL if present.
+    # Only archive issues.jsonl - SQLite DB and daemon files are not needed.
+    if [ -f "$WORKTREE_PATH/.beads/issues.jsonl" ] && [ -s "$WORKTREE_PATH/.beads/issues.jsonl" ]; then
+        mkdir -p "$ARCHIVE_DIR"
+        cp "$WORKTREE_PATH/.beads/issues.jsonl" "$ARCHIVE_DIR/"
+        HAS_CONTENT=true
+
+        # Show bead summary.
+        ISSUE_COUNT=$(wc -l < "$WORKTREE_PATH/.beads/issues.jsonl")
+        OPEN_COUNT=$(grep -c '"status":"open"\|"status":"in_progress"' "$WORKTREE_PATH/.beads/issues.jsonl" || echo "0")
+        CLOSED_COUNT=$(grep -c '"status":"closed"' "$WORKTREE_PATH/.beads/issues.jsonl" || echo "0")
+        info "Archived beads: $OPEN_COUNT open/in-progress, $CLOSED_COUNT closed ($ISSUE_COUNT total)"
+    fi
+
+    # Archive .notes if present.
+    if [ -d "$WORKTREE_PATH/.notes" ]; then
+        mkdir -p "$ARCHIVE_DIR"
+        cp -r "$WORKTREE_PATH/.notes" "$ARCHIVE_DIR/"
+        HAS_CONTENT=true
+        info "Archived .notes"
+    fi
+
+    # Archive AGENT.md for context.
+    if [ -f "$WORKTREE_PATH/AGENT.md" ]; then
+        mkdir -p "$ARCHIVE_DIR"
+        cp "$WORKTREE_PATH/AGENT.md" "$ARCHIVE_DIR/"
+        HAS_CONTENT=true
+    fi
+
+    # Archive CLAUDE.local.md for context.
+    if [ -f "$WORKTREE_PATH/CLAUDE.local.md" ]; then
+        mkdir -p "$ARCHIVE_DIR"
+        cp "$WORKTREE_PATH/CLAUDE.local.md" "$ARCHIVE_DIR/"
+        HAS_CONTENT=true
+    fi
+
+    if [ "$HAS_CONTENT" = true ]; then
+        info "Archived to: $ARCHIVE_DIR"
+    else
+        info "Nothing to archive"
+    fi
+fi
+
+# Remove the worktree.
+cd "$MAIN_WORKTREE"
+
+REMOVE_FLAGS=""
+if [ "$FORCE" = true ]; then
+    REMOVE_FLAGS="--force"
+fi
+
+git worktree remove $REMOVE_FLAGS "$WORKTREE_PATH"
+info "Removed worktree"
+
+# Prune stale references.
+git worktree prune
+info "Pruned stale worktree references"
+
+# Clean up any temp files.
+TEMP_PATTERN="/tmp/bureau-agent-${WORKTREE_NAME}"
+if ls ${TEMP_PATTERN}* &>/dev/null 2>&1; then
+    rm -rf ${TEMP_PATTERN}*
+    info "Cleaned up temp files"
+fi
+
+echo ""
+info "Worktree removed successfully!"
+
+if [ "$NO_ARCHIVE" = false ] && [ -n "${ARCHIVE_DIR:-}" ] && [ -d "$ARCHIVE_DIR" ]; then
+    echo ""
+    echo "Archived to:"
+    echo "  $ARCHIVE_DIR"
+fi

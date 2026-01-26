@@ -1,0 +1,664 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Creates a Bureau agent worktree with proper configuration.
+#
+# Usage: bureau-worktree-init [options] <branch>
+#
+# Examples:
+#   bureau-worktree-init --issue 42 agent/alice/issue-42
+#   bureau-worktree-init --instructions "Fix the login bug" agent/alice/quick-fix
+#   bureau-worktree-init --agent reviewer-bob --style reviewer main
+#
+# Creates:
+#   - Git worktree at ~/src/bureau-agents/<name>/
+#   - .beads/ initialized (pre-populated from issue assignment comment)
+#   - .claude/ with agent-specific settings
+#   - AGENT.md with identity and mission
+#   - .envrc with proxy configuration (when proxies available)
+
+set -euo pipefail
+
+# Colors.
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info() { printf "${GREEN}[bureau-worktree]${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}[bureau-worktree]${NC} %s\n" "$1"; }
+error() { printf "${RED}[bureau-worktree]${NC} %s\n" "$1" >&2; }
+header() { printf "${CYAN}[bureau-worktree]${NC} %s\n" "$1"; }
+
+show_help() {
+    cat << 'EOF'
+bureau-worktree-init - Create a Bureau agent worktree
+
+USAGE
+    bureau-worktree-init [options] <branch>
+
+ARGUMENTS
+    <branch>    Git branch name (e.g., agent/alice/issue-42)
+                Created from main if it doesn't exist
+
+OPTIONS
+    --issue <number>      GitHub issue number (primary mode)
+                          Fetches issue and parses assignment comment
+    --instructions <text> Ad-hoc instructions (for testing/quick tasks)
+    --instructions-file <path>  Read instructions from file
+    --agent <name>        Agent name (default: extracted from branch or issue)
+    --name <name>         Worktree directory name (default: <agent>-<task>)
+    --style <style>       Agent style: developer, reviewer (default: developer)
+    --repo <owner/repo>   GitHub repo (default: from git remote)
+    -h, --help            Show this help
+
+ENVIRONMENT
+    BUREAU_ROOT           Base directory for Bureau (default: auto-detect)
+                          Worktrees dir: \$BUREAU_ROOT/worktrees/
+                          Archives dir: \$BUREAU_ROOT/archives/
+
+EXAMPLES
+    bureau-worktree-init --issue 2 --agent alice
+        Fetches issue #2, derives branch agent/alice/issue/2,
+        creates worktree at worktrees/agent/alice/issue/2/
+
+    bureau-worktree-init --instructions "Fix typo" user/benvanik/fix-typo
+        Ad-hoc user worktree at worktrees/user/benvanik/fix-typo/
+
+    bureau-worktree-init feature/matrix-client
+        Shared feature worktree at worktrees/feature/matrix-client/
+        (branch owner controls merge queue for this feature)
+
+DIRECTORY STRUCTURE
+    Branch names map directly to paths under \$BUREAU_ROOT/worktrees/:
+
+        agent/alice/issue/2     →  worktrees/agent/alice/issue/2/
+        agent/alice/pr/15       →  worktrees/agent/alice/pr/15/
+        user/benvanik/feature   →  worktrees/user/benvanik/feature/
+        feature/matrix-client   →  worktrees/feature/matrix-client/
+
+    Permissions:
+        - Agents can READ their entire agent/<name>/ subtree
+        - Agents can WRITE only their specific worktree
+
+WHAT IT CREATES
+    \$BUREAU_ROOT/worktrees/<branch>/
+    ├── .beads/             Issue tracker (pre-populated from assignment)
+    ├── .claude/
+    │   ├── settings.json       → symlink to main
+    │   └── settings.local.json   agent-specific overrides
+    ├── AGENT.md            Agent identity and mission
+    ├── CLAUDE.local.md     Agent-specific instructions
+    └── .envrc              Environment configuration
+
+GITHUB ISSUE MODE (--issue)
+
+    The issue should have an assignment comment with this format:
+
+        <!-- bureau-assignment -->
+        **Agent**: alice
+        **Style**: developer
+        **Priority**: 2
+
+        ## Tasks
+        - [ ] First task
+        - [ ] Second task
+
+        ## Success Criteria
+        - Criterion one
+        - Criterion two
+        <!-- /bureau-assignment -->
+
+    The script parses this to pre-populate beads and AGENT.md.
+
+WORKFLOW
+    1. File or find a GitHub issue
+    2. Add assignment comment (or have PM agent do it)
+    3. Initialize worktree:
+         bureau-worktree-init --issue 42 agent/alice/issue-42
+    4. Agent works, posts checkpoint comments to issue
+    5. When done:
+         bureau-worktree-deinit alice-issue-42
+
+SEE ALSO
+    bureau-worktree-deinit    Remove worktree and archive beads
+EOF
+}
+
+# Parse arguments.
+AGENT=""
+ISSUE_NUMBER=""
+INSTRUCTIONS=""
+INSTRUCTIONS_FILE=""
+WORKTREE_NAME=""
+STYLE="developer"
+REPO=""
+BRANCH=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --agent)
+            AGENT="$2"
+            shift 2
+            ;;
+        --issue)
+            ISSUE_NUMBER="$2"
+            shift 2
+            ;;
+        --instructions)
+            INSTRUCTIONS="$2"
+            shift 2
+            ;;
+        --instructions-file)
+            INSTRUCTIONS_FILE="$2"
+            shift 2
+            ;;
+        --name)
+            WORKTREE_NAME="$2"
+            shift 2
+            ;;
+        --style)
+            STYLE="$2"
+            shift 2
+            ;;
+        --repo)
+            REPO="$2"
+            shift 2
+            ;;
+        -*)
+            error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            BRANCH="$1"
+            shift
+            ;;
+    esac
+done
+
+# Derive branch from --agent + --issue if not explicitly provided.
+if [ -z "$BRANCH" ]; then
+    if [ -n "$AGENT" ] && [ -n "$ISSUE_NUMBER" ]; then
+        BRANCH="agent/$AGENT/issue/$ISSUE_NUMBER"
+        info "Derived branch: $BRANCH"
+    else
+        error "Branch name required (or use --agent + --issue to derive it)"
+        show_help
+        exit 1
+    fi
+fi
+
+# Validate required tools.
+MISSING_TOOLS=()
+command -v git &>/dev/null || MISSING_TOOLS+=("git")
+command -v gh &>/dev/null || MISSING_TOOLS+=("gh (GitHub CLI)")
+command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
+command -v bd &>/dev/null || MISSING_TOOLS+=("bd (beads)")
+
+if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+    error "Missing required tools:"
+    for tool in "${MISSING_TOOLS[@]}"; do
+        error "  - $tool"
+    done
+    error ""
+    error "Agent cannot operate without these tools installed."
+    exit 1
+fi
+
+# Configuration.
+# Detection order:
+#   1. BUREAU_ROOT env var (for explicit override)
+#   2. Default to ~/.cache/bureau/
+# The main repo is detected separately from git remote.
+if [ -n "${BUREAU_ROOT:-}" ]; then
+    : # Use env var as-is
+else
+    BUREAU_ROOT="$HOME/.cache/bureau"
+fi
+AGENTS_ROOT="$BUREAU_ROOT/worktrees"
+ARCHIVES_ROOT="$BUREAU_ROOT/archives"
+
+# Find the main repo (where we're running from, or via git).
+MAIN_WORKTREE="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [ -z "$MAIN_WORKTREE" ]; then
+    error "Not in a git repository. Run from the bureau repo."
+    exit 1
+fi
+
+# Verify we're in a git repo (MAIN_WORKTREE already validated above).
+
+# Extract agent name from branch if not provided.
+# Patterns:
+#   agent/<name>/issue/<n>  → agent name is <name>
+#   agent/<name>/pr/<n>     → agent name is <name>
+#   user/<name>/...         → user worktree (no agent)
+#   feature/<name>/...      → shared worktree (no agent)
+if [ -z "$AGENT" ]; then
+    if [[ "$BRANCH" =~ ^agent/([^/]+)/ ]]; then
+        AGENT="${BASH_REMATCH[1]}"
+    fi
+    # user/ and feature/ branches don't have an agent name
+fi
+
+# Worktree path mirrors branch structure exactly.
+# branch: agent/alice/issue/2 → worktrees/agent/alice/issue/2/
+WORKTREE_PATH="$AGENTS_ROOT/$BRANCH"
+
+# For display purposes, extract a short name.
+WORKTREE_NAME=$(basename "$BRANCH")
+
+# Check if worktree already exists.
+if [ -d "$WORKTREE_PATH" ]; then
+    error "Worktree already exists at $WORKTREE_PATH"
+    error "Use bureau-worktree-deinit to remove it first."
+    exit 1
+fi
+
+# Determine repo from git remote if not specified.
+if [ -z "$REPO" ]; then
+    REPO=$(cd "$MAIN_WORKTREE" && gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)
+    if [ -z "$REPO" ]; then
+        error "Could not determine GitHub repo. Use --repo owner/repo"
+        exit 1
+    fi
+fi
+
+# Load instructions from various sources.
+MISSION=""
+ISSUE_URL=""
+ISSUE_TITLE=""
+ASSIGNMENT_TASKS=()
+SUCCESS_CRITERIA=()
+
+# Priority: --instructions > --instructions-file > --issue
+if [ -n "$INSTRUCTIONS" ]; then
+    MISSION="$INSTRUCTIONS"
+    info "Using ad-hoc instructions"
+
+elif [ -n "$INSTRUCTIONS_FILE" ]; then
+    if [ ! -f "$INSTRUCTIONS_FILE" ]; then
+        error "Instructions file not found: $INSTRUCTIONS_FILE"
+        exit 1
+    fi
+    MISSION=$(cat "$INSTRUCTIONS_FILE")
+    info "Loaded instructions from: $INSTRUCTIONS_FILE"
+
+elif [ -n "$ISSUE_NUMBER" ]; then
+    info "Fetching issue #$ISSUE_NUMBER from $REPO..."
+
+    # Fetch issue details.
+    ISSUE_JSON=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER" 2>/dev/null || true)
+    if [ -z "$ISSUE_JSON" ] || [ "$ISSUE_JSON" = "null" ]; then
+        error "Could not fetch issue #$ISSUE_NUMBER from $REPO"
+        exit 1
+    fi
+
+    ISSUE_URL=$(echo "$ISSUE_JSON" | jq -r '.html_url')
+    ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
+    ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
+
+    # Find assignment comment (<!-- bureau-assignment --> ... <!-- /bureau-assignment -->).
+    ASSIGNMENT_COMMENT=""
+    ASSIGNMENT_AUTHOR=""
+
+    # Check issue body first for assignment block.
+    if echo "$ISSUE_BODY" | grep -q '<!-- bureau-assignment -->'; then
+        ASSIGNMENT_COMMENT="$ISSUE_BODY"
+        ASSIGNMENT_AUTHOR=$(echo "$ISSUE_JSON" | jq -r '.user.login')
+    else
+        # Search comments for assignment block.
+        # Use --paginate to fetch all comments (default is 30 per page).
+        # Use single jq filter instead of O(N) loop - last assignment wins if multiple.
+        ASSIGNMENT_OBJ=$(gh api --paginate "repos/$REPO/issues/$ISSUE_NUMBER/comments" 2>/dev/null \
+            | jq -s 'add // []
+                | [.[] | select(.body | contains("<!-- bureau-assignment -->"))]
+                | last
+                | if . then {body: .body, author: .user.login} else null end' \
+            || echo "null")
+
+        if [ "$ASSIGNMENT_OBJ" != "null" ]; then
+            ASSIGNMENT_COMMENT=$(echo "$ASSIGNMENT_OBJ" | jq -r '.body')
+            ASSIGNMENT_AUTHOR=$(echo "$ASSIGNMENT_OBJ" | jq -r '.author')
+        fi
+    fi
+
+    if [ -n "$ASSIGNMENT_COMMENT" ]; then
+        info "Found assignment from @$ASSIGNMENT_AUTHOR"
+
+        # Validate author has write access to the repo.
+        # gh api returns exit 0 for 204 (is collaborator), non-zero for 404 (not collaborator).
+        if ! gh api "repos/$REPO/collaborators/$ASSIGNMENT_AUTHOR" --silent 2>/dev/null; then
+            error "Assignment author @$ASSIGNMENT_AUTHOR is not a repo collaborator"
+            error "Only users with write access can create assignments"
+            exit 1
+        fi
+        info "Verified @$ASSIGNMENT_AUTHOR has write access"
+
+        # Parse assignment comment.
+        # Extract agent name if specified.
+        PARSED_AGENT=$(echo "$ASSIGNMENT_COMMENT" | grep -oP '\*\*Agent\*\*:\s*\K\S+' || true)
+        if [ -n "$PARSED_AGENT" ] && [ -z "$AGENT" ]; then
+            AGENT="$PARSED_AGENT"
+        fi
+
+        # Extract style if specified.
+        PARSED_STYLE=$(echo "$ASSIGNMENT_COMMENT" | grep -oP '\*\*Style\*\*:\s*\K\S+' || true)
+        if [ -n "$PARSED_STYLE" ]; then
+            STYLE="$PARSED_STYLE"
+        fi
+
+        # Extract tasks (lines starting with - [ ]).
+        while IFS= read -r line; do
+            TASK=$(echo "$line" | sed 's/^- \[ \] //')
+            ASSIGNMENT_TASKS+=("$TASK")
+        done < <(echo "$ASSIGNMENT_COMMENT" | grep -E '^- \[ \]' || true)
+
+        # Extract success criteria (lines after "## Success Criteria").
+        IN_CRITERIA=false
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^##[[:space:]]*Success ]]; then
+                IN_CRITERIA=true
+                continue
+            fi
+            if [[ "$line" =~ ^## ]] && [ "$IN_CRITERIA" = true ]; then
+                break
+            fi
+            if [ "$IN_CRITERIA" = true ] && [[ "$line" =~ ^- ]]; then
+                CRITERION=$(echo "$line" | sed 's/^- //')
+                SUCCESS_CRITERIA+=("$CRITERION")
+            fi
+        done < <(echo "$ASSIGNMENT_COMMENT")
+
+        # Build mission from issue + assignment.
+        MISSION="Issue #$ISSUE_NUMBER: $ISSUE_TITLE
+
+$ISSUE_BODY"
+
+        if [ ${#ASSIGNMENT_TASKS[@]} -gt 0 ]; then
+            MISSION="$MISSION
+
+## Assigned Tasks
+
+"
+            for task in "${ASSIGNMENT_TASKS[@]}"; do
+                MISSION="$MISSION- $task
+"
+            done
+        fi
+
+        if [ ${#SUCCESS_CRITERIA[@]} -gt 0 ]; then
+            MISSION="$MISSION
+## Success Criteria
+
+"
+            for criterion in "${SUCCESS_CRITERIA[@]}"; do
+                MISSION="$MISSION- $criterion
+"
+            done
+        fi
+    else
+        # No assignment comment - use issue body as instructions.
+        warn "No assignment comment found on issue #$ISSUE_NUMBER"
+        warn "Using issue body as instructions"
+        MISSION="Issue #$ISSUE_NUMBER: $ISSUE_TITLE
+
+$ISSUE_BODY"
+    fi
+fi
+
+# Default mission if nothing provided.
+if [ -z "$MISSION" ]; then
+    MISSION="Working on branch $BRANCH."
+fi
+
+header "Creating agent worktree..."
+echo "  Agent: $AGENT"
+echo "  Style: $STYLE"
+echo "  Branch: $BRANCH"
+echo "  Location: $WORKTREE_PATH"
+if [ -n "$ISSUE_URL" ]; then
+    echo "  Issue: $ISSUE_URL"
+fi
+if [ ${#ASSIGNMENT_TASKS[@]} -gt 0 ]; then
+    echo "  Tasks: ${#ASSIGNMENT_TASKS[@]}"
+fi
+echo ""
+
+# Create agents directory if needed.
+mkdir -p "$AGENTS_ROOT"
+mkdir -p "$ARCHIVES_ROOT"
+
+# Create the worktree.
+cd "$MAIN_WORKTREE"
+
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    # Branch exists locally.
+    git worktree add "$WORKTREE_PATH" "$BRANCH"
+elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    # Branch exists on remote - track it.
+    git worktree add --track -b "$BRANCH" "$WORKTREE_PATH" "origin/$BRANCH"
+else
+    # Branch doesn't exist - create from default branch.
+    # Detect default branch (supports main, master, trunk, etc.)
+    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    if [ -z "$DEFAULT_BRANCH" ]; then
+        # Fallback: try common names.
+        for candidate in main master trunk develop; do
+            if git show-ref --verify --quiet "refs/remotes/origin/$candidate"; then
+                DEFAULT_BRANCH="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$DEFAULT_BRANCH" ]; then
+        error "Cannot determine default branch"
+        error "Set origin/HEAD with: git remote set-head origin --auto"
+        exit 1
+    fi
+    info "Branch '$BRANCH' doesn't exist, creating from $DEFAULT_BRANCH..."
+    git worktree add -b "$BRANCH" "$WORKTREE_PATH" "$DEFAULT_BRANCH"
+fi
+
+cd "$WORKTREE_PATH"
+
+# Set up .claude directory.
+if [ -d .claude ]; then
+    rm -rf .claude
+fi
+mkdir -p .claude
+
+# Symlink shared Claude settings.
+if [ -f "$MAIN_WORKTREE/.claude/settings.json" ]; then
+    ln -s "$MAIN_WORKTREE/.claude/settings.json" ".claude/settings.json"
+    info "Symlinked: .claude/settings.json"
+fi
+
+# Create agent-specific settings.
+cat > .claude/settings.local.json << EOF
+{
+  "\$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Edit($WORKTREE_PATH)",
+      "Edit(/tmp)"
+    ]
+  }
+}
+EOF
+info "Created: .claude/settings.local.json"
+
+# Create CLAUDE.local.md with agent-specific instructions.
+# (CLAUDE.md is already in the repo and will be in the worktree)
+# Include beads workflow instructions from bd setup, filtering out sync-related lines.
+# Bureau uses local-only beads - no git sync.
+BEADS_INSTRUCTIONS=$(bd setup claude --print 2>/dev/null | grep -vE '(bd sync|auto-sync|git remote|hooks auto-sync)' || echo "")
+BEADS_INSTRUCTIONS="## Beads (Local-Only)
+
+> **Note**: Beads are local to this worktree. Do NOT run \`bd sync\` - there is no remote.
+> Your beads will be archived when this worktree is removed.
+
+$BEADS_INSTRUCTIONS"
+
+if [ -n "$AGENT" ]; then
+    # Agent worktree - include read permissions info
+    cat > CLAUDE.local.md << CLAUDE_LOCAL_EOF
+# Agent-Local Instructions
+
+You are agent **$AGENT** working in an isolated worktree. Read AGENT.md for your mission.
+
+## Your Environment
+
+- This is a git worktree at: \`$WORKTREE_PATH\`
+- Your branch: \`$BRANCH\`
+
+## Permissions
+
+You can **read**:
+- Your worktrees: \`$AGENTS_ROOT/agent/$AGENT/*\`
+- Shared feature worktrees: \`$AGENTS_ROOT/feature/*\`
+
+You can **write**:
+- Only this worktree: \`$WORKTREE_PATH\`
+
+## Agent Workflow
+
+1. Read AGENT.md to understand your mission
+2. Check beads: \`bd ready\`
+3. Claim a task: \`bd update <id> --status=in_progress\`
+4. Do the work
+5. Mark complete: \`bd close <id>\`
+6. Test your changes: \`bazel test //...\`
+7. When ready, create a PR: \`gh pr create\`
+8. Post checkpoint comments on the issue to report progress
+
+## Boundaries
+
+- Stay focused on your assigned tasks
+- Do not modify files outside this worktree
+- If blocked, post a comment on the issue asking for help
+
+---
+
+$BEADS_INSTRUCTIONS
+CLAUDE_LOCAL_EOF
+else
+    # Non-agent worktree (user/feature)
+    cat > CLAUDE.local.md << CLAUDE_LOCAL_EOF
+# Worktree-Local Instructions
+
+This is a worktree at: \`$WORKTREE_PATH\`
+Branch: \`$BRANCH\`
+
+## Workflow
+
+1. Check beads: \`bd ready\`
+2. Claim a task: \`bd update <id> --status=in_progress\`
+3. Do the work
+4. Mark complete: \`bd close <id>\`
+5. Test changes: \`bazel test //...\`
+6. Create PR when ready: \`gh pr create\`
+
+---
+
+$BEADS_INSTRUCTIONS
+CLAUDE_LOCAL_EOF
+fi
+info "Created: CLAUDE.local.md"
+
+# Create AGENT.md with identity.
+cat > AGENT.md << EOF
+# Agent Identity
+
+**Name**: $AGENT
+**Style**: $STYLE
+**Worktree**: $WORKTREE_PATH
+**Created**: $(date -Iseconds)
+
+## Branch
+
+\`$BRANCH\`
+
+## Mission
+
+$MISSION
+
+## Boundaries
+
+- You are working in this worktree only
+- You may create PRs from the \`$BRANCH\` branch
+- You may NOT push to \`main\` or other agent branches
+- All GitHub operations go through the Bureau proxy (when available)
+
+## Process
+
+1. Check your beads (\`bd ready\`) for tasks
+2. Work through tasks in priority order
+3. Update beads as you progress (\`bd update\`)
+4. Create PR when implementation complete
+5. Respond to review feedback
+6. Signal completion when PR merges
+
+## Resources
+
+EOF
+
+if [ -n "$ISSUE_URL" ]; then
+    echo "- GitHub Issue: $ISSUE_URL" >> AGENT.md
+fi
+echo "- Branch: \`$BRANCH\`" >> AGENT.md
+
+info "Created: AGENT.md"
+
+# Initialize beads in sandbox mode (local only, no daemon, no git integration).
+# Required tools validated at start.
+bd init --prefix bead --skip-hooks --skip-merge-driver --setup-exclude --sandbox -q
+info "Initialized beads: .beads/ (prefix: bead-*)"
+
+# Pre-populate beads from assignment tasks.
+if [ ${#ASSIGNMENT_TASKS[@]} -gt 0 ]; then
+    for task in "${ASSIGNMENT_TASKS[@]}"; do
+        bd create "$task" --quiet
+        info "  Created bead: $task"
+    done
+    info "Created ${#ASSIGNMENT_TASKS[@]} beads from assignment"
+fi
+
+# Create .envrc for direnv (minimal, no external dependencies).
+cat > .envrc << EOF
+# Bureau agent worktree environment.
+# Minimal setup - no external dotfiles dependencies.
+
+# Bureau root (set by worktree-init).
+export BUREAU_ROOT="$BUREAU_ROOT"
+
+# Agent worktree path.
+export BUREAU_WORKTREE="\$(pwd)"
+
+# Add bureau tools to PATH when available.
+if [ -d "\${BUREAU_ROOT}/bin" ]; then
+    PATH="\${BUREAU_ROOT}/bin:\$PATH"
+fi
+EOF
+
+# Allow direnv if available (optional for agents).
+if command -v direnv &>/dev/null; then
+    direnv allow 2>/dev/null || true
+fi
+
+echo ""
+info "Worktree created successfully!"
+echo ""
+echo "Next steps:"
+echo "  cd $WORKTREE_PATH"
+echo "  # Review AGENT.md for your mission"
+echo "  bd ready        # Check your tasks"
+echo ""
+echo "When done:"
+echo "  bureau-worktree-deinit $WORKTREE_NAME"

@@ -1,0 +1,235 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Creates a draft PR and links it to a bead for tracking.
+#
+# Usage: bureau-pr-create --bead <bead-id> [options]
+#
+# Examples:
+#   bureau-pr-create --bead bead-xyz
+#   bureau-pr-create --bead bead-xyz --title "Fix bug" --body "Description"
+
+set -euo pipefail
+
+# Colors.
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info() { printf "${GREEN}✓${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}⚠${NC} %s\n" "$1"; }
+error() { printf "${RED}✗${NC} %s\n" "$1" >&2; }
+step() { printf "${CYAN}→${NC} %s\n" "$1"; }
+
+show_help() {
+    cat << 'EOF'
+bureau-pr-create - Create a draft PR linked to a bead
+
+USAGE
+    bureau-pr-create --bead <bead-id> [options]
+
+REQUIRED
+    --bead <id>     Bead ID to link this PR to (e.g., bead-xyz, 6-1)
+
+OPTIONS
+    --title <text>  PR title (default: derived from bead title)
+    --body <text>   PR body (default: generated from bead)
+    --base <branch> Base branch (default: main)
+    -h, --help      Show this help
+
+WHAT IT DOES
+    1. Validates the bead exists and is in-progress
+    2. Creates a draft PR via 'gh pr create --draft'
+    3. Creates a tracking bead with external-ref to the PR
+    4. Links the PR bead to block the original task
+    5. Outputs next steps for the agent
+
+WHY DRAFT?
+    PRs are created as drafts so CI can run before review.
+    When CI passes, the PR should be marked ready for review.
+    (Future: hooks will automate this transition)
+
+EXAMPLES
+    bureau-pr-create --bead bead-xyz
+        Creates PR with title/body from bead, links it
+
+    bureau-pr-create --bead 6-1 --title "Fix CI" --body "Adds placeholder test"
+        Creates PR with custom title/body
+
+OUTPUT
+    On success, prints:
+        ✓ Created PR #43 (draft): https://github.com/owner/repo/pull/43
+
+        Next steps:
+        - CI will run automatically
+        - When CI passes, mark ready: gh pr ready
+        - You'll be notified when review comments arrive
+
+SEE ALSO
+    bureau-worktree-list    List worktrees with PR status
+    bd show                 Show bead details
+EOF
+}
+
+# Parse arguments.
+BEAD_ID=""
+PR_TITLE=""
+PR_BODY=""
+BASE_BRANCH=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --bead)
+            BEAD_ID="$2"
+            shift 2
+            ;;
+        --title)
+            PR_TITLE="$2"
+            shift 2
+            ;;
+        --body)
+            PR_BODY="$2"
+            shift 2
+            ;;
+        --base)
+            BASE_BRANCH="$2"
+            shift 2
+            ;;
+        -*)
+            error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            error "Unexpected argument: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# Validate required arguments.
+if [ -z "$BEAD_ID" ]; then
+    error "Missing required --bead argument"
+    echo ""
+    show_help
+    exit 1
+fi
+
+# Check we're in a git repo.
+if ! git rev-parse --git-dir &>/dev/null; then
+    error "Not in a git repository"
+    exit 1
+fi
+
+# Check gh is available.
+if ! command -v gh &>/dev/null; then
+    error "GitHub CLI (gh) not found. Install from https://cli.github.com"
+    exit 1
+fi
+
+# Check bd is available.
+if ! command -v bd &>/dev/null; then
+    error "Beads CLI (bd) not found"
+    exit 1
+fi
+
+# Validate bead exists.
+step "Validating bead $BEAD_ID..."
+if ! bd show "$BEAD_ID" &>/dev/null; then
+    error "Bead $BEAD_ID not found"
+    exit 1
+fi
+
+# Get bead info.
+BEAD_TITLE=$(bd show "$BEAD_ID" --json 2>/dev/null | jq -r '.title // empty' || bd show "$BEAD_ID" 2>/dev/null | head -1 | sed 's/^[^:]*: //')
+
+# Use bead title for PR title if not specified.
+if [ -z "$PR_TITLE" ]; then
+    PR_TITLE="$BEAD_TITLE"
+fi
+
+# Generate PR body if not specified.
+if [ -z "$PR_BODY" ]; then
+    PR_BODY="## Summary
+
+Implements $BEAD_ID: $BEAD_TITLE
+
+## Test plan
+
+- [ ] Tests pass
+- [ ] Manual verification complete"
+fi
+
+# Determine base branch.
+if [ -z "$BASE_BRANCH" ]; then
+    # Try to detect default branch.
+    BASE_BRANCH=$(git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}' || echo "main")
+fi
+
+# Get repo info for external-ref.
+REPO_URL=$(gh repo view --json url -q '.url' 2>/dev/null || echo "")
+if [ -z "$REPO_URL" ]; then
+    error "Could not determine repository URL"
+    exit 1
+fi
+
+# Extract owner/repo from URL.
+REPO_SLUG="${REPO_URL#https://github.com/}"
+
+step "Creating draft PR..."
+
+# Create the draft PR.
+if ! PR_URL=$(gh pr create \
+    --draft \
+    --title "$PR_TITLE" \
+    --body "$PR_BODY" \
+    --base "$BASE_BRANCH" \
+    2>&1); then
+    error "Failed to create PR"
+    echo "$PR_URL"
+    exit 1
+fi
+
+# Extract PR number from URL.
+PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+
+if [ -z "$PR_NUMBER" ]; then
+    error "Could not extract PR number from: $PR_URL"
+    exit 1
+fi
+
+info "Created PR #$PR_NUMBER (draft): $PR_URL"
+
+# Create a tracking bead for this PR.
+step "Linking PR to bead $BEAD_ID..."
+
+# Create the PR tracking bead.
+PR_BEAD_ID=$(bd create "PR #$PR_NUMBER: $PR_TITLE" \
+    --type task \
+    --external-ref "gh:pr:$REPO_SLUG#$PR_NUMBER" \
+    --deps "blocks:$BEAD_ID" \
+    -q 2>/dev/null || echo "")
+
+if [ -n "$PR_BEAD_ID" ]; then
+    info "Created tracking bead: $PR_BEAD_ID"
+else
+    warn "Could not create tracking bead (PR still created)"
+fi
+
+# Output next steps for the agent.
+echo ""
+printf '%s%s%s\n' "$BOLD" "Next steps:" "$NC"
+echo "- CI will run automatically on the draft PR"
+echo "- When CI passes, mark ready for review: gh pr ready"
+echo "- You'll be notified when review comments arrive"
+echo ""
+printf '%s%s%s %s\n' "$CYAN" "PR URL:" "$NC" "$PR_URL"

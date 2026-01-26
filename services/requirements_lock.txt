@@ -9,8 +9,9 @@
 matrix-nio==0.24.0 \
     --hash=sha256:placeholder
 
-litellm==1.0.0 \
-    --hash=sha256:placeholder
+litellm==1.61.15 \
+    --hash=sha256:977fd4e37491dd5adf14ed7c4d55bd099dd5ee7d40b8b8af5eba515d448013bb \
+    --hash=sha256:f10ff155d8bca6cb0e2a1cc8d9aedbe6b390f73b30b9603e9cadb66b11472d44
 
 pyyaml==6.0.2 \
     --hash=sha256:placeholder

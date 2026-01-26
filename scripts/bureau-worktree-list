@@ -4,12 +4,12 @@
 
 # Lists active Bureau agent worktrees and their status.
 #
-# Usage: bureau-worktree-list [options]
+# Usage: bureau-worktree-list [options] [pattern...]
 #
 # Examples:
 #   bureau-worktree-list
-#   bureau-worktree-list --quiet
-#   bureau-worktree-list --json
+#   bureau-worktree-list agent/*
+#   bureau-worktree-list --json agent/alice/*
 
 set -euo pipefail
 
@@ -31,7 +31,11 @@ show_help() {
 bureau-worktree-list - List active Bureau agent worktrees
 
 USAGE
-    bureau-worktree-list [options]
+    bureau-worktree-list [options] [pattern...]
+
+ARGUMENTS
+    pattern         Glob pattern to filter worktrees (can specify multiple)
+                    Patterns match against relative worktree path.
 
 OPTIONS
     -q, --quiet     Minimal output (just paths, no header)
@@ -52,11 +56,17 @@ EXAMPLES
     bureau-worktree-list
         Shows all worktrees with status
 
-    bureau-worktree-list --quiet
-        Just paths, one per line (for scripting)
+    bureau-worktree-list agent/*
+        Shows all agent worktrees
 
-    bureau-worktree-list --json
-        JSON output for agents (pipe to jq, etc.)
+    bureau-worktree-list agent/alice/*
+        Shows all of alice's worktrees
+
+    bureau-worktree-list agent/*/issue/*
+        Shows all issue-based worktrees
+
+    bureau-worktree-list --json agent/*
+        JSON output filtered to agents
 
 SEE ALSO
     bureau-worktree-init      Create new worktree
@@ -67,6 +77,7 @@ EOF
 # Parse arguments.
 QUIET=false
 JSON_OUTPUT=false
+declare -a FILTERS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -88,12 +99,31 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            error "Unexpected argument: $1"
-            show_help
-            exit 1
+            # Positional argument = filter pattern.
+            FILTERS+=("$1")
+            shift
             ;;
     esac
 done
+
+# Check if path matches any filter pattern (glob-style).
+# Returns 0 (true) if matches, 1 (false) otherwise.
+matches_filter() {
+    local path="$1"
+    # No filters = match everything.
+    if [ ${#FILTERS[@]} -eq 0 ]; then
+        return 0
+    fi
+    # Match against any pattern (OR semantics).
+    for pattern in "${FILTERS[@]}"; do
+        # Use bash extended globbing for pattern matching.
+        # shellcheck disable=SC2053
+        if [[ "$path" == $pattern ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 # Configuration (same as other worktree scripts).
 if [ -n "${BUREAU_ROOT:-}" ]; then
@@ -191,6 +221,11 @@ for worktree_path in "${WORKTREE_PATHS[@]}"; do
     # Get relative path from WORKTREES_ROOT.
     relative_path="${worktree_path#"$WORKTREES_ROOT"/}"
 
+    # Apply filter if patterns specified.
+    if ! matches_filter "$relative_path"; then
+        continue
+    fi
+
     if [ "$QUIET" = true ]; then
         echo "$relative_path"
         continue
@@ -217,6 +252,50 @@ if [ "$QUIET" = true ]; then
     exit 0
 fi
 
+# Get beads summary for a worktree as JSON fragment.
+# Returns: {"total": N, "open": N, "inProgress": N, "closed": N}
+get_beads_summary() {
+    local worktree_path="$1"
+    local beads_file="$worktree_path/.beads/issues.jsonl"
+
+    if [ ! -f "$beads_file" ] || [ ! -s "$beads_file" ]; then
+        echo '{"total": 0, "open": 0, "inProgress": 0, "closed": 0}'
+        return
+    fi
+
+    # Count beads by status using jq.
+    jq -s '{
+        total: length,
+        open: [.[] | select(.status == "open")] | length,
+        inProgress: [.[] | select(.status == "in_progress")] | length,
+        closed: [.[] | select(.status == "closed")] | length
+    }' "$beads_file" 2>/dev/null || echo '{"total": 0, "open": 0, "inProgress": 0, "closed": 0}'
+}
+
+# Get source info from AGENT.md as JSON fragment.
+# Returns: {"type": "github_issue", "url": "..."} or null
+get_source_info() {
+    local worktree_path="$1"
+    local agent_file="$worktree_path/AGENT.md"
+
+    if [ ! -f "$agent_file" ]; then
+        echo "null"
+        return
+    fi
+
+    # Look for "GitHub Issue:" line.
+    local issue_url
+    issue_url=$(grep -m1 "^- GitHub Issue:" "$agent_file" 2>/dev/null | sed 's/^- GitHub Issue: *//' | tr -d ' ')
+
+    if [ -n "$issue_url" ]; then
+        # Escape for JSON.
+        issue_url=$(printf '%s' "$issue_url" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        echo "{\"type\": \"github_issue\", \"url\": \"$issue_url\"}"
+    else
+        echo "null"
+    fi
+}
+
 # JSON output mode.
 if [ "$JSON_OUTPUT" = true ]; then
     echo "["
@@ -233,8 +312,13 @@ if [ "$JSON_OUTPUT" = true ]; then
         branch_json=$(printf '%s' "$branch" | sed 's/\\/\\\\/g; s/"/\\"/g')
         path_json=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
         activity_json=$(printf '%s' "$activity" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s"}' \
-            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json"
+
+        # Get beads summary and source info.
+        beads_json=$(get_beads_summary "$path")
+        source_json=$(get_source_info "$path")
+
+        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s", "beads": %s, "source": %s}' \
+            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json" "$beads_json" "$source_json"
     done
     echo ""
     echo "]"

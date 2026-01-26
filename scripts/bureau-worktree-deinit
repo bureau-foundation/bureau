@@ -47,6 +47,8 @@ OPTIONS
     --force         Remove even if there are uncommitted changes
     --no-archive    Skip archival (destructive)
     --kill          Kill any running agent processes in the scope
+    --keep-branch   Keep the local branch (for takeover scenarios)
+    --delete-branch Always delete the local branch
     -h, --help      Show this help
 
 EXAMPLES
@@ -61,6 +63,19 @@ WHAT IT DOES
     2. Archives .beads/, .notes/, AGENT.md, CLAUDE.local.md
     3. Removes the git worktree
     4. Prunes stale worktree references
+    5. Deletes local branch if remote is gone (PR merged/closed)
+
+BRANCH CLEANUP
+    By default, the local branch is deleted if its remote tracking branch
+    is gone (shown as "gone" in git branch -vv). This happens after a PR
+    is merged or closed and GitHub deletes the remote branch.
+
+    Branches are kept if:
+        - Remote branch still exists (PR still open)
+        - Branch was never pushed (may have unpushed work)
+        - --keep-branch flag is passed
+
+    Use --delete-branch to force deletion regardless of remote status.
 
 ARCHIVAL
     Archives mirror the worktree path structure:
@@ -88,6 +103,8 @@ EOF
 FORCE=false
 NO_ARCHIVE=false
 KILL_PROCESSES=false
+KEEP_BRANCH=false
+DELETE_BRANCH=false
 WORKTREE_NAME=""
 
 while [[ $# -gt 0 ]]; do
@@ -106,6 +123,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --kill)
             KILL_PROCESSES=true
+            shift
+            ;;
+        --keep-branch)
+            KEEP_BRANCH=true
+            shift
+            ;;
+        --delete-branch)
+            DELETE_BRANCH=true
             shift
             ;;
         -*)
@@ -147,7 +172,7 @@ if [[ "$WORKTREE_NAME" == /* ]]; then
     # Absolute path provided.
     WORKTREE_PATH="$WORKTREE_NAME"
     # Extract relative path from AGENTS_ROOT for archive naming.
-    WORKTREE_REL_PATH="${WORKTREE_PATH#$AGENTS_ROOT/}"
+    WORKTREE_REL_PATH="${WORKTREE_PATH#"$AGENTS_ROOT"/}"
 elif [[ "$WORKTREE_NAME" == */* ]]; then
     # Path-like input (e.g., agent/alice/issue/2) - treat as relative to AGENTS_ROOT.
     WORKTREE_PATH="$AGENTS_ROOT/$WORKTREE_NAME"
@@ -170,6 +195,9 @@ if [ ! -f "$WORKTREE_PATH/.git" ]; then
     error "(Expected .git file pointing to main repo)"
     exit 1
 fi
+
+# Get the branch name before we start (needed for cleanup later).
+BRANCH=$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
 # Check for uncommitted changes.
 cd "$WORKTREE_PATH"
@@ -304,10 +332,43 @@ info "Removed worktree"
 git worktree prune
 info "Pruned stale worktree references"
 
+# Clean up local branch if appropriate.
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
+    if [ "$KEEP_BRANCH" = true ]; then
+        info "Keeping local branch: $BRANCH (--keep-branch)"
+    elif [ "$DELETE_BRANCH" = true ]; then
+        if git branch -D "$BRANCH" 2>/dev/null; then
+            info "Deleted local branch: $BRANCH (--delete-branch)"
+        fi
+    else
+        # Check if branch tracking shows "gone" (remote was deleted after PR merge/close).
+        # Format: "  branch-name abc123 [origin/branch-name: gone] commit message"
+        TRACKING_INFO=$(git branch -vv 2>/dev/null | grep -E "^[* ] ${BRANCH} " || echo "")
+        if [[ "$TRACKING_INFO" == *": gone]"* ]]; then
+            # Remote was deleted - PR was merged or closed.
+            # Try -d first (safe delete), fall back to -D for squash merges.
+            if git branch -d "$BRANCH" 2>/dev/null; then
+                info "Deleted local branch: $BRANCH (remote gone, fully merged)"
+            elif git branch -D "$BRANCH" 2>/dev/null; then
+                info "Deleted local branch: $BRANCH (remote gone, squash-merged)"
+            fi
+        elif [ -z "$TRACKING_INFO" ]; then
+            # Branch not found in list (already deleted somehow).
+            :
+        elif [[ "$TRACKING_INFO" != *"["* ]]; then
+            # No tracking bracket at all - never pushed.
+            warn "Local branch $BRANCH has no remote, keeping it (may have unpushed work)"
+        else
+            # Has tracking and remote still exists.
+            info "Remote branch still exists, keeping local branch: $BRANCH"
+        fi
+    fi
+fi
+
 # Clean up any temp files.
 TEMP_PATTERN="/tmp/bureau-agent-${WORKTREE_NAME}"
-if ls ${TEMP_PATTERN}* &>/dev/null 2>&1; then
-    rm -rf ${TEMP_PATTERN}*
+if ls "${TEMP_PATTERN}"* &>/dev/null 2>&1; then
+    rm -rf "${TEMP_PATTERN}"*
     info "Cleaned up temp files"
 fi
 

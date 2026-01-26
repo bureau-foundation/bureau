@@ -9,6 +9,7 @@
 # Examples:
 #   bureau-worktree-list
 #   bureau-worktree-list --quiet
+#   bureau-worktree-list --json
 
 set -euo pipefail
 
@@ -34,6 +35,7 @@ USAGE
 
 OPTIONS
     -q, --quiet     Minimal output (just paths, no header)
+    --json          Output as JSON array (for scripting/agents)
     -h, --help      Show this help
 
 ENVIRONMENT
@@ -53,6 +55,9 @@ EXAMPLES
     bureau-worktree-list --quiet
         Just paths, one per line (for scripting)
 
+    bureau-worktree-list --json
+        JSON output for agents (pipe to jq, etc.)
+
 SEE ALSO
     bureau-worktree-init      Create new worktree
     bureau-worktree-deinit    Remove worktree
@@ -61,6 +66,7 @@ EOF
 
 # Parse arguments.
 QUIET=false
+JSON_OUTPUT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -q|--quiet)
             QUIET=true
+            shift
+            ;;
+        --json)
+            JSON_OUTPUT=true
             shift
             ;;
         -*)
@@ -98,6 +108,10 @@ if [ ! -d "$WORKTREES_ROOT" ]; then
     if [ "$QUIET" = true ]; then
         exit 0
     fi
+    if [ "$JSON_OUTPUT" = true ]; then
+        echo "[]"
+        exit 0
+    fi
     echo "No active agent worktrees in $WORKTREES_ROOT"
     exit 0
 fi
@@ -113,6 +127,10 @@ done < <(find "$WORKTREES_ROOT" -name ".git" -type f -print0 2>/dev/null)
 # Check if any worktrees found.
 if [ ${#WORKTREE_PATHS[@]} -eq 0 ]; then
     if [ "$QUIET" = true ]; then
+        exit 0
+    fi
+    if [ "$JSON_OUTPUT" = true ]; then
+        echo "[]"
         exit 0
     fi
     echo "No active agent worktrees in $WORKTREES_ROOT"
@@ -185,15 +203,41 @@ for worktree_path in "${WORKTREE_PATHS[@]}"; do
     last_commit_ts=$(git -C "$worktree_path" log -1 --format=%ct 2>/dev/null || echo "0")
     if [ "$last_commit_ts" = "0" ] || [ -z "$last_commit_ts" ]; then
         last_activity="no commits"
+        last_commit_ts="null"
     else
         last_activity=$(relative_time "$last_commit_ts")
     fi
 
-    WORKTREE_INFO+=("$relative_path|$branch|$last_activity")
+    # Store with timestamp for JSON output.
+    WORKTREE_INFO+=("$relative_path|$branch|$last_activity|$last_commit_ts|$worktree_path")
 done
 
 # If quiet mode, we already printed paths.
 if [ "$QUIET" = true ]; then
+    exit 0
+fi
+
+# JSON output mode.
+if [ "$JSON_OUTPUT" = true ]; then
+    echo "["
+    first=true
+    for info in "${WORKTREE_INFO[@]}"; do
+        IFS='|' read -r worktree branch activity timestamp path <<< "$info"
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo ","
+        fi
+        # Escape strings for JSON (handle quotes and backslashes).
+        worktree_json=$(printf '%s' "$worktree" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        branch_json=$(printf '%s' "$branch" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        path_json=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        activity_json=$(printf '%s' "$activity" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s"}' \
+            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json"
+    done
+    echo ""
+    echo "]"
     exit 0
 fi
 
@@ -202,7 +246,7 @@ max_worktree_len=8  # "WORKTREE"
 max_branch_len=6    # "BRANCH"
 
 for info in "${WORKTREE_INFO[@]}"; do
-    IFS='|' read -r worktree branch activity <<< "$info"
+    IFS='|' read -r worktree branch activity _ _ <<< "$info"
     if [ ${#worktree} -gt "$max_worktree_len" ]; then
         max_worktree_len=${#worktree}
     fi
@@ -220,6 +264,6 @@ printf "${BOLD}%-${max_worktree_len}s %-${max_branch_len}s %s${NC}\n" "WORKTREE"
 
 # Print worktrees.
 for info in "${WORKTREE_INFO[@]}"; do
-    IFS='|' read -r worktree branch activity <<< "$info"
+    IFS='|' read -r worktree branch activity _ _ <<< "$info"
     printf "%-${max_worktree_len}s %-${max_branch_len}s %s\n" "$worktree" "$branch" "$activity"
 done

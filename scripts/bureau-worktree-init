@@ -526,8 +526,18 @@ You can **write**:
 4. Do the work
 5. Mark complete: \`bd close <id>\`
 6. Test your changes: \`bazel test //...\`
-7. When ready, create a PR: \`gh pr create\`
+7. Create a PR: \`bureau-pr-create --bead <id>\`
 8. Post checkpoint comments on the issue to report progress
+
+## Creating PRs
+
+Use \`bureau-pr-create\` to create PRs (do NOT use \`gh pr create\` directly):
+
+    bureau-pr-create --bead <bead-id>
+
+This creates a draft PR, links it to your task, and notifies you when:
+- CI passes (PR marked ready for review)
+- Review comments arrive
 
 ## Boundaries
 
@@ -554,7 +564,15 @@ Branch: \`$BRANCH\`
 3. Do the work
 4. Mark complete: \`bd close <id>\`
 5. Test changes: \`bazel test //...\`
-6. Create PR when ready: \`gh pr create\`
+6. Create PR: \`bureau-pr-create --bead <id>\`
+
+## Creating PRs
+
+Use \`bureau-pr-create\` to create PRs:
+
+    bureau-pr-create --bead <bead-id>
+
+This creates a draft PR linked to your task bead.
 
 ---
 
@@ -613,7 +631,7 @@ info "Created: AGENT.md"
 # Required tools validated at start.
 mkdir -p .beads
 touch .beads/issues.jsonl
-bd --no-db init --force --prefix bead --skip-hooks --skip-merge-driver --setup-exclude --sandbox -q
+bd --no-db init --force --prefix bead- --skip-hooks --skip-merge-driver --setup-exclude --sandbox -q
 info "Initialized beads: .beads/ (prefix: bead-*, JSONL-only)"
 
 # Create bd wrapper that adds --no-db flag so agents don't have to remember it.

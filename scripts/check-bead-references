@@ -1,0 +1,41 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Pre-commit hook script to detect bead IDs in source files.
+# Bead IDs (like bead-abc123) are ephemeral local state that should
+# never appear in committed code, comments, or documentation.
+
+set -euo pipefail
+
+# Search for bead-* patterns in source files
+matches=$(grep -rn \
+    --include="*.go" \
+    --include="*.py" \
+    --include="*.sh" \
+    --include="*.md" \
+    -E "bead-[a-z0-9]+" \
+    . 2>/dev/null || true)
+
+# Filter out allowed files (documentation explaining beads, config files)
+filtered=$(echo "$matches" \
+    | grep -v "^\./.beads/" \
+    | grep -v "CONTRIBUTING.md" \
+    | grep -v "CLAUDE.md" \
+    | grep -v ".pre-commit-config.yaml" \
+    | grep -v "check-bead-references" \
+    || true)
+
+if [ -n "$filtered" ]; then
+    echo ""
+    echo "ERROR: Bead IDs found in code:"
+    echo "$filtered"
+    echo ""
+    echo "Comments and code must be timeless - describe what the code does"
+    echo "and why, not the process involved in writing it."
+    echo ""
+    echo "See CONTRIBUTING.md for guidelines."
+    exit 1
+fi
+
+exit 0

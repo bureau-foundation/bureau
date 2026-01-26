@@ -128,6 +128,18 @@ repos:
         args: [-d, "{extends: relaxed, rules: {line-length: disable}}"]
 
   # =============================================================================
+  # Code Quality - Timeless Comments
+  # =============================================================================
+  - repo: local
+    hooks:
+      - id: no-bead-references
+        name: no bead references in code
+        entry: scripts/check-bead-references
+        language: script
+        pass_filenames: false
+        always_run: true
+
+  # =============================================================================
   # Beads (local-only, flush to JSONL before commit)
   # =============================================================================
   - repo: local

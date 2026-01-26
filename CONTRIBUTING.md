@@ -7,6 +7,81 @@ guidelines for contributing to the project.
 
 Be excellent to each other. Treat all contributors—human and AI—with respect.
 
+## Timeless Code and Commits
+
+All code, comments, and commit messages must be **timeless**: they describe
+*what the code does and why*, never the process of creating it.
+
+### Why This Matters
+
+Git history is permanent. Anyone reading the code or history years from now
+should understand it without knowing what issue tracking system was used,
+what work items existed, or what phases were planned.
+
+### Bead IDs Are Local State
+
+We use beads (`bd`) for local workstream management. Bead IDs like `bead-abc123`
+are **ephemeral local state** that must never appear in:
+
+- Source code or comments
+- Commit messages
+- Documentation (except this file and `.pre-commit-config.yaml`)
+
+Pre-commit hooks enforce this automatically.
+
+### What NOT to Write
+
+**In comments:**
+
+```go
+// BAD: References transient state
+// Fixed per bead-1ar review feedback
+// TODO(bead-xyz): Clean up later
+// Phase 2 will add caching here
+// Moved from old_file.go
+```
+
+**In commit messages:**
+
+```text
+BAD: Phase 1: Add path filtering
+BAD: Part of bead-abc123 (some epic name)
+BAD: WIP: checkpoint before meeting
+```
+
+### What TO Write
+
+**In comments:**
+
+```go
+// GOOD: Describes what and why
+// Use draft PRs to allow CI to run before review.
+// TODO: Add retry logic for transient network failures.
+```
+
+**In commit messages:**
+
+```text
+GOOD: Add glob pattern filtering to bureau-worktree-list
+
+Support filtering worktrees by path patterns like agent/* and
+agent/alice/*. Multiple patterns use OR semantics.
+```
+
+### Pre-commit Hooks
+
+Install both hook types:
+
+```bash
+pre-commit install
+pre-commit install --hook-type commit-msg
+```
+
+The following hooks enforce these guidelines:
+
+- `no-bead-references`: Blocks bead IDs in code files
+- `no-bead-references-commit-msg`: Blocks bead IDs in commit messages
+
 ## Getting Started
 
 ### Prerequisites
@@ -51,7 +126,7 @@ bazel test //...
 
 ### Commit Messages
 
-Write clear, descriptive commit messages:
+Write clear, descriptive commit messages that are **timeless** (see above):
 
 ```text
 Add channel abstraction for Matrix facade
@@ -64,7 +139,9 @@ mock implementations in tests and potential future backends.
 - Use imperative mood ("Add" not "Added")
 - First line is a summary (50 chars or less)
 - Body explains what and why, not how
+- Each commit should stand alone—no "Part of X" or "Phase N"
 - Reference GitHub issues where relevant: `Fixes #123`
+- Never reference bead IDs—they are local state
 
 ### Pull Requests
 
@@ -82,6 +159,23 @@ Use the PR template, which includes:
 - Checklist of requirements
 
 ## Code Standards
+
+### Naming Conventions
+
+Use full words, not abbreviations:
+
+- `length` not `len`
+- `buffer` not `buf`
+- `count` not `cnt` or `num`
+- `position` not `pos`
+- `string` (or more descriptive) not `str`
+
+### Error Handling
+
+- No silent failures—fail loud and fail fast
+- Never use fallbacks or defaults that hide errors
+- Always check for unsupported features explicitly
+- If something is unhandled, it must fail, not silently pass
 
 ### Go
 

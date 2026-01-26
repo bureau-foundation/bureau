@@ -8,11 +8,13 @@
       "Bash(pytest *)",
       "Bash(pre-commit *)",
       "Bash(git *)",
-      "Bash(gh *)"
+      "Bash(gh *)",
+      "Bash(bureau-*)"
     ],
     "deny": [
       "Bash(bazel clean*)",
-      "Bash(rm -rf /)*"
+      "Bash(rm -rf /)*",
+      "Bash(gh pr create*)"
     ]
   }
 }

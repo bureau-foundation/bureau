@@ -1,0 +1,269 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Lists active Bureau agent worktrees and their status.
+#
+# Usage: bureau-worktree-list [options]
+#
+# Examples:
+#   bureau-worktree-list
+#   bureau-worktree-list --quiet
+#   bureau-worktree-list --json
+
+set -euo pipefail
+
+# Colors.
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info() { printf "${GREEN}[bureau-worktree]${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}[bureau-worktree]${NC} %s\n" "$1"; }
+error() { printf "${RED}[bureau-worktree]${NC} %s\n" "$1" >&2; }
+header() { printf "${CYAN}[bureau-worktree]${NC} %s\n" "$1"; }
+
+show_help() {
+    cat << 'EOF'
+bureau-worktree-list - List active Bureau agent worktrees
+
+USAGE
+    bureau-worktree-list [options]
+
+OPTIONS
+    -q, --quiet     Minimal output (just paths, no header)
+    --json          Output as JSON array (for scripting/agents)
+    -h, --help      Show this help
+
+ENVIRONMENT
+    BUREAU_ROOT     Base directory for Bureau (default: ~/.cache/bureau)
+                    Worktrees are in: $BUREAU_ROOT/worktrees/
+
+OUTPUT
+    Lists all active worktrees with:
+        WORKTREE    Relative path under $BUREAU_ROOT/worktrees/
+        BRANCH      Current git branch
+        LAST ACTIVITY   Time since last commit (relative)
+
+EXAMPLES
+    bureau-worktree-list
+        Shows all worktrees with status
+
+    bureau-worktree-list --quiet
+        Just paths, one per line (for scripting)
+
+    bureau-worktree-list --json
+        JSON output for agents (pipe to jq, etc.)
+
+SEE ALSO
+    bureau-worktree-init      Create new worktree
+    bureau-worktree-deinit    Remove worktree
+EOF
+}
+
+# Parse arguments.
+QUIET=false
+JSON_OUTPUT=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -q|--quiet)
+            QUIET=true
+            shift
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
+        -*)
+            error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            error "Unexpected argument: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# Configuration (same as other worktree scripts).
+if [ -n "${BUREAU_ROOT:-}" ]; then
+    : # Use env var as-is
+else
+    BUREAU_ROOT="$HOME/.cache/bureau"
+fi
+WORKTREES_ROOT="$BUREAU_ROOT/worktrees"
+
+# Check if worktrees directory exists.
+if [ ! -d "$WORKTREES_ROOT" ]; then
+    if [ "$QUIET" = true ]; then
+        exit 0
+    fi
+    if [ "$JSON_OUTPUT" = true ]; then
+        echo "[]"
+        exit 0
+    fi
+    echo "No active agent worktrees in $WORKTREES_ROOT"
+    exit 0
+fi
+
+# Find all worktrees by looking for .git files (worktrees have a .git file, not directory).
+# This finds actual git worktrees, not just any directories.
+WORKTREE_PATHS=()
+while IFS= read -r -d '' gitfile; do
+    worktree_dir=$(dirname "$gitfile")
+    WORKTREE_PATHS+=("$worktree_dir")
+done < <(find "$WORKTREES_ROOT" -name ".git" -type f -print0 2>/dev/null)
+
+# Check if any worktrees found.
+if [ ${#WORKTREE_PATHS[@]} -eq 0 ]; then
+    if [ "$QUIET" = true ]; then
+        exit 0
+    fi
+    if [ "$JSON_OUTPUT" = true ]; then
+        echo "[]"
+        exit 0
+    fi
+    echo "No active agent worktrees in $WORKTREES_ROOT"
+    exit 0
+fi
+
+# Get relative time string from timestamp.
+relative_time() {
+    local timestamp="$1"
+    local now
+    now=$(date +%s)
+    local diff=$((now - timestamp))
+
+    if [ $diff -lt 60 ]; then
+        echo "just now"
+    elif [ $diff -lt 3600 ]; then
+        local minutes=$((diff / 60))
+        if [ $minutes -eq 1 ]; then
+            echo "1 minute ago"
+        else
+            echo "$minutes minutes ago"
+        fi
+    elif [ $diff -lt 86400 ]; then
+        local hours=$((diff / 3600))
+        if [ $hours -eq 1 ]; then
+            echo "1 hour ago"
+        else
+            echo "$hours hours ago"
+        fi
+    elif [ $diff -lt 604800 ]; then
+        local days=$((diff / 86400))
+        if [ $days -eq 1 ]; then
+            echo "1 day ago"
+        else
+            echo "$days days ago"
+        fi
+    elif [ $diff -lt 2592000 ]; then
+        local weeks=$((diff / 604800))
+        if [ $weeks -eq 1 ]; then
+            echo "1 week ago"
+        else
+            echo "$weeks weeks ago"
+        fi
+    else
+        local months=$((diff / 2592000))
+        if [ $months -eq 1 ]; then
+            echo "1 month ago"
+        else
+            echo "$months months ago"
+        fi
+    fi
+}
+
+# Collect worktree info.
+declare -a WORKTREE_INFO=()
+
+for worktree_path in "${WORKTREE_PATHS[@]}"; do
+    # Get relative path from WORKTREES_ROOT.
+    relative_path="${worktree_path#"$WORKTREES_ROOT"/}"
+
+    if [ "$QUIET" = true ]; then
+        echo "$relative_path"
+        continue
+    fi
+
+    # Get current branch.
+    branch=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+
+    # Get last commit timestamp.
+    last_commit_ts=$(git -C "$worktree_path" log -1 --format=%ct 2>/dev/null || echo "0")
+    if [ "$last_commit_ts" = "0" ] || [ -z "$last_commit_ts" ]; then
+        last_activity="no commits"
+        last_commit_ts="null"
+    else
+        last_activity=$(relative_time "$last_commit_ts")
+    fi
+
+    # Store with timestamp for JSON output.
+    WORKTREE_INFO+=("$relative_path|$branch|$last_activity|$last_commit_ts|$worktree_path")
+done
+
+# If quiet mode, we already printed paths.
+if [ "$QUIET" = true ]; then
+    exit 0
+fi
+
+# JSON output mode.
+if [ "$JSON_OUTPUT" = true ]; then
+    echo "["
+    first=true
+    for info in "${WORKTREE_INFO[@]}"; do
+        IFS='|' read -r worktree branch activity timestamp path <<< "$info"
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo ","
+        fi
+        # Escape strings for JSON (handle quotes and backslashes).
+        worktree_json=$(printf '%s' "$worktree" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        branch_json=$(printf '%s' "$branch" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        path_json=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        activity_json=$(printf '%s' "$activity" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s"}' \
+            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json"
+    done
+    echo ""
+    echo "]"
+    exit 0
+fi
+
+# Calculate column widths.
+max_worktree_len=8  # "WORKTREE"
+max_branch_len=6    # "BRANCH"
+
+for info in "${WORKTREE_INFO[@]}"; do
+    IFS='|' read -r worktree branch activity _ _ <<< "$info"
+    if [ ${#worktree} -gt "$max_worktree_len" ]; then
+        max_worktree_len=${#worktree}
+    fi
+    if [ ${#branch} -gt "$max_branch_len" ]; then
+        max_branch_len=${#branch}
+    fi
+done
+
+# Add some padding.
+max_worktree_len=$((max_worktree_len + 2))
+max_branch_len=$((max_branch_len + 2))
+
+# Print header.
+printf "${BOLD}%-${max_worktree_len}s %-${max_branch_len}s %s${NC}\n" "WORKTREE" "BRANCH" "LAST ACTIVITY"
+
+# Print worktrees.
+for info in "${WORKTREE_INFO[@]}"; do
+    IFS='|' read -r worktree branch activity _ _ <<< "$info"
+    printf "%-${max_worktree_len}s %-${max_branch_len}s %s\n" "$worktree" "$branch" "$activity"
+done

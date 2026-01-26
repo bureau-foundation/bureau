@@ -616,15 +616,32 @@ echo "- Branch: \`$BRANCH\`" >> AGENT.md
 
 info "Created: AGENT.md"
 
-# Initialize beads in sandbox mode (local only, no daemon, no git integration).
+# Initialize beads in JSONL-only mode (local only, no daemon, no git integration).
+# We must use --no-db because bd auto-discovers the main repo's .beads through
+# the git worktree pointer. Pre-creating the directory + --force prevents this.
 # Required tools validated at start.
-bd init --prefix bead --skip-hooks --skip-merge-driver --setup-exclude --sandbox -q
-info "Initialized beads: .beads/ (prefix: bead-*)"
+mkdir -p .beads
+touch .beads/issues.jsonl
+bd --no-db init --force --prefix bead --skip-hooks --skip-merge-driver --setup-exclude --sandbox -q
+info "Initialized beads: .beads/ (prefix: bead-*, JSONL-only)"
+
+# Create bd wrapper that adds --no-db flag so agents don't have to remember it.
+BD_REAL=$(which bd)
+mkdir -p bin
+cat > bin/bd << BDWRAPPER
+#!/bin/bash
+# Wrapper for bd that forces JSONL-only mode in agent worktrees.
+# This prevents bd from auto-discovering the main repo's .beads.
+exec "$BD_REAL" --no-db "\$@"
+BDWRAPPER
+chmod +x bin/bd
+info "Created: bin/bd wrapper (use PATH=\$PWD/bin:\$PATH)"
 
 # Pre-populate beads from assignment tasks.
+# Use --no-db since wrapper isn't in PATH yet.
 if [ ${#ASSIGNMENT_TASKS[@]} -gt 0 ]; then
     for task in "${ASSIGNMENT_TASKS[@]}"; do
-        bd create "$task" --quiet
+        bd --no-db create "$task" --quiet
         info "  Created bead: $task"
     done
     info "Created ${#ASSIGNMENT_TASKS[@]} beads from assignment"
@@ -641,7 +658,9 @@ export BUREAU_ROOT="$BUREAU_ROOT"
 # Agent worktree path.
 export BUREAU_WORKTREE="\$(pwd)"
 
-# Add bureau tools to PATH when available.
+# Add local bin (bd wrapper) to PATH first, then bureau tools.
+# The local bd wrapper adds --no-db to prevent main repo .beads discovery.
+PATH="\$(pwd)/bin:\$PATH"
 if [ -d "\${BUREAU_ROOT}/bin" ]; then
     PATH="\${BUREAU_ROOT}/bin:\$PATH"
 fi

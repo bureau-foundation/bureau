@@ -3,6 +3,53 @@
 
 repos:
   # =============================================================================
+  # License Headers
+  # =============================================================================
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.6
+    hooks:
+      # Go files
+      - id: insert-license
+        name: license-go
+        files: \.go$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - //
+
+      # Python files
+      - id: insert-license
+        name: license-python
+        files: \.py$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+      # Shell scripts
+      - id: insert-license
+        name: license-shell
+        files: ^scripts/.*$
+        exclude: \.(md|txt|gitkeep)$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+      # Bazel files
+      - id: insert-license
+        name: license-bazel
+        files: (BUILD\.bazel|\.bzl)$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+  # =============================================================================
   # General
   # =============================================================================
   - repo: https://github.com/pre-commit/pre-commit-hooks

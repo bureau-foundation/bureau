@@ -38,9 +38,11 @@ ARGUMENTS
                     Patterns match against relative worktree path.
 
 OPTIONS
-    -q, --quiet     Minimal output (just paths, no header)
-    --json          Output as JSON array (for scripting/agents)
-    -h, --help      Show this help
+    -q, --quiet         Minimal output (just paths, no header)
+    --json              Output as JSON array (for scripting/agents)
+    --complete-only     Show only complete worktrees
+    --incomplete-only   Show only incomplete worktrees
+    -h, --help          Show this help
 
 ENVIRONMENT
     BUREAU_ROOT     Base directory for Bureau (default: ~/.cache/bureau)
@@ -77,6 +79,8 @@ EOF
 # Parse arguments.
 QUIET=false
 JSON_OUTPUT=false
+COMPLETE_ONLY=false
+INCOMPLETE_ONLY=false
 declare -a FILTERS=()
 
 while [[ $# -gt 0 ]]; do
@@ -91,6 +95,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --json)
             JSON_OUTPUT=true
+            shift
+            ;;
+        --complete-only)
+            COMPLETE_ONLY=true
+            shift
+            ;;
+        --incomplete-only)
+            INCOMPLETE_ONLY=true
             shift
             ;;
         -*)
@@ -214,6 +226,76 @@ relative_time() {
     fi
 }
 
+# Check if a worktree is complete.
+# Returns JSON: {"isComplete": bool, "reason": "..."}
+# Complete = all beads closed (no open or in_progress)
+check_completeness() {
+    local worktree_path="$1"
+    local beads_file="$worktree_path/.beads/issues.jsonl"
+
+    # No beads file = nothing to track, consider complete.
+    if [ ! -f "$beads_file" ] || [ ! -s "$beads_file" ]; then
+        echo '{"isComplete": true, "reason": "no beads"}'
+        return
+    fi
+
+    # Count open and in_progress beads.
+    local counts
+    counts=$(jq -s '{
+        open: [.[] | select(.status == "open")] | length,
+        inProgress: [.[] | select(.status == "in_progress")] | length
+    }' "$beads_file" 2>/dev/null)
+
+    if [ -z "$counts" ]; then
+        echo '{"isComplete": true, "reason": "no beads"}'
+        return
+    fi
+
+    local open_count in_progress_count
+    open_count=$(echo "$counts" | jq -r '.open')
+    in_progress_count=$(echo "$counts" | jq -r '.inProgress')
+
+    if [ "$open_count" -eq 0 ] && [ "$in_progress_count" -eq 0 ]; then
+        echo '{"isComplete": true, "reason": "all beads closed"}'
+    else
+        local reason=""
+        if [ "$open_count" -gt 0 ] && [ "$in_progress_count" -gt 0 ]; then
+            reason="$open_count open, $in_progress_count in progress"
+        elif [ "$open_count" -gt 0 ]; then
+            reason="$open_count open"
+        else
+            reason="$in_progress_count in progress"
+        fi
+        echo "{\"isComplete\": false, \"reason\": \"$reason\"}"
+    fi
+}
+
+# Check if worktree passes completeness filter.
+# Returns 0 (true) if should be included, 1 (false) otherwise.
+passes_completeness_filter() {
+    local worktree_path="$1"
+
+    # No filter = include everything.
+    if [ "$COMPLETE_ONLY" = false ] && [ "$INCOMPLETE_ONLY" = false ]; then
+        return 0
+    fi
+
+    local completeness
+    completeness=$(check_completeness "$worktree_path")
+    local is_complete
+    is_complete=$(echo "$completeness" | jq -r '.isComplete')
+
+    if [ "$COMPLETE_ONLY" = true ] && [ "$is_complete" = "true" ]; then
+        return 0
+    fi
+
+    if [ "$INCOMPLETE_ONLY" = true ] && [ "$is_complete" = "false" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
 # Collect worktree info.
 declare -a WORKTREE_INFO=()
 
@@ -223,6 +305,11 @@ for worktree_path in "${WORKTREE_PATHS[@]}"; do
 
     # Apply filter if patterns specified.
     if ! matches_filter "$relative_path"; then
+        continue
+    fi
+
+    # Apply completeness filter if specified.
+    if ! passes_completeness_filter "$worktree_path"; then
         continue
     fi
 
@@ -313,12 +400,13 @@ if [ "$JSON_OUTPUT" = true ]; then
         path_json=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
         activity_json=$(printf '%s' "$activity" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
-        # Get beads summary and source info.
+        # Get beads summary, source info, and completeness.
         beads_json=$(get_beads_summary "$path")
         source_json=$(get_source_info "$path")
+        completeness_json=$(check_completeness "$path")
 
-        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s", "beads": %s, "source": %s}' \
-            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json" "$beads_json" "$source_json"
+        printf '  {"worktree": "%s", "branch": "%s", "path": "%s", "lastCommitTimestamp": %s, "lastActivity": "%s", "beads": %s, "source": %s, "completeness": %s}' \
+            "$worktree_json" "$branch_json" "$path_json" "$timestamp" "$activity_json" "$beads_json" "$source_json" "$completeness_json"
     done
     echo ""
     echo "]"

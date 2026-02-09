@@ -10,8 +10,8 @@ Five primitives (see `.notes/design/FUNDAMENTALS.md`):
 1. **Sandbox** — bwrap namespace isolation (`sandbox/`)
 2. **Proxy** — credential injection via HTTP proxy (`proxy/`)
 3. **Bridge** — TCP-to-Unix socket forwarder for sandboxed HTTP (`bridge/`)
-4. **Observation** — tmux outside sandbox, PTY crosses namespace boundary (`observe/`)
-5. **Messaging** — agent-to-agent communication via proxy endpoints (`messaging/`)
+4. **Observation** — not yet implemented; depends on messaging for cross-machine support
+5. **Messaging** — agent-to-agent communication via Matrix, accessed through proxy endpoints
 
 ## Repository layout
 
@@ -19,8 +19,7 @@ Five primitives (see `.notes/design/FUNDAMENTALS.md`):
 sandbox/       Primitive 1: bubblewrap isolation
 proxy/         Primitive 2: credential injection proxy
 bridge/        Primitive 3: TCP-to-Unix socket bridge
-observe/       Primitive 4: tmux session management
-messaging/     Primitive 5: message storage and routing
+messaging/     Primitive 5: message storage and routing (next up)
 lib/           Supporting packages (config, version, etc.)
 cmd/           Binary entry points
 ```

@@ -138,10 +138,12 @@ func TestLogPath(t *testing.T) {
 }
 
 func TestBuildPaneCommand(t *testing.T) {
+	remainPrefix := "tmux set-option remain-on-exit on 2>/dev/null;"
+
 	t.Run("without logging", func(t *testing.T) {
 		obs := &Observer{}
 		got := obs.buildPaneCommand([]string{"sleep", "300"}, "alice", "terminal", 200)
-		want := "sleep 300"
+		want := remainPrefix + " exec sleep 300"
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -150,7 +152,7 @@ func TestBuildPaneCommand(t *testing.T) {
 	t.Run("with logging", func(t *testing.T) {
 		obs := &Observer{LogDir: "/var/log/bureau"}
 		got := obs.buildPaneCommand([]string{"sleep", "300"}, "alice", "terminal", 200)
-		want := "tail -n 200 '/var/log/bureau/alice/terminal.log' 2>/dev/null; exec sleep 300"
+		want := remainPrefix + " tail -n 200 '/var/log/bureau/alice/terminal.log' 2>/dev/null; exec sleep 300"
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -159,7 +161,7 @@ func TestBuildPaneCommand(t *testing.T) {
 	t.Run("with logging and spaces in path", func(t *testing.T) {
 		obs := &Observer{LogDir: "/var/log/my bureau"}
 		got := obs.buildPaneCommand([]string{"bash"}, "alice", "agent", 100)
-		want := "tail -n 100 '/var/log/my bureau/alice/agent.log' 2>/dev/null; exec bash"
+		want := remainPrefix + " tail -n 100 '/var/log/my bureau/alice/agent.log' 2>/dev/null; exec bash"
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -226,6 +228,94 @@ func TestLaunchAndStopAgent(t *testing.T) {
 	// Verify agent session is gone.
 	if SessionExists(sessionName) {
 		t.Error("agent session still exists after stop")
+	}
+}
+
+func TestLaunchReplacesDeadSession(t *testing.T) {
+	requireTmux(t)
+
+	obs := testObserver(t)
+	agent := "dead-session-test"
+
+	cleanupSessions(t, obs, agent)
+	defer cleanupSessions(t, obs, agent)
+
+	// Launch an agent that exits immediately.
+	err := obs.Launch(agent, []string{"true"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// Wait for the process to exit. The session stays due to remain-on-exit.
+	time.Sleep(500 * time.Millisecond)
+	sessionName := obs.agentSessionName(agent)
+	if !SessionExists(sessionName) {
+		t.Fatal("session should still exist (remain-on-exit)")
+	}
+	if sessionHasLivePanes(sessionName) {
+		t.Fatal("pane should be dead after process exits")
+	}
+
+	// Relaunching should succeed — the dead session is cleaned up automatically.
+	err = obs.Launch(agent, []string{"sleep", "300"})
+	if err != nil {
+		t.Fatalf("relaunch over dead session should succeed: %v", err)
+	}
+
+	if !sessionHasLivePanes(obs.agentSessionName(agent)) {
+		t.Error("new session should have live panes")
+	}
+}
+
+func TestLaunchBlocksOnRunningAgent(t *testing.T) {
+	requireTmux(t)
+
+	obs := testObserver(t)
+	agent := "block-test"
+
+	cleanupSessions(t, obs, agent)
+	defer cleanupSessions(t, obs, agent)
+
+	// Launch a long-running agent.
+	err := obs.Launch(agent, []string{"sleep", "300"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// Relaunching without Replace should fail.
+	err = obs.Launch(agent, []string{"sleep", "300"})
+	if err == nil {
+		t.Fatal("expected error when launching over a running agent")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("error should mention 'already running', got: %v", err)
+	}
+}
+
+func TestLaunchReplaceRunningAgent(t *testing.T) {
+	requireTmux(t)
+
+	obs := testObserver(t)
+	obs.Replace = true
+	agent := "replace-test"
+
+	cleanupSessions(t, obs, agent)
+	defer cleanupSessions(t, obs, agent)
+
+	// Launch a long-running agent.
+	err := obs.Launch(agent, []string{"sleep", "300"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// Relaunching with Replace should succeed.
+	err = obs.Launch(agent, []string{"sleep", "300"})
+	if err != nil {
+		t.Fatalf("relaunch with Replace should succeed: %v", err)
+	}
+
+	if !SessionExists(obs.agentSessionName(agent)) {
+		t.Error("session should exist after replace")
 	}
 }
 

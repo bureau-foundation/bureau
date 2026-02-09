@@ -70,6 +70,15 @@ type Observer struct {
 	// scroll buffer on launch. Only used when LogDir is set.
 	// Defaults to DefaultBackscrollLines (200).
 	BackscrollLines int
+
+	// Replace controls behavior when an agent session already exists with
+	// live (running) panes. When false (the default), launching into a
+	// running agent returns an error. When true, the existing session is
+	// killed and replaced.
+	//
+	// Dead sessions (all panes exited, kept by remain-on-exit) are always
+	// cleaned up automatically regardless of this setting.
+	Replace bool
 }
 
 // New creates an Observer with default settings.
@@ -205,7 +214,15 @@ func (o *Observer) LaunchWithLayout(agent string, command []string, layout Launc
 
 	sessionName := o.agentSessionName(agent)
 	if SessionExists(sessionName) {
-		return fmt.Errorf("agent session %q already exists", sessionName)
+		alive := sessionHasLivePanes(sessionName)
+		if alive && !o.Replace {
+			return fmt.Errorf("agent %q is already running; stop it first or use --replace", agent)
+		}
+		// Either all panes are dead (remain-on-exit corpse) or Replace is set.
+		// Clean up and proceed with a fresh launch.
+		if err := tmuxRun("kill-session", "-t", sessionName); err != nil {
+			return fmt.Errorf("replace existing session for agent %q: %w", agent, err)
+		}
 	}
 
 	backscrollLines := o.BackscrollLines
@@ -284,12 +301,6 @@ func (o *Observer) LaunchWithLayout(agent string, command []string, layout Launc
 		if err := tmuxRun("select-layout", "-t", sessionName+":"+agent, layoutName); err != nil {
 			return fmt.Errorf("apply layout %q: %w", layoutName, err)
 		}
-	}
-
-	// Set remain-on-exit so panes persist after their process exits,
-	// letting the operator see what happened.
-	if err := tmuxRun("set-option", "-t", sessionName, "remain-on-exit", "on"); err != nil {
-		return fmt.Errorf("set remain-on-exit: %w", err)
 	}
 
 	// Ensure the observation session exists.
@@ -399,23 +410,50 @@ func (o *Observer) logPath(agent, paneName string) string {
 
 // buildPaneCommand constructs the shell command string for a tmux pane.
 //
-// Without logging (LogDir empty), this is just the command joined for shell
-// execution. With logging enabled and a log file from a previous run, the
-// command is wrapped to replay recent scroll history before starting:
+// Every pane command is prefixed with "tmux set-option remain-on-exit on"
+// so that panes persist after their process exits. This is done inside the
+// pane's own shell rather than as a separate tmux command, because a
+// separate command would race with fast-exiting processes — the session
+// could vanish before set-option runs.
 //
-//	tail -n 200 /path/to/log 2>/dev/null; exec actual-command
+// With logging enabled and a log file from a previous run, the command
+// also replays recent scroll history:
+//
+//	tmux set-option remain-on-exit on; tail -n 200 /path/to/log 2>/dev/null; exec cmd
 //
 // The tail output lands in the pane's scroll buffer as history, then exec
-// replaces the shell with the real command. The 2>/dev/null suppresses
-// errors on first launch when the log file doesn't exist yet.
+// replaces the shell with the real command.
 func (o *Observer) buildPaneCommand(command []string, agent, paneName string, backscrollLines int) string {
 	shellCommand := shellJoin(command)
+
+	// remain-on-exit is set from inside the pane as the very first action.
+	// This guarantees it's in effect before the actual command starts,
+	// regardless of how fast the command exits.
+	prefix := "tmux set-option remain-on-exit on 2>/dev/null;"
+
 	logPath := o.logPath(agent, paneName)
 	if logPath == "" {
-		return shellCommand
+		return fmt.Sprintf("%s exec %s", prefix, shellCommand)
 	}
-	return fmt.Sprintf("tail -n %d %s 2>/dev/null; exec %s",
-		backscrollLines, shellQuote(logPath), shellCommand)
+	return fmt.Sprintf("%s tail -n %d %s 2>/dev/null; exec %s",
+		prefix, backscrollLines, shellQuote(logPath), shellCommand)
+}
+
+// sessionHasLivePanes returns true if the tmux session has at least one pane
+// whose process is still running (as opposed to dead panes kept by
+// remain-on-exit).
+func sessionHasLivePanes(sessionName string) bool {
+	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_dead}")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "0" {
+			return true
+		}
+	}
+	return false
 }
 
 // setupPaneLogging configures pipe-pane for a tmux pane to continuously

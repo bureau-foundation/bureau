@@ -53,6 +53,10 @@ func run() error {
 				return fmt.Errorf("--stop requires an agent name")
 			}
 			return obs.Stop(args[1])
+		case "--replace":
+			obs.Replace = true
+			args = args[1:]
+			continue
 		case "--config":
 			if len(args) < 2 {
 				return fmt.Errorf("--config requires a path to a layout YAML file")
@@ -162,6 +166,7 @@ OPTIONS
     --config <path>      Layout config YAML (multi-pane, see below)
     --log-dir <path>     Enable pane output logging to this directory
     --backscroll <lines> Lines of log to replay on resume (default 200)
+    --replace            Kill and replace an already-running agent
 
 EXAMPLES
     # Launch a single-pane agent

@@ -24,7 +24,8 @@ import (
 
 const (
 	// DefaultObserveSession is the name of the shared observation session.
-	DefaultObserveSession = "bureau"
+	// Uses "bureau-observe" to avoid colliding with user sessions.
+	DefaultObserveSession = "bureau-observe"
 
 	// AgentSessionPrefix is prepended to agent names for their tmux sessions.
 	AgentSessionPrefix = "agent-"

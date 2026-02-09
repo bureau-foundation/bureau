@@ -1,0 +1,30 @@
+# Bureau pre-commit hooks
+# Install: pre-commit install --install-hooks -t pre-commit
+repos:
+  # Go formatting (gofmt)
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+      - id: go-vet
+
+  # License headers
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        name: license-headers-go
+        files: \.go$
+        args:
+          - --license-filepath=.license-header.txt
+          - --comment-style=//
+          - --detect-license-in-X-top-lines=3
+
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict

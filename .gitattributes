@@ -1,28 +1,14 @@
-# Linguist overrides
-*.bazel linguist-language=Starlark
-*.bzl linguist-language=Starlark
-BUILD linguist-language=Starlark
-BUILD.bazel linguist-language=Starlark
-WORKSPACE linguist-language=Starlark
-WORKSPACE.bazel linguist-language=Starlark
-MODULE.bazel linguist-language=Starlark
-
-# Ensure consistent line endings
+# Consistent line endings
 * text=auto
 *.go text eol=lf
-*.py text eol=lf
 *.sh text eol=lf
-*.bazel text eol=lf
-*.bzl text eol=lf
 *.md text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
 *.json text eol=lf
-*.toml text eol=lf
 
 # Binary files
 *.png binary
 *.jpg binary
 *.gif binary
-*.ico binary
 *.pdf binary

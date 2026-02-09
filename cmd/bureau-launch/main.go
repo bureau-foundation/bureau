@@ -35,35 +35,82 @@ func run() error {
 	}
 
 	obs := observe.New()
+	var configPath string
 
-	switch args[0] {
-	case "--version", "version":
-		fmt.Printf("bureau-launch %s\n", version.Info())
-		return nil
-	case "--help", "help", "-h":
-		printUsage()
-		return nil
-	case "--list", "list":
-		return listCmd(obs)
-	case "--stop", "stop":
-		if len(args) < 2 {
-			return fmt.Errorf("--stop requires an agent name")
+	// Extract flags that precede the agent name.
+	for len(args) > 0 {
+		switch args[0] {
+		case "--version", "version":
+			fmt.Printf("bureau-launch %s\n", version.Info())
+			return nil
+		case "--help", "help", "-h":
+			printUsage()
+			return nil
+		case "--list", "list":
+			return listCmd(obs)
+		case "--stop", "stop":
+			if len(args) < 2 {
+				return fmt.Errorf("--stop requires an agent name")
+			}
+			return obs.Stop(args[1])
+		case "--config":
+			if len(args) < 2 {
+				return fmt.Errorf("--config requires a path to a layout YAML file")
+			}
+			configPath = args[1]
+			args = args[2:]
+			continue
+		case "--log-dir":
+			if len(args) < 2 {
+				return fmt.Errorf("--log-dir requires a directory path")
+			}
+			obs.LogDir = args[1]
+			args = args[2:]
+			continue
+		case "--backscroll":
+			if len(args) < 2 {
+				return fmt.Errorf("--backscroll requires a line count")
+			}
+			lines, err := fmt.Sscanf(args[1], "%d", &obs.BackscrollLines)
+			if err != nil || lines != 1 {
+				return fmt.Errorf("--backscroll requires a numeric line count, got %q", args[1])
+			}
+			args = args[2:]
+			continue
 		}
-		return obs.Stop(args[1])
+		break
 	}
 
-	// Parse: bureau-launch <agent-name> -- <command> [args...]
+	if len(args) == 0 {
+		return fmt.Errorf("agent name is required\n\nusage: bureau-launch [options] <agent-name> -- <command> [args...]")
+	}
+
+	// Parse: [options] <agent-name> -- <command> [args...]
 	agentName := args[0]
 	command := findCommandAfterSeparator(args[1:])
 	if len(command) == 0 {
-		return fmt.Errorf("command required after '--'\n\nusage: bureau-launch <agent-name> -- <command> [args...]")
+		return fmt.Errorf("command required after '--'\n\nusage: bureau-launch [options] <agent-name> -- <command> [args...]")
 	}
 
-	if err := obs.Launch(agentName, command); err != nil {
-		return err
+	// Launch with layout config if provided, otherwise single-pane.
+	if configPath != "" {
+		layout, err := observe.LoadLayoutConfig(configPath)
+		if err != nil {
+			return err
+		}
+		if err := obs.LaunchWithLayout(agentName, command, layout); err != nil {
+			return err
+		}
+	} else {
+		if err := obs.Launch(agentName, command); err != nil {
+			return err
+		}
 	}
 
 	fmt.Printf("Agent %q launched in tmux session %q\n", agentName, observe.AgentSessionPrefix+agentName)
+	if obs.LogDir != "" {
+		fmt.Printf("Logs: %s/%s/\n", obs.LogDir, agentName)
+	}
 	fmt.Printf("Attach with: bureau-attach\n")
 	return nil
 }
@@ -107,13 +154,24 @@ func printUsage() {
 	fmt.Print(`bureau-launch - Start an agent in a sandboxed tmux session
 
 USAGE
-    bureau-launch <agent-name> -- <command> [args...]
+    bureau-launch [options] <agent-name> -- <command> [args...]
     bureau-launch --stop <agent-name>
     bureau-launch --list
 
+OPTIONS
+    --config <path>      Layout config YAML (multi-pane, see below)
+    --log-dir <path>     Enable pane output logging to this directory
+    --backscroll <lines> Lines of log to replay on resume (default 200)
+
 EXAMPLES
-    # Launch an agent
-    bureau-launch alice -- bureau-sandbox run --profile=developer --worktree=/work/alice -- claude
+    # Launch a single-pane agent
+    bureau-launch alice -- bash
+
+    # Launch with logging (pane output saved, replayed on restart)
+    bureau-launch --log-dir /var/log/bureau alice -- bash
+
+    # Launch with a multi-pane layout
+    bureau-launch --config layout.yaml --log-dir /var/log/bureau alice -- bash
 
     # List running agents
     bureau-launch --list
@@ -121,9 +179,31 @@ EXAMPLES
     # Stop an agent
     bureau-launch --stop alice
 
+LAYOUT CONFIG
+    A YAML file describing the pane arrangement. Example:
+
+        layout: main-vertical
+        panes:
+          - name: agent
+            # empty command = agent's main process
+          - name: logs
+            command: ["tail", "-f", "/var/log/bureau/agent.log"]
+          - name: status
+            command: ["watch", "-n5", "bureau-status"]
+
+    Layouts: main-vertical, main-horizontal, even-horizontal,
+    even-vertical, tiled.
+
 OBSERVATION
     Agents are linked into the "bureau" tmux observation session.
     Attach with: bureau-attach (or: tmux attach -t bureau)
     Navigate agents with Ctrl-b n/p/number.
+
+LOGGING
+    When --log-dir is set, all pane output is continuously captured
+    to <log-dir>/<agent>/<pane-name>.log via tmux pipe-pane. On
+    subsequent launches, the last --backscroll lines from the log
+    are replayed into the pane's scroll buffer, so you see recent
+    context when you attach — as if the session never restarted.
 `)
 }

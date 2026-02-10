@@ -26,6 +26,12 @@ type IdentityInfo struct {
 
 	// ServerName is the Matrix server name (e.g., "bureau.local").
 	ServerName string `json:"server_name,omitempty"`
+
+	// ObserveSocket is the path to the proxy's observation socket.
+	// Agents dial this socket to observe other principals. The proxy
+	// injects credentials and forwards to the daemon. Empty when
+	// observation is not configured.
+	ObserveSocket string `json:"observe_socket,omitempty"`
 }
 
 // Handler handles HTTP requests to the proxy server.

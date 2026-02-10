@@ -23,6 +23,18 @@ type Config struct {
 	// sandboxes).
 	AdminSocketPath string `yaml:"admin_socket_path"`
 
+	// ObserveSocketPath is an optional Unix socket for observation forwarding.
+	// When set, the proxy listens on this socket and transparently forwards
+	// observation requests to the daemon's observation relay, injecting the
+	// proxy's own Matrix credentials (MATRIX_USER_ID and MATRIX_TOKEN).
+	// This is the only path for sandboxed agents to observe other principals.
+	ObserveSocketPath string `yaml:"observe_socket_path"`
+
+	// DaemonObserveSocket is the path to the daemon's observation socket.
+	// The proxy connects here when forwarding observation requests.
+	// Defaults to /run/bureau/observe.sock if empty.
+	DaemonObserveSocket string `yaml:"daemon_observe_socket"`
+
 	// ListenAddress is an optional TCP address to listen on (e.g., "127.0.0.1:8080").
 	// If set, the proxy listens on both the Unix socket and TCP.
 	// This is useful for agents that can't use Unix sockets directly (e.g., HTTP SDKs).

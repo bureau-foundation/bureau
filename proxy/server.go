@@ -26,6 +26,8 @@ type Server struct {
 	unixListener    net.Listener
 	adminListener   net.Listener
 	tcpListener     net.Listener
+	observeProxy    *observeProxy
+	observeConfig   *observeProxyConfig
 	logger          *slog.Logger
 }
 
@@ -129,6 +131,20 @@ func (s *Server) SetMatrixPolicy(policy *schema.MatrixPolicy) {
 	s.handler.SetMatrixPolicy(policy)
 }
 
+// SetObserveConfig configures the observation proxy. When called before
+// Start(), the server will listen on the observation socket and forward
+// observation requests to the daemon with injected credentials. The
+// observation socket speaks the daemon's native observation protocol
+// (JSON handshake + binary framing), not HTTP.
+func (s *Server) SetObserveConfig(socketPath, daemonSocket string, credential CredentialSource) {
+	s.observeConfig = &observeProxyConfig{
+		SocketPath:   socketPath,
+		DaemonSocket: daemonSocket,
+		Credential:   credential,
+		Logger:       s.logger,
+	}
+}
+
 // Start begins listening on the Unix socket and optionally TCP.
 func (s *Server) Start() error {
 	// Remove existing socket file if present
@@ -209,6 +225,15 @@ func (s *Server) Start() error {
 		}()
 	}
 
+	// Start the observation proxy if configured.
+	if s.observeConfig != nil {
+		observeProxy, err := startObserveProxy(*s.observeConfig)
+		if err != nil {
+			return fmt.Errorf("start observe proxy: %w", err)
+		}
+		s.observeProxy = observeProxy
+	}
+
 	// Notify systemd that we're ready (no-op if not running under systemd)
 	notifySystemd("READY=1")
 
@@ -241,6 +266,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if adminErr := s.adminServer.Shutdown(ctx); adminErr != nil && err == nil {
 			err = adminErr
 		}
+	}
+	if s.observeProxy != nil {
+		s.observeProxy.stop()
 	}
 	if s.unixListener != nil {
 		os.Remove(s.socketPath)

@@ -164,11 +164,27 @@ func run() error {
 		logger.Info("registered built-in Matrix proxy service", logAttrs...)
 	}
 
+	// Configure observation proxy if an observe socket path is set.
+	// This enables sandboxed agents to observe other principals through
+	// the proxy, which injects its own Matrix credentials so the agent
+	// never touches authentication material.
+	if config.ObserveSocketPath != "" {
+		daemonSocket := config.DaemonObserveSocket
+		if daemonSocket == "" {
+			daemonSocket = "/run/bureau/observe.sock"
+		}
+		server.SetObserveConfig(config.ObserveSocketPath, daemonSocket, credentialSource)
+	}
+
 	// Set agent identity from credentials so the GET /v1/identity endpoint
 	// can return the agent's Matrix user ID without a homeserver round-trip.
+	// Includes the observe socket path when configured.
 	if matrixUserIDBuffer := credentialSource.Get("MATRIX_USER_ID"); matrixUserIDBuffer != nil {
 		matrixUserID := matrixUserIDBuffer.String()
-		identity := proxy.IdentityInfo{UserID: matrixUserID}
+		identity := proxy.IdentityInfo{
+			UserID:        matrixUserID,
+			ObserveSocket: config.ObserveSocketPath,
+		}
 		// Extract server name from the Matrix user ID: @localpart:server → server.
 		// Use first colon — Matrix localparts cannot contain colons, but server
 		// names can include a port (e.g., bureau.local:8448).

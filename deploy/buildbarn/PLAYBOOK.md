@@ -169,6 +169,18 @@ bazel build --config=remote //...
 Look for `remote cache hit` in the build output. Check the scheduler
 admin UI at http://localhost:7982/ — completed actions should be visible.
 
+Tests that depend on external tools (tmux, network access) will fail
+remotely because the runner container is a minimal Ubuntu image with no
+network. Run these locally or with `--test_strategy=local`:
+
+```bash
+bazel test --config=remote //... --test_strategy=local
+```
+
+This executes test actions locally while still using the remote cache for
+build actions. Once the runner has access to the full Nix store (via
+bind-mount), all tests can execute remotely.
+
 You can also check Prometheus metrics:
 
 ```bash
@@ -333,4 +345,8 @@ becomes a candidate for a tracked issue.
 
 | Step | Friction | Severity |
 |------|----------|----------|
-| | | |
+| bb-worker config | `actionCache` and `contentAddressableStorage` are top-level in bb-storage but nested under `blobstore` in bb-worker. The proto field names differ between components. | med |
+| runner binary | `bb-runner-installer` image ships `bb_runner` but not `tini`. Use Docker Compose `init: true` instead. | low |
+| @platforms dep | `platform()` rule needs `bazel_dep(name = "platforms")` in MODULE.bazel — not implicitly visible to user BUILD files under bzlmod. | med |
+| tmux tests | `//observe:observe_test` and `//cmd/bureau-daemon:bureau-daemon_test` fail remotely (no tmux in runner). Need Nix bind-mount or local execution tag. | high |
+| WebRTC tests | `//transport:transport_test` fails remotely (runner has `network_mode: none`, WebRTC needs loopback). Needs local execution tag. | high |

@@ -3,6 +3,9 @@ module(
     version = "0.0.0",
 )
 
+# Platform constraint values for execution platform definitions.
+bazel_dep(name = "platforms", version = "1.0.0")
+
 # Go build rules and BUILD file generator.
 bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.47.0")

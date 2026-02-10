@@ -31,20 +31,17 @@
 
   scheduler: { address: 'scheduler:8983' },
 
-  // CAS and AC access for downloading action inputs and uploading outputs.
-  // The action cache uses completeness checking: before returning an AC
-  // hit, the worker verifies that all referenced CAS blobs still exist.
-  // This prevents serving stale results when CAS has garbage-collected
-  // blobs that an AC entry references.
-  contentAddressableStorage: {
-    grpc: { address: 'storage:8980' },
-  },
-  actionCache: {
-    completenessChecking: {
-      backend: {
-        grpc: { address: 'storage:8980' },
-      },
-      maximumTotalTreeSizeBytes: 64 * 1024 * 1024,
+  // CAS and AC access via bb-storage. The worker downloads action inputs
+  // from CAS and uploads outputs after execution. AC lookups let the
+  // worker skip re-execution when a cached result already exists.
+  // Completeness checking (verifying referenced CAS blobs still exist
+  // before serving an AC hit) is configured on bb-storage, not here.
+  blobstore: {
+    contentAddressableStorage: {
+      grpc: { address: 'storage:8980' },
+    },
+    actionCache: {
+      grpc: { address: 'storage:8980' },
     },
   },
 

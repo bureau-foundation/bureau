@@ -86,14 +86,13 @@ services:
     image: ubuntu:24.04
     container_name: bureau-bb-runner
     restart: unless-stopped
+    init: true
     depends_on:
       runner-installer:
         condition: service_completed_successfully
       worker-init:
         condition: service_completed_successfully
     command:
-      - /bb/tini
-      - --
       - /bb/bb_runner
       - /config/bb-runner.jsonnet
     network_mode: none

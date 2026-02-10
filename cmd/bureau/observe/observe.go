@@ -7,14 +7,18 @@
 package observe
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
 	"golang.org/x/term"
 )
@@ -104,26 +108,48 @@ Use this for monitoring without risk of accidental input.`,
 // DashboardCommand returns the "dashboard" subcommand for composite
 // workstream views.
 func DashboardCommand() *cli.Command {
-	var socketPath string
+	var (
+		socketPath    string
+		layoutFile    string
+		tmuxSocket    string
+		detach        bool
+	)
 
 	return &cli.Command{
 		Name:    "dashboard",
 		Summary: "Open a composite workstream view",
-		Description: `Open a composite workstream view from a channel's layout state event.
+		Description: `Open a composite workstream view where each pane observes a different
+principal. The layout defines which principals to show and how to
+arrange them.
 
-Each pane in the layout runs an observation session connected to the
-relevant remote principal. If no channel is specified, shows a dashboard
-of all channels the user is a member of.`,
+Layout sources (exactly one required):
+  --layout-file    Read layout from a local JSON file
+  <channel>        Fetch layout from a channel's Matrix state (not yet supported)
+
+Each "observe" pane in the layout connects to the daemon's observation
+relay for the target principal. "command" panes run local commands.
+"role" panes display their role identity.`,
 		Usage: "bureau dashboard [channel] [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Open a project dashboard",
-				Command:     "bureau dashboard #iree/amdgpu/general",
+				Description: "Open a dashboard from a layout file",
+				Command:     "bureau dashboard --layout-file ./workspace.json",
+			},
+			{
+				Description: "Open a project channel dashboard",
+				Command:     "bureau dashboard '#iree/amdgpu/general'",
+			},
+			{
+				Description: "Create dashboard without attaching",
+				Command:     "bureau dashboard --layout-file ./workspace.json --detach",
 			},
 		},
 		Flags: func() *flag.FlagSet {
 			flagSet := flag.NewFlagSet("dashboard", flag.ContinueOnError)
-			flagSet.StringVar(&socketPath, "socket", "/run/bureau/observe.sock", "daemon observation socket path")
+			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
+			flagSet.StringVar(&layoutFile, "layout-file", "", "read layout from a JSON file")
+			flagSet.StringVar(&tmuxSocket, "tmux-socket", "", "tmux server socket (default: user's default tmux)")
+			flagSet.BoolVar(&detach, "detach", false, "create the session without attaching")
 			return flagSet
 		},
 		Run: func(args []string) error {
@@ -135,14 +161,105 @@ of all channels the user is a member of.`,
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
 
-			if channel == "" {
-				fmt.Fprintf(os.Stderr, "bureau dashboard: opening default dashboard (socket=%s)\n", socketPath)
-			} else {
-				fmt.Fprintf(os.Stderr, "bureau dashboard: opening %q (socket=%s)\n", channel, socketPath)
+			// --- Resolve layout from the specified source ---
+
+			var layout *observe.Layout
+			var sessionName string
+
+			switch {
+			case layoutFile != "":
+				var err error
+				layout, err = loadLayoutFile(layoutFile)
+				if err != nil {
+					return fmt.Errorf("load layout file: %w", err)
+				}
+				// Derive session name from the filename.
+				name := strings.TrimSuffix(layoutFile, ".json")
+				name = strings.TrimSuffix(name, ".yaml")
+				// Take just the base name, not the full path.
+				if idx := strings.LastIndex(name, "/"); idx >= 0 {
+					name = name[idx+1:]
+				}
+				sessionName = "observe/" + name
+
+			case channel != "":
+				return fmt.Errorf("fetching layouts from channels requires daemon query support (use --layout-file for now)")
+
+			default:
+				return fmt.Errorf("layout source required: use --layout-file or specify a channel\n\nUsage: bureau dashboard [channel] [flags]")
 			}
-			return fmt.Errorf("dashboard not yet wired (waiting for observe dashboard library)")
+
+			// --- Create the dashboard tmux session ---
+
+			// Dashboard sessions live in the user's own tmux server
+			// (not Bureau's managed tmux), so they show up in the
+			// user's normal `tmux list-sessions`.
+			if tmuxSocket == "" {
+				tmuxSocket = defaultTmuxSocket()
+			}
+
+			tmuxArgs := []string{"-S", tmuxSocket}
+			serverSocket := tmuxSocket
+
+			if err := observe.Dashboard(serverSocket, sessionName, socketPath, layout); err != nil {
+				return fmt.Errorf("create dashboard: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "dashboard session created: %s\n", sessionName)
+
+			if detach {
+				return nil
+			}
+
+			// Attach to the session via exec (replaces this process).
+			tmuxBinary, err := exec.LookPath("tmux")
+			if err != nil {
+				return fmt.Errorf("tmux not found in PATH: %w", err)
+			}
+
+			attachArgs := append(tmuxArgs, "attach-session", "-t", sessionName)
+			// syscall.Exec replaces the process — the dashboard CLI
+			// becomes the tmux client. This is the standard pattern
+			// for "open a tmux session" commands.
+			return syscall.Exec(tmuxBinary, append([]string{"tmux"}, attachArgs...), os.Environ())
 		},
 	}
+}
+
+// loadLayoutFile reads a layout from a JSON file. The file format matches
+// the schema.LayoutContent wire format (the same JSON that appears in
+// m.bureau.layout state events).
+func loadLayoutFile(path string) (*observe.Layout, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var content schema.LayoutContent
+	if err := json.Unmarshal(data, &content); err != nil {
+		return nil, fmt.Errorf("parsing layout JSON: %w", err)
+	}
+
+	if len(content.Windows) == 0 {
+		return nil, fmt.Errorf("layout has no windows")
+	}
+
+	return observe.SchemaToLayout(content), nil
+}
+
+// defaultTmuxSocket returns the path to the user's default tmux server
+// socket. This matches the path tmux uses when invoked without -S:
+// $TMUX_TMPDIR/tmux-$UID/default (or /tmp/tmux-$UID/default if
+// TMUX_TMPDIR is unset).
+//
+// Dashboard sessions go in the user's own tmux (not Bureau's managed
+// tmux server) so they appear in regular `tmux list-sessions`.
+func defaultTmuxSocket() string {
+	tmpDirectory := os.Getenv("TMUX_TMPDIR")
+	if tmpDirectory == "" {
+		tmpDirectory = os.TempDir()
+	}
+	return filepath.Join(tmpDirectory, fmt.Sprintf("tmux-%d", os.Getuid()), "default")
 }
 
 // ListCommand returns the "list" subcommand for querying observable targets.

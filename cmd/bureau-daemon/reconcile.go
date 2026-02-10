@@ -55,6 +55,13 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
+		// Check if the principal's start condition is satisfied. When a
+		// StartCondition references a state event that doesn't exist yet,
+		// the principal is deferred until a subsequent /sync delivers it.
+		if !d.evaluateStartCondition(ctx, localpart, assignment.StartCondition) {
+			continue
+		}
+
 		d.logger.Info("starting principal", "principal", localpart)
 
 		// Read the credentials for this principal.
@@ -299,6 +306,66 @@ func structurallyChanged(old, new *schema.SandboxSpec) bool {
 		return true
 	}
 	return string(oldJSON) != string(newJSON)
+}
+
+// evaluateStartCondition checks whether a principal's StartCondition is
+// satisfied. Returns true if the principal should proceed with launch, false
+// if it should be deferred. When StartCondition is nil, always returns true.
+//
+// The condition references a state event in a specific room. When RoomAlias is
+// set, the daemon resolves it to a room ID. When empty, the daemon checks the
+// principal's own config room (where MachineConfig lives). If the state event
+// exists, the condition is met. If it's M_NOT_FOUND, the principal is deferred.
+func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) bool {
+	if condition == nil {
+		return true
+	}
+
+	// Determine which room to check. When RoomAlias is empty, check the
+	// principal's config room (the room where the MachineConfig lives).
+	roomID := d.configRoomID
+	if condition.RoomAlias != "" {
+		resolved, err := d.session.ResolveAlias(ctx, condition.RoomAlias)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				d.logger.Info("start condition room alias not found, deferring principal",
+					"principal", localpart,
+					"room_alias", condition.RoomAlias,
+				)
+				return false
+			}
+			d.logger.Error("resolving start condition room alias",
+				"principal", localpart,
+				"room_alias", condition.RoomAlias,
+				"error", err,
+			)
+			return false
+		}
+		roomID = resolved
+	}
+
+	_, err := d.session.GetStateEvent(ctx, roomID, condition.EventType, condition.StateKey)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			d.logger.Info("start condition not met, deferring principal",
+				"principal", localpart,
+				"event_type", condition.EventType,
+				"state_key", condition.StateKey,
+				"room_id", roomID,
+			)
+			return false
+		}
+		d.logger.Error("checking start condition",
+			"principal", localpart,
+			"event_type", condition.EventType,
+			"state_key", condition.StateKey,
+			"room_id", roomID,
+			"error", err,
+		)
+		return false
+	}
+
+	return true
 }
 
 // readMachineConfig reads the MachineConfig state event from the config room.

@@ -8,5 +8,10 @@ go_library(
     srcs = ["command.go"],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/workspace",
     visibility = ["//visibility:public"],
-    deps = ["//cmd/bureau/cli"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/principal",
+        "//lib/schema",
+        "//messaging",
+    ],
 )

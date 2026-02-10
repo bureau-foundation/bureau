@@ -22,7 +22,16 @@
 package workspace
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"text/tabwriter"
+
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // Command returns the "workspace" command group.
@@ -129,14 +138,147 @@ func listCommand() *cli.Command {
 		Name:    "list",
 		Summary: "List workspaces across the fleet",
 		Description: `Query Matrix for rooms with workspace project configuration. Shows
-the workspace alias, project, hosting machine, and status.
+the workspace alias, project, repository, and status.
 
 This is a Matrix-only query — works from any machine without needing
 access to the workspace filesystem.`,
-		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace list")
-		},
+		Run: runList,
 	}
+}
+
+// workspaceInfo holds the display data for a single workspace, extracted
+// from the Matrix room's state events.
+type workspaceInfo struct {
+	Alias      string
+	Project    string
+	Repository string
+	Status     string
+}
+
+func runList(args []string) error {
+	operatorSession, err := cli.LoadSession()
+	if err != nil {
+		return err
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: operatorSession.Homeserver,
+	})
+	if err != nil {
+		return fmt.Errorf("creating Matrix client: %w", err)
+	}
+
+	session, err := client.SessionFromToken(operatorSession.UserID, operatorSession.AccessToken)
+	if err != nil {
+		return fmt.Errorf("creating Matrix session: %w", err)
+	}
+	defer session.Close()
+
+	ctx := context.Background()
+
+	roomIDs, err := session.JoinedRooms(ctx)
+	if err != nil {
+		return fmt.Errorf("listing joined rooms: %w", err)
+	}
+
+	var workspaces []workspaceInfo
+	for _, roomID := range roomIDs {
+		workspace, err := extractWorkspaceInfo(ctx, session, roomID)
+		if err != nil {
+			// Skip rooms we can't read state for (permission errors,
+			// rooms being tombstoned, etc.).
+			continue
+		}
+		if workspace != nil {
+			workspaces = append(workspaces, *workspace)
+		}
+	}
+
+	if len(workspaces) == 0 {
+		fmt.Println("No workspaces found.")
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "WORKSPACE\tPROJECT\tREPOSITORY\tSTATUS")
+	for _, workspace := range workspaces {
+		repository := workspace.Repository
+		if repository == "" {
+			repository = "-"
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", workspace.Alias, workspace.Project, repository, workspace.Status)
+	}
+	writer.Flush()
+
+	return nil
+}
+
+// extractWorkspaceInfo reads a room's state and returns workspace info if
+// the room contains an m.bureau.project event. Returns nil (not an error)
+// for non-workspace rooms.
+func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomID string) (*workspaceInfo, error) {
+	events, err := session.GetRoomState(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+
+	var project *schema.ProjectConfig
+	var projectKey string
+	var alias string
+	var hasReady bool
+
+	for _, event := range events {
+		switch event.Type {
+		case schema.EventTypeProject:
+			// Event.Content is map[string]any — round-trip through JSON
+			// to unmarshal into the typed struct.
+			raw, marshalError := json.Marshal(event.Content)
+			if marshalError != nil {
+				continue
+			}
+			var config schema.ProjectConfig
+			if json.Unmarshal(raw, &config) != nil {
+				continue
+			}
+			project = &config
+			if event.StateKey != nil {
+				projectKey = *event.StateKey
+			}
+
+		case "m.room.canonical_alias":
+			if aliasValue, ok := event.Content["alias"].(string); ok {
+				alias = aliasValue
+			}
+
+		case schema.EventTypeWorkspaceReady:
+			hasReady = true
+		}
+	}
+
+	if project == nil {
+		return nil, nil
+	}
+
+	status := "pending"
+	if hasReady {
+		status = "ready"
+	}
+
+	// Use the canonical alias (stripped of # and :server) for display.
+	// Fall back to the project state key when no alias is set.
+	displayAlias := alias
+	if displayAlias == "" {
+		displayAlias = projectKey
+	} else {
+		displayAlias = principal.RoomAliasLocalpart(displayAlias)
+	}
+
+	return &workspaceInfo{
+		Alias:      displayAlias,
+		Project:    project.WorkspacePath,
+		Repository: project.Repository,
+		Status:     status,
+	}, nil
 }
 
 func statusCommand() *cli.Command {

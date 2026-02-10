@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestEnvCredentialSource_Get(t *testing.T) {
@@ -338,4 +340,72 @@ func TestChainCredentialSource_Get(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPipeCredentialSource_MatrixPolicy(t *testing.T) {
+	t.Run("policy present", func(t *testing.T) {
+		payload := `{
+			"matrix_homeserver_url": "http://localhost:6167",
+			"matrix_token": "syt_test",
+			"matrix_user_id": "@test:bureau.local",
+			"matrix_policy": {
+				"allow_join": true,
+				"allow_invite": false,
+				"allow_room_create": true
+			}
+		}`
+
+		source, err := ReadPipeCredentials(strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("ReadPipeCredentials() error: %v", err)
+		}
+
+		policy := source.MatrixPolicy()
+		if policy == nil {
+			t.Fatal("MatrixPolicy() = nil, want non-nil")
+		}
+		if !policy.AllowJoin {
+			t.Error("AllowJoin = false, want true")
+		}
+		if policy.AllowInvite {
+			t.Error("AllowInvite = true, want false")
+		}
+		if !policy.AllowRoomCreate {
+			t.Error("AllowRoomCreate = false, want true")
+		}
+	})
+
+	t.Run("policy absent", func(t *testing.T) {
+		payload := `{
+			"matrix_homeserver_url": "http://localhost:6167",
+			"matrix_token": "syt_test",
+			"matrix_user_id": "@test:bureau.local"
+		}`
+
+		source, err := ReadPipeCredentials(strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("ReadPipeCredentials() error: %v", err)
+		}
+
+		if source.MatrixPolicy() != nil {
+			t.Errorf("MatrixPolicy() = %v, want nil for absent policy", source.MatrixPolicy())
+		}
+	})
+
+	t.Run("policy round-trips through schema type", func(t *testing.T) {
+		// Verify the policy type is schema.MatrixPolicy (compile-time check).
+		payload := `{
+			"matrix_homeserver_url": "http://localhost:6167",
+			"matrix_token": "syt_test",
+			"matrix_user_id": "@test:bureau.local",
+			"matrix_policy": {"allow_join": true}
+		}`
+
+		source, err := ReadPipeCredentials(strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("ReadPipeCredentials() error: %v", err)
+		}
+
+		var _ *schema.MatrixPolicy = source.MatrixPolicy()
+	})
 }

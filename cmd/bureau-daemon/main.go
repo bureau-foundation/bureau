@@ -335,15 +335,15 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	}
 
 	// Determine the desired set of principals.
-	desired := make(map[string]bool, len(config.Principals))
+	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
 	for _, assignment := range config.Principals {
 		if assignment.AutoStart {
-			desired[assignment.Localpart] = true
+			desired[assignment.Localpart] = assignment
 		}
 	}
 
 	// Create sandboxes for principals that should be running but aren't.
-	for localpart := range desired {
+	for localpart, assignment := range desired {
 		if d.running[localpart] {
 			continue
 		}
@@ -366,6 +366,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			Action:               "create-sandbox",
 			Principal:            localpart,
 			EncryptedCredentials: credentials.Ciphertext,
+			MatrixPolicy:         assignment.MatrixPolicy,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
@@ -390,7 +391,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 	// Destroy sandboxes for principals that should not be running.
 	for localpart := range d.running {
-		if desired[localpart] {
+		if _, shouldRun := desired[localpart]; shouldRun {
 			continue
 		}
 
@@ -1250,9 +1251,10 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 // avoid importing cmd/bureau-launcher (which is a main package and cannot be
 // imported). The JSON wire format is the contract between daemon and launcher.
 type launcherIPCRequest struct {
-	Action               string `json:"action"`
-	Principal            string `json:"principal,omitempty"`
-	EncryptedCredentials string `json:"encrypted_credentials,omitempty"`
+	Action               string              `json:"action"`
+	Principal            string              `json:"principal,omitempty"`
+	EncryptedCredentials string              `json:"encrypted_credentials,omitempty"`
+	MatrixPolicy         *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.

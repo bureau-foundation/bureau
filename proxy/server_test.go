@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // mockService is a test service that returns predictable output.
@@ -1323,5 +1326,199 @@ func TestUnixSocketUpstream(t *testing.T) {
 	}
 	if result["method"] != "POST" {
 		t.Errorf("expected method 'POST', got %q", result["method"])
+	}
+}
+
+func TestMatrixPolicy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := NewHandler(logger)
+
+	// checkMatrixPolicy is a method on Handler — test it directly with
+	// table-driven subtests covering every gated endpoint.
+	tests := []struct {
+		name    string
+		policy  *schema.MatrixPolicy
+		method  string
+		path    string
+		blocked bool
+	}{
+		// Default-deny (nil policy): all self-service operations blocked.
+		{
+			name:    "nil policy blocks join by alias",
+			policy:  nil,
+			method:  "POST",
+			path:    "/_matrix/client/v3/join/%23room:bureau.local",
+			blocked: true,
+		},
+		{
+			name:    "nil policy blocks join by room ID",
+			policy:  nil,
+			method:  "POST",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/join",
+			blocked: true,
+		},
+		{
+			name:    "nil policy blocks invite",
+			policy:  nil,
+			method:  "POST",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
+			blocked: true,
+		},
+		{
+			name:    "nil policy blocks createRoom",
+			policy:  nil,
+			method:  "POST",
+			path:    "/_matrix/client/v3/createRoom",
+			blocked: true,
+		},
+		{
+			name:    "nil policy allows GET messages",
+			policy:  nil,
+			method:  "GET",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/messages",
+			blocked: false,
+		},
+		{
+			name:    "nil policy allows PUT send",
+			policy:  nil,
+			method:  "PUT",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/send/m.room.message/txn1",
+			blocked: false,
+		},
+		{
+			name:    "nil policy allows GET sync",
+			policy:  nil,
+			method:  "GET",
+			path:    "/_matrix/client/v3/sync",
+			blocked: false,
+		},
+
+		// Zero-valued policy (all false): same as nil.
+		{
+			name:    "zero policy blocks join",
+			policy:  &schema.MatrixPolicy{},
+			method:  "POST",
+			path:    "/_matrix/client/v3/join/%23room:bureau.local",
+			blocked: true,
+		},
+
+		// AllowJoin = true: join and accept-invite unblocked.
+		{
+			name:    "AllowJoin unblocks join by alias",
+			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/join/%23iree:bureau.local",
+			blocked: false,
+		},
+		{
+			name:    "AllowJoin unblocks rooms/*/join",
+			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/join",
+			blocked: false,
+		},
+		{
+			name:    "AllowJoin still blocks invite",
+			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
+			blocked: true,
+		},
+		{
+			name:    "AllowJoin still blocks createRoom",
+			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/createRoom",
+			blocked: true,
+		},
+
+		// AllowInvite = true: invite unblocked, join still blocked.
+		{
+			name:    "AllowInvite unblocks invite",
+			policy:  &schema.MatrixPolicy{AllowInvite: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
+			blocked: false,
+		},
+		{
+			name:    "AllowInvite still blocks join",
+			policy:  &schema.MatrixPolicy{AllowInvite: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/join/%23room:bureau.local",
+			blocked: true,
+		},
+
+		// AllowRoomCreate = true: createRoom unblocked.
+		{
+			name:    "AllowRoomCreate unblocks createRoom",
+			policy:  &schema.MatrixPolicy{AllowRoomCreate: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/createRoom",
+			blocked: false,
+		},
+		{
+			name:    "AllowRoomCreate still blocks join",
+			policy:  &schema.MatrixPolicy{AllowRoomCreate: true},
+			method:  "POST",
+			path:    "/_matrix/client/v3/join/%23room:bureau.local",
+			blocked: true,
+		},
+
+		// Coordinator policy (all true): everything allowed.
+		{
+			name: "full policy allows everything",
+			policy: &schema.MatrixPolicy{
+				AllowJoin:       true,
+				AllowInvite:     true,
+				AllowRoomCreate: true,
+			},
+			method:  "POST",
+			path:    "/_matrix/client/v3/createRoom",
+			blocked: false,
+		},
+
+		// Non-POST methods are never blocked.
+		{
+			name:    "GET join endpoint is allowed (not POST)",
+			policy:  nil,
+			method:  "GET",
+			path:    "/_matrix/client/v3/join/%23room:bureau.local",
+			blocked: false,
+		},
+
+		// Non-Matrix paths are never checked.
+		{
+			name:    "non-matrix path ignored",
+			policy:  nil,
+			method:  "POST",
+			path:    "/v1/proxy",
+			blocked: false,
+		},
+
+		// PUT state events are always allowed (admin sets state).
+		{
+			name:    "PUT state event allowed even with nil policy",
+			policy:  nil,
+			method:  "PUT",
+			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/state/m.room.topic/",
+			blocked: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler.SetMatrixPolicy(tt.policy)
+			blocked, reason := handler.checkMatrixPolicy(tt.method, tt.path)
+			if blocked != tt.blocked {
+				t.Errorf("checkMatrixPolicy(%s, %s) blocked = %v, want %v (reason: %s)",
+					tt.method, tt.path, blocked, tt.blocked, reason)
+			}
+			if blocked && reason == "" {
+				t.Error("blocked request should have a reason")
+			}
+			if !blocked && reason != "" {
+				t.Errorf("allowed request should not have a reason, got %q", reason)
+			}
+		})
 	}
 }

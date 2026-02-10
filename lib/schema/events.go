@@ -161,6 +161,41 @@ type PrincipalAssignment struct {
 	// sandbox immediately at boot, or wait for a wake event (message,
 	// service request, etc.).
 	AutoStart bool `json:"auto_start"`
+
+	// MatrixPolicy controls which self-service Matrix operations this
+	// principal's proxy allows. The homeserver enforces room membership
+	// and power levels; this policy controls whether the agent can change
+	// its own membership (join rooms, invite others, create rooms).
+	// When nil or zero-valued, all self-service membership operations are
+	// blocked — the agent can only interact with rooms the admin placed
+	// it in.
+	MatrixPolicy *MatrixPolicy `json:"matrix_policy,omitempty"`
+}
+
+// MatrixPolicy controls which self-service Matrix operations an agent can
+// perform through its proxy. The homeserver enforces room membership and
+// power levels; this is a defense-in-depth layer that prevents agents from
+// expanding their own access.
+//
+// Default (all false): the agent can only interact with rooms it was
+// explicitly placed in by the admin. It cannot join new rooms, accept
+// invitations, invite others, or create rooms.
+type MatrixPolicy struct {
+	// AllowJoin permits the agent to join public rooms and accept room
+	// invitations from other agents. When false, the proxy blocks all
+	// POST /join requests. Enables general-purpose agents that discover
+	// rooms via space membership and accept invitations from coordinator
+	// agents.
+	AllowJoin bool `json:"allow_join,omitempty"`
+
+	// AllowInvite permits the agent to invite other agents to rooms it
+	// is a member of. Enables coordinator/secretary agents that assemble
+	// teams and page in other agents.
+	AllowInvite bool `json:"allow_invite,omitempty"`
+
+	// AllowRoomCreate permits the agent to create new rooms (e.g.,
+	// backchannel rooms for ad-hoc collaboration between agents).
+	AllowRoomCreate bool `json:"allow_room_create,omitempty"`
 }
 
 // Credentials is the content of an EventTypeCredentials state event.

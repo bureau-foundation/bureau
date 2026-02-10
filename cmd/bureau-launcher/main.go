@@ -363,10 +363,11 @@ type managedSandbox struct {
 // This mirrors proxy.pipeCredentialPayload but lives here to avoid importing
 // the proxy package — the launcher should not depend on the proxy.
 type proxyCredentialPayload struct {
-	MatrixHomeserverURL string            `json:"matrix_homeserver_url"`
-	MatrixToken         string            `json:"matrix_token"`
-	MatrixUserID        string            `json:"matrix_user_id"`
-	Credentials         map[string]string `json:"credentials"`
+	MatrixHomeserverURL string               `json:"matrix_homeserver_url"`
+	MatrixToken         string               `json:"matrix_token"`
+	MatrixUserID        string               `json:"matrix_user_id"`
+	Credentials         map[string]string    `json:"credentials"`
+	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
 // Launcher handles IPC requests from the daemon.
@@ -415,6 +416,11 @@ type IPCRequest struct {
 	// EncryptedCredentials is the base64-encoded age ciphertext from
 	// the m.bureau.credentials state event (for create-sandbox).
 	EncryptedCredentials string `json:"encrypted_credentials,omitempty"`
+
+	// MatrixPolicy is the Matrix access policy for this principal's proxy.
+	// Forwarded from the PrincipalAssignment in MachineConfig. The launcher
+	// includes this in the credential payload piped to the proxy subprocess.
+	MatrixPolicy *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
 // IPCResponse is the JSON structure of a response to the daemon.
@@ -515,7 +521,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		"credential_keys", credentialKeys(credentials),
 	)
 
-	pid, err := l.spawnProxy(request.Principal, credentials)
+	pid, err := l.spawnProxy(request.Principal, credentials, request.MatrixPolicy)
 	if err != nil {
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
@@ -667,7 +673,7 @@ func readSecret(path string) (string, error) {
 // It writes a minimal config file, pipes credentials via stdin, and waits
 // for the proxy's agent socket to appear before returning. The proxy process
 // is tracked in l.sandboxes for later destruction.
-func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string) (int, error) {
+func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, matrixPolicy *schema.MatrixPolicy) (int, error) {
 	if l.proxyBinaryPath == "" {
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
 	}
@@ -728,7 +734,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Write credential payload to the proxy's stdin and close.
 	if credentials != nil {
-		payload, err := l.buildCredentialPayload(principalLocalpart, credentials)
+		payload, err := l.buildCredentialPayload(principalLocalpart, credentials, matrixPolicy)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -796,7 +802,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 // structure expected by the proxy's PipeCredentialSource. The Matrix-specific
 // keys (MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_USER_ID) are extracted
 // into top-level fields; everything else goes under "credentials".
-func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials map[string]string) (*proxyCredentialPayload, error) {
+func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials map[string]string, matrixPolicy *schema.MatrixPolicy) (*proxyCredentialPayload, error) {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		// Fall back to the launcher's homeserver URL (the principal is
@@ -830,6 +836,7 @@ func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials
 		MatrixToken:         matrixToken,
 		MatrixUserID:        matrixUserID,
 		Credentials:         remaining,
+		MatrixPolicy:        matrixPolicy,
 	}, nil
 }
 

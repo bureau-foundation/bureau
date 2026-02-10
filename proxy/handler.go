@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // Maximum request body size (64KB is plenty for CLI args)
@@ -31,6 +33,7 @@ type Handler struct {
 	services     map[string]Service      // CLI services (JSON-RPC style)
 	httpServices map[string]*HTTPService // HTTP proxy services
 	identity     *IdentityInfo           // agent identity, nil if not set
+	matrixPolicy *schema.MatrixPolicy    // Matrix access policy, nil = default-deny
 	mu           sync.RWMutex
 	logger       *slog.Logger
 }
@@ -92,6 +95,25 @@ func (h *Handler) SetIdentity(identity IdentityInfo) {
 	defer h.mu.Unlock()
 	h.identity = &identity
 	h.logger.Info("agent identity configured", "user_id", identity.UserID)
+}
+
+// SetMatrixPolicy configures the Matrix access policy for this agent. When
+// nil, the proxy uses default-deny: all self-service membership operations
+// (join, invite, room creation) are blocked. The agent can only interact
+// with rooms the admin explicitly placed it in.
+func (h *Handler) SetMatrixPolicy(policy *schema.MatrixPolicy) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.matrixPolicy = policy
+	if policy != nil {
+		h.logger.Info("matrix policy configured",
+			"allow_join", policy.AllowJoin,
+			"allow_invite", policy.AllowInvite,
+			"allow_room_create", policy.AllowRoomCreate,
+		)
+	} else {
+		h.logger.Info("matrix policy configured (default-deny)")
+	}
 }
 
 // HandleHealth handles health check requests.
@@ -341,11 +363,99 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce Matrix access policy on Matrix API requests. The check uses
+	// the rewritten servicePath (what the upstream sees), not the original
+	// request path, so it works regardless of how the service is named.
+	if strings.HasPrefix(servicePath, "/_matrix/") {
+		if blocked, reason := h.checkMatrixPolicy(r.Method, servicePath); blocked {
+			h.logger.Warn("matrix policy blocked request",
+				"method", r.Method,
+				"path", servicePath,
+				"reason", reason,
+			)
+			http.Error(w, reason, http.StatusForbidden)
+			return
+		}
+	}
+
 	// Rewrite the URL path for the service handler
 	r.URL.Path = servicePath
 
 	// Delegate to the HTTP service
 	service.ServeHTTP(w, r)
+}
+
+// checkMatrixPolicy checks whether a Matrix API request is allowed by the
+// agent's policy. Returns (true, reason) if the request should be blocked,
+// (false, "") if allowed.
+//
+// The gated endpoints are:
+//   - POST /_matrix/client/v3/join/{roomIdOrAlias}   — AllowJoin
+//   - POST /_matrix/client/v3/rooms/{roomId}/join     — AllowJoin
+//   - POST /_matrix/client/v3/rooms/{roomId}/invite   — AllowInvite
+//   - POST /_matrix/client/v3/createRoom              — AllowRoomCreate
+//
+// Everything else (messages, state, sync, room history) is allowed — the
+// homeserver enforces room membership and power levels for those operations.
+func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason string) {
+	h.mu.RLock()
+	policy := h.matrixPolicy
+	h.mu.RUnlock()
+
+	// Only POST requests are gated — reads always pass through to the
+	// homeserver which enforces membership.
+	if method != http.MethodPost {
+		return false, ""
+	}
+
+	const clientPrefix = "/_matrix/client/v3/"
+	if !strings.HasPrefix(path, clientPrefix) {
+		return false, ""
+	}
+	apiPath := strings.TrimPrefix(path, clientPrefix)
+
+	// POST /_matrix/client/v3/createRoom
+	if apiPath == "createRoom" {
+		if policy != nil && policy.AllowRoomCreate {
+			return false, ""
+		}
+		return true, "matrix policy: room creation is not allowed for this agent"
+	}
+
+	// POST /_matrix/client/v3/join/{roomIdOrAlias}
+	if strings.HasPrefix(apiPath, "join/") {
+		if policy != nil && policy.AllowJoin {
+			return false, ""
+		}
+		return true, "matrix policy: joining rooms is not allowed for this agent"
+	}
+
+	// POST /_matrix/client/v3/rooms/{roomId}/join
+	// POST /_matrix/client/v3/rooms/{roomId}/invite
+	if strings.HasPrefix(apiPath, "rooms/") {
+		// Extract the action after rooms/{roomId}/...
+		// Room IDs contain colons and may be URL-encoded, but the action
+		// segment is always the last path component.
+		parts := strings.Split(apiPath, "/")
+		if len(parts) >= 3 {
+			action := parts[len(parts)-1]
+			switch action {
+			case "join":
+				if policy != nil && policy.AllowJoin {
+					return false, ""
+				}
+				return true, "matrix policy: joining rooms is not allowed for this agent"
+			case "invite":
+				if policy != nil && policy.AllowInvite {
+					return false, ""
+				}
+				return true, "matrix policy: inviting users is not allowed for this agent"
+			}
+		}
+	}
+
+	// All other endpoints are allowed — the homeserver handles authz.
+	return false, ""
 }
 
 // AdminServiceRequest is the JSON body for PUT /v1/admin/services/{name}.

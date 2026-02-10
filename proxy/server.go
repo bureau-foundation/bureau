@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // Server is a credential proxy server that listens on a Unix socket and optionally TCP.
@@ -119,6 +121,12 @@ func (s *Server) ListHTTPServices() []string {
 // GET /v1/identity endpoint.
 func (s *Server) SetIdentity(identity IdentityInfo) {
 	s.handler.SetIdentity(identity)
+}
+
+// SetMatrixPolicy configures the Matrix access policy. See
+// Handler.SetMatrixPolicy for details.
+func (s *Server) SetMatrixPolicy(policy *schema.MatrixPolicy) {
+	s.handler.SetMatrixPolicy(policy)
 }
 
 // Start begins listening on the Unix socket and optionally TCP.

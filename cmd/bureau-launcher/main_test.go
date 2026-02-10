@@ -662,7 +662,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"GITHUB_PAT":           "ghp_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials)
+		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -694,7 +694,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"OPENAI_API_KEY": "sk-test",
 		}
 
-		_, err := launcher.buildCredentialPayload("test/echo", credentials)
+		_, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
 		if err == nil {
 			t.Error("expected error for missing MATRIX_TOKEN")
 		}
@@ -708,7 +708,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials)
+		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -724,7 +724,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials)
+		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}

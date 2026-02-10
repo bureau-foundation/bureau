@@ -79,8 +79,10 @@ func run() error {
 	// 3. File-based credentials (secure dev - file not visible in /proc)
 	// 4. Environment variables (fallback - WARNING: visible in /proc/*/environ)
 	sources := []proxy.CredentialSource{}
+	var pipeSource *proxy.PipeCredentialSource
 	if credentialStdin {
-		pipeSource, err := proxy.ReadPipeCredentials(os.Stdin)
+		var err error
+		pipeSource, err = proxy.ReadPipeCredentials(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("failed to read credentials from stdin: %w", err)
 		}
@@ -168,6 +170,14 @@ func run() error {
 			identity.ServerName = matrixUserID[colonIndex+1:]
 		}
 		server.SetIdentity(identity)
+	}
+
+	// Set Matrix access policy from the credential payload. The policy
+	// controls which self-service membership operations (join, invite, room
+	// creation) the proxy allows. Only PipeCredentialSource carries the
+	// policy — other credential sources use default-deny.
+	if credentialStdin && pipeSource != nil {
+		server.SetMatrixPolicy(pipeSource.MatrixPolicy())
 	}
 
 	// Start server

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // EnvCredentialSource reads credentials from environment variables.
@@ -172,7 +174,8 @@ func (s *ChainCredentialSource) Get(name string) string {
 // keys appear in the credentials object (stored verbatim). Lookup is
 // exact-match (no normalization).
 type PipeCredentialSource struct {
-	credentials map[string]string
+	credentials  map[string]string
+	matrixPolicy *schema.MatrixPolicy
 }
 
 // pipeCredentialPayload is the JSON structure read from stdin.
@@ -181,6 +184,7 @@ type pipeCredentialPayload struct {
 	MatrixToken         string            `json:"matrix_token"`
 	MatrixUserID        string            `json:"matrix_user_id"`
 	Credentials         map[string]string `json:"credentials"`
+	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
 // ReadPipeCredentials reads a JSON credential payload from reader and returns
@@ -230,7 +234,10 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 	credentials["MATRIX_BEARER"] = "Bearer " + payload.MatrixToken
 	credentials["MATRIX_USER_ID"] = payload.MatrixUserID
 
-	return &PipeCredentialSource{credentials: credentials}, nil
+	return &PipeCredentialSource{
+		credentials:  credentials,
+		matrixPolicy: payload.MatrixPolicy,
+	}, nil
 }
 
 // Get retrieves a credential by exact name. No normalization is applied —
@@ -238,6 +245,12 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 // "MATRIX_TOKEN" / "MATRIX_USER_ID" for the top-level fields).
 func (s *PipeCredentialSource) Get(name string) string {
 	return s.credentials[name]
+}
+
+// MatrixPolicy returns the Matrix access policy from the credential payload.
+// Returns nil if no policy was specified (the proxy should use default-deny).
+func (s *PipeCredentialSource) MatrixPolicy() *schema.MatrixPolicy {
+	return s.matrixPolicy
 }
 
 // Verify credential sources implement CredentialSource interface.

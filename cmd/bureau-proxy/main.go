@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/proxy"
 )
@@ -87,9 +88,11 @@ func run() error {
 			return fmt.Errorf("failed to read credentials from stdin: %w", err)
 		}
 		sources = append(sources, pipeSource)
-		logger.Info("loaded credentials from stdin",
-			"matrix_user_id", pipeSource.Get("MATRIX_USER_ID"),
-		)
+		if userIDBuffer := pipeSource.Get("MATRIX_USER_ID"); userIDBuffer != nil {
+			logger.Info("loaded credentials from stdin",
+				"matrix_user_id", userIDBuffer.String(),
+			)
+		}
 	}
 	sources = append(sources, &proxy.SystemdCredentialSource{})
 	if credentialFile != "" {
@@ -98,6 +101,7 @@ func run() error {
 	}
 	sources = append(sources, &proxy.EnvCredentialSource{Prefix: credentialPrefix})
 	credentialSource := &proxy.ChainCredentialSource{Sources: sources}
+	defer credentialSource.Close()
 
 	// Create server
 	server, err := proxy.NewServer(proxy.ServerConfig{
@@ -153,15 +157,17 @@ func run() error {
 		logger.Warn("matrix proxy service not registered", "reason", err)
 	} else {
 		server.RegisterHTTPService("matrix", matrixService)
-		logger.Info("registered built-in Matrix proxy service",
-			"upstream", credentialSource.Get("MATRIX_HOMESERVER_URL"),
-			"matrix_user_id", credentialSource.Get("MATRIX_USER_ID"),
-		)
+		logAttrs := []any{"upstream", bufferStringOrEmpty(credentialSource.Get("MATRIX_HOMESERVER_URL"))}
+		if userIDBuffer := credentialSource.Get("MATRIX_USER_ID"); userIDBuffer != nil {
+			logAttrs = append(logAttrs, "matrix_user_id", userIDBuffer.String())
+		}
+		logger.Info("registered built-in Matrix proxy service", logAttrs...)
 	}
 
 	// Set agent identity from credentials so the GET /v1/identity endpoint
 	// can return the agent's Matrix user ID without a homeserver round-trip.
-	if matrixUserID := credentialSource.Get("MATRIX_USER_ID"); matrixUserID != "" {
+	if matrixUserIDBuffer := credentialSource.Get("MATRIX_USER_ID"); matrixUserIDBuffer != nil {
+		matrixUserID := matrixUserIDBuffer.String()
 		identity := proxy.IdentityInfo{UserID: matrixUserID}
 		// Extract server name from the Matrix user ID: @localpart:server → server.
 		// Use first colon — Matrix localparts cannot contain colons, but server
@@ -233,8 +239,8 @@ func createCLIService(name string, config proxy.ServiceConfig, credentials proxy
 // if MATRIX_BEARER is not set but MATRIX_TOKEN is, this function wraps the
 // credential source to synthesize the Bearer value.
 func createMatrixService(credentials proxy.CredentialSource, logger *slog.Logger) (*proxy.HTTPService, error) {
-	homeserverURL := credentials.Get("MATRIX_HOMESERVER_URL")
-	if homeserverURL == "" {
+	homeserverURLBuffer := credentials.Get("MATRIX_HOMESERVER_URL")
+	if homeserverURLBuffer == nil {
 		return nil, fmt.Errorf("MATRIX_HOMESERVER_URL not available in credentials")
 	}
 
@@ -242,18 +248,20 @@ func createMatrixService(credentials proxy.CredentialSource, logger *slog.Logger
 	// absent, try to synthesize from MATRIX_TOKEN (file/env credential
 	// sources store the raw token without Bearer prefix).
 	effectiveCredentials := credentials
-	if credentials.Get("MATRIX_BEARER") == "" {
-		matrixToken := credentials.Get("MATRIX_TOKEN")
-		if matrixToken == "" {
+	if credentials.Get("MATRIX_BEARER") == nil {
+		matrixTokenBuffer := credentials.Get("MATRIX_TOKEN")
+		if matrixTokenBuffer == nil {
 			return nil, fmt.Errorf("neither MATRIX_BEARER nor MATRIX_TOKEN available in credentials")
+		}
+		bearerSource, err := proxy.NewMapCredentialSource(map[string]string{
+			"MATRIX_BEARER": "Bearer " + matrixTokenBuffer.String(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("creating bearer credential: %w", err)
 		}
 		effectiveCredentials = &proxy.ChainCredentialSource{
 			Sources: []proxy.CredentialSource{
-				&proxy.MapCredentialSource{
-					Credentials: map[string]string{
-						"MATRIX_BEARER": "Bearer " + matrixToken,
-					},
-				},
+				bearerSource,
 				credentials,
 			},
 		}
@@ -261,7 +269,7 @@ func createMatrixService(credentials proxy.CredentialSource, logger *slog.Logger
 
 	return proxy.NewHTTPService(proxy.HTTPServiceConfig{
 		Name:     "matrix",
-		Upstream: homeserverURL,
+		Upstream: homeserverURLBuffer.String(),
 		InjectHeaders: map[string]string{
 			"Authorization": "MATRIX_BEARER",
 		},
@@ -338,4 +346,14 @@ func createHTTPService(name string, config proxy.ServiceConfig, credentials prox
 		Credential:    credentials,
 		Logger:        logger,
 	})
+}
+
+// bufferStringOrEmpty returns the string value of a secret buffer, or an
+// empty string if the buffer is nil. Used for logging non-secret values
+// like homeserver URLs where nil means "not configured".
+func bufferStringOrEmpty(buffer *secret.Buffer) string {
+	if buffer == nil {
+		return ""
+	}
+	return buffer.String()
 }

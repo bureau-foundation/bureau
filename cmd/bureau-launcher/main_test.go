@@ -24,31 +24,47 @@ import (
 
 func TestDerivePassword(t *testing.T) {
 	// Deterministic: same inputs produce same output.
-	password1 := derivePassword("token123", "machine/workstation")
-	password2 := derivePassword("token123", "machine/workstation")
-	if password1 != password2 {
-		t.Errorf("derivePassword not deterministic: %q != %q", password1, password2)
+	password1, err := derivePassword("token123", "machine/workstation")
+	if err != nil {
+		t.Fatalf("derivePassword: %v", err)
+	}
+	defer password1.Close()
+	password2, err := derivePassword("token123", "machine/workstation")
+	if err != nil {
+		t.Fatalf("derivePassword: %v", err)
+	}
+	defer password2.Close()
+	if !password1.Equal(password2) {
+		t.Errorf("derivePassword not deterministic: %q != %q", password1.String(), password2.String())
 	}
 
 	// Different tokens produce different passwords.
-	password3 := derivePassword("different-token", "machine/workstation")
-	if password1 == password3 {
+	password3, err := derivePassword("different-token", "machine/workstation")
+	if err != nil {
+		t.Fatalf("derivePassword: %v", err)
+	}
+	defer password3.Close()
+	if password1.Equal(password3) {
 		t.Errorf("different tokens should produce different passwords")
 	}
 
 	// Different machine names produce different passwords.
-	password4 := derivePassword("token123", "machine/other")
-	if password1 == password4 {
+	password4, err := derivePassword("token123", "machine/other")
+	if err != nil {
+		t.Fatalf("derivePassword: %v", err)
+	}
+	defer password4.Close()
+	if password1.Equal(password4) {
 		t.Errorf("different machine names should produce different passwords")
 	}
 
 	// Result should be a hex-encoded SHA-256 hash (64 hex chars).
-	if len(password1) != 64 {
-		t.Errorf("password length = %d, want 64 (hex-encoded SHA-256)", len(password1))
+	if password1.Len() != 64 {
+		t.Errorf("password length = %d, want 64 (hex-encoded SHA-256)", password1.Len())
 	}
 
 	// All characters should be valid hex.
-	for _, char := range password1 {
+	for _, char := range password1.String() {
 		if !strings.ContainsRune("0123456789abcdef", char) {
 			t.Errorf("password contains non-hex character: %q", char)
 			break
@@ -97,8 +113,9 @@ func TestReadSecret_File(t *testing.T) {
 			if err != nil {
 				t.Fatalf("readSecret() error: %v", err)
 			}
-			if result != test.expected {
-				t.Errorf("readSecret() = %q, want %q", result, test.expected)
+			defer result.Close()
+			if result.String() != test.expected {
+				t.Errorf("readSecret() = %q, want %q", result.String(), test.expected)
 			}
 		})
 	}
@@ -610,6 +627,7 @@ func TestSaveAndLoadSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadSession() error: %v", err)
 	}
+	defer session.Close()
 
 	if session.UserID() != "@machine/test:bureau.local" {
 		t.Errorf("UserID() = %q, want %q", session.UserID(), "@machine/test:bureau.local")

@@ -24,7 +24,12 @@ func newTestSession(t *testing.T, handler http.Handler) (*Client, *Session) {
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	return client, client.SessionFromToken("@test:local", "test-token")
+	session, err := client.SessionFromToken("@test:local", "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken failed: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return client, session
 }
 
 func TestWhoAmI(t *testing.T) {

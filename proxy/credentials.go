@@ -11,26 +11,67 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // EnvCredentialSource reads credentials from environment variables.
-// Useful for development and testing.
+// Useful for development and testing. Results are cached in mmap-backed
+// buffers on first access — the env var string briefly touches the heap
+// during os.Getenv, but the cached copy is protected.
 type EnvCredentialSource struct {
 	// Prefix is prepended to credential names when looking up env vars.
 	// Example: Prefix="BUREAU_" means Get("github-pat") looks up BUREAU_GITHUB_PAT.
 	Prefix string
+
+	mu    sync.Mutex
+	cache map[string]*secret.Buffer
 }
 
 // Get retrieves a credential from environment variables.
-func (s *EnvCredentialSource) Get(name string) string {
+func (s *EnvCredentialSource) Get(name string) *secret.Buffer {
 	// Convert credential name to env var format: github-pat -> GITHUB_PAT
 	envName := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	if s.Prefix != "" {
 		envName = s.Prefix + envName
 	}
-	return os.Getenv(envName)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cache != nil {
+		if buffer, ok := s.cache[name]; ok {
+			return buffer
+		}
+	}
+
+	value := os.Getenv(envName)
+	if value == "" {
+		return nil
+	}
+
+	buffer, err := secret.NewFromBytes([]byte(value))
+	if err != nil {
+		return nil
+	}
+	if s.cache == nil {
+		s.cache = make(map[string]*secret.Buffer)
+	}
+	s.cache[name] = buffer
+	return buffer
+}
+
+// Close releases all cached credential buffers.
+func (s *EnvCredentialSource) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, buffer := range s.cache {
+		buffer.Close()
+		delete(s.cache, name)
+	}
+	return nil
 }
 
 // FileCredentialSource reads credentials from a key=value file.
@@ -48,12 +89,12 @@ type FileCredentialSource struct {
 	Path string
 
 	// credentials is the parsed credential map, loaded lazily.
-	credentials map[string]string
+	credentials map[string]*secret.Buffer
 	loaded      bool
 }
 
 // Get retrieves a credential from the file.
-func (s *FileCredentialSource) Get(name string) string {
+func (s *FileCredentialSource) Get(name string) *secret.Buffer {
 	if !s.loaded {
 		s.load()
 	}
@@ -62,10 +103,19 @@ func (s *FileCredentialSource) Get(name string) string {
 	return s.credentials[key]
 }
 
+// Close releases all credential buffers.
+func (s *FileCredentialSource) Close() error {
+	for key, buffer := range s.credentials {
+		buffer.Close()
+		delete(s.credentials, key)
+	}
+	return nil
+}
+
 // load parses the credentials file.
 func (s *FileCredentialSource) load() {
 	s.loaded = true
-	s.credentials = make(map[string]string)
+	s.credentials = make(map[string]*secret.Buffer)
 
 	if s.Path == "" {
 		return
@@ -85,10 +135,14 @@ func (s *FileCredentialSource) load() {
 			continue
 		}
 		// Parse key=value.
-		if idx := strings.Index(line, "="); idx > 0 {
-			key := strings.TrimSpace(line[:idx])
-			value := strings.TrimSpace(line[idx+1:])
-			s.credentials[key] = value
+		if index := strings.Index(line, "="); index > 0 {
+			key := strings.TrimSpace(line[:index])
+			value := strings.TrimSpace(line[index+1:])
+			buffer, err := secret.NewFromBytes([]byte(value))
+			if err != nil {
+				continue
+			}
+			s.credentials[key] = buffer
 		}
 	}
 }
@@ -99,54 +153,134 @@ type SystemdCredentialSource struct {
 	// Directory is the path to the credentials directory.
 	// Defaults to $CREDENTIALS_DIRECTORY if empty.
 	Directory string
+
+	mu    sync.Mutex
+	cache map[string]*secret.Buffer
 }
 
 // Get retrieves a credential from the systemd credentials directory.
-func (s *SystemdCredentialSource) Get(name string) string {
-	dir := s.Directory
-	if dir == "" {
-		dir = os.Getenv("CREDENTIALS_DIRECTORY")
-	}
-	if dir == "" {
-		return ""
+func (s *SystemdCredentialSource) Get(name string) *secret.Buffer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cache != nil {
+		if buffer, ok := s.cache[name]; ok {
+			return buffer
+		}
 	}
 
-	path := filepath.Join(dir, name)
+	directory := s.Directory
+	if directory == "" {
+		directory = os.Getenv("CREDENTIALS_DIRECTORY")
+	}
+	if directory == "" {
+		return nil
+	}
+
+	path := filepath.Join(directory, name)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(string(data))
+
+	// Credential files commonly have trailing newlines — strip whitespace
+	// before moving into mmap-backed memory.
+	trimmed := []byte(strings.TrimSpace(string(data)))
+	// Zero the original read before discarding it.
+	for index := range data {
+		data[index] = 0
+	}
+	if len(trimmed) == 0 {
+		return nil
+	}
+
+	buffer, err := secret.NewFromBytes(trimmed)
+	if err != nil {
+		return nil
+	}
+
+	if s.cache == nil {
+		s.cache = make(map[string]*secret.Buffer)
+	}
+	s.cache[name] = buffer
+	return buffer
 }
 
-// MapCredentialSource provides credentials from an in-memory map.
-// Useful for testing.
+// Close releases all cached credential buffers.
+func (s *SystemdCredentialSource) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, buffer := range s.cache {
+		buffer.Close()
+		delete(s.cache, name)
+	}
+	return nil
+}
+
+// MapCredentialSource provides credentials from mmap-backed buffers.
+// Use NewMapCredentialSource to construct from a string map.
 type MapCredentialSource struct {
-	Credentials map[string]string
+	credentials map[string]*secret.Buffer
+}
+
+// NewMapCredentialSource creates a MapCredentialSource from string values.
+// Each value is copied into an mmap-backed buffer. Returns an error if
+// any buffer allocation fails.
+func NewMapCredentialSource(values map[string]string) (*MapCredentialSource, error) {
+	credentials := make(map[string]*secret.Buffer, len(values))
+	for key, value := range values {
+		buffer, err := secret.NewFromBytes([]byte(value))
+		if err != nil {
+			// Clean up already-created buffers.
+			for _, existing := range credentials {
+				existing.Close()
+			}
+			return nil, fmt.Errorf("creating credential buffer for %q: %w", key, err)
+		}
+		credentials[key] = buffer
+	}
+	return &MapCredentialSource{credentials: credentials}, nil
 }
 
 // Get retrieves a credential from the map.
-func (s *MapCredentialSource) Get(name string) string {
-	if s.Credentials == nil {
-		return ""
+func (s *MapCredentialSource) Get(name string) *secret.Buffer {
+	if s.credentials == nil {
+		return nil
 	}
-	return s.Credentials[name]
+	return s.credentials[name]
+}
+
+// Close releases all credential buffers.
+func (s *MapCredentialSource) Close() error {
+	for key, buffer := range s.credentials {
+		buffer.Close()
+		delete(s.credentials, key)
+	}
+	return nil
 }
 
 // ChainCredentialSource tries multiple credential sources in order.
-// Returns the first non-empty value found.
+// Returns the first non-nil value found.
 type ChainCredentialSource struct {
 	Sources []CredentialSource
 }
 
-// Get tries each source in order and returns the first non-empty value.
-func (s *ChainCredentialSource) Get(name string) string {
+// Get tries each source in order and returns the first non-nil value.
+func (s *ChainCredentialSource) Get(name string) *secret.Buffer {
 	for _, source := range s.Sources {
-		if value := source.Get(name); value != "" {
+		if value := source.Get(name); value != nil {
 			return value
 		}
 	}
-	return ""
+	return nil
+}
+
+// Close closes all child credential sources.
+func (s *ChainCredentialSource) Close() error {
+	for _, source := range s.Sources {
+		source.Close()
+	}
+	return nil
 }
 
 // PipeCredentialSource reads credentials from a JSON payload piped to an
@@ -174,16 +308,16 @@ func (s *ChainCredentialSource) Get(name string) string {
 // keys appear in the credentials object (stored verbatim). Lookup is
 // exact-match (no normalization).
 type PipeCredentialSource struct {
-	credentials  map[string]string
+	credentials  map[string]*secret.Buffer
 	matrixPolicy *schema.MatrixPolicy
 }
 
 // pipeCredentialPayload is the JSON structure read from stdin.
 type pipeCredentialPayload struct {
-	MatrixHomeserverURL string            `json:"matrix_homeserver_url"`
-	MatrixToken         string            `json:"matrix_token"`
-	MatrixUserID        string            `json:"matrix_user_id"`
-	Credentials         map[string]string `json:"credentials"`
+	MatrixHomeserverURL string               `json:"matrix_homeserver_url"`
+	MatrixToken         string               `json:"matrix_token"`
+	MatrixUserID        string               `json:"matrix_user_id"`
+	Credentials         map[string]string     `json:"credentials"`
 	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
@@ -192,24 +326,24 @@ type pipeCredentialPayload struct {
 // The raw buffer is zeroed after parsing. Returns an error if the payload
 // cannot be read or parsed, or if required fields are missing.
 func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
-	buffer, err := io.ReadAll(reader)
+	rawBuffer, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("reading credential payload: %w", err)
 	}
 
 	// Ensure we zero the buffer regardless of parse outcome.
 	defer func() {
-		for i := range buffer {
-			buffer[i] = 0
+		for i := range rawBuffer {
+			rawBuffer[i] = 0
 		}
 	}()
 
-	if len(buffer) == 0 {
+	if len(rawBuffer) == 0 {
 		return nil, fmt.Errorf("credential payload is empty")
 	}
 
 	var payload pipeCredentialPayload
-	if err := json.Unmarshal(buffer, &payload); err != nil {
+	if err := json.Unmarshal(rawBuffer, &payload); err != nil {
 		return nil, fmt.Errorf("parsing credential payload: %w", err)
 	}
 
@@ -223,16 +357,40 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 		return nil, fmt.Errorf("credential payload missing required field: matrix_user_id")
 	}
 
-	credentials := make(map[string]string, len(payload.Credentials)+4)
+	credentials := make(map[string]*secret.Buffer, len(payload.Credentials)+4)
+
+	// Helper to wrap a string value into a secret buffer, cleaning up on failure.
+	wrapValue := func(key, value string) error {
+		buffer, err := secret.NewFromBytes([]byte(value))
+		if err != nil {
+			for _, existing := range credentials {
+				existing.Close()
+			}
+			return fmt.Errorf("creating credential buffer for %q: %w", key, err)
+		}
+		credentials[key] = buffer
+		return nil
+	}
+
 	for key, value := range payload.Credentials {
-		credentials[key] = value
+		if err := wrapValue(key, value); err != nil {
+			return nil, err
+		}
 	}
 	// Top-level fields are set AFTER the credentials map so they cannot
 	// be overridden by a key collision in the credentials object.
-	credentials["MATRIX_HOMESERVER_URL"] = payload.MatrixHomeserverURL
-	credentials["MATRIX_TOKEN"] = payload.MatrixToken
-	credentials["MATRIX_BEARER"] = "Bearer " + payload.MatrixToken
-	credentials["MATRIX_USER_ID"] = payload.MatrixUserID
+	if err := wrapValue("MATRIX_HOMESERVER_URL", payload.MatrixHomeserverURL); err != nil {
+		return nil, err
+	}
+	if err := wrapValue("MATRIX_TOKEN", payload.MatrixToken); err != nil {
+		return nil, err
+	}
+	if err := wrapValue("MATRIX_BEARER", "Bearer "+payload.MatrixToken); err != nil {
+		return nil, err
+	}
+	if err := wrapValue("MATRIX_USER_ID", payload.MatrixUserID); err != nil {
+		return nil, err
+	}
 
 	return &PipeCredentialSource{
 		credentials:  credentials,
@@ -243,8 +401,17 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 // Get retrieves a credential by exact name. No normalization is applied —
 // the key must match exactly as it appeared in the JSON payload (or
 // "MATRIX_TOKEN" / "MATRIX_USER_ID" for the top-level fields).
-func (s *PipeCredentialSource) Get(name string) string {
+func (s *PipeCredentialSource) Get(name string) *secret.Buffer {
 	return s.credentials[name]
+}
+
+// Close releases all credential buffers.
+func (s *PipeCredentialSource) Close() error {
+	for key, buffer := range s.credentials {
+		buffer.Close()
+		delete(s.credentials, key)
+	}
+	return nil
 }
 
 // MatrixPolicy returns the Matrix access policy from the credential payload.

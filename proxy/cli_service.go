@@ -80,7 +80,7 @@ func (s *CLIService) checkAndPrepareCommand(ctx context.Context, args []string) 
 	// when the real problem is proxy misconfiguration.
 	var missingCredentials []string
 	for _, envConfig := range s.envVars {
-		if s.credential == nil || s.credential.Get(envConfig.Credential) == "" {
+		if s.credential == nil || s.credential.Get(envConfig.Credential) == nil {
 			missingCredentials = append(missingCredentials, envConfig.Credential)
 		}
 	}
@@ -118,8 +118,8 @@ func (s *CLIService) checkAndPrepareCommand(ctx context.Context, args []string) 
 				}
 				return nil, nil, fmt.Errorf("failed to create temp file for %s: %w", envVar, err)
 			}
-			// Write credential and close immediately (CLI will read it)
-			if _, err := tempFile.WriteString(value); err != nil {
+			// Write credential directly from mmap to file (no heap copy).
+			if _, err := value.WriteTo(tempFile); err != nil {
 				tempFile.Close()
 				os.Remove(tempFile.Name())
 				for _, f := range tempFiles {
@@ -134,7 +134,7 @@ func (s *CLIService) checkAndPrepareCommand(ctx context.Context, args []string) 
 			env = append(env, fmt.Sprintf("%s=%s", envVar, tempFile.Name()))
 
 		default: // "value"
-			env = append(env, fmt.Sprintf("%s=%s", envVar, value))
+			env = append(env, fmt.Sprintf("%s=%s", envVar, value.String()))
 		}
 	}
 	cmd.Env = env

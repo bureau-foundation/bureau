@@ -432,7 +432,14 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 
 	var data sessionData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
+		for index := range jsonData {
+			jsonData[index] = 0
+		}
 		return nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
+	}
+	// Zero the raw JSON which contains the access token in plaintext.
+	for index := range jsonData {
+		jsonData[index] = 0
 	}
 
 	if data.AccessToken == "" {
@@ -454,7 +461,7 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 		return nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(data.UserID, data.AccessToken), nil
+	return client.SessionFromToken(data.UserID, data.AccessToken)
 }
 
 // ensureConfigRoom ensures the per-machine config room exists. If it doesn't,

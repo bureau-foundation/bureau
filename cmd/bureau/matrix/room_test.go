@@ -494,7 +494,11 @@ func TestInspectRoomState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken("@test:local", "test-token")
+		if err != nil {
+			t.Fatalf("SessionFromToken: %v", err)
+		}
+		defer session.Close()
 
 		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
 		if name != "Test Room" {
@@ -519,7 +523,11 @@ func TestInspectRoomState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken("@test:local", "test-token")
+		if err != nil {
+			t.Fatalf("SessionFromToken: %v", err)
+		}
+		defer session.Close()
 
 		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
 		if name != "" {
@@ -543,7 +551,11 @@ func TestInspectRoomState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken("@test:local", "test-token")
+		if err != nil {
+			t.Fatalf("SessionFromToken: %v", err)
+		}
+		defer session.Close()
 
 		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
 		if name != "" || alias != "" || topic != "" {

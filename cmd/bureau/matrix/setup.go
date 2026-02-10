@@ -5,6 +5,7 @@ package matrix
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -92,9 +94,7 @@ Standard rooms created:
 			if err != nil {
 				return fmt.Errorf("read registration token: %w", err)
 			}
-			if registrationToken == "" {
-				return fmt.Errorf("registration token is empty")
-			}
+			defer registrationToken.Close()
 
 			logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 				Level: slog.LevelInfo,
@@ -121,7 +121,7 @@ Standard rooms created:
 
 type setupConfig struct {
 	homeserverURL     string
-	registrationToken string
+	registrationToken *secret.Buffer
 	credentialFile    string
 	serverName        string
 	adminUsername     string
@@ -138,11 +138,16 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 
 	// Step 1: Register or login the admin account.
-	adminPassword := deriveAdminPassword(config.registrationToken)
-	session, err := registerOrLogin(ctx, client, config.adminUsername, adminPassword, config.registrationToken)
+	adminPassword, err := deriveAdminPassword(config.registrationToken.String())
+	if err != nil {
+		return fmt.Errorf("derive admin password: %w", err)
+	}
+	defer adminPassword.Close()
+	session, err := registerOrLogin(ctx, client, config.adminUsername, adminPassword.String(), config.registrationToken.String())
 	if err != nil {
 		return fmt.Errorf("get admin session: %w", err)
 	}
+	defer session.Close()
 	logger.Info("admin session established", "user_id", session.UserID())
 
 	// Step 2: Create Bureau space.
@@ -324,7 +329,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken, spaceRoomID, agentsRoomID, systemRoomID, machinesRoomID, servicesRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, agentsRoomID, systemRoomID, machinesRoomID, servicesRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -332,7 +337,7 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_HOMESERVER_URL=%s\n", homeserverURL)
 	fmt.Fprintf(&builder, "MATRIX_ADMIN_USER=%s\n", session.UserID())
 	fmt.Fprintf(&builder, "MATRIX_ADMIN_TOKEN=%s\n", session.AccessToken())
-	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken)
+	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken.String())
 	fmt.Fprintf(&builder, "MATRIX_SPACE_ROOM=%s\n", spaceRoomID)
 	fmt.Fprintf(&builder, "MATRIX_AGENTS_ROOM=%s\n", agentsRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
@@ -381,40 +386,60 @@ func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string)
 }
 
 // readSecret reads a secret from a file path, or from stdin if path is "-".
-// The returned string is trimmed of leading/trailing whitespace. This avoids
-// putting secrets in CLI arguments (visible in /proc/*/cmdline, ps, shell
-// history, and LLM conversation context).
-func readSecret(path string) (string, error) {
+// The returned buffer is mmap-backed (locked into RAM, excluded from core
+// dumps) and must be closed by the caller. Leading/trailing whitespace is
+// trimmed before storing. Returns an error if the source is empty after
+// trimming.
+func readSecret(path string) (*secret.Buffer, error) {
 	var data []byte
-	var err error
 
 	if path == "-" {
 		scanner := bufio.NewScanner(os.Stdin)
 		if !scanner.Scan() {
 			if scanErr := scanner.Err(); scanErr != nil {
-				return "", fmt.Errorf("reading stdin: %w", scanErr)
+				return nil, fmt.Errorf("reading stdin: %w", scanErr)
 			}
-			return "", fmt.Errorf("stdin is empty")
+			return nil, fmt.Errorf("stdin is empty")
 		}
 		data = scanner.Bytes()
 	} else {
+		var err error
 		data, err = os.ReadFile(path)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
-	return strings.TrimSpace(string(data)), nil
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		for index := range data {
+			data[index] = 0
+		}
+		return nil, fmt.Errorf("secret is empty")
+	}
+
+	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
+	buffer, err := secret.NewFromBytes(trimmed)
+	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
+	for index := range data {
+		data[index] = 0
+	}
+	if err != nil {
+		return nil, err
+	}
+	return buffer, nil
 }
 
 // deriveAdminPassword deterministically derives the admin password from the
-// registration token via SHA-256 with a domain separator. This ensures re-running
-// setup with the same token produces the same password (idempotency).
+// registration token via SHA-256 with a domain separator. The result is
+// returned in an mmap-backed buffer; the caller must close it.
 //
-// Acceptable because the registration token is high-entropy random material
-// (openssl rand -hex 32) and the password only needs to resist online attacks
-// rate-limited by the homeserver.
-func deriveAdminPassword(registrationToken string) string {
+// This ensures re-running setup with the same token produces the same
+// password (idempotency). Acceptable because the registration token is
+// high-entropy random material (openssl rand -hex 32) and the password
+// only needs to resist online attacks rate-limited by the homeserver.
+func deriveAdminPassword(registrationToken string) (*secret.Buffer, error) {
 	hash := sha256.Sum256([]byte("bureau-admin-password:" + registrationToken))
-	return hex.EncodeToString(hash[:])
+	hexBytes := []byte(hex.EncodeToString(hash[:]))
+	return secret.NewFromBytes(hexBytes)
 }

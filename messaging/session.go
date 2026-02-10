@@ -13,14 +13,20 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // Session is an authenticated Matrix session.
 // It wraps a Client with an access token for making authenticated API calls.
 // Sessions are lightweight and safe to create in large numbers.
+//
+// The access token is stored in a secret.Buffer (mmap-backed, locked against
+// swap, excluded from core dumps). The caller must call Close when the Session
+// is no longer needed.
 type Session struct {
 	client      *Client
-	accessToken string
+	accessToken *secret.Buffer
 	userID      string
 	deviceID    string
 
@@ -33,14 +39,26 @@ func (s *Session) UserID() string {
 	return s.userID
 }
 
-// AccessToken returns the access token for this session.
+// AccessToken returns the access token as a heap string. This creates a brief
+// copy from the mmap-backed buffer — use only at API boundaries that require
+// a string (e.g., writing to JSON, logging). Prefer passing the Session
+// itself when possible.
 func (s *Session) AccessToken() string {
-	return s.accessToken
+	return s.accessToken.String()
 }
 
 // DeviceID returns the device ID for this session.
 func (s *Session) DeviceID() string {
 	return s.deviceID
+}
+
+// Close releases the access token memory (zeros, unlocks, unmaps).
+// Idempotent — safe to call multiple times.
+func (s *Session) Close() error {
+	if s.accessToken != nil {
+		return s.accessToken.Close()
+	}
+	return nil
 }
 
 // WhoAmI validates the access token and returns the user ID.

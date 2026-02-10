@@ -178,7 +178,11 @@ func TestInspectSpaceState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken("@test:local", "test-token")
+		if err != nil {
+			t.Fatalf("SessionFromToken: %v", err)
+		}
+		defer session.Close()
 
 		isSpace, name, alias := inspectSpaceState(t.Context(), session, "!room1:local")
 		if !isSpace {
@@ -216,7 +220,11 @@ func TestInspectSpaceState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken("@test:local", "test-token")
+		if err != nil {
+			t.Fatalf("SessionFromToken: %v", err)
+		}
+		defer session.Close()
 
 		isSpace, _, _ := inspectSpaceState(t.Context(), session, "!room1:local")
 		if isSpace {

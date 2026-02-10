@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // ClientConfig holds configuration for creating a Client.
@@ -79,7 +81,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 // supported by the homeserver. This is an unauthenticated endpoint — useful
 // for checking whether the homeserver is reachable and what it supports.
 func (c *Client) ServerVersions(ctx context.Context) (*ServerVersionsResponse, error) {
-	body, err := c.doRequest(ctx, http.MethodGet, "/_matrix/client/versions", "", nil)
+	body, err := c.doRequest(ctx, http.MethodGet, "/_matrix/client/versions", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: server versions failed: %w", err)
 	}
@@ -111,7 +113,7 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 		"username": request.Username,
 		"password": request.Password,
 	}
-	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", "", firstAttempt)
+	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", nil, firstAttempt)
 	if err == nil {
 		// Registration succeeded without UIAA (unlikely but possible if server
 		// has no auth requirements).
@@ -119,7 +121,7 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 		if parseErr := json.Unmarshal(body, &authResponse); parseErr != nil {
 			return nil, fmt.Errorf("messaging: failed to parse register response: %w", parseErr)
 		}
-		return c.sessionFromAuth(&authResponse), nil
+		return c.sessionFromAuth(&authResponse)
 	}
 
 	// Expect 401 with UIAA session.
@@ -145,7 +147,7 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 		"password": request.Password,
 		"auth":     auth,
 	}
-	body, err = c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", "", completeRequest)
+	body, err = c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", nil, completeRequest)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: registration failed: %w", err)
 	}
@@ -160,7 +162,7 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 		"device_id", authResponse.DeviceID,
 	)
 
-	return c.sessionFromAuth(&authResponse), nil
+	return c.sessionFromAuth(&authResponse)
 }
 
 // Login authenticates with username and password, returning a Session.
@@ -179,7 +181,7 @@ func (c *Client) Login(ctx context.Context, username, password string) (*Session
 		InitialDeviceDisplayName: "bureau",
 	}
 
-	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/login", "", loginRequest)
+	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/login", nil, loginRequest)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: login failed: %w", err)
 	}
@@ -194,34 +196,48 @@ func (c *Client) Login(ctx context.Context, username, password string) (*Session
 		"device_id", authResponse.DeviceID,
 	)
 
-	return c.sessionFromAuth(&authResponse), nil
+	return c.sessionFromAuth(&authResponse)
 }
 
-// SessionFromToken creates a Session from an existing access token.
+// SessionFromToken creates a Session from an existing access token string.
+// The token is moved into mmap-backed memory (locked against swap, excluded
+// from core dumps). The original string remains on the heap briefly — it will
+// be collected by the GC, but the mmap buffer is the durable copy.
+//
 // This does NOT validate the token — the first API call will fail if invalid.
 // userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local").
-func (c *Client) SessionFromToken(userID, accessToken string) *Session {
+//
+// The caller must call Close on the returned Session when done.
+func (c *Client) SessionFromToken(userID, accessToken string) (*Session, error) {
+	tokenBuffer, err := secret.NewFromBytes([]byte(accessToken))
+	if err != nil {
+		return nil, fmt.Errorf("messaging: protecting access token: %w", err)
+	}
 	return &Session{
 		client:      c,
-		accessToken: accessToken,
+		accessToken: tokenBuffer,
 		userID:      userID,
-	}
+	}, nil
 }
 
-func (c *Client) sessionFromAuth(auth *AuthResponse) *Session {
+func (c *Client) sessionFromAuth(auth *AuthResponse) (*Session, error) {
+	tokenBuffer, err := secret.NewFromBytes([]byte(auth.AccessToken))
+	if err != nil {
+		return nil, fmt.Errorf("messaging: protecting access token: %w", err)
+	}
 	return &Session{
 		client:      c,
-		accessToken: auth.AccessToken,
+		accessToken: tokenBuffer,
 		userID:      auth.UserID,
 		deviceID:    auth.DeviceID,
-	}
+	}, nil
 }
 
 // doRequest performs an HTTP request to the homeserver and returns the response body.
 // On 2xx, returns the body. On 4xx/5xx, returns a *MatrixError.
-// accessToken may be empty for unauthenticated endpoints.
+// accessToken may be nil for unauthenticated endpoints.
 // query may be nil for endpoints without query parameters.
-func (c *Client) doRequest(ctx context.Context, method, path, accessToken string, requestBody any, query ...url.Values) ([]byte, error) {
+func (c *Client) doRequest(ctx context.Context, method, path string, accessToken *secret.Buffer, requestBody any, query ...url.Values) ([]byte, error) {
 	requestURL := c.baseURL + path
 	if len(query) > 0 && query[0] != nil {
 		requestURL += "?" + query[0].Encode()
@@ -244,8 +260,8 @@ func (c *Client) doRequest(ctx context.Context, method, path, accessToken string
 	if requestBody != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	if accessToken != "" {
-		request.Header.Set("Authorization", "Bearer "+accessToken)
+	if accessToken != nil {
+		request.Header.Set("Authorization", "Bearer "+accessToken.String())
 	}
 
 	response, err := c.httpClient.Do(request)
@@ -277,7 +293,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, accessToken string
 }
 
 // doRequestRaw performs an HTTP request with a raw body (for media upload).
-func (c *Client) doRequestRaw(ctx context.Context, method, path, accessToken, contentType string, body io.Reader) ([]byte, error) {
+func (c *Client) doRequestRaw(ctx context.Context, method, path string, accessToken *secret.Buffer, contentType string, body io.Reader) ([]byte, error) {
 	requestURL := c.baseURL + path
 
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
@@ -288,8 +304,8 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path, accessToken, co
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	if accessToken != "" {
-		request.Header.Set("Authorization", "Bearer "+accessToken)
+	if accessToken != nil {
+		request.Header.Set("Authorization", "Bearer "+accessToken.String())
 	}
 
 	response, err := c.httpClient.Do(request)

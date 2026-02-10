@@ -558,11 +558,9 @@ func TestServerWithCredentials(t *testing.T) {
 		EnvVars: map[string]EnvVarConfig{
 			"TEST_SECRET": {Credential: "test-credential", Type: "value"},
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"test-credential": "secret-value-12345",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"test-credential": "secret-value-12345",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -637,11 +635,9 @@ func TestFileBasedCredentials(t *testing.T) {
 		EnvVars: map[string]EnvVarConfig{
 			"CREDENTIAL_FILE": {Credential: "test-cred", Type: "file"},
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"test-cred": `{"type":"service_account","project_id":"test"}`,
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"test-cred": `{"type":"service_account","project_id":"test"}`,
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -712,11 +708,9 @@ func TestFileCredentialCleanup(t *testing.T) {
 		EnvVars: map[string]EnvVarConfig{
 			"CREDENTIAL_FILE": {Credential: "test-cred", Type: "file"},
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"test-cred": "secret-content",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"test-cred": "secret-content",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)

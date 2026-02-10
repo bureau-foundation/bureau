@@ -161,7 +161,7 @@ func TestBuffer_String_PanicsAfterClose(t *testing.T) {
 		}
 	}()
 
-	buffer.String()
+	_ = buffer.String()
 }
 
 func TestNewFromReader(t *testing.T) {

@@ -174,7 +174,11 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	results := runDoctor(t.Context(), client, session, "local", nil)
 
@@ -233,7 +237,11 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	// Provide matching credentials.
 	credentials := map[string]string{
@@ -263,7 +271,11 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	// Provide mismatched credentials.
 	credentials := map[string]string{
@@ -300,7 +312,11 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken("@admin:local", "test-token")
+	session, err := client.SessionFromToken("@admin:local", "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	results := runDoctor(t.Context(), client, session, "local", nil)
 
@@ -343,7 +359,11 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken("@admin:local", "bad-token")
+	session, err := client.SessionFromToken("@admin:local", "bad-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	results := runDoctor(t.Context(), client, session, "local", nil)
 
@@ -402,7 +422,11 @@ func TestCheckAuth_Mismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken("@expected:local", "token")
+	session, err := client.SessionFromToken("@expected:local", "token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
 
 	result := checkAuth(t.Context(), session)
 	if result.Status != statusWarn {

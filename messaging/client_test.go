@@ -106,6 +106,7 @@ func TestRegister(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Register failed: %v", err)
 		}
+		defer session.Close()
 
 		if session.UserID() != "@alice:test.local" {
 			t.Errorf("unexpected user ID: %s", session.UserID())
@@ -203,6 +204,7 @@ func TestLogin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Login failed: %v", err)
 		}
+		defer session.Close()
 
 		if session.UserID() != "@bob:test.local" {
 			t.Errorf("unexpected user ID: %s", session.UserID())
@@ -258,7 +260,12 @@ func TestSessionFromToken(t *testing.T) {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	session := client.SessionFromToken("@alice:test.local", "syt_token")
+	session, err := client.SessionFromToken("@alice:test.local", "syt_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken failed: %v", err)
+	}
+	defer session.Close()
+
 	if session.UserID() != "@alice:test.local" {
 		t.Errorf("unexpected user ID: %s", session.UserID())
 	}

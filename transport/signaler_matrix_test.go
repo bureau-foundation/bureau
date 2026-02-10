@@ -124,7 +124,11 @@ func newTestMatrixSignaler(t *testing.T, mock *mockSignalingServer) *MatrixSigna
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	session := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
 
 	return NewMatrixSignaler(session, "!machines:bureau.local", nil)
 }

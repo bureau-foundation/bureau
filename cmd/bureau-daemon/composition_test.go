@@ -174,7 +174,11 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_daemon_session_token")
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_daemon_session_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
 
 	// Construct the daemon directly (not via run()) so we control the lifecycle
 	// and avoid signal handling, polling loops, etc.
@@ -200,6 +204,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		layoutWatchers: make(map[string]*layoutWatcher),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	ctx := context.Background()
 	agentSocket := socketBase + principalLocalpart + principal.SocketSuffix
@@ -326,7 +331,11 @@ func TestReconcileNoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
 		session:        session,
@@ -345,6 +354,7 @@ func TestReconcileNoConfig(t *testing.T) {
 		layoutWatchers: make(map[string]*layoutWatcher),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// The mock has no state event for m.bureau.machine_config, so the
 	// mock returns M_NOT_FOUND. Reconcile should treat this as "no config yet"

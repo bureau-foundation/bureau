@@ -41,7 +41,11 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
 		session:           session,
@@ -58,6 +62,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 		layoutWatchers:    make(map[string]*layoutWatcher),
 		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	ctx := context.Background()
 	if err := daemon.startObserveListener(ctx); err != nil {

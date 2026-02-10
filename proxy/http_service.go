@@ -160,7 +160,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Validate credentials are available before making request
 	var missingCredentials []string
 	for _, credName := range s.injectHeaders {
-		if s.credential == nil || s.credential.Get(credName) == "" {
+		if s.credential == nil || s.credential.Get(credName) == nil {
 			missingCredentials = append(missingCredentials, credName)
 		}
 	}
@@ -207,7 +207,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Inject credential headers
 	for headerName, credName := range s.injectHeaders {
 		value := s.credential.Get(credName)
-		upstreamReq.Header.Set(headerName, value)
+		upstreamReq.Header.Set(headerName, value.String())
 	}
 
 	// Set standard proxy headers

@@ -255,9 +255,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	if err != nil {
 		return fmt.Errorf("reading registration token: %w", err)
 	}
-	if registrationToken == "" {
-		return fmt.Errorf("registration token is empty")
-	}
+	defer registrationToken.Close()
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
@@ -267,10 +265,14 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 		return fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	// Register the machine account. Use the registration token as the password
-	// (deterministic, so re-running with the same token is idempotent).
-	password := derivePassword(registrationToken, machineName)
-	session, err := registerOrLogin(ctx, client, machineName, password, registrationToken)
+	// Register the machine account. Use a password derived from the
+	// registration token (deterministic, so re-running is idempotent).
+	password, err := derivePassword(registrationToken.String(), machineName)
+	if err != nil {
+		return fmt.Errorf("derive machine password: %w", err)
+	}
+	defer password.Close()
+	session, err := registerOrLogin(ctx, client, machineName, password.String(), registrationToken.String())
 	if err != nil {
 		return fmt.Errorf("registering machine account: %w", err)
 	}
@@ -349,7 +351,14 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 
 	var data sessionData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
+		for index := range jsonData {
+			jsonData[index] = 0
+		}
 		return nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
+	}
+	// Zero the raw JSON which contains the access token in plaintext.
+	for index := range jsonData {
+		jsonData[index] = 0
 	}
 
 	if data.AccessToken == "" {
@@ -371,7 +380,7 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 		return nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(data.UserID, data.AccessToken), nil
+	return client.SessionFromToken(data.UserID, data.AccessToken)
 }
 
 // managedSandbox tracks a running proxy process for a principal.
@@ -658,35 +667,60 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username, pa
 }
 
 // derivePassword deterministically derives a password from the registration
-// token and machine name. This makes re-registration idempotent — calling
+// token and machine name. The result is returned in an mmap-backed buffer;
+// the caller must close it. This makes re-registration idempotent — calling
 // register with the same token and machine name always produces the same
 // password, so the launcher can safely re-run first-boot against an account
 // that already exists.
-func derivePassword(registrationToken, machineName string) string {
+func derivePassword(registrationToken, machineName string) (*secret.Buffer, error) {
 	hash := sha256.Sum256([]byte("bureau-machine-password:" + machineName + ":" + registrationToken))
-	return hex.EncodeToString(hash[:])
+	hexBytes := []byte(hex.EncodeToString(hash[:]))
+	return secret.NewFromBytes(hexBytes)
 }
 
 // readSecret reads a secret from a file path, or from stdin if path is "-".
-// The returned string has leading/trailing whitespace trimmed (including the
-// trailing newline that most files and echo commands produce).
-func readSecret(path string) (string, error) {
+// The returned buffer is mmap-backed (locked into RAM, excluded from core
+// dumps) and must be closed by the caller. Leading/trailing whitespace is
+// trimmed before storing. Returns an error if the source is empty after
+// trimming.
+func readSecret(path string) (*secret.Buffer, error) {
+	var data []byte
+
 	if path == "-" {
 		scanner := bufio.NewScanner(os.Stdin)
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
-				return "", fmt.Errorf("reading stdin: %w", err)
+				return nil, fmt.Errorf("reading stdin: %w", err)
 			}
-			return "", fmt.Errorf("stdin is empty")
+			return nil, fmt.Errorf("stdin is empty")
 		}
-		return strings.TrimSpace(scanner.Text()), nil
+		data = scanner.Bytes()
+	} else {
+		var err error
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		for index := range data {
+			data[index] = 0
+		}
+		return nil, fmt.Errorf("secret is empty")
 	}
-	return strings.TrimSpace(string(data)), nil
+
+	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
+	buffer, err := secret.NewFromBytes(trimmed)
+	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
+	for index := range data {
+		data[index] = 0
+	}
+	if err != nil {
+		return nil, err
+	}
+	return buffer, nil
 }
 
 // spawnProxy creates a bureau-proxy subprocess for the given principal.

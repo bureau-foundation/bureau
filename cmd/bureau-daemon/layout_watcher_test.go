@@ -39,7 +39,11 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
 		session:          session,
@@ -56,6 +60,7 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 		layoutWatchers:   make(map[string]*layoutWatcher),
 		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Kill tmux server on cleanup.
 	t.Cleanup(func() {

@@ -106,12 +106,17 @@ func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error)
 		return nil, fmt.Errorf("create matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(userID, token), nil
+	return client.SessionFromToken(userID, token)
 }
 
 // readCredentialFile parses a key=value credential file. Lines starting
 // with "#" are comments. Empty lines are ignored. This matches the format
 // written by "bureau matrix setup".
+//
+// The returned map holds heap strings containing secrets (access tokens, etc.).
+// These strings cannot be zeroed (Go strings are immutable). In the CLI context
+// this is acceptable: the map is short-lived, and the access token is moved
+// into a *secret.Buffer by SessionFromToken before the map goes out of scope.
 func readCredentialFile(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {

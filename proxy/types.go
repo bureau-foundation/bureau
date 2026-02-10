@@ -20,6 +20,8 @@ package proxy
 import (
 	"context"
 	"io"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // Request is the JSON request format for proxy calls.
@@ -85,8 +87,14 @@ type Filter interface {
 
 // CredentialSource provides credentials for services.
 // This abstraction allows different credential backends (env, systemd, vault, etc.)
+//
+// Get returns a borrowed *secret.Buffer — the source retains ownership and the
+// caller must NOT close it. Returns nil when the credential is not found.
+//
+// Close releases all mmap-backed buffers held by the source. The creator of
+// a CredentialSource is responsible for calling Close; consumers (services)
+// borrow references and must not close the source.
 type CredentialSource interface {
-	// Get retrieves a credential by name.
-	// Returns empty string if not found.
-	Get(name string) string
+	Get(name string) *secret.Buffer
+	Close() error
 }

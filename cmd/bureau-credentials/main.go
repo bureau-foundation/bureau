@@ -115,26 +115,27 @@ type matrixConfig struct {
 // (the same format written by bureau-matrix-setup).
 func loadMatrixConfig(configPath, serverName string) (*matrixConfig, error) {
 	source := &proxy.FileCredentialSource{Path: configPath}
+	defer source.Close()
 
-	homeserverURL := source.Get("matrix-homeserver-url")
-	if homeserverURL == "" {
+	homeserverURLBuffer := source.Get("matrix-homeserver-url")
+	if homeserverURLBuffer == nil {
 		return nil, fmt.Errorf("MATRIX_HOMESERVER_URL not found in %s", configPath)
 	}
 
-	adminToken := source.Get("matrix-admin-token")
-	if adminToken == "" {
+	adminTokenBuffer := source.Get("matrix-admin-token")
+	if adminTokenBuffer == nil {
 		return nil, fmt.Errorf("MATRIX_ADMIN_TOKEN not found in %s", configPath)
 	}
 
-	adminUserID := source.Get("matrix-admin-user")
-	if adminUserID == "" {
+	adminUserIDBuffer := source.Get("matrix-admin-user")
+	if adminUserIDBuffer == nil {
 		return nil, fmt.Errorf("MATRIX_ADMIN_USER not found in %s", configPath)
 	}
 
 	return &matrixConfig{
-		HomeserverURL: homeserverURL,
-		AdminToken:    adminToken,
-		AdminUserID:   adminUserID,
+		HomeserverURL: homeserverURLBuffer.String(),
+		AdminToken:    adminTokenBuffer.String(),
+		AdminUserID:   adminUserIDBuffer.String(),
 		ServerName:    serverName,
 	}, nil
 }
@@ -149,7 +150,7 @@ func createSession(config *matrixConfig) (*messaging.Session, error) {
 		return nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(config.AdminUserID, config.AdminToken), nil
+	return client.SessionFromToken(config.AdminUserID, config.AdminToken)
 }
 
 // runProvision encrypts credentials and publishes them to Matrix.

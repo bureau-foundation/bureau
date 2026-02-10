@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 func TestEnvCredentialSource_Get(t *testing.T) {
@@ -47,12 +48,31 @@ func TestEnvCredentialSource_Get(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.source.Get(tt.key); got != tt.want {
-				t.Errorf("EnvCredentialSource.Get(%q) = %q, want %q", tt.key, got, tt.want)
-			}
+	for i := range tests {
+		test := &tests[i]
+		t.Run(test.name, func(t *testing.T) {
+			got := test.source.Get(test.key)
+			assertSecretBuffer(t, "EnvCredentialSource", test.key, got, test.want)
 		})
+	}
+}
+
+// assertSecretBuffer checks that a *secret.Buffer matches the expected string
+// value. An empty want means the buffer should be nil (not found).
+func assertSecretBuffer(t *testing.T, source, key string, got *secret.Buffer, want string) {
+	t.Helper()
+	if want == "" {
+		if got != nil {
+			t.Errorf("%s.Get(%q) = %q, want nil", source, key, got.String())
+		}
+		return
+	}
+	if got == nil {
+		t.Errorf("%s.Get(%q) = nil, want %q", source, key, want)
+		return
+	}
+	if got.String() != want {
+		t.Errorf("%s.Get(%q) = %q, want %q", source, key, got.String(), want)
 	}
 }
 
@@ -89,22 +109,20 @@ func TestSystemdCredentialSource_Get(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.source.Get(tt.key); got != tt.want {
-				t.Errorf("SystemdCredentialSource.Get(%q) = %q, want %q", tt.key, got, tt.want)
-			}
+	for i := range tests {
+		test := &tests[i]
+		t.Run(test.name, func(t *testing.T) {
+			got := test.source.Get(test.key)
+			assertSecretBuffer(t, "SystemdCredentialSource", test.key, got, test.want)
 		})
 	}
 }
 
 func TestMapCredentialSource_Get(t *testing.T) {
-	source := &MapCredentialSource{
-		Credentials: map[string]string{
-			"key1": "value1",
-			"key2": "value2",
-		},
-	}
+	source := testCredentials(t, map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+	})
 
 	tests := []struct {
 		key  string
@@ -117,17 +135,16 @@ func TestMapCredentialSource_Get(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			if got := source.Get(tt.key); got != tt.want {
-				t.Errorf("MapCredentialSource.Get(%q) = %q, want %q", tt.key, got, tt.want)
-			}
+			got := source.Get(tt.key)
+			assertSecretBuffer(t, "MapCredentialSource", tt.key, got, tt.want)
 		})
 	}
 }
 
 func TestMapCredentialSource_NilMap(t *testing.T) {
 	source := &MapCredentialSource{}
-	if got := source.Get("anything"); got != "" {
-		t.Errorf("MapCredentialSource.Get() with nil map = %q, want empty", got)
+	if got := source.Get("anything"); got != nil {
+		t.Errorf("MapCredentialSource.Get() with nil map = %q, want nil", got.String())
 	}
 }
 
@@ -162,9 +179,8 @@ func TestReadPipeCredentials(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.key, func(t *testing.T) {
-			if got := source.Get(test.key); got != test.want {
-				t.Errorf("PipeCredentialSource.Get(%q) = %q, want %q", test.key, got, test.want)
-			}
+			got := source.Get(test.key)
+			assertSecretBuffer(t, "PipeCredentialSource", test.key, got, test.want)
 		})
 	}
 }
@@ -181,18 +197,10 @@ func TestReadPipeCredentials_EmptyCredentialsMap(t *testing.T) {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
 
-	if got := source.Get("MATRIX_HOMESERVER_URL"); got != "http://localhost:6167" {
-		t.Errorf("Get(MATRIX_HOMESERVER_URL) = %q, want %q", got, "http://localhost:6167")
-	}
-	if got := source.Get("MATRIX_TOKEN"); got != "syt_token" {
-		t.Errorf("Get(MATRIX_TOKEN) = %q, want %q", got, "syt_token")
-	}
-	if got := source.Get("MATRIX_BEARER"); got != "Bearer syt_token" {
-		t.Errorf("Get(MATRIX_BEARER) = %q, want %q", got, "Bearer syt_token")
-	}
-	if got := source.Get("MATRIX_USER_ID"); got != "@alice:bureau.local" {
-		t.Errorf("Get(MATRIX_USER_ID) = %q, want %q", got, "@alice:bureau.local")
-	}
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_HOMESERVER_URL", source.Get("MATRIX_HOMESERVER_URL"), "http://localhost:6167")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "syt_token")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer syt_token")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_USER_ID", source.Get("MATRIX_USER_ID"), "@alice:bureau.local")
 }
 
 func TestReadPipeCredentials_ZerosBuffer(t *testing.T) {
@@ -210,9 +218,7 @@ func TestReadPipeCredentials_ZerosBuffer(t *testing.T) {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
 
-	if got := source.Get("MATRIX_TOKEN"); got != "secret" {
-		t.Errorf("Get(MATRIX_TOKEN) = %q, want %q", got, "secret")
-	}
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "secret")
 }
 
 func TestReadPipeCredentials_Errors(t *testing.T) {
@@ -299,28 +305,18 @@ func TestReadPipeCredentials_TopLevelFieldsCannotBeOverridden(t *testing.T) {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
 
-	if got := source.Get("MATRIX_HOMESERVER_URL"); got != "http://real:6167" {
-		t.Errorf("Get(MATRIX_HOMESERVER_URL) = %q, want %q (top-level field must win)", got, "http://real:6167")
-	}
-	if got := source.Get("MATRIX_TOKEN"); got != "top-level-token" {
-		t.Errorf("Get(MATRIX_TOKEN) = %q, want %q (top-level field must win)", got, "top-level-token")
-	}
-	if got := source.Get("MATRIX_BEARER"); got != "Bearer top-level-token" {
-		t.Errorf("Get(MATRIX_BEARER) = %q, want %q (derived from top-level token)", got, "Bearer top-level-token")
-	}
-	if got := source.Get("MATRIX_USER_ID"); got != "@top:level" {
-		t.Errorf("Get(MATRIX_USER_ID) = %q, want %q (top-level field must win)", got, "@top:level")
-	}
-	if got := source.Get("OTHER_KEY"); got != "other-value" {
-		t.Errorf("Get(OTHER_KEY) = %q, want %q", got, "other-value")
-	}
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_HOMESERVER_URL", source.Get("MATRIX_HOMESERVER_URL"), "http://real:6167")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "top-level-token")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer top-level-token")
+	assertSecretBuffer(t, "PipeCredentialSource", "MATRIX_USER_ID", source.Get("MATRIX_USER_ID"), "@top:level")
+	assertSecretBuffer(t, "PipeCredentialSource", "OTHER_KEY", source.Get("OTHER_KEY"), "other-value")
 }
 
 func TestChainCredentialSource_Get(t *testing.T) {
 	source := &ChainCredentialSource{
 		Sources: []CredentialSource{
-			&MapCredentialSource{Credentials: map[string]string{"key1": "from-first"}},
-			&MapCredentialSource{Credentials: map[string]string{"key1": "from-second", "key2": "from-second"}},
+			testCredentials(t, map[string]string{"key1": "from-first"}),
+			testCredentials(t, map[string]string{"key1": "from-second", "key2": "from-second"}),
 		},
 	}
 
@@ -335,9 +331,8 @@ func TestChainCredentialSource_Get(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			if got := source.Get(tt.key); got != tt.want {
-				t.Errorf("ChainCredentialSource.Get(%q) = %q, want %q", tt.key, got, tt.want)
-			}
+			got := source.Get(tt.key)
+			assertSecretBuffer(t, "ChainCredentialSource", tt.key, got, tt.want)
 		})
 	}
 }

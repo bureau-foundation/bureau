@@ -137,11 +137,12 @@ and proceeds directly to ensuring room membership.`,
 				if registrationTokenFile == "-" && passwordFile == "-" {
 					return fmt.Errorf("--registration-token-file and --password-file cannot both be - (stdin)")
 				}
-				token, err := readSecret(registrationTokenFile)
+				tokenBuffer, err := readSecret(registrationTokenFile)
 				if err != nil {
 					return fmt.Errorf("read registration token: %w", err)
 				}
-				registrationToken = token
+				defer tokenBuffer.Close()
+				registrationToken = tokenBuffer.String()
 			}
 			if registrationToken == "" {
 				return fmt.Errorf("registration token is required (use --credential-file or --registration-token-file)")
@@ -164,10 +165,9 @@ and proceeds directly to ensuring room membership.`,
 				// Agent accounts use a password derived from the registration
 				// token. The derived value is deterministic, so re-running
 				// with the same token produces the same account.
-				derived := deriveAdminPassword(registrationToken)
-				passwordBuffer, err = secret.NewFromBytes([]byte(derived))
+				passwordBuffer, err = deriveAdminPassword(registrationToken)
 				if err != nil {
-					return fmt.Errorf("secure password buffer: %w", err)
+					return fmt.Errorf("derive password: %w", err)
 				}
 				defer passwordBuffer.Close()
 			}
@@ -237,7 +237,11 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
-	adminSession := client.SessionFromToken(adminUserID, adminToken)
+	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	if err != nil {
+		return fmt.Errorf("creating admin session: %w", err)
+	}
+	defer adminSession.Close()
 
 	// Bureau infrastructure rooms from the credential file, in the order
 	// they appear in setup. Each entry maps a human-readable name to the
@@ -295,37 +299,13 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 // reads one line instead. The caller must Close the returned buffer.
 func readPassword(path string) (*secret.Buffer, error) {
 	if path != "-" {
-		plaintext, err := readSecret(path)
-		if err != nil {
-			return nil, err
-		}
-		if plaintext == "" {
-			return nil, fmt.Errorf("password is empty")
-		}
-		data := []byte(plaintext)
-		buffer, err := secret.NewFromBytes(data)
-		if err != nil {
-			return nil, err
-		}
-		return buffer, nil
+		return readSecret(path)
 	}
 
 	stdinFd := int(os.Stdin.Fd())
 	if !term.IsTerminal(stdinFd) {
 		// Stdin is piped — read one line without prompting.
-		plaintext, err := readSecret("-")
-		if err != nil {
-			return nil, err
-		}
-		if plaintext == "" {
-			return nil, fmt.Errorf("password is empty")
-		}
-		data := []byte(plaintext)
-		buffer, err := secret.NewFromBytes(data)
-		if err != nil {
-			return nil, err
-		}
-		return buffer, nil
+		return readSecret("-")
 	}
 
 	// Interactive terminal — prompt with echo disabled, confirm.

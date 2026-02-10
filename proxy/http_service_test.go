@@ -40,11 +40,9 @@ func TestHTTPServiceBasicProxy(t *testing.T) {
 		InjectHeaders: map[string]string{
 			"Authorization": "api-key",
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"api-key": "Bearer sk-test-12345",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"api-key": "Bearer sk-test-12345",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -103,11 +101,9 @@ func TestHTTPServiceStripHeaders(t *testing.T) {
 			"Authorization": "real-key",
 		},
 		StripHeaders: []string{"Authorization"}, // Strip incoming auth
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"real-key": "Bearer real-secret",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"real-key": "Bearer real-secret",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -163,11 +159,9 @@ func TestHTTPServiceSSEStreaming(t *testing.T) {
 		InjectHeaders: map[string]string{
 			"Authorization": "api-key",
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"api-key": "Bearer sk-test",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"api-key": "Bearer sk-test",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -212,9 +206,7 @@ func TestHTTPServiceMissingCredentials(t *testing.T) {
 		InjectHeaders: map[string]string{
 			"Authorization": "missing-credential",
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{}, // Empty - credential not provided
-		},
+		Credential: testCredentials(t, map[string]string{}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
@@ -366,11 +358,9 @@ func TestHTTPServiceIntegration(t *testing.T) {
 			"Authorization": "openai-key",
 		},
 		StripHeaders: []string{"Authorization"},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"openai-key": "Bearer sk-real-key",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"openai-key": "Bearer sk-real-key",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create http service: %v", err)
@@ -464,11 +454,9 @@ func TestHTTPServiceSSEIntegration(t *testing.T) {
 		InjectHeaders: map[string]string{
 			"Authorization": "key",
 		},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"key": "Bearer sk-test",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"key": "Bearer sk-test",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create http service: %v", err)
@@ -657,11 +645,9 @@ func TestMatrixProxyIntegration(t *testing.T) {
 			"Authorization": "MATRIX_BEARER",
 		},
 		StripHeaders: []string{"Authorization"},
-		Credential: &MapCredentialSource{
-			Credentials: map[string]string{
-				"MATRIX_BEARER": "Bearer syt_real_agent_token",
-			},
-		},
+		Credential: testCredentials(t, map[string]string{
+			"MATRIX_BEARER": "Bearer syt_real_agent_token",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("failed to create matrix service: %v", err)

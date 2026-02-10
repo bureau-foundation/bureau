@@ -41,6 +41,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
+	"github.com/bureau-foundation/bureau/sandbox"
 )
 
 func main() {
@@ -405,9 +406,10 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 type managedSandbox struct {
 	principal string
 	process   *os.Process
-	configDir string        // temp directory containing proxy config
-	done      chan struct{} // closed when process exits
-	exitError error         // set when process exits
+	configDir string              // temp directory containing proxy config
+	done      chan struct{}       // closed when process exits
+	exitError error               // set when process exits
+	roles     map[string][]string // role name → command, from SandboxSpec.Roles
 }
 
 // proxyCredentialPayload is the JSON structure piped to the proxy's stdin.
@@ -573,6 +575,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	l.logger.Info("spawning proxy for principal",
 		"principal", request.Principal,
 		"credential_keys", credentialKeys(credentials),
+		"has_sandbox_spec", request.SandboxSpec != nil,
 	)
 
 	pid, err := l.spawnProxy(request.Principal, credentials, request.MatrixPolicy)
@@ -580,13 +583,37 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
 
+	// Build the sandbox command if a SandboxSpec was provided. When no
+	// spec is present (legacy behavior), the tmux session gets a bare
+	// shell.
+	var sandboxCommand []string
+	if request.SandboxSpec != nil {
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec)
+		if setupErr != nil {
+			l.logger.Error("sandbox setup failed, rolling back proxy",
+				"principal", request.Principal, "error", setupErr)
+			if sb, exists := l.sandboxes[request.Principal]; exists {
+				sb.process.Kill()
+				<-sb.done
+				l.cleanupSandbox(request.Principal)
+			}
+			return IPCResponse{OK: false, Error: fmt.Sprintf("sandbox setup: %v", setupErr)}
+		}
+		sandboxCommand = sandboxCmd
+
+		// Store roles for layout resolution.
+		if sb, exists := l.sandboxes[request.Principal]; exists {
+			sb.roles = request.SandboxSpec.Roles
+		}
+	}
+
 	// Create a tmux session for observation of this principal.
-	if err := l.createTmuxSession(request.Principal); err != nil {
+	if err := l.createTmuxSession(request.Principal, sandboxCommand...); err != nil {
 		l.logger.Error("tmux session creation failed, rolling back proxy",
 			"principal", request.Principal, "error", err)
-		if sandbox, exists := l.sandboxes[request.Principal]; exists {
-			sandbox.process.Kill()
-			<-sandbox.done
+		if sb, exists := l.sandboxes[request.Principal]; exists {
+			sb.process.Kill()
+			<-sb.done
 			l.cleanupSandbox(request.Principal)
 		}
 		return IPCResponse{OK: false, Error: err.Error()}
@@ -632,6 +659,85 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 
 	l.logger.Info("sandbox destroyed", "principal", request.Principal)
 	return IPCResponse{OK: true}
+}
+
+// buildSandboxCommand converts a SandboxSpec into a shell script that exec's
+// the bwrap sandbox. Returns the command to pass to tmux new-session (the
+// script path). The bwrap arguments are built from the SandboxSpec's profile
+// conversion, and a payload file is written if the spec includes a Payload.
+//
+// The returned command is a single-element slice containing the script path.
+// The script handles all bwrap argument quoting internally, avoiding shell
+// escaping issues when tmux invokes the command.
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec) ([]string, error) {
+	// Find the sandbox's config directory (created by spawnProxy).
+	sb, exists := l.sandboxes[principalLocalpart]
+	if !exists {
+		return nil, fmt.Errorf("no sandbox entry for %q (proxy must be spawned first)", principalLocalpart)
+	}
+
+	// Determine the proxy socket path (same as spawnProxy uses).
+	proxySocketPath := l.socketBasePath + principalLocalpart + principal.SocketSuffix
+
+	// Convert the SandboxSpec to a sandbox.Profile.
+	profile := specToProfile(spec, proxySocketPath)
+
+	// Handle payload: write to file and add a bind mount into the sandbox.
+	if len(spec.Payload) > 0 {
+		payloadPath, err := writePayloadFile(sb.configDir, spec.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("writing payload: %w", err)
+		}
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: payloadPath,
+			Dest:   "/run/bureau/payload.json",
+			Mode:   sandbox.MountModeRO,
+		})
+	}
+
+	// Find bwrap.
+	bwrapPath, err := sandbox.BwrapPath()
+	if err != nil {
+		return nil, fmt.Errorf("locating bwrap: %w", err)
+	}
+
+	// Build bwrap arguments.
+	builder := sandbox.NewBwrapBuilder()
+	bwrapArgs, err := builder.Build(&sandbox.BwrapOptions{
+		Profile:  profile,
+		Command:  spec.Command,
+		ClearEnv: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building bwrap arguments: %w", err)
+	}
+
+	// Optionally wrap with systemd-run for resource limits.
+	if profile.Resources.HasLimits() {
+		scope := sandbox.NewSystemdScope("bureau-"+strings.ReplaceAll(principalLocalpart, "/", "-"), profile.Resources)
+		fullCmd := append([]string{bwrapPath}, bwrapArgs...)
+		wrappedCmd := scope.WrapCommand(fullCmd)
+		// If systemd wrapped it, the first element is systemd-run.
+		if wrappedCmd[0] != bwrapPath {
+			bwrapPath = wrappedCmd[0]
+			bwrapArgs = wrappedCmd[1:]
+		}
+	}
+
+	// Write the sandbox script that exec's bwrap.
+	scriptPath, err := writeSandboxScript(sb.configDir, bwrapPath, bwrapArgs)
+	if err != nil {
+		return nil, fmt.Errorf("writing sandbox script: %w", err)
+	}
+
+	l.logger.Info("sandbox command built",
+		"principal", principalLocalpart,
+		"script", scriptPath,
+		"bwrap", bwrapPath,
+		"command", spec.Command,
+	)
+
+	return []string{scriptPath}, nil
 }
 
 // credentialKeys returns the key names from a credential map (for logging —
@@ -1021,8 +1127,12 @@ func tmuxSessionName(localpart string) string {
 // defaults: Ctrl-a prefix (distinct from the user's Ctrl-b), mouse support
 // for relay pass-through, and generous scrollback for observation history.
 //
+// When command is provided, the tmux session runs that command instead of a
+// bare shell. This is used for bwrap sandbox scripts — the command is the
+// path to the script generated by buildSandboxCommand.
+//
 // If tmuxServerSocket is empty, this is a no-op (tmux management disabled).
-func (l *Launcher) createTmuxSession(localpart string) error {
+func (l *Launcher) createTmuxSession(localpart string, command ...string) error {
 	if l.tmuxServerSocket == "" {
 		return nil
 	}
@@ -1035,9 +1145,11 @@ func (l *Launcher) createTmuxSession(localpart string) error {
 	}
 
 	// Create a detached tmux session. The first new-session on this socket
-	// also starts the tmux server.
-	cmd := exec.Command("tmux", "-S", l.tmuxServerSocket,
-		"new-session", "-d", "-s", sessionName)
+	// also starts the tmux server. When a command is provided, tmux runs
+	// it instead of the default shell.
+	args := []string{"-S", l.tmuxServerSocket, "new-session", "-d", "-s", sessionName}
+	args = append(args, command...)
+	cmd := exec.Command("tmux", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("creating tmux session %q: %w (%s)",
 			sessionName, err, strings.TrimSpace(string(output)))
@@ -1048,6 +1160,7 @@ func (l *Launcher) createTmuxSession(localpart string) error {
 	l.logger.Info("tmux session created",
 		"session", sessionName,
 		"server_socket", l.tmuxServerSocket,
+		"has_command", len(command) > 0,
 	)
 	return nil
 }

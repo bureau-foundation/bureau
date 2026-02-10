@@ -73,11 +73,16 @@ type ResourceConfig struct {
 	TasksMax  int    `yaml:"tasks_max,omitempty"`
 	MemoryMax string `yaml:"memory_max,omitempty"`
 	CPUQuota  string `yaml:"cpu_quota,omitempty"`
+
+	// CPUWeight is the cgroup v2 cpu.weight value (1–10000, default 100).
+	// This controls relative CPU time under contention via the systemd
+	// CPUWeight property. Zero means no limit (use cgroup default).
+	CPUWeight int `yaml:"cpu_weight,omitempty"`
 }
 
 // HasLimits returns true if any resource limits are configured.
 func (r ResourceConfig) HasLimits() bool {
-	return r.TasksMax > 0 || r.MemoryMax != "" || r.CPUQuota != ""
+	return r.TasksMax > 0 || r.MemoryMax != "" || r.CPUQuota != "" || r.CPUWeight > 0
 }
 
 // SecurityConfig defines security settings for the sandbox.

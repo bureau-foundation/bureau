@@ -73,6 +73,10 @@ func (s *SystemdScope) WrapCommand(cmd []string) []string {
 		args = append(args, fmt.Sprintf("--property=CPUQuota=%s", s.Resources.CPUQuota))
 	}
 
+	if s.Resources.CPUWeight > 0 {
+		args = append(args, fmt.Sprintf("--property=CPUWeight=%d", s.Resources.CPUWeight))
+	}
+
 	// Separator and original command.
 	args = append(args, "--")
 	args = append(args, cmd...)

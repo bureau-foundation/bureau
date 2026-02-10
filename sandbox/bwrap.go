@@ -64,9 +64,6 @@ func (b *BwrapBuilder) Build(opts *BwrapOptions) ([]string, error) {
 	if opts.Profile == nil {
 		return nil, fmt.Errorf("profile is required")
 	}
-	if opts.Worktree == "" {
-		return nil, fmt.Errorf("worktree is required")
-	}
 	if len(opts.Command) == 0 {
 		return nil, fmt.Errorf("command is required")
 	}
@@ -202,6 +199,9 @@ func (b *BwrapBuilder) addProfileMounts(profile *Profile, worktree string, overl
 
 		// Substitute ${WORKTREE} placeholder.
 		if source == "${WORKTREE}" {
+			if worktree == "" {
+				return fmt.Errorf("mount %s references ${WORKTREE} but no worktree was provided", mount.Dest)
+			}
 			source = worktree
 		}
 

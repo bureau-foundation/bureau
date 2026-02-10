@@ -164,13 +164,25 @@ func TestBwrapBuilderValidation(t *testing.T) {
 		t.Error("expected error for missing profile")
 	}
 
-	// Missing worktree.
+	// Empty worktree is allowed (only errors when a mount uses ${WORKTREE}).
 	_, err = builder.Build(&BwrapOptions{
 		Profile: &Profile{Name: "test"},
 		Command: []string{"/bin/bash"},
 	})
+	if err != nil {
+		t.Errorf("empty worktree should be allowed, got: %v", err)
+	}
+
+	// ${WORKTREE} reference without a worktree set should error.
+	_, err = builder.Build(&BwrapOptions{
+		Profile: &Profile{
+			Name:       "test",
+			Filesystem: []Mount{{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"}},
+		},
+		Command: []string{"/bin/bash"},
+	})
 	if err == nil {
-		t.Error("expected error for missing worktree")
+		t.Error("expected error when ${WORKTREE} is used without worktree set")
 	}
 
 	// Missing command.

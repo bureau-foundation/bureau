@@ -551,6 +551,273 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	}
 }
 
+func TestBuildServiceDirectory(t *testing.T) {
+	daemon := &Daemon{
+		machineUserID: "@machine/workstation:bureau.local",
+		services: map[string]*schema.Service{
+			"service/stt/whisper": {
+				Principal:    "@service/stt/whisper:bureau.local",
+				Machine:      "@machine/gpu-1:bureau.local",
+				Capabilities: []string{"streaming", "speaker-diarization"},
+				Protocol:     "http",
+				Description:  "Speech-to-text via Whisper",
+				Metadata:     map[string]any{"model": "large-v3"},
+			},
+			"service/tts/piper": {
+				Principal:    "@service/tts/piper:bureau.local",
+				Machine:      "@machine/gpu-1:bureau.local",
+				Capabilities: []string{"streaming"},
+				Protocol:     "http",
+				Description:  "Text-to-speech via Piper",
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	directory := daemon.buildServiceDirectory()
+
+	if len(directory) != 2 {
+		t.Fatalf("buildServiceDirectory() returned %d entries, want 2", len(directory))
+	}
+
+	// Build a lookup map for easier assertions (order is non-deterministic).
+	byLocalpart := make(map[string]adminDirectoryEntry, len(directory))
+	for _, entry := range directory {
+		byLocalpart[entry.Localpart] = entry
+	}
+
+	whisper, ok := byLocalpart["service/stt/whisper"]
+	if !ok {
+		t.Fatal("missing service/stt/whisper in directory")
+	}
+	if whisper.Principal != "@service/stt/whisper:bureau.local" {
+		t.Errorf("whisper principal = %q, want @service/stt/whisper:bureau.local", whisper.Principal)
+	}
+	if whisper.Protocol != "http" {
+		t.Errorf("whisper protocol = %q, want http", whisper.Protocol)
+	}
+	if len(whisper.Capabilities) != 2 {
+		t.Errorf("whisper capabilities = %d, want 2", len(whisper.Capabilities))
+	}
+	if whisper.Metadata == nil || whisper.Metadata["model"] != "large-v3" {
+		t.Errorf("whisper metadata not preserved: %v", whisper.Metadata)
+	}
+
+	piper, ok := byLocalpart["service/tts/piper"]
+	if !ok {
+		t.Fatal("missing service/tts/piper in directory")
+	}
+	if piper.Description != "Text-to-speech via Piper" {
+		t.Errorf("piper description = %q", piper.Description)
+	}
+}
+
+func TestBuildServiceDirectory_Empty(t *testing.T) {
+	daemon := &Daemon{
+		services: make(map[string]*schema.Service),
+		logger:   slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	directory := daemon.buildServiceDirectory()
+
+	if len(directory) != 0 {
+		t.Errorf("buildServiceDirectory() returned %d entries for empty services, want 0", len(directory))
+	}
+}
+
+func TestPushDirectoryToProxy(t *testing.T) {
+	// Set up a mock admin server that captures the PUT /v1/admin/directory request.
+	tempDir := t.TempDir()
+
+	var receivedDirectory []adminDirectoryEntry
+	var callCount int
+	var callsMu sync.Mutex
+
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/directory", func(w http.ResponseWriter, r *http.Request) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		callCount++
+
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(bodyBytes, &receivedDirectory); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":   "ok",
+			"services": len(receivedDirectory),
+		})
+	})
+
+	consumerAdminDir := filepath.Join(tempDir, "agent")
+	os.MkdirAll(consumerAdminDir, 0755)
+	consumerAdminSocket := filepath.Join(consumerAdminDir, "alice.admin.sock")
+
+	listener, err := net.Listen("unix", consumerAdminSocket)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer listener.Close()
+
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(listener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		adminSocketPathFunc: func(localpart string) string {
+			return filepath.Join(tempDir, localpart+".admin.sock")
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	directory := []adminDirectoryEntry{
+		{
+			Localpart:    "service/stt/whisper",
+			Principal:    "@service/stt/whisper:bureau.local",
+			Machine:      "@machine/gpu-1:bureau.local",
+			Protocol:     "http",
+			Description:  "Speech-to-text",
+			Capabilities: []string{"streaming"},
+		},
+		{
+			Localpart:   "service/embedding/e5",
+			Principal:   "@service/embedding/e5:bureau.local",
+			Machine:     "@machine/cpu-1:bureau.local",
+			Protocol:    "grpc",
+			Description: "Text embeddings",
+			Metadata:    map[string]any{"max_tokens": float64(512)},
+		},
+	}
+
+	err = daemon.pushDirectoryToProxy(context.Background(), "agent/alice", directory)
+	if err != nil {
+		t.Fatalf("pushDirectoryToProxy: %v", err)
+	}
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+
+	if callCount != 1 {
+		t.Errorf("expected 1 admin call, got %d", callCount)
+	}
+	if len(receivedDirectory) != 2 {
+		t.Fatalf("proxy received %d entries, want 2", len(receivedDirectory))
+	}
+
+	// Verify the entries were correctly serialized on the wire.
+	byLocalpart := make(map[string]adminDirectoryEntry, len(receivedDirectory))
+	for _, entry := range receivedDirectory {
+		byLocalpart[entry.Localpart] = entry
+	}
+	whisper, ok := byLocalpart["service/stt/whisper"]
+	if !ok {
+		t.Fatal("missing service/stt/whisper")
+	}
+	if whisper.Protocol != "http" {
+		t.Errorf("whisper protocol = %q, want http", whisper.Protocol)
+	}
+	e5, ok := byLocalpart["service/embedding/e5"]
+	if !ok {
+		t.Fatal("missing service/embedding/e5")
+	}
+	if e5.Protocol != "grpc" {
+		t.Errorf("e5 protocol = %q, want grpc", e5.Protocol)
+	}
+}
+
+func TestPushServiceDirectory_AllConsumers(t *testing.T) {
+	// Verify pushServiceDirectory pushes to all running consumers.
+	tempDir := t.TempDir()
+
+	var pushCounts sync.Map // map[string]int — consumer localpart → push count
+
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/directory", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "services": 1})
+	})
+
+	// Create admin sockets for two consumers.
+	for _, consumer := range []string{"agent/alice", "agent/bob"} {
+		consumerSocketDir := filepath.Join(tempDir, consumer)
+		os.MkdirAll(filepath.Dir(consumerSocketDir+".admin.sock"), 0755)
+		socketPath := consumerSocketDir + ".admin.sock"
+
+		localConsumer := consumer
+		wrappedMux := http.NewServeMux()
+		wrappedMux.HandleFunc("PUT /v1/admin/directory", func(w http.ResponseWriter, r *http.Request) {
+			count, _ := pushCounts.LoadOrStore(localConsumer, 0)
+			pushCounts.Store(localConsumer, count.(int)+1)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "services": 1})
+		})
+
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			t.Fatalf("Listen(%s): %v", socketPath, err)
+		}
+		t.Cleanup(func() { listener.Close() })
+
+		server := &http.Server{Handler: wrappedMux}
+		go server.Serve(listener)
+		t.Cleanup(func() { server.Close() })
+	}
+
+	daemon := &Daemon{
+		machineUserID: "@machine/workstation:bureau.local",
+		services: map[string]*schema.Service{
+			"service/stt/whisper": {
+				Principal: "@service/stt/whisper:bureau.local",
+				Machine:   "@machine/workstation:bureau.local",
+				Protocol:  "http",
+			},
+		},
+		running: map[string]bool{
+			"agent/alice": true,
+			"agent/bob":   true,
+		},
+		adminSocketPathFunc: func(localpart string) string {
+			return filepath.Join(tempDir, localpart+".admin.sock")
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	daemon.pushServiceDirectory(context.Background())
+
+	// Verify both consumers received a push.
+	for _, consumer := range []string{"agent/alice", "agent/bob"} {
+		count, ok := pushCounts.Load(consumer)
+		if !ok {
+			t.Errorf("consumer %s did not receive a directory push", consumer)
+		} else if count.(int) != 1 {
+			t.Errorf("consumer %s received %d pushes, want 1", consumer, count.(int))
+		}
+	}
+}
+
+func TestPushServiceDirectory_NoRunning(t *testing.T) {
+	// When no consumers are running, pushServiceDirectory should be a no-op.
+	daemon := &Daemon{
+		machineUserID: "@machine/workstation:bureau.local",
+		services: map[string]*schema.Service{
+			"service/stt/whisper": {
+				Principal: "@service/stt/whisper:bureau.local",
+				Machine:   "@machine/workstation:bureau.local",
+				Protocol:  "http",
+			},
+		},
+		running: make(map[string]bool),
+		logger:  slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// Should not panic or error — just return immediately.
+	daemon.pushServiceDirectory(context.Background())
+}
+
 func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	// A service migrates from remote to local while the relay is active.
 	relaySocket := filepath.Join(t.TempDir(), "relay.sock")

@@ -387,6 +387,93 @@ func (d *Daemon) registerProxyRoute(ctx context.Context, consumerLocalpart, serv
 	return nil
 }
 
+// pushServiceDirectory pushes the current service directory to all running
+// consumer proxies via the admin API (PUT /v1/admin/directory). Called after
+// syncServiceDirectory detects changes and after new consumers start.
+func (d *Daemon) pushServiceDirectory(ctx context.Context) {
+	if len(d.running) == 0 {
+		return
+	}
+
+	directory := d.buildServiceDirectory()
+
+	for consumerLocalpart := range d.running {
+		if err := d.pushDirectoryToProxy(ctx, consumerLocalpart, directory); err != nil {
+			d.logger.Error("failed to push service directory to consumer proxy",
+				"consumer", consumerLocalpart,
+				"error", err,
+			)
+		}
+	}
+}
+
+// pushDirectoryToProxy pushes the service directory to a single consumer's
+// proxy via the admin API (PUT /v1/admin/directory). Called when a new
+// sandbox starts and after the directory changes.
+func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart string, directory []adminDirectoryEntry) error {
+	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+	client := proxyAdminClient(adminSocket)
+
+	body, err := json.Marshal(directory)
+	if err != nil {
+		return fmt.Errorf("marshaling directory: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		"http://localhost/v1/admin/directory",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("connecting to admin socket %s: %w", adminSocket, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		responseBody, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+	}
+
+	return nil
+}
+
+// buildServiceDirectory converts the daemon's service map into a wire-format
+// directory suitable for pushing to consumer proxies.
+func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
+	entries := make([]adminDirectoryEntry, 0, len(d.services))
+	for localpart, service := range d.services {
+		entries = append(entries, adminDirectoryEntry{
+			Localpart:    localpart,
+			Principal:    service.Principal,
+			Machine:      service.Machine,
+			Protocol:     service.Protocol,
+			Description:  service.Description,
+			Capabilities: service.Capabilities,
+			Metadata:     service.Metadata,
+		})
+	}
+	return entries
+}
+
+// adminDirectoryEntry is the JSON wire format for a single entry in the
+// service directory pushed to consumer proxies. Matches the proxy's
+// ServiceDirectoryEntry but defined locally to keep the daemon binary
+// decoupled from the proxy library.
+type adminDirectoryEntry struct {
+	Localpart    string         `json:"localpart"`
+	Principal    string         `json:"principal"`
+	Machine      string         `json:"machine"`
+	Protocol     string         `json:"protocol"`
+	Description  string         `json:"description,omitempty"`
+	Capabilities []string       `json:"capabilities,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
 // unregisterProxyRoute removes a single service from a single consumer's proxy
 // via the admin API (DELETE /v1/admin/services/{name}).
 func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, serviceName string) error {

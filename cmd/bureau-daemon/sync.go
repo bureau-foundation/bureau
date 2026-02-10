@@ -116,6 +116,7 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 			"remote", len(d.remoteServices()),
 		)
 		d.reconcileServices(ctx, added, removed, updated)
+		d.pushServiceDirectory(ctx)
 	}
 
 	return response.NextBatch, nil
@@ -223,6 +224,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.logger.Error("service directory sync failed", "error", err)
 		} else {
 			d.reconcileServices(ctx, added, removed, updated)
+			d.pushServiceDirectory(ctx)
 		}
 	}
 }

@@ -1516,3 +1516,342 @@ func TestMatrixPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	t.Run("empty directory", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 0 {
+			t.Errorf("expected 0 services, got %d", len(services))
+		}
+	})
+
+	// Push a directory via the admin endpoint.
+	directory := []ServiceDirectoryEntry{
+		{
+			Localpart:    "service/stt/whisper",
+			Principal:    "@service/stt/whisper:bureau.local",
+			Machine:      "@machine/gpu-1:bureau.local",
+			Protocol:     "http",
+			Description:  "Speech-to-text via Whisper",
+			Capabilities: []string{"streaming", "speaker-diarization"},
+		},
+		{
+			Localpart:    "service/tts/piper",
+			Principal:    "@service/tts/piper:bureau.local",
+			Machine:      "@machine/gpu-1:bureau.local",
+			Protocol:     "http",
+			Description:  "Text-to-speech via Piper",
+			Capabilities: []string{"streaming"},
+		},
+		{
+			Localpart:   "service/embedding/e5",
+			Principal:   "@service/embedding/e5:bureau.local",
+			Machine:     "@machine/cpu-1:bureau.local",
+			Protocol:    "grpc",
+			Description: "Text embeddings via E5",
+			Metadata:    map[string]any{"max_tokens": float64(512)},
+		},
+	}
+
+	t.Run("push directory via admin", func(t *testing.T) {
+		body, _ := json.Marshal(directory)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if result["status"] != "ok" {
+			t.Errorf("expected status ok, got %v", result["status"])
+		}
+		if result["services"] != float64(3) {
+			t.Errorf("expected 3 services, got %v", result["services"])
+		}
+	})
+
+	t.Run("list all services", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 3 {
+			t.Fatalf("expected 3 services, got %d", len(services))
+		}
+	})
+
+	t.Run("filter by protocol", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services?protocol=http")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 2 {
+			t.Errorf("expected 2 http services, got %d", len(services))
+		}
+		for _, service := range services {
+			if service.Protocol != "http" {
+				t.Errorf("expected protocol http, got %q", service.Protocol)
+			}
+		}
+	})
+
+	t.Run("filter by capability", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services?capability=speaker-diarization")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 1 {
+			t.Errorf("expected 1 service with speaker-diarization, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/stt/whisper" {
+			t.Errorf("expected whisper service, got %q", services[0].Localpart)
+		}
+	})
+
+	t.Run("filter by protocol and capability", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services?protocol=http&capability=streaming")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 2 {
+			t.Errorf("expected 2 http+streaming services, got %d", len(services))
+		}
+	})
+
+	t.Run("filter returns empty for no matches", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services?protocol=websocket")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 0 {
+			t.Errorf("expected 0 services, got %d", len(services))
+		}
+	})
+
+	t.Run("metadata preserved", func(t *testing.T) {
+		resp, err := agentClient.Get("http://localhost/v1/services?protocol=grpc")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 1 {
+			t.Fatalf("expected 1 grpc service, got %d", len(services))
+		}
+		if services[0].Metadata == nil {
+			t.Fatal("expected metadata to be preserved")
+		}
+		maxTokens, ok := services[0].Metadata["max_tokens"]
+		if !ok {
+			t.Fatal("expected max_tokens in metadata")
+		}
+		if maxTokens != float64(512) {
+			t.Errorf("expected max_tokens=512, got %v", maxTokens)
+		}
+	})
+
+	t.Run("admin directory not on agent socket", func(t *testing.T) {
+		body, _ := json.Marshal(directory)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := agentClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// The agent mux doesn't have /v1/admin/directory, so Go's
+		// default ServeMux returns 405 (PUT method not allowed on the
+		// catch-all pattern).
+		if resp.StatusCode == http.StatusOK {
+			t.Error("admin directory endpoint should not be accessible on agent socket")
+		}
+	})
+
+	t.Run("services endpoint via admin socket", func(t *testing.T) {
+		// GET /v1/services should work via admin socket too (falls
+		// through to agent mux).
+		resp, err := adminClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("push replaces entire directory", func(t *testing.T) {
+		// Push a smaller directory — should replace, not append.
+		newDirectory := []ServiceDirectoryEntry{
+			{
+				Localpart: "service/llm/claude",
+				Principal: "@service/llm/claude:bureau.local",
+				Machine:   "@machine/cpu-1:bureau.local",
+				Protocol:  "http",
+			},
+		}
+		body, _ := json.Marshal(newDirectory)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("push failed: %v", err)
+		}
+		resp.Body.Close()
+
+		// Query to verify replacement.
+		listResp, err := agentClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("list failed: %v", err)
+		}
+		defer listResp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		json.NewDecoder(listResp.Body).Decode(&services)
+		if len(services) != 1 {
+			t.Errorf("expected 1 service after replacement, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/llm/claude" {
+			t.Errorf("expected claude service, got %q", services[0].Localpart)
+		}
+	})
+
+	t.Run("push invalid body", func(t *testing.T) {
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader([]byte("not json")))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("SetServiceDirectory programmatic", func(t *testing.T) {
+		// Test the programmatic setter (used internally, not via HTTP).
+		server.SetServiceDirectory([]ServiceDirectoryEntry{
+			{
+				Localpart: "service/test",
+				Principal: "@service/test:bureau.local",
+				Machine:   "@machine/dev:bureau.local",
+				Protocol:  "http",
+			},
+		})
+
+		resp, err := agentClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []ServiceDirectoryEntry
+		json.NewDecoder(resp.Body).Decode(&services)
+		if len(services) != 1 {
+			t.Errorf("expected 1 service, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/test" {
+			t.Errorf("expected test service, got %q", services[0].Localpart)
+		}
+	})
+}

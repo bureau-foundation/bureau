@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,8 +41,48 @@ type Handler struct {
 	httpServices map[string]*HTTPService // HTTP proxy services
 	identity     *IdentityInfo           // agent identity, nil if not set
 	matrixPolicy *schema.MatrixPolicy    // Matrix access policy, nil = default-deny
-	mu           sync.RWMutex
-	logger       *slog.Logger
+
+	// serviceDirectory is the cached service directory pushed by the
+	// daemon. Agents query this via GET /v1/services to discover what
+	// services are available. The daemon pushes updates via the admin
+	// socket whenever the directory changes.
+	serviceDirectory []ServiceDirectoryEntry
+
+	mu     sync.RWMutex
+	logger *slog.Logger
+}
+
+// ServiceDirectoryEntry describes a service in the Bureau service directory.
+// The daemon maintains the authoritative directory from Matrix state events
+// and pushes it to each proxy. Agents query the proxy to discover services
+// without needing direct access to the Matrix services room.
+type ServiceDirectoryEntry struct {
+	// Localpart is the service identifier (the Matrix state key),
+	// e.g., "service/stt/whisper".
+	Localpart string `json:"localpart"`
+
+	// Principal is the full Matrix user ID of the service provider,
+	// e.g., "@service/stt/whisper:bureau.local".
+	Principal string `json:"principal"`
+
+	// Machine is the full Matrix user ID of the machine running this
+	// service instance, e.g., "@machine/cloud-gpu-1:bureau.local".
+	Machine string `json:"machine"`
+
+	// Protocol is the wire protocol spoken by the service
+	// (e.g., "http", "grpc", "raw-frames").
+	Protocol string `json:"protocol"`
+
+	// Description is a human-readable description of the service.
+	Description string `json:"description,omitempty"`
+
+	// Capabilities lists what this service instance supports
+	// (e.g., ["streaming", "speaker-diarization"]).
+	Capabilities []string `json:"capabilities,omitempty"`
+
+	// Metadata holds service-specific key-value pairs (e.g., supported
+	// languages, model version, max batch size).
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // NewHandler creates a new request handler.
@@ -570,4 +611,70 @@ func (h *Handler) HandleAdminUnregisterService(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "removed", "name": name})
+}
+
+// SetServiceDirectory replaces the cached service directory. Called by the
+// daemon (via the admin API) whenever the service directory changes.
+func (h *Handler) SetServiceDirectory(entries []ServiceDirectoryEntry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serviceDirectory = entries
+	h.logger.Info("service directory updated", "services", len(entries))
+}
+
+// HandleServiceDirectory returns the service directory to the agent. Agents
+// query GET /v1/services to discover what services exist across the Bureau
+// deployment. The daemon pushes the authoritative directory to each proxy;
+// the proxy serves it as a read-only catalog.
+//
+// Optional query parameters filter the results:
+//   - capability: only entries with this capability
+//   - protocol: only entries with this wire protocol
+func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	directory := h.serviceDirectory
+	h.mu.RUnlock()
+
+	if directory == nil {
+		directory = []ServiceDirectoryEntry{}
+	}
+
+	capability := r.URL.Query().Get("capability")
+	protocol := r.URL.Query().Get("protocol")
+
+	if capability != "" || protocol != "" {
+		filtered := make([]ServiceDirectoryEntry, 0, len(directory))
+		for _, entry := range directory {
+			if protocol != "" && entry.Protocol != protocol {
+				continue
+			}
+			if capability != "" && !slices.Contains(entry.Capabilities, capability) {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		directory = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(directory)
+}
+
+// HandleAdminSetDirectory replaces the full service directory. The daemon
+// pushes the complete directory via PUT /v1/admin/directory whenever the
+// service state in Matrix changes.
+func (h *Handler) HandleAdminSetDirectory(w http.ResponseWriter, r *http.Request) {
+	var entries []ServiceDirectoryEntry
+	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid directory payload: %v", err)
+		return
+	}
+
+	h.SetServiceDirectory(entries)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"services": len(entries),
+	})
 }

@@ -61,6 +61,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 	agentMux := http.NewServeMux()
 	agentMux.HandleFunc("POST /v1/proxy", handler.HandleProxy)
 	agentMux.HandleFunc("GET /v1/identity", handler.HandleIdentity)
+	agentMux.HandleFunc("GET /v1/services", handler.HandleServiceDirectory)
 	agentMux.HandleFunc("GET /health", handler.HandleHealth)
 	agentMux.HandleFunc("/http/", handler.HandleHTTPProxy)
 
@@ -85,6 +86,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		adminMux.HandleFunc("GET /v1/admin/services", handler.HandleAdminListServices)
 		adminMux.HandleFunc("PUT /v1/admin/services/{name}", handler.HandleAdminRegisterService)
 		adminMux.HandleFunc("DELETE /v1/admin/services/{name}", handler.HandleAdminUnregisterService)
+		adminMux.HandleFunc("PUT /v1/admin/directory", handler.HandleAdminSetDirectory)
 		// Fall through to agent endpoints for all other paths.
 		adminMux.Handle("/", agentMux)
 
@@ -129,6 +131,12 @@ func (s *Server) SetIdentity(identity IdentityInfo) {
 // Handler.SetMatrixPolicy for details.
 func (s *Server) SetMatrixPolicy(policy *schema.MatrixPolicy) {
 	s.handler.SetMatrixPolicy(policy)
+}
+
+// SetServiceDirectory replaces the cached service directory. See
+// Handler.SetServiceDirectory for details.
+func (s *Server) SetServiceDirectory(entries []ServiceDirectoryEntry) {
+	s.handler.SetServiceDirectory(entries)
 }
 
 // SetObserveConfig configures the observation proxy. When called before

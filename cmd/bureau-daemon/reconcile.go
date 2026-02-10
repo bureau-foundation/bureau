@@ -89,6 +89,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// so it should be accepting connections by the time the launcher
 		// responds to create-sandbox.
 		d.configureConsumerProxy(ctx, localpart)
+
+		// Push the service directory so the new consumer's agent can
+		// discover services via GET /v1/services.
+		directory := d.buildServiceDirectory()
+		if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
+			d.logger.Error("failed to push service directory to new consumer proxy",
+				"consumer", localpart,
+				"error", err,
+			)
+		}
 	}
 
 	// Destroy sandboxes for principals that should not be running.

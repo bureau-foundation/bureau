@@ -52,7 +52,8 @@ exposing secrets in CLI arguments, process listings, or shell history.
 Standard rooms created:
   bureau/system      Operational messages
   bureau/machines    Machine keys and status
-  bureau/services    Service directory`,
+  bureau/services    Service directory
+  bureau/templates   Sandbox templates (base, base-networked)`,
 		Usage: "bureau matrix setup [flags]",
 		Examples: []cli.Example{
 			{
@@ -180,6 +181,18 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 	logger.Info("services room ready", "room_id", servicesRoomID)
 
+	templatesRoomID, err := ensureRoom(ctx, session, "bureau/templates", "Bureau Templates", "Sandbox templates",
+		spaceRoomID, config.serverName, nil, logger)
+	if err != nil {
+		return fmt.Errorf("create templates room: %w", err)
+	}
+	logger.Info("templates room ready", "room_id", templatesRoomID)
+
+	// Step 3b: Publish base templates into the templates room.
+	if err := publishBaseTemplates(ctx, session, templatesRoomID, logger); err != nil {
+		return fmt.Errorf("publish base templates: %w", err)
+	}
+
 	// Step 4: Invite users to all Bureau rooms.
 	if len(config.inviteUsers) > 0 {
 		allRooms := []struct {
@@ -190,6 +203,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			{"bureau/system", systemRoomID},
 			{"bureau/machines", machinesRoomID},
 			{"bureau/services", servicesRoomID},
+			{"bureau/templates", templatesRoomID},
 		}
 		for _, userID := range config.inviteUsers {
 			for _, room := range allRooms {
@@ -214,7 +228,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID); err != nil {
+		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templatesRoomID); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -225,6 +239,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		"system_room", systemRoomID,
 		"machines_room", machinesRoomID,
 		"services_room", servicesRoomID,
+		"templates_room", templatesRoomID,
 	)
 	return nil
 }
@@ -319,7 +334,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templatesRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -332,8 +347,88 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
 	fmt.Fprintf(&builder, "MATRIX_MACHINES_ROOM=%s\n", machinesRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SERVICES_ROOM=%s\n", servicesRoomID)
+	fmt.Fprintf(&builder, "MATRIX_TEMPLATES_ROOM=%s\n", templatesRoomID)
 
 	return os.WriteFile(path, []byte(builder.String()), 0600)
+}
+
+// publishBaseTemplates publishes the built-in sandbox templates to the
+// templates room as m.bureau.template state events. Idempotent: re-publishing
+// overwrites the existing state event with the same content.
+func publishBaseTemplates(ctx context.Context, session *messaging.Session, templatesRoomID string, logger *slog.Logger) error {
+	for _, template := range baseTemplates() {
+		_, err := session.SendStateEvent(ctx, templatesRoomID, schema.EventTypeTemplate, template.name, template.content)
+		if err != nil {
+			return fmt.Errorf("publishing template %q: %w", template.name, err)
+		}
+		logger.Info("published template", "name", template.name, "room_id", templatesRoomID)
+	}
+	return nil
+}
+
+// namedTemplate pairs a template state key (name) with its content.
+type namedTemplate struct {
+	name    string
+	content schema.TemplateContent
+}
+
+// baseTemplates returns the built-in Bureau sandbox templates.
+//
+// "base" is the minimal sandbox skeleton: full namespace isolation, strict
+// security defaults, and only the bare minimum mounts (/proc, /dev, tmpfs
+// /tmp). It intentionally has no opinions about OS libraries — those come
+// from the Nix EnvironmentPath or from template-level mounts that inherit
+// from base.
+//
+// "base-networked" inherits from base and disables network namespace
+// isolation. Use for sandboxes that need direct host network access (e.g.,
+// services binding to host ports, agents that need raw TCP rather than
+// going through the proxy/bridge).
+func baseTemplates() []namedTemplate {
+	return []namedTemplate{
+		{
+			name: "base",
+			content: schema.TemplateContent{
+				Description: "Minimal sandbox: full namespace isolation, strict security, bare mounts",
+				Namespaces: &schema.TemplateNamespaces{
+					PID: true,
+					Net: true,
+					IPC: true,
+					UTS: true,
+				},
+				Security: &schema.TemplateSecurity{
+					NewSession:    true,
+					DieWithParent: true,
+					NoNewPrivs:    true,
+				},
+				Filesystem: []schema.TemplateMount{
+					{Dest: "/tmp", Type: "tmpfs"},
+				},
+				CreateDirs: []string{
+					"/tmp",
+					"/var/tmp",
+					"/run/bureau",
+				},
+				EnvironmentVariables: map[string]string{
+					"HOME": "/workspace",
+					"TERM": "xterm-256color",
+				},
+			},
+		},
+		{
+			name: "base-networked",
+			content: schema.TemplateContent{
+				Description: "Base sandbox with host network access (no network namespace isolation)",
+				Inherits:    "bureau/templates:base",
+				Namespaces: &schema.TemplateNamespaces{
+					PID: true,
+					Net: false,
+					IPC: true,
+					UTS: true,
+				},
+			},
+		},
+	}
 }
 
 // adminOnlyPowerLevels returns power level settings where only the admin can

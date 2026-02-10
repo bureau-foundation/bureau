@@ -472,6 +472,13 @@ type IPCRequest struct {
 	// Forwarded from the PrincipalAssignment in MachineConfig. The launcher
 	// includes this in the credential payload piped to the proxy subprocess.
 	MatrixPolicy *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
+
+	// SandboxSpec is the fully-resolved sandbox configuration produced by
+	// the daemon's template resolution pipeline. When set, the launcher
+	// uses this to build the bwrap command line and configure the sandbox
+	// environment. When nil (current behavior), the launcher spawns only
+	// the proxy process without a bwrap sandbox.
+	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
 }
 
 // IPCResponse is the JSON structure of a response to the daemon.

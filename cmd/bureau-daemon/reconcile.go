@@ -182,6 +182,13 @@ type launcherIPCRequest struct {
 	Principal            string               `json:"principal,omitempty"`
 	EncryptedCredentials string               `json:"encrypted_credentials,omitempty"`
 	MatrixPolicy         *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
+
+	// SandboxSpec is the fully-resolved sandbox configuration produced by
+	// the daemon's template resolution pipeline. When set, the launcher
+	// uses this to build the bwrap command line and configure the sandbox
+	// environment. When nil (current behavior), the launcher spawns only
+	// the proxy process without a bwrap sandbox.
+	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.

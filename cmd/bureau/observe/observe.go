@@ -42,8 +42,14 @@ The target is a principal localpart (e.g., "iree/amdgpu/pm") or Matrix
 ID (e.g., "@iree/amdgpu/pm:bureau.local"). The leading "@" is stripped
 automatically.
 
-In read-only mode, keystrokes are not forwarded to the remote session.
-Use this for monitoring without risk of accidental input.
+On connect, the relay sends the terminal's scrollback history followed
+by a status line showing the principal and machine name. In readwrite
+mode (the default), your keystrokes are forwarded to the remote terminal
+— you are typing into the agent's session. In readonly mode, keystrokes
+are not forwarded, making it safe for monitoring.
+
+To disconnect, press Ctrl-C or close your terminal. There is no detach
+mechanism — each observation is a live stream, not a tmux client attach.
 
 Access is controlled by the ObservePolicy on the target's MachineConfig.
 If you get "not authorized", ask a deployment admin to add your principal
@@ -55,12 +61,12 @@ to the target's AllowedObservers list.`,
 				Command:     "bureau observe iree/amdgpu/pm",
 			},
 			{
-				Description: "Read-only observation",
+				Description: "Read-only monitoring (no input forwarded)",
 				Command:     "bureau observe iree/amdgpu/pm --readonly",
 			},
 			{
-				Description: "Use a custom daemon socket",
-				Command:     "bureau observe iree/amdgpu/pm --socket /tmp/test.sock",
+				Description: "Observe a service on a remote machine",
+				Command:     "bureau observe service/stt/whisper",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
@@ -147,11 +153,21 @@ Layout sources:
 
 With no arguments, the dashboard shows all observable principals running
 on the local machine, arranged as a vertical stack. This is the default
-sysadmin view.
+sysadmin view — type "bureau dashboard" and see everything at a glance.
 
-Each "observe" pane in the layout connects to the daemon's observation
-relay for the target principal. "command" panes run local commands.
-"role" panes display their role identity.`,
+The dashboard creates a local tmux session and attaches to it. Standard
+tmux navigation works inside the dashboard:
+
+  Ctrl-b d         Detach from the dashboard (it keeps running)
+  Ctrl-b <arrow>   Move between panes
+  Ctrl-b n / p     Next / previous window
+
+To reattach after detaching, use "tmux attach-session -t <name>" where
+the session name is printed on creation (e.g., "observe/machine/workstation").
+
+Each "observe" pane connects to the daemon's observation relay for the
+target principal. "command" panes run local commands. "role" panes
+display their role identity.`,
 		Usage: "bureau dashboard [channel] [flags]",
 		Examples: []cli.Example{
 			{
@@ -159,16 +175,20 @@ relay for the target principal. "command" panes run local commands.
 				Command:     "bureau dashboard",
 			},
 			{
-				Description: "Open a dashboard from a layout file",
-				Command:     "bureau dashboard --layout-file ./workspace.json",
-			},
-			{
 				Description: "Open a project channel dashboard",
 				Command:     "bureau dashboard '#iree/amdgpu/general'",
 			},
 			{
+				Description: "Open a dashboard from a layout file",
+				Command:     "bureau dashboard --layout-file ./workspace.json",
+			},
+			{
 				Description: "Create dashboard without attaching",
-				Command:     "bureau dashboard --layout-file ./workspace.json --detach",
+				Command:     "bureau dashboard --detach",
+			},
+			{
+				Description: "Reattach to a detached dashboard",
+				Command:     "tmux attach-session -t observe/machine/workstation",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
@@ -352,7 +372,18 @@ an active tmux session or are reachable via transport) are shown.
 
 Principals come from two sources: locally running sandboxes and the
 service directory (which includes remote services). Machines include
-the local machine and all known peers.`,
+the local machine and all known peers.
+
+Principal statuses:
+  running       Active on this machine with a tmux session
+  remote        Active on a reachable remote machine
+  known         In the service directory but not currently observable
+  unreachable   On a remote machine with no transport path
+
+Machine statuses:
+  self          This machine
+  peer          A remote machine with a known transport address
+  unreachable   A remote machine with no transport path`,
 		Usage: "bureau list [flags]",
 		Examples: []cli.Example{
 			{
@@ -360,7 +391,7 @@ the local machine and all known peers.`,
 				Command:     "bureau list",
 			},
 			{
-				Description: "List only observable targets",
+				Description: "List only targets you can observe right now",
 				Command:     "bureau list --observable",
 			},
 			{

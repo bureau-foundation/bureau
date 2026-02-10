@@ -13,9 +13,9 @@
 //
 //	login       Authenticate as an operator
 //	whoami      Show the current operator identity
-//	observe     Attach to a principal's terminal session
-//	dashboard   Open a composite workstream view
 //	list        List observable targets
+//	dashboard   Open a composite observation view (machine, channel, or file)
+//	observe     Attach to a single principal's terminal session
 //	matrix      Matrix homeserver operations
 //	version     Print version information
 package main
@@ -72,16 +72,24 @@ observation, and structured messaging via Matrix.`,
 				Command:     "bureau login ben",
 			},
 			{
-				Description: "Observe an agent's terminal",
+				Description: "See what's running on this machine",
+				Command:     "bureau list",
+			},
+			{
+				Description: "Open the machine dashboard (all running principals)",
+				Command:     "bureau dashboard",
+			},
+			{
+				Description: "Observe a single agent's terminal",
 				Command:     "bureau observe iree/amdgpu/pm",
+			},
+			{
+				Description: "Open a project channel dashboard",
+				Command:     "bureau dashboard '#iree/amdgpu/general'",
 			},
 			{
 				Description: "Bootstrap the Matrix homeserver",
 				Command:     "bureau matrix setup --registration-token-file /path/to/token --credential-file ./creds",
-			},
-			{
-				Description: "Open a project dashboard",
-				Command:     "bureau dashboard #iree/amdgpu/general",
 			},
 		},
 	}

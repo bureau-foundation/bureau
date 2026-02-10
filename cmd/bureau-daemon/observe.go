@@ -150,9 +150,13 @@ func (d *Daemon) acceptObserveConnections(ctx context.Context) {
 }
 
 // handleObserveClient processes a single request on the observe socket.
-// It reads the initial JSON line, dispatches on the action field, and
-// either establishes a streaming observation session or handles a
-// request/response query.
+// It reads the initial JSON line, authenticates the observer, dispatches
+// on the action field, and either establishes a streaming observation
+// session or handles a request/response query.
+//
+// Every request must include a valid Matrix access token. The daemon verifies
+// the token against the homeserver (via the cached tokenVerifier) before
+// processing any action.
 func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 	defer clientConnection.Close()
 
@@ -165,6 +169,23 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		d.sendObserveError(clientConnection, fmt.Sprintf("invalid request: %v", err))
 		return
 	}
+
+	// Authenticate the observer. Every action requires a valid token.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	observerUserID, err := d.authenticateObserver(ctx, request.Token)
+	if err != nil {
+		d.sendObserveError(clientConnection, err.Error())
+		return
+	}
+
+	// Replace the observer field with the verified identity. The client
+	// may have sent a user ID, but the daemon trusts only the token
+	// verification result.
+	request.Observer = observerUserID
+
+	d.logger.Debug("observer authenticated", "observer", observerUserID)
 
 	switch request.Action {
 	case "", "observe":
@@ -180,8 +201,12 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 }
 
 // handleObserveSession handles a streaming observation request. It validates
-// the principal, determines whether it is local or remote, and either forks
-// a relay or forwards through the transport.
+// the principal, checks authorization against the ObservePolicy, determines
+// whether it is local or remote, and either forks a relay or forwards through
+// the transport.
+//
+// The observer identity in request.Observer is already verified by
+// handleObserveClient before this method is called.
 func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observeRequest) {
 	if err := principal.ValidateLocalpart(request.Principal); err != nil {
 		d.sendObserveError(clientConnection, fmt.Sprintf("invalid principal: %v", err))
@@ -194,14 +219,31 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 		return
 	}
 
+	// Authorize the observer against the principal's ObservePolicy.
+	authz := d.authorizeObserve(request.Observer, request.Principal, request.Mode)
+	if !authz.Allowed {
+		d.logger.Warn("observation denied",
+			"observer", request.Observer,
+			"principal", request.Principal,
+		)
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("not authorized to observe %q", request.Principal))
+		return
+	}
+
+	// Enforce the granted mode. The daemon decides the mode, not the client.
+	request.Mode = authz.GrantedMode
+
 	d.logger.Info("observation requested",
+		"observer", request.Observer,
 		"principal", request.Principal,
-		"mode", request.Mode,
+		"requested_mode", request.Mode,
+		"granted_mode", authz.GrantedMode,
 	)
 
 	// Check if the principal is running locally.
 	if d.running[request.Principal] {
-		d.handleLocalObserve(clientConnection, request)
+		d.handleLocalObserve(clientConnection, request, authz.GrantedMode)
 		return
 	}
 
@@ -220,6 +262,10 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 // to a room ID, fetches the m.bureau.layout state event and room membership,
 // expands ObserveMembers panes, and returns the concrete layout as JSON.
 //
+// Authentication is handled by handleObserveClient before dispatch. The
+// layout is returned as-is — individual pane authorization happens when the
+// client opens observation sessions for each pane's principal.
+//
 // This is pure request/response — the connection is closed after the response.
 func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeRequest) {
 	if request.Channel == "" {
@@ -232,7 +278,10 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	d.logger.Info("query_layout requested", "channel", request.Channel)
+	d.logger.Info("query_layout requested",
+		"observer", request.Observer,
+		"channel", request.Channel,
+	)
 
 	// Resolve the channel alias to a room ID.
 	roomID, err := d.session.ResolveAlias(ctx, request.Channel)
@@ -313,6 +362,10 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 // handleList handles a "list" request: enumerates all known principals and
 // machines, returning each with observability and location metadata.
 //
+// Authentication is handled by handleObserveClient before dispatch. The
+// returned list is filtered to only principals the observer is authorized
+// to see per their ObservePolicy.
+//
 // Principals come from two sources:
 //   - d.running: principals with active sandboxes on this machine (always observable)
 //   - d.services: service directory entries across all machines (observable when
@@ -320,7 +373,10 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 //
 // Machines come from d.peerAddresses plus the local machine.
 func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
-	d.logger.Info("list requested", "observable", request.Observable)
+	d.logger.Info("list requested",
+		"observer", request.Observer,
+		"observable", request.Observable,
+	)
 
 	// Collect principals. Use a map to deduplicate between d.running and
 	// d.services (a locally running service appears in both).
@@ -330,6 +386,13 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	// Locally running principals.
 	for localpart := range d.running {
 		seen[localpart] = true
+
+		// Filter by authorization — only include principals the
+		// observer is allowed to see.
+		if !d.authorizeList(request.Observer, localpart) {
+			continue
+		}
+
 		principals = append(principals, observe.ListPrincipal{
 			Localpart:  localpart,
 			Machine:    d.machineName,
@@ -346,6 +409,11 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 			continue
 		}
 		seen[localpart] = true
+
+		// Filter by authorization.
+		if !d.authorizeList(request.Observer, localpart) {
+			continue
+		}
 
 		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
 		if err != nil {
@@ -372,9 +440,9 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	// Filter to observable if requested.
 	if request.Observable {
 		filtered := principals[:0]
-		for _, principal := range principals {
-			if principal.Observable {
-				filtered = append(filtered, principal)
+		for _, entry := range principals {
+			if entry.Observable {
+				filtered = append(filtered, entry)
 			}
 		}
 		principals = filtered
@@ -402,6 +470,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	}
 
 	d.logger.Info("list completed",
+		"observer", request.Observer,
 		"principals", len(principals),
 		"machines", len(machines),
 	)
@@ -414,11 +483,11 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 }
 
 // handleLocalObserve handles observation of a principal running on this machine.
-// It forks a relay process, sends the success response, and bridges bytes
-// between the client and the relay.
-func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRequest) {
+// It forks a relay process, sends the success response (including the granted
+// mode), and bridges bytes between the client and the relay.
+func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRequest, grantedMode string) {
 	sessionName := "bureau/" + request.Principal
-	readOnly := request.Mode == "readonly"
+	readOnly := grantedMode == "readonly"
 
 	relayConnection, relayCommand, err := d.forkObserveRelay(sessionName, readOnly)
 	if err != nil {
@@ -434,9 +503,10 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	// Send success response and clear the handshake deadline before
 	// entering the streaming bridge.
 	response := observeResponse{
-		OK:      true,
-		Session: sessionName,
-		Machine: d.machineName,
+		OK:          true,
+		Session:     sessionName,
+		Machine:     d.machineName,
+		GrantedMode: grantedMode,
 	}
 	clientConnection.SetDeadline(time.Time{})
 	if err := json.NewEncoder(clientConnection).Encode(response); err != nil {
@@ -451,8 +521,10 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	}
 
 	d.logger.Info("observation started",
+		"observer", request.Observer,
 		"principal", request.Principal,
 		"session", sessionName,
+		"mode", grantedMode,
 	)
 
 	// Bridge bytes zero-copy between client and relay. This blocks until
@@ -463,7 +535,10 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	// escalate to SIGKILL after a timeout.
 	cleanupRelayProcess(relayCommand)
 
-	d.logger.Info("observation ended", "principal", request.Principal)
+	d.logger.Info("observation ended",
+		"observer", request.Observer,
+		"principal", request.Principal,
+	)
 }
 
 // handleRemoteObserve forwards an observation request to a remote daemon via
@@ -563,6 +638,12 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 // observeRequest body. On success, the handler hijacks the HTTP connection,
 // forks a relay, writes the observeResponse, and bridges bytes between the
 // hijacked connection and the relay.
+//
+// The originating daemon has already verified the observer's token. The
+// request carries the verified observer identity in the Observer field.
+// This daemon trusts the forwarded identity (transport connections are
+// authenticated via WebRTC signaling through Matrix) and checks its own
+// local ObservePolicy to authorize the observation.
 func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -597,6 +678,31 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// The originating daemon must include the verified observer identity.
+	if request.Observer == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: "observer identity is required in forwarded request",
+		})
+		return
+	}
+
+	// Check local authorization for the forwarded observer identity.
+	authz := d.authorizeObserve(request.Observer, request.Principal, request.Mode)
+	if !authz.Allowed {
+		d.logger.Warn("transport observation denied",
+			"observer", request.Observer,
+			"principal", request.Principal,
+		)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("not authorized to observe %q", request.Principal),
+		})
+		return
+	}
+
 	if !d.running[request.Principal] {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -607,7 +713,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	sessionName := "bureau/" + request.Principal
-	readOnly := request.Mode == "readonly"
+	readOnly := authz.GrantedMode == "readonly"
 
 	relayConnection, relayCommand, err := d.forkObserveRelay(sessionName, readOnly)
 	if err != nil {
@@ -645,9 +751,10 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 
 	// Write the HTTP response manually on the hijacked connection.
 	responseJSON, _ := json.Marshal(observeResponse{
-		OK:      true,
-		Session: sessionName,
-		Machine: d.machineName,
+		OK:          true,
+		Session:     sessionName,
+		Machine:     d.machineName,
+		GrantedMode: authz.GrantedMode,
 	})
 	fmt.Fprintf(transportBuffer, "HTTP/1.1 200 OK\r\n")
 	fmt.Fprintf(transportBuffer, "Content-Type: application/json\r\n")
@@ -657,8 +764,10 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	transportBuffer.Flush()
 
 	d.logger.Info("transport observation started",
+		"observer", request.Observer,
 		"principal", request.Principal,
 		"session", sessionName,
+		"mode", authz.GrantedMode,
 	)
 
 	// Bridge the hijacked connection to the relay.
@@ -666,7 +775,10 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 
 	cleanupRelayProcess(relayCommand)
 
-	d.logger.Info("transport observation ended", "principal", request.Principal)
+	d.logger.Info("transport observation ended",
+		"observer", request.Observer,
+		"principal", request.Principal,
+	)
 }
 
 // forkObserveRelay creates a socketpair and forks the observation relay binary.

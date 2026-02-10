@@ -110,9 +110,12 @@ func TestLoadSession(t *testing.T) {
 		}`
 		os.WriteFile(filepath.Join(stateDir, "session.json"), []byte(sessionJSON), 0600)
 
-		session, err := loadSession(stateDir, "http://localhost:6167", logger)
+		client, session, err := loadSession(stateDir, "http://localhost:6167", logger)
 		if err != nil {
 			t.Fatalf("loadSession() error: %v", err)
+		}
+		if client == nil {
+			t.Error("loadSession() returned nil client")
 		}
 		if session.UserID() != "@machine/test:bureau.local" {
 			t.Errorf("UserID() = %q, want %q", session.UserID(), "@machine/test:bureau.local")
@@ -121,7 +124,7 @@ func TestLoadSession(t *testing.T) {
 
 	t.Run("missing file", func(t *testing.T) {
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-		_, err := loadSession(t.TempDir(), "http://localhost:6167", logger)
+		_, _, err := loadSession(t.TempDir(), "http://localhost:6167", logger)
 		if err == nil {
 			t.Error("expected error for missing session file")
 		}
@@ -136,7 +139,7 @@ func TestLoadSession(t *testing.T) {
 			"access_token": ""
 		}`), 0600)
 
-		_, err := loadSession(stateDir, "http://localhost:6167", logger)
+		_, _, err := loadSession(stateDir, "http://localhost:6167", logger)
 		if err == nil {
 			t.Error("expected error for empty access token")
 		}

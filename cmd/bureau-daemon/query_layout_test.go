@@ -24,31 +24,64 @@ import (
 
 // newTestDaemonWithQuery creates a Daemon with a mock Matrix server that
 // supports alias resolution, state events, and room members — everything
-// handleQueryLayout needs. Returns the daemon and mock for test setup.
+// handleQueryLayout needs. Also sets up authentication via a permissive
+// ObservePolicy and a token verifier backed by a mock whoami endpoint.
+// Returns the daemon and mock for test setup.
 func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	t.Helper()
 
 	socketDir := t.TempDir()
 	observeSocketPath := filepath.Join(socketDir, "observe.sock")
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	matrixState := newMockMatrixState()
-	matrixServer := httptest.NewServer(matrixState.handler())
+
+	// Wrap the state mock's handler with whoami support for token verification.
+	stateHandler := matrixState.handler()
+	combinedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_matrix/client/v3/account/whoami" {
+			authorization := r.Header.Get("Authorization")
+			if authorization == "Bearer "+testObserverToken {
+				json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
+					UserID: testObserverUserID,
+				})
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_UNKNOWN_TOKEN",
+				"error":   "Invalid token",
+			})
+			return
+		}
+		stateHandler.ServeHTTP(w, r)
+	})
+
+	matrixServer := httptest.NewServer(combinedHandler)
 	t.Cleanup(matrixServer.Close)
 
-	client, err := messaging.NewClient(messaging.ClientConfig{
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
-		session:           session,
+		session:       session,
+		client:        matrixClient,
+		tokenVerifier: newTokenVerifier(matrixClient, 5*time.Minute, logger),
+		lastConfig: &schema.MachineConfig{
+			DefaultObservePolicy: &schema.ObservePolicy{
+				AllowedObservers:   []string{"**"},
+				ReadWriteObservers: []string{"**"},
+			},
+		},
 		machineName:       "machine/test",
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
@@ -60,7 +93,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 		peerTransports:    make(map[string]http.RoundTripper),
 		observeSocketPath: observeSocketPath,
 		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		logger:            logger,
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
@@ -87,8 +120,10 @@ func sendQueryLayout(t *testing.T, socketPath, channel string) observe.QueryLayo
 	connection.SetDeadline(time.Now().Add(5 * time.Second))
 
 	request := observe.QueryLayoutRequest{
-		Action:  "query_layout",
-		Channel: channel,
+		Action:   "query_layout",
+		Channel:  channel,
+		Observer: testObserverUserID,
+		Token:    testObserverToken,
 	}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		t.Fatalf("send query_layout request: %v", err)
@@ -270,7 +305,7 @@ func TestQueryLayoutUnknownAction(t *testing.T) {
 	defer connection.Close()
 	connection.SetDeadline(time.Now().Add(5 * time.Second))
 
-	request := map[string]string{"action": "bogus"}
+	request := map[string]string{"action": "bogus", "token": testObserverToken}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -355,10 +390,11 @@ func TestQueryLayoutBackwardCompatibility(t *testing.T) {
 	defer connection.Close()
 	connection.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// Send a classic observe request (no action field).
+	// Send a classic observe request (no action field) with auth token.
 	request := map[string]string{
 		"principal": "test/agent",
 		"mode":      "readwrite",
+		"token":     testObserverToken,
 	}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		t.Fatalf("send: %v", err)

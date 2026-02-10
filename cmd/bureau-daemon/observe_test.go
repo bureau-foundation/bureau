@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,8 +21,18 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
+
+// testObserverToken is the Matrix access token used by test observers.
+// The mock Matrix server in newTestDaemonWithObserve accepts this token
+// and returns testObserverUserID from whoami.
+const testObserverToken = "syt_test_observer_token"
+
+// testObserverUserID is the Matrix user ID returned by the mock whoami
+// handler when testObserverToken is presented.
+const testObserverUserID = "@ops/test-observer:bureau.local"
 
 // mockRelaySource is the Go source for a minimal observation relay binary used
 // in tests. It speaks the observation protocol on fd 3:
@@ -156,8 +167,13 @@ func buildMockRelay(t *testing.T) string {
 }
 
 // connectObserve connects to the daemon's observe socket and sends an
-// observation request. Returns the connection and decoded response.
+// observation request. The test observer token is automatically included
+// if the request doesn't already have one. Returns the connection and
+// decoded response.
 func connectObserve(t *testing.T, socketPath string, request observeRequest) (net.Conn, observeResponse) {
+	if request.Token == "" {
+		request.Token = testObserverToken
+	}
 	t.Helper()
 
 	connection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
@@ -234,8 +250,9 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 }
 
 // newTestDaemonWithObserve creates a minimal Daemon wired for observation
-// testing. It starts the observe listener and returns the daemon plus a
-// cleanup function.
+// testing. It starts a mock Matrix server for token verification, configures
+// a permissive ObservePolicy (AllowedObservers: ["**"], ReadWriteObservers:
+// ["**"]), starts the observe listener, and returns the daemon.
 func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipals []string) *Daemon {
 	t.Helper()
 
@@ -244,11 +261,61 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
 
 	running := make(map[string]bool)
-	for _, principal := range runningPrincipals {
-		running[principal] = true
+	for _, localpart := range runningPrincipals {
+		running[localpart] = true
+	}
+
+	// Mock Matrix server for token verification. Accepts testObserverToken
+	// and returns testObserverUserID from /account/whoami.
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_matrix/client/v3/account/whoami" {
+			authorization := r.Header.Get("Authorization")
+			if authorization != "Bearer "+testObserverToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{
+					"errcode": "M_UNKNOWN_TOKEN",
+					"error":   "Invalid token",
+				})
+				return
+			}
+			json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
+				UserID: testObserverUserID,
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	// Build PrincipalAssignment list for the test config. Each running
+	// principal gets a permissive ObservePolicy.
+	var principals []schema.PrincipalAssignment
+	for _, localpart := range runningPrincipals {
+		principals = append(principals, schema.PrincipalAssignment{
+			Localpart: localpart,
+			AutoStart: true,
+		})
 	}
 
 	daemon := &Daemon{
+		client:        client,
+		tokenVerifier: newTokenVerifier(client, 5*time.Minute, logger),
+		lastConfig: &schema.MachineConfig{
+			DefaultObservePolicy: &schema.ObservePolicy{
+				AllowedObservers:   []string{"**"},
+				ReadWriteObservers: []string{"**"},
+			},
+			Principals: principals,
+		},
 		machineName:        "machine/test",
 		machineUserID:      "@machine/test:bureau.local",
 		serverName:         "bureau.local",
@@ -261,7 +328,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		tmuxServerSocket:   tmuxSocket,
 		observeRelayBinary: relayBinary,
 		layoutWatchers:     make(map[string]*layoutWatcher),
-		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		logger:             logger,
 	}
 
 	ctx := context.Background()
@@ -286,7 +353,7 @@ func connectList(t *testing.T, socketPath string, observable bool) observe.ListR
 
 	connection.SetDeadline(time.Now().Add(5 * time.Second))
 
-	request := observeRequest{Action: "list", Observable: observable}
+	request := observeRequest{Action: "list", Observable: observable, Token: testObserverToken}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		t.Fatalf("send list request: %v", err)
 	}

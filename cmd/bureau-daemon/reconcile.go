@@ -27,6 +27,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		return fmt.Errorf("reading machine config: %w", err)
 	}
 
+	// Cache the config for observation authorization. This is the only
+	// place that updates lastConfig — it's always consistent with the
+	// daemon's running state.
+	d.lastConfig = config
+
 	// Determine the desired set of principals.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
 	for _, assignment := range config.Principals {

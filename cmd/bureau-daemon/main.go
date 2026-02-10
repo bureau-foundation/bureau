@@ -100,8 +100,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Load the Matrix session saved by the launcher.
-	session, err := loadSession(stateDir, homeserverURL, logger)
+	// Load the Matrix session saved by the launcher. The client is also
+	// needed for the token verifier (creates temporary sessions for whoami).
+	client, session, err := loadSession(stateDir, homeserverURL, logger)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
 	}
@@ -140,6 +141,8 @@ func run() error {
 
 	daemon := &Daemon{
 		session:             session,
+		client:              client,
+		tokenVerifier:       newTokenVerifier(client, 5*time.Minute, logger),
 		machineName:         machineName,
 		machineUserID:       machineUserID,
 		serverName:          serverName,
@@ -216,7 +219,24 @@ func run() error {
 
 // Daemon is the core daemon state.
 type Daemon struct {
-	session        *messaging.Session
+	session *messaging.Session
+
+	// client is the unauthenticated Matrix client. Used by the token
+	// verifier to create temporary sessions for whoami calls.
+	client *messaging.Client
+
+	// tokenVerifier validates Matrix access tokens from observation
+	// clients (operators and peer daemons). Successful verifications
+	// are cached to avoid per-request homeserver round-trips.
+	tokenVerifier *tokenVerifier
+
+	// lastConfig is the MachineConfig from the most recent successful
+	// reconciliation. Used by observation authorization to look up
+	// per-principal ObservePolicy and the machine-level default. Nil
+	// before the first successful reconcile — observation requests are
+	// rejected in that state.
+	lastConfig *schema.MachineConfig
+
 	machineName    string
 	machineUserID  string
 	serverName     string
@@ -422,12 +442,14 @@ type sessionData struct {
 
 // loadSession reads the Matrix session from the state directory.
 // This is the same session.json written by bureau-launcher during first-boot.
-func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*messaging.Session, error) {
+// Returns both the client (needed for token verification against the homeserver)
+// and the authenticated session.
+func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*messaging.Client, *messaging.Session, error) {
 	sessionPath := filepath.Join(stateDir, "session.json")
 
 	jsonData, err := os.ReadFile(sessionPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading session from %s: %w", sessionPath, err)
+		return nil, nil, fmt.Errorf("reading session from %s: %w", sessionPath, err)
 	}
 
 	var data sessionData
@@ -435,7 +457,7 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 		for index := range jsonData {
 			jsonData[index] = 0
 		}
-		return nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
+		return nil, nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
 	}
 	// Zero the raw JSON which contains the access token in plaintext.
 	for index := range jsonData {
@@ -443,7 +465,7 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 	}
 
 	if data.AccessToken == "" {
-		return nil, fmt.Errorf("session file %s has empty access token", sessionPath)
+		return nil, nil, fmt.Errorf("session file %s has empty access token", sessionPath)
 	}
 
 	// Use the homeserver URL from the flag if provided, falling back to
@@ -458,10 +480,14 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 		Logger:        logger,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating matrix client: %w", err)
+		return nil, nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(data.UserID, data.AccessToken)
+	session, err := client.SessionFromToken(data.UserID, data.AccessToken)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, session, nil
 }
 
 // ensureConfigRoom ensures the per-machine config room exists. If it doesn't,

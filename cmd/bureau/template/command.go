@@ -56,6 +56,7 @@ All commands that access Matrix require an operator session. Run
 			pushCommand(),
 			validateCommand(),
 			diffCommand(),
+			impactCommand(),
 		},
 		Examples: []cli.Example{
 			{
@@ -81,6 +82,14 @@ All commands that access Matrix require an operator session. Run
 			{
 				Description: "Diff a Matrix template against a local file",
 				Command:     "bureau template diff bureau/templates:my-agent my-agent.json",
+			},
+			{
+				Description: "Show which principals would be affected by a template change",
+				Command:     "bureau template impact bureau/templates:base",
+			},
+			{
+				Description: "Classify changes before pushing a modified template",
+				Command:     "bureau template impact bureau/templates:my-agent my-agent.json",
 			},
 		},
 	}

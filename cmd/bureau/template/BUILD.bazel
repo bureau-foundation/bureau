@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "command.go",
         "diff.go",
+        "impact.go",
         "list.go",
         "push.go",
         "show.go",
@@ -30,8 +31,12 @@ go_test(
     name = "template_test",
     srcs = [
         "diff_test.go",
+        "impact_test.go",
         "validate_test.go",
     ],
     embed = [":template"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/schema",
+        "//messaging",
+    ],
 )

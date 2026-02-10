@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -31,6 +32,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -54,17 +56,20 @@ func main() {
 
 func run() error {
 	var (
-		homeserverURL    string
-		machineName      string
-		serverName       string
-		stateDir         string
-		launcherSocket   string
-		adminUser        string
-		transportListen  string
-		relaySocket      string
-		pollInterval     time.Duration
-		statusInterval   time.Duration
-		showVersion      bool
+		homeserverURL      string
+		machineName        string
+		serverName         string
+		stateDir           string
+		launcherSocket     string
+		adminUser          string
+		transportListen    string
+		relaySocket        string
+		observeSocket      string
+		tmuxSocket         string
+		observeRelayBinary string
+		pollInterval       time.Duration
+		statusInterval     time.Duration
+		showVersion        bool
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
@@ -75,6 +80,9 @@ func run() error {
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
 	flag.StringVar(&transportListen, "transport-listen", "", "TCP address for inbound transport connections from peer daemons (e.g., :7891)")
 	flag.StringVar(&relaySocket, "relay-socket", "/run/bureau/relay.sock", "Unix socket path for the transport relay (consumer proxies connect here for remote services)")
+	flag.StringVar(&observeSocket, "observe-socket", "/run/bureau/observe.sock", "Unix socket for observation requests from clients")
+	flag.StringVar(&tmuxSocket, "tmux-socket", "/run/bureau/tmux.sock", "tmux server socket for Bureau-managed sessions")
+	flag.StringVar(&observeRelayBinary, "observe-relay-binary", "bureau-observe-relay", "path to the observation relay binary")
 	flag.DurationVar(&pollInterval, "poll-interval", 30*time.Second, "how often to poll for config changes")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -155,6 +163,9 @@ func run() error {
 		peerAddresses:       make(map[string]string),
 		peerTransports:      make(map[string]http.RoundTripper),
 		adminSocketPathFunc: principal.AdminSocketPath,
+		observeSocketPath:   observeSocket,
+		tmuxServerSocket:    tmuxSocket,
+		observeRelayBinary:  observeRelayBinary,
 		logger:              logger,
 	}
 
@@ -164,6 +175,14 @@ func run() error {
 			return fmt.Errorf("starting transport: %w", err)
 		}
 		defer daemon.stopTransport()
+	}
+
+	// Start observation socket listener.
+	if daemon.observeSocketPath != "" {
+		if err := daemon.startObserveListener(ctx); err != nil {
+			return fmt.Errorf("starting observe listener: %w", err)
+		}
+		defer daemon.stopObserveListener()
 	}
 
 	// Initial reconciliation.
@@ -276,6 +295,28 @@ type Daemon struct {
 	// (sandbox creation, destruction, config reconciliation with changes).
 	// Published in MachineStatus so consumers can determine idle duration.
 	lastActivityAt time.Time
+
+	// Observation: the daemon listens for observation requests from clients
+	// and routes them to local relays or remote daemons via the transport.
+
+	// observeSocketPath is the Unix socket where the daemon accepts
+	// observation requests from clients (bureau observe CLI). Defaults to
+	// /run/bureau/observe.sock, separate from the launcher IPC socket to
+	// keep observation traffic off the privileged IPC channel.
+	observeSocketPath string
+
+	// observeListener is the net.Listener for the observation socket.
+	observeListener net.Listener
+
+	// tmuxServerSocket is the path to Bureau's dedicated tmux server socket.
+	// Passed to relay processes as BUREAU_TMUX_SOCKET so they attach to the
+	// correct tmux server. Defaults to /run/bureau/tmux.sock.
+	tmuxServerSocket string
+
+	// observeRelayBinary is the path to the bureau-observe-relay binary.
+	// The daemon forks this for each observation session. Defaults to
+	// "bureau-observe-relay" (found via PATH).
+	observeRelayBinary string
 
 	logger *slog.Logger
 }
@@ -826,8 +867,10 @@ func (d *Daemon) startTransport(ctx context.Context, listenAddress, relaySocketP
 
 	// Start the inbound handler on the transport listener. This serves
 	// requests from peer daemons and routes them to local provider proxies.
+	// Also handles observation requests from peer daemons.
 	inboundMux := http.NewServeMux()
 	inboundMux.HandleFunc("/http/", d.handleTransportInbound)
+	inboundMux.HandleFunc("/observe/", d.handleTransportObserve)
 
 	go func() {
 		if err := tcpListener.Serve(ctx, inboundMux); err != nil {
@@ -1352,6 +1395,548 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 		"admin", adminUserID,
 	)
 	return response.RoomID, nil
+}
+
+// --- Observation routing ---
+//
+// The daemon routes observation requests from clients (bureau observe CLI) to
+// relay processes that attach to tmux sessions. For local principals, the
+// daemon forks a relay directly. For remote principals, it forwards the
+// request through the transport to the remote daemon.
+//
+// The observation protocol has two phases:
+//   - Handshake: client sends observeRequest JSON, daemon sends observeResponse JSON
+//   - Streaming: after success, the socket carries the binary observation protocol
+//     (framed messages: data, resize, history, metadata). The daemon bridges bytes
+//     zero-copy between the client and the relay — no parsing of protocol messages.
+
+// observeRequest mirrors observe.ObserveRequest. Defined locally to avoid
+// importing the observe package (which has in-progress compilation issues from
+// another agent) and to parallel the existing pattern with launcherIPCRequest.
+// The JSON wire format is the contract between client and daemon.
+type observeRequest struct {
+	// Principal is the localpart of the target (e.g., "iree/amdgpu/pm").
+	Principal string `json:"principal"`
+
+	// Mode is "readwrite" or "readonly".
+	Mode string `json:"mode"`
+}
+
+// observeResponse mirrors observe.ObserveResponse. Defined locally for the
+// same reasons as observeRequest.
+type observeResponse struct {
+	// OK is true if the observation session was established.
+	OK bool `json:"ok"`
+
+	// Session is the tmux session name (e.g., "bureau/iree/amdgpu/pm").
+	Session string `json:"session,omitempty"`
+
+	// Machine is the machine localpart hosting the principal.
+	Machine string `json:"machine,omitempty"`
+
+	// Error describes why the request failed.
+	Error string `json:"error,omitempty"`
+}
+
+// startObserveListener creates the observation Unix socket and starts
+// accepting client connections in a goroutine.
+func (d *Daemon) startObserveListener(ctx context.Context) error {
+	if err := os.MkdirAll(filepath.Dir(d.observeSocketPath), 0755); err != nil {
+		return fmt.Errorf("creating observe socket directory: %w", err)
+	}
+
+	// Remove stale socket from a previous run.
+	if err := os.Remove(d.observeSocketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing existing observe socket: %w", err)
+	}
+
+	listener, err := net.Listen("unix", d.observeSocketPath)
+	if err != nil {
+		return fmt.Errorf("creating observe socket at %s: %w", d.observeSocketPath, err)
+	}
+	d.observeListener = listener
+
+	if err := os.Chmod(d.observeSocketPath, 0660); err != nil {
+		listener.Close()
+		return fmt.Errorf("setting observe socket permissions: %w", err)
+	}
+
+	d.logger.Info("observe listener started", "socket", d.observeSocketPath)
+
+	go d.acceptObserveConnections(ctx)
+	return nil
+}
+
+// stopObserveListener closes the observation socket and removes the file.
+func (d *Daemon) stopObserveListener() {
+	if d.observeListener != nil {
+		d.observeListener.Close()
+		os.Remove(d.observeSocketPath)
+	}
+}
+
+// acceptObserveConnections runs the accept loop for the observation socket.
+// Each connection is handled in its own goroutine.
+func (d *Daemon) acceptObserveConnections(ctx context.Context) {
+	for {
+		connection, err := d.observeListener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				if !strings.Contains(err.Error(), "use of closed network connection") {
+					d.logger.Error("accept observe connection", "error", err)
+				}
+				return
+			}
+		}
+		go d.handleObserveClient(connection)
+	}
+}
+
+// handleObserveClient processes a single observation request. It reads the
+// JSON handshake, determines whether the principal is local or remote, and
+// either forks a relay or forwards through the transport.
+func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
+	defer clientConnection.Close()
+
+	// Set a deadline for the JSON handshake. Cleared before entering
+	// the streaming bridge.
+	clientConnection.SetDeadline(time.Now().Add(10 * time.Second))
+
+	var request observeRequest
+	if err := json.NewDecoder(clientConnection).Decode(&request); err != nil {
+		d.sendObserveError(clientConnection, fmt.Sprintf("invalid request: %v", err))
+		return
+	}
+
+	if err := principal.ValidateLocalpart(request.Principal); err != nil {
+		d.sendObserveError(clientConnection, fmt.Sprintf("invalid principal: %v", err))
+		return
+	}
+
+	if request.Mode != "readwrite" && request.Mode != "readonly" {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid mode %q: must be readwrite or readonly", request.Mode))
+		return
+	}
+
+	d.logger.Info("observation requested",
+		"principal", request.Principal,
+		"mode", request.Mode,
+	)
+
+	// Check if the principal is running locally.
+	if d.running[request.Principal] {
+		d.handleLocalObserve(clientConnection, request)
+		return
+	}
+
+	// Check if the principal is a known service on a remote machine
+	// reachable via the transport.
+	if peerAddress, ok := d.findPrincipalPeer(request.Principal); ok {
+		d.handleRemoteObserve(clientConnection, request, peerAddress)
+		return
+	}
+
+	d.sendObserveError(clientConnection,
+		fmt.Sprintf("principal %q not found", request.Principal))
+}
+
+// handleLocalObserve handles observation of a principal running on this machine.
+// It forks a relay process, sends the success response, and bridges bytes
+// between the client and the relay.
+func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRequest) {
+	sessionName := "bureau/" + request.Principal
+	readOnly := request.Mode == "readonly"
+
+	relayConnection, relayCommand, err := d.forkObserveRelay(sessionName, readOnly)
+	if err != nil {
+		d.logger.Error("fork observe relay failed",
+			"principal", request.Principal,
+			"error", err,
+		)
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("failed to start relay: %v", err))
+		return
+	}
+
+	// Send success response and clear the handshake deadline before
+	// entering the streaming bridge.
+	response := observeResponse{
+		OK:      true,
+		Session: sessionName,
+		Machine: d.machineName,
+	}
+	clientConnection.SetDeadline(time.Time{})
+	if err := json.NewEncoder(clientConnection).Encode(response); err != nil {
+		d.logger.Error("send observe response failed",
+			"principal", request.Principal,
+			"error", err,
+		)
+		relayConnection.Close()
+		relayCommand.Process.Kill()
+		relayCommand.Wait()
+		return
+	}
+
+	d.logger.Info("observation started",
+		"principal", request.Principal,
+		"session", sessionName,
+	)
+
+	// Bridge bytes zero-copy between client and relay. This blocks until
+	// one side disconnects or errors.
+	bridgeConnections(clientConnection, relayConnection)
+
+	// Clean up the relay process. Send SIGTERM first for graceful shutdown,
+	// escalate to SIGKILL after a timeout.
+	cleanupRelayProcess(relayCommand)
+
+	d.logger.Info("observation ended", "principal", request.Principal)
+}
+
+// handleRemoteObserve forwards an observation request to a remote daemon via
+// the transport layer. It connects to the peer, performs an HTTP handshake
+// with the remote daemon's /observe/ handler, then bridges the resulting
+// raw connection to the client.
+func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeRequest, peerAddress string) {
+	d.logger.Info("forwarding observation to remote daemon",
+		"principal", request.Principal,
+		"peer", peerAddress,
+	)
+
+	// Dial the remote daemon's transport listener.
+	rawConnection, err := net.DialTimeout("tcp", peerAddress, 10*time.Second)
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("cannot reach peer at %s: %v", peerAddress, err))
+		return
+	}
+
+	// Build and send an HTTP POST to the remote daemon's observation handler.
+	// The principal localpart contains '/' which is fine in the URL path —
+	// the remote handler strips the /observe/ prefix and takes the rest.
+	requestBody, _ := json.Marshal(request)
+	httpRequest, err := http.NewRequest("POST",
+		"http://"+peerAddress+"/observe/"+request.Principal,
+		bytes.NewReader(requestBody))
+	if err != nil {
+		rawConnection.Close()
+		d.sendObserveError(clientConnection, fmt.Sprintf("build request: %v", err))
+		return
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	if err := httpRequest.Write(rawConnection); err != nil {
+		rawConnection.Close()
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("send request to peer: %v", err))
+		return
+	}
+
+	// Read the HTTP response. The bufio.Reader may read ahead into the
+	// post-HTTP observation stream — we preserve those bytes via
+	// bufferedConn for the bridge.
+	bufferedReader := bufio.NewReader(rawConnection)
+	httpResponse, err := http.ReadResponse(bufferedReader, httpRequest)
+	if err != nil {
+		rawConnection.Close()
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("read peer response: %v", err))
+		return
+	}
+
+	responseBody, _ := io.ReadAll(httpResponse.Body)
+	httpResponse.Body.Close()
+
+	var peerResponse observeResponse
+	if err := json.Unmarshal(responseBody, &peerResponse); err != nil {
+		rawConnection.Close()
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid peer response: %v", err))
+		return
+	}
+
+	if !peerResponse.OK {
+		rawConnection.Close()
+		d.sendObserveError(clientConnection, peerResponse.Error)
+		return
+	}
+
+	// Forward the success response to the client.
+	clientConnection.SetDeadline(time.Time{})
+	if err := json.NewEncoder(clientConnection).Encode(peerResponse); err != nil {
+		rawConnection.Close()
+		return
+	}
+
+	d.logger.Info("remote observation established",
+		"principal", request.Principal,
+		"session", peerResponse.Session,
+		"peer", peerAddress,
+	)
+
+	// Bridge client ↔ remote daemon. Use bufferedConn to include any bytes
+	// the bufio.Reader read ahead beyond the HTTP response.
+	peerConn := &bufferedConn{reader: bufferedReader, Conn: rawConnection}
+	bridgeConnections(clientConnection, peerConn)
+
+	d.logger.Info("remote observation ended", "principal", request.Principal)
+}
+
+// handleTransportObserve handles observation requests arriving from peer
+// daemons over the transport listener. The peer sends an HTTP POST with an
+// observeRequest body. On success, the handler hijacks the HTTP connection,
+// forks a relay, writes the observeResponse, and bridges bytes between the
+// hijacked connection and the relay.
+func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract principal from path: /observe/<localpart>
+	principalLocalpart := strings.TrimPrefix(r.URL.Path, "/observe/")
+	if principalLocalpart == "" {
+		http.Error(w, "empty principal in path", http.StatusBadRequest)
+		return
+	}
+
+	var request observeRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("invalid request: %v", err),
+		})
+		return
+	}
+
+	// The principal in the path and body must match.
+	if request.Principal != principalLocalpart {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("principal mismatch: path=%q body=%q",
+				principalLocalpart, request.Principal),
+		})
+		return
+	}
+
+	if !d.running[request.Principal] {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("principal %q not running on this machine", request.Principal),
+		})
+		return
+	}
+
+	sessionName := "bureau/" + request.Principal
+	readOnly := request.Mode == "readonly"
+
+	relayConnection, relayCommand, err := d.forkObserveRelay(sessionName, readOnly)
+	if err != nil {
+		d.logger.Error("fork observe relay for transport failed",
+			"principal", request.Principal,
+			"error", err,
+		)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("failed to start relay: %v", err),
+		})
+		return
+	}
+
+	// Hijack the HTTP connection to switch to the binary observation protocol.
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		d.logger.Error("response writer does not support hijacking")
+		relayConnection.Close()
+		relayCommand.Process.Kill()
+		relayCommand.Wait()
+		http.Error(w, "server does not support connection hijacking", http.StatusInternalServerError)
+		return
+	}
+
+	transportConnection, transportBuffer, err := hijacker.Hijack()
+	if err != nil {
+		d.logger.Error("hijack transport connection failed", "error", err)
+		relayConnection.Close()
+		relayCommand.Process.Kill()
+		relayCommand.Wait()
+		return
+	}
+
+	// Write the HTTP response manually on the hijacked connection.
+	responseJSON, _ := json.Marshal(observeResponse{
+		OK:      true,
+		Session: sessionName,
+		Machine: d.machineName,
+	})
+	fmt.Fprintf(transportBuffer, "HTTP/1.1 200 OK\r\n")
+	fmt.Fprintf(transportBuffer, "Content-Type: application/json\r\n")
+	fmt.Fprintf(transportBuffer, "Content-Length: %d\r\n", len(responseJSON))
+	fmt.Fprintf(transportBuffer, "\r\n")
+	transportBuffer.Write(responseJSON)
+	transportBuffer.Flush()
+
+	d.logger.Info("transport observation started",
+		"principal", request.Principal,
+		"session", sessionName,
+	)
+
+	// Bridge the hijacked connection to the relay.
+	bridgeConnections(transportConnection, relayConnection)
+
+	cleanupRelayProcess(relayCommand)
+
+	d.logger.Info("transport observation ended", "principal", request.Principal)
+}
+
+// forkObserveRelay creates a socketpair and forks the observation relay binary.
+// Returns the daemon's end of the socketpair (as a net.Conn) and the relay's
+// exec.Cmd. The relay receives the other end of the socketpair as fd 3.
+//
+// The relay binary is invoked as: bureau-observe-relay <session-name>
+// Environment:
+//   - BUREAU_TMUX_SOCKET: tmux server socket path
+//   - BUREAU_OBSERVE_READONLY=1: if readOnly is true
+func (d *Daemon) forkObserveRelay(sessionName string, readOnly bool) (net.Conn, *exec.Cmd, error) {
+	// Create a socketpair. fds[0] goes to the relay as fd 3; fds[1] stays
+	// with the daemon and is converted to a net.Conn.
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating socketpair: %w", err)
+	}
+
+	relayFile := os.NewFile(uintptr(fds[0]), "relay-socket")
+	daemonFile := os.NewFile(uintptr(fds[1]), "daemon-socket")
+
+	// Convert the daemon's end to a net.Conn for proper socket semantics
+	// (deadline support, etc.). FileConn dups the fd internally, so we
+	// close the original.
+	daemonConnection, err := net.FileConn(daemonFile)
+	daemonFile.Close()
+	if err != nil {
+		relayFile.Close()
+		return nil, nil, fmt.Errorf("converting daemon socket to net.Conn: %w", err)
+	}
+
+	// Build environment for the relay process.
+	environment := os.Environ()
+	if d.tmuxServerSocket != "" {
+		environment = append(environment, "BUREAU_TMUX_SOCKET="+d.tmuxServerSocket)
+	}
+	if readOnly {
+		environment = append(environment, "BUREAU_OBSERVE_READONLY=1")
+	}
+
+	command := exec.Command(d.observeRelayBinary, sessionName)
+	command.Env = environment
+	command.ExtraFiles = []*os.File{relayFile} // becomes fd 3 in child
+	command.Stderr = os.Stderr
+
+	if err := command.Start(); err != nil {
+		daemonConnection.Close()
+		relayFile.Close()
+		return nil, nil, fmt.Errorf("starting observe relay %q: %w", d.observeRelayBinary, err)
+	}
+
+	// Close the relay's end in the parent — the child has its own copy.
+	relayFile.Close()
+
+	return daemonConnection, command, nil
+}
+
+// findPrincipalPeer looks up which remote machine hosts a principal by
+// checking the service directory. Returns the peer's transport address if
+// the principal is a known remote service with a reachable peer.
+//
+// This provides best-effort remote observation for service principals. For
+// non-service principals (regular agents), a future principal directory
+// would be needed.
+func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok bool) {
+	if d.transportDialer == nil {
+		return "", false
+	}
+
+	for _, service := range d.services {
+		serviceLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
+		if err != nil {
+			continue
+		}
+		if serviceLocalpart != localpart {
+			continue
+		}
+		if service.Machine == d.machineUserID {
+			continue // Local, not remote.
+		}
+		address, exists := d.peerAddresses[service.Machine]
+		if !exists || address == "" {
+			continue
+		}
+		return address, true
+	}
+	return "", false
+}
+
+// bridgeConnections copies bytes bidirectionally between two connections.
+// Returns when either direction finishes (EOF, error, or closed connection).
+// Both connections are closed before returning.
+func bridgeConnections(a, b net.Conn) {
+	done := make(chan struct{}, 2)
+
+	go func() {
+		io.Copy(a, b)
+		done <- struct{}{}
+	}()
+
+	go func() {
+		io.Copy(b, a)
+		done <- struct{}{}
+	}()
+
+	// Wait for one direction to finish, then close both to unblock the other.
+	<-done
+	a.Close()
+	b.Close()
+	<-done
+}
+
+// cleanupRelayProcess sends SIGTERM and waits for the relay to exit.
+// If the relay doesn't exit within 5 seconds, it is killed with SIGKILL.
+func cleanupRelayProcess(command *exec.Cmd) {
+	command.Process.Signal(syscall.SIGTERM)
+	exitChannel := make(chan error, 1)
+	go func() { exitChannel <- command.Wait() }()
+	select {
+	case <-exitChannel:
+	case <-time.After(5 * time.Second):
+		command.Process.Kill()
+		<-exitChannel
+	}
+}
+
+// sendObserveError writes an error observeResponse to the connection.
+func (d *Daemon) sendObserveError(connection net.Conn, message string) {
+	d.logger.Warn("observe request failed", "error", message)
+	json.NewEncoder(connection).Encode(observeResponse{Error: message})
+}
+
+// bufferedConn wraps a net.Conn with a buffered reader for reads while
+// writing directly to the underlying connection. Used after HTTP response
+// parsing where the bufio.Reader may have read ahead into the post-HTTP
+// streaming data.
+type bufferedConn struct {
+	reader *bufio.Reader
+	net.Conn
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }
 
 // uptimeSeconds returns the system uptime in seconds, or 0 if unavailable.

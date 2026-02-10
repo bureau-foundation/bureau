@@ -6,6 +6,7 @@ package observe
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,4 +87,31 @@ func TmuxCapturePane(t *testing.T, serverSocket, target string) string {
 		t.Fatalf("capture-pane %q: %v\n%s", target, err, output)
 	}
 	return string(output)
+}
+
+// mustTmux runs a tmux command via the production tmuxCommand function
+// and fails the test on error.
+func mustTmux(t *testing.T, serverSocket string, args ...string) {
+	t.Helper()
+	if _, err := tmuxCommand(serverSocket, args...); err != nil {
+		t.Fatalf("tmux %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+// mustTmuxTrimmed runs a tmux command via the production tmuxCommand
+// function and returns the trimmed output. Fails the test on error.
+func mustTmuxTrimmed(t *testing.T, serverSocket string, args ...string) string {
+	t.Helper()
+	output, err := tmuxCommand(serverSocket, args...)
+	if err != nil {
+		t.Fatalf("tmux %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(output)
+}
+
+// countPanes returns the number of panes in the first window of a session.
+func countPanes(t *testing.T, serverSocket, sessionName string) int {
+	t.Helper()
+	output := mustTmuxTrimmed(t, serverSocket, "list-panes", "-t", sessionName)
+	return len(splitLines(output))
 }

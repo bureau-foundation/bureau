@@ -144,6 +144,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		"--admin-base-path", adminBase,
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
+		"--tmux-socket", "", // Disable tmux session management in this test (no tmux binary needed)
 	)
 	launcherCmd.Stderr = os.Stderr
 	if err := launcherCmd.Start(); err != nil {

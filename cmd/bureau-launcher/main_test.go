@@ -1118,3 +1118,302 @@ func TestShutdownAllSandboxes(t *testing.T) {
 		t.Errorf("expected 0 sandboxes after shutdown, got %d", len(launcher.sandboxes))
 	}
 }
+
+// --- Tmux integration tests ---
+
+// requireTmux skips the test if tmux is not available on the system.
+func requireTmux(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+}
+
+// newTestTmuxSocket returns a path for a test-isolated tmux server socket
+// in a temporary directory, and registers cleanup to kill the tmux server
+// when the test finishes. All tmux commands in tests MUST use this socket
+// via -S to avoid interfering with the user's or agent's tmux sessions.
+func newTestTmuxSocket(t *testing.T) string {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "tmux.sock")
+	t.Cleanup(func() {
+		exec.Command("tmux", "-S", socketPath, "kill-server").Run()
+	})
+	return socketPath
+}
+
+// tmuxSessionExists checks whether a tmux session with the given name exists
+// on the specified tmux server socket.
+func tmuxSessionExists(socketPath, sessionName string) bool {
+	cmd := exec.Command("tmux", "-S", socketPath, "has-session", "-t", sessionName)
+	return cmd.Run() == nil
+}
+
+func TestTmuxSessionName(t *testing.T) {
+	tests := []struct {
+		localpart string
+		want      string
+	}{
+		{"iree/amdgpu/pm", "bureau/iree/amdgpu/pm"},
+		{"service/stt/whisper", "bureau/service/stt/whisper"},
+		{"test/echo", "bureau/test/echo"},
+		{"simple", "bureau/simple"},
+	}
+	for _, test := range tests {
+		got := tmuxSessionName(test.localpart)
+		if got != test.want {
+			t.Errorf("tmuxSessionName(%q) = %q, want %q", test.localpart, got, test.want)
+		}
+	}
+}
+
+func TestTmuxSessionLifecycle(t *testing.T) {
+	requireTmux(t)
+
+	tmuxSocket := newTestTmuxSocket(t)
+
+	launcher := &Launcher{
+		tmuxServerSocket: tmuxSocket,
+		sandboxes:        make(map[string]*managedSandbox),
+		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	localpart := "test/tmux"
+	sessionName := tmuxSessionName(localpart)
+
+	// Create the session.
+	if err := launcher.createTmuxSession(localpart); err != nil {
+		t.Fatalf("createTmuxSession: %v", err)
+	}
+
+	// Verify the session exists on the Bureau tmux server.
+	if !tmuxSessionExists(tmuxSocket, sessionName) {
+		t.Fatalf("tmux session %q should exist after creation", sessionName)
+	}
+
+	// Destroy the session.
+	launcher.destroyTmuxSession(localpart)
+
+	// Verify the session is gone.
+	if tmuxSessionExists(tmuxSocket, sessionName) {
+		t.Errorf("tmux session %q should not exist after destruction", sessionName)
+	}
+}
+
+func TestTmuxSessionConfiguration(t *testing.T) {
+	requireTmux(t)
+
+	tmuxSocket := newTestTmuxSocket(t)
+
+	launcher := &Launcher{
+		tmuxServerSocket: tmuxSocket,
+		sandboxes:        make(map[string]*managedSandbox),
+		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	localpart := "test/config"
+	sessionName := tmuxSessionName(localpart)
+
+	if err := launcher.createTmuxSession(localpart); err != nil {
+		t.Fatalf("createTmuxSession: %v", err)
+	}
+
+	// Verify Bureau-standard tmux options were applied.
+	globalOptions := []struct {
+		option string
+		want   string
+	}{
+		{"prefix", "C-a"},
+		{"mouse", "on"},
+		{"history-limit", "50000"},
+	}
+
+	for _, test := range globalOptions {
+		cmd := exec.Command("tmux", "-S", tmuxSocket,
+			"show-option", "-gv", test.option)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("show-option -gv %s: %v (output: %s)", test.option, err, output)
+			continue
+		}
+		got := strings.TrimSpace(string(output))
+		if got != test.want {
+			t.Errorf("global tmux option %s = %q, want %q", test.option, got, test.want)
+		}
+	}
+
+	// Verify per-session status-left contains the principal name.
+	cmd := exec.Command("tmux", "-S", tmuxSocket,
+		"show-option", "-t", sessionName, "-v", "status-left")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("show-option status-left: %v (output: %s)", err, output)
+	} else {
+		got := strings.TrimSpace(string(output))
+		if !strings.Contains(got, localpart) {
+			t.Errorf("status-left = %q, should contain principal %q", got, localpart)
+		}
+	}
+}
+
+func TestTmuxSessionSkippedWhenSocketEmpty(t *testing.T) {
+	// When tmuxServerSocket is empty, tmux operations are no-ops.
+	launcher := &Launcher{
+		tmuxServerSocket: "",
+		sandboxes:        make(map[string]*managedSandbox),
+		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// createTmuxSession should return nil (no error, no action).
+	if err := launcher.createTmuxSession("test/noop"); err != nil {
+		t.Errorf("createTmuxSession with empty socket should succeed, got: %v", err)
+	}
+
+	// destroyTmuxSession should not panic or error.
+	launcher.destroyTmuxSession("test/noop")
+}
+
+func TestTmuxSessionMultipleSessions(t *testing.T) {
+	requireTmux(t)
+
+	tmuxSocket := newTestTmuxSocket(t)
+
+	launcher := &Launcher{
+		tmuxServerSocket: tmuxSocket,
+		sandboxes:        make(map[string]*managedSandbox),
+		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	localparts := []string{"test/a", "test/b", "test/c"}
+
+	// Create all sessions.
+	for _, localpart := range localparts {
+		if err := launcher.createTmuxSession(localpart); err != nil {
+			t.Fatalf("createTmuxSession(%q): %v", localpart, err)
+		}
+	}
+
+	// Verify all sessions exist.
+	for _, localpart := range localparts {
+		sessionName := tmuxSessionName(localpart)
+		if !tmuxSessionExists(tmuxSocket, sessionName) {
+			t.Errorf("session %q should exist", sessionName)
+		}
+	}
+
+	// Destroy one session and verify the others survive.
+	launcher.destroyTmuxSession("test/b")
+	if tmuxSessionExists(tmuxSocket, tmuxSessionName("test/b")) {
+		t.Error("session bureau/test/b should be gone after destroy")
+	}
+	if !tmuxSessionExists(tmuxSocket, tmuxSessionName("test/a")) {
+		t.Error("session bureau/test/a should still exist")
+	}
+	if !tmuxSessionExists(tmuxSocket, tmuxSessionName("test/c")) {
+		t.Error("session bureau/test/c should still exist")
+	}
+}
+
+func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
+	requireTmux(t)
+
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+	launcher.tmuxServerSocket = newTestTmuxSocket(t)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN":   "syt_fake_test_token",
+		"MATRIX_USER_ID": "@test/tmuxproxy:bureau.local",
+	})
+
+	// Create a sandbox — this should spawn a proxy AND create a tmux session.
+	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/tmuxproxy",
+		EncryptedCredentials: ciphertext,
+	})
+	if !response.OK {
+		t.Fatalf("create-sandbox failed: %s", response.Error)
+	}
+
+	sessionName := tmuxSessionName("test/tmuxproxy")
+	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+		t.Fatalf("tmux session %q should exist after sandbox creation", sessionName)
+	}
+
+	// Verify the proxy is also running (agent socket responds).
+	socketPath := launcher.socketBasePath + "test/tmuxproxy.sock"
+	agentClient := unixHTTPClient(socketPath)
+	healthResponse, err := agentClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check: %v", err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Errorf("health status = %d, want 200", healthResponse.StatusCode)
+	}
+
+	// Destroy the sandbox — should kill both proxy and tmux session.
+	destroyResponse := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: "test/tmuxproxy",
+	})
+	if !destroyResponse.OK {
+		t.Fatalf("destroy-sandbox failed: %s", destroyResponse.Error)
+	}
+
+	if tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+		t.Errorf("tmux session %q should not exist after sandbox destruction", sessionName)
+	}
+	if _, exists := launcher.sandboxes["test/tmuxproxy"]; exists {
+		t.Error("sandbox should be removed from map after destroy")
+	}
+}
+
+func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
+	requireTmux(t)
+
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+	launcher.tmuxServerSocket = newTestTmuxSocket(t)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN": "syt_test",
+	})
+
+	// Create a sandbox.
+	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/crash",
+		EncryptedCredentials: ciphertext,
+	})
+	if !response.OK {
+		t.Fatalf("create-sandbox: %s", response.Error)
+	}
+
+	sessionName := tmuxSessionName("test/crash")
+	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+		t.Fatal("tmux session should exist after creation")
+	}
+
+	// Kill the proxy to simulate a crash.
+	sandbox := launcher.sandboxes["test/crash"]
+	sandbox.process.Kill()
+	<-sandbox.done
+
+	// Re-creating the sandbox should clean up the old tmux session
+	// (via cleanupSandbox) and create a new one.
+	response2 := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/crash",
+		EncryptedCredentials: ciphertext,
+	})
+	if !response2.OK {
+		t.Fatalf("recreate after crash: %s", response2.Error)
+	}
+
+	// The new tmux session should exist.
+	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+		t.Error("tmux session should exist after recreate")
+	}
+}

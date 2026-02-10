@@ -16,6 +16,7 @@ coverage.txt
 coverage.html
 go.work
 go.work.sum
+/bureau
 /bureau-*
 
 # Python (if/when needed)

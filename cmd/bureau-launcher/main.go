@@ -59,6 +59,7 @@ func run() error {
 		proxyBinaryPath       string
 		socketBasePath        string
 		adminBasePath         string
+		tmuxServerSocket      string
 		showVersion           bool
 	)
 
@@ -71,6 +72,7 @@ func run() error {
 	flag.StringVar(&proxyBinaryPath, "proxy-binary", "", "path to bureau-proxy binary (auto-detected if empty)")
 	flag.StringVar(&socketBasePath, "socket-base-path", principal.SocketBasePath, "base directory for principal agent sockets")
 	flag.StringVar(&adminBasePath, "admin-base-path", principal.AdminSocketBasePath, "base directory for principal admin sockets")
+	flag.StringVar(&tmuxServerSocket, "tmux-socket", "/run/bureau/tmux.sock", "path for the Bureau tmux server socket (empty to disable tmux session management)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -128,17 +130,18 @@ func run() error {
 
 	// Start the IPC socket for daemon communication.
 	launcher := &Launcher{
-		session:         session,
-		keypair:         keypair,
-		machineName:     machineName,
-		serverName:      serverName,
-		homeserverURL:   homeserverURL,
-		stateDir:        stateDir,
-		proxyBinaryPath: proxyBinaryPath,
-		socketBasePath:  socketBasePath,
-		adminBasePath:   adminBasePath,
-		sandboxes:       make(map[string]*managedSandbox),
-		logger:          logger,
+		session:          session,
+		keypair:          keypair,
+		machineName:      machineName,
+		serverName:       serverName,
+		homeserverURL:    homeserverURL,
+		stateDir:         stateDir,
+		proxyBinaryPath:  proxyBinaryPath,
+		socketBasePath:   socketBasePath,
+		adminBasePath:    adminBasePath,
+		tmuxServerSocket: tmuxServerSocket,
+		sandboxes:        make(map[string]*managedSandbox),
+		logger:           logger,
 	}
 
 	listener, err := listenSocket(socketPath)
@@ -368,17 +371,18 @@ type proxyCredentialPayload struct {
 
 // Launcher handles IPC requests from the daemon.
 type Launcher struct {
-	session         *messaging.Session
-	keypair         *sealed.Keypair
-	machineName     string
-	serverName      string
-	homeserverURL   string
-	stateDir        string
-	proxyBinaryPath string
-	socketBasePath  string // base directory for agent sockets (e.g., /run/bureau/principal/)
-	adminBasePath   string // base directory for admin sockets (e.g., /run/bureau/admin/)
-	sandboxes       map[string]*managedSandbox
-	logger          *slog.Logger
+	session          *messaging.Session
+	keypair          *sealed.Keypair
+	machineName      string
+	serverName       string
+	homeserverURL    string
+	stateDir         string
+	proxyBinaryPath  string
+	socketBasePath   string // base directory for agent sockets (e.g., /run/bureau/principal/)
+	adminBasePath    string // base directory for admin sockets (e.g., /run/bureau/admin/)
+	tmuxServerSocket string // path to Bureau's dedicated tmux server socket (e.g., /run/bureau/tmux.sock)
+	sandboxes        map[string]*managedSandbox
+	logger           *slog.Logger
 }
 
 // serve accepts connections on the IPC socket and handles requests.
@@ -513,6 +517,18 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 
 	pid, err := l.spawnProxy(request.Principal, credentials)
 	if err != nil {
+		return IPCResponse{OK: false, Error: err.Error()}
+	}
+
+	// Create a tmux session for observation of this principal.
+	if err := l.createTmuxSession(request.Principal); err != nil {
+		l.logger.Error("tmux session creation failed, rolling back proxy",
+			"principal", request.Principal, "error", err)
+		if sandbox, exists := l.sandboxes[request.Principal]; exists {
+			sandbox.process.Kill()
+			<-sandbox.done
+			l.cleanupSandbox(request.Principal)
+		}
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
 
@@ -840,9 +856,9 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 	}
 }
 
-// cleanupSandbox removes a sandbox's temp config directory and socket files,
-// and deletes it from the sandboxes map. The caller must ensure the process
-// has already exited.
+// cleanupSandbox removes a sandbox's temp config directory, socket files,
+// and tmux session, then deletes it from the sandboxes map. The caller must
+// ensure the process has already exited.
 func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 	sandbox, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -860,11 +876,16 @@ func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 	os.Remove(socketPath)
 	os.Remove(adminSocketPath)
 
+	// Kill the principal's tmux session. This is safe even if the session
+	// doesn't exist (the process crashed before it was created, or it was
+	// already killed) — destroyTmuxSession logs a warning and moves on.
+	l.destroyTmuxSession(principalLocalpart)
+
 	delete(l.sandboxes, principalLocalpart)
 }
 
-// shutdownAllSandboxes terminates all running proxy processes. Called during
-// launcher shutdown.
+// shutdownAllSandboxes terminates all running proxy processes and their
+// associated tmux sessions. Called during launcher shutdown.
 func (l *Launcher) shutdownAllSandboxes() {
 	for principalLocalpart, sandbox := range l.sandboxes {
 		l.logger.Info("shutting down sandbox", "principal", principalLocalpart, "pid", sandbox.process.Pid)
@@ -883,6 +904,120 @@ func (l *Launcher) shutdownAllSandboxes() {
 		}
 
 		l.cleanupSandbox(principalLocalpart)
+	}
+
+	// Kill the Bureau tmux server entirely. Individual sessions were
+	// already killed by cleanupSandbox above; this is belt-and-suspenders
+	// cleanup in case any sessions survived. Since Bureau owns this tmux
+	// server (dedicated socket, not the user's tmux), this is safe.
+	if l.tmuxServerSocket != "" {
+		cmd := exec.Command("tmux", "-S", l.tmuxServerSocket, "kill-server")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			l.logger.Debug("killing tmux server (may already be stopped)",
+				"socket", l.tmuxServerSocket, "error", err, "output", string(output))
+		} else {
+			l.logger.Info("tmux server stopped", "socket", l.tmuxServerSocket)
+		}
+	}
+}
+
+// tmuxSessionName returns the tmux session name for a principal.
+// Bureau session names follow "bureau/<localpart>" — the slash in the
+// localpart creates a natural hierarchy. Tmux treats "/" as a regular
+// character in session names (only ":" and "." are delimiters in tmux
+// target syntax).
+func tmuxSessionName(localpart string) string {
+	return "bureau/" + localpart
+}
+
+// createTmuxSession creates a detached tmux session for a principal on
+// Bureau's dedicated tmux server. The session is configured with Bureau
+// defaults: Ctrl-a prefix (distinct from the user's Ctrl-b), mouse support
+// for relay pass-through, and generous scrollback for observation history.
+//
+// If tmuxServerSocket is empty, this is a no-op (tmux management disabled).
+func (l *Launcher) createTmuxSession(localpart string) error {
+	if l.tmuxServerSocket == "" {
+		return nil
+	}
+
+	sessionName := tmuxSessionName(localpart)
+
+	// Ensure the tmux server socket directory exists.
+	if err := os.MkdirAll(filepath.Dir(l.tmuxServerSocket), 0755); err != nil {
+		return fmt.Errorf("creating tmux socket directory: %w", err)
+	}
+
+	// Create a detached tmux session. The first new-session on this socket
+	// also starts the tmux server.
+	cmd := exec.Command("tmux", "-S", l.tmuxServerSocket,
+		"new-session", "-d", "-s", sessionName)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("creating tmux session %q: %w (%s)",
+			sessionName, err, strings.TrimSpace(string(output)))
+	}
+
+	l.configureTmuxSession(sessionName, localpart)
+
+	l.logger.Info("tmux session created",
+		"session", sessionName,
+		"server_socket", l.tmuxServerSocket,
+	)
+	return nil
+}
+
+// configureTmuxSession sets Bureau-standard tmux options on a session and
+// the server. Global options (prefix, mouse, scrollback) are set with -g
+// so all sessions on Bureau's dedicated server inherit them. Per-session
+// options (status bar content) are set on the specific session.
+func (l *Launcher) configureTmuxSession(sessionName, localpart string) {
+	type tmuxOption struct {
+		global bool
+		key    string
+		value  string
+	}
+
+	options := []tmuxOption{
+		{global: true, key: "prefix", value: "C-a"},
+		{global: true, key: "mouse", value: "on"},
+		{global: true, key: "history-limit", value: "50000"},
+		{global: false, key: "status-left", value: fmt.Sprintf(" %s ", localpart)},
+	}
+
+	for _, option := range options {
+		var args []string
+		if option.global {
+			args = []string{"-S", l.tmuxServerSocket, "set-option", "-g", option.key, option.value}
+		} else {
+			args = []string{"-S", l.tmuxServerSocket, "set-option", "-t", sessionName, option.key, option.value}
+		}
+		cmd := exec.Command("tmux", args...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			l.logger.Warn("setting tmux option failed",
+				"session", sessionName, "option", option.key,
+				"error", err, "output", strings.TrimSpace(string(output)))
+		}
+	}
+}
+
+// destroyTmuxSession kills a principal's tmux session on Bureau's dedicated
+// tmux server. Called during sandbox cleanup. Failures are logged as warnings
+// because the session may already have been killed (the shell exited, or the
+// session was never created due to an earlier failure).
+func (l *Launcher) destroyTmuxSession(localpart string) {
+	if l.tmuxServerSocket == "" {
+		return
+	}
+
+	sessionName := tmuxSessionName(localpart)
+	cmd := exec.Command("tmux", "-S", l.tmuxServerSocket,
+		"kill-session", "-t", sessionName)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		l.logger.Debug("killing tmux session (may already be gone)",
+			"session", sessionName, "error", err,
+			"output", strings.TrimSpace(string(output)))
+	} else {
+		l.logger.Info("tmux session destroyed", "session", sessionName)
 	}
 }
 

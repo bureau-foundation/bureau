@@ -5,6 +5,7 @@ port = [6167]
 address = "0.0.0.0"
 allow_registration = true
 allow_federation = false
+new_user_displayname_suffix = ""
 
 # TURN server configuration for WebRTC NAT traversal. The homeserver
 # serves time-limited HMAC credentials via /_matrix/client/v3/voip/turnServer.

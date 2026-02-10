@@ -41,6 +41,10 @@ via --credential-file or --homeserver/--token/--user-id.`,
 // userCreateCommand returns the "user create" subcommand for registering a new
 // Matrix account. This uses Client.Register directly (no existing session
 // needed), similar to how setup bootstraps the admin account.
+//
+// With --operator, also invites the user to all Bureau infrastructure rooms
+// (space, agents, system, machines, services). This is the primary onboarding
+// path for human operators after running "bureau matrix setup".
 func userCreateCommand() *cli.Command {
 	var (
 		credentialFile        string
@@ -48,6 +52,7 @@ func userCreateCommand() *cli.Command {
 		registrationTokenFile string
 		passwordFile          string
 		serverName            string
+		operator              bool
 	)
 
 	return &cli.Command{
@@ -62,15 +67,21 @@ credential file is the easiest path after initial setup.
 By default, the password is derived deterministically from the registration
 token. This is appropriate for agent accounts that never need interactive
 login. For human accounts (e.g., to log in via Element), use --password-file
-to set a chosen password. Use --password-file - to be prompted interactively.`,
+to set a chosen password. Use --password-file - to be prompted interactively.
+
+With --operator, the user is also invited to all Bureau infrastructure rooms
+(the space plus agents, system, machines, and services). This is the
+recommended way to onboard a human operator after initial server setup.
+The command is idempotent: if the account already exists, it skips creation
+and proceeds directly to ensuring room membership.`,
 		Usage: "bureau matrix user create <username> [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Create a human account (credential file + interactive password)",
-				Command:     "bureau matrix user create ben --credential-file ./bureau-creds --password-file -",
+				Description: "Create an operator account (recommended after setup)",
+				Command:     "bureau matrix user create ben --credential-file ./bureau-creds --password-file - --operator",
 			},
 			{
-				Description: "Create an agent account (derived password, credential file)",
+				Description: "Create an agent account (derived password, no room invites)",
 				Command:     "bureau matrix user create iree-builder --credential-file ./bureau-creds",
 			},
 			{
@@ -85,6 +96,7 @@ to set a chosen password. Use --password-file - to be prompted interactively.`,
 			flagSet.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (overrides credential file)")
 			flagSet.StringVar(&passwordFile, "password-file", "", "path to file containing password, or - to prompt interactively (default: derive from registration token)")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user IDs")
+			flagSet.BoolVar(&operator, "operator", false, "invite the user to all Bureau infrastructure rooms (requires --credential-file)")
 			return flagSet
 		},
 		Run: func(args []string) error {
@@ -95,20 +107,30 @@ to set a chosen password. Use --password-file - to be prompted interactively.`,
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
+			if operator && credentialFile == "" {
+				return fmt.Errorf("--operator requires --credential-file (needed for admin session and Bureau room discovery)")
+			}
+
+			// Parse the credential file once. Both the registration flow
+			// and the operator invite flow read from it.
+			var credentials map[string]string
+			if credentialFile != "" {
+				var err error
+				credentials, err = readCredentialFile(credentialFile)
+				if err != nil {
+					return fmt.Errorf("read credential file: %w", err)
+				}
+			}
 
 			// Resolve registration token and homeserver URL. The credential
 			// file from "bureau matrix setup" contains both, so after initial
 			// bootstrap --credential-file is all you need. Explicit flags
 			// override the credential file values.
 			var registrationToken string
-			if credentialFile != "" {
-				creds, err := readCredentialFile(credentialFile)
-				if err != nil {
-					return fmt.Errorf("read credential file: %w", err)
-				}
-				registrationToken = creds["MATRIX_REGISTRATION_TOKEN"]
+			if credentials != nil {
+				registrationToken = credentials["MATRIX_REGISTRATION_TOKEN"]
 				if homeserverURL == "" {
-					homeserverURL = creds["MATRIX_HOMESERVER_URL"]
+					homeserverURL = credentials["MATRIX_HOMESERVER_URL"]
 				}
 			}
 			if registrationTokenFile != "" {
@@ -160,24 +182,111 @@ to set a chosen password. Use --password-file - to be prompted interactively.`,
 				return fmt.Errorf("create matrix client: %w", err)
 			}
 
-			// String() creates a heap copy that the GC will eventually
-			// collect — this is unavoidable at the API boundary since
-			// Register takes a string password. The mmap-backed buffer
-			// ensures the primary copy is zeroed immediately after use.
-			session, err := client.Register(ctx, messaging.RegisterRequest{
+			// Register the account. In operator mode, M_USER_IN_USE means
+			// the account already exists — verify the password matches
+			// (if one was explicitly provided) and proceed to room invites.
+			userID := fmt.Sprintf("@%s:%s", username, serverName)
+			session, registerErr := client.Register(ctx, messaging.RegisterRequest{
 				Username:          username,
 				Password:          passwordBuffer.String(),
 				RegistrationToken: registrationToken,
 			})
-			if err != nil {
-				return fmt.Errorf("register user %q: %w", username, err)
+			if registerErr != nil {
+				if operator && messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
+					// Account exists. Log in to get a session for joining
+					// rooms (invite alone leaves the user in limbo —
+					// they must also join to become a full member).
+					var loginErr error
+					session, loginErr = client.Login(ctx, username, passwordBuffer.String())
+					if loginErr != nil {
+						if passwordFile != "" {
+							return fmt.Errorf("account %s already exists but the provided password does not match (the existing password was not changed)", userID)
+						}
+						return fmt.Errorf("account %s already exists and login with derived password failed: %w", userID, loginErr)
+					}
+					fmt.Fprintf(os.Stderr, "Account %s already exists, logged in.\n", userID)
+					fmt.Fprintf(os.Stderr, "Ensuring room membership.\n")
+				} else {
+					return fmt.Errorf("register user %q: %w", username, registerErr)
+				}
+			} else {
+				fmt.Fprintf(os.Stdout, "User ID:       %s\n", session.UserID())
+				fmt.Fprintf(os.Stdout, "Access Token:  %s\n", session.AccessToken())
 			}
 
-			fmt.Fprintf(os.Stdout, "User ID:       %s\n", session.UserID())
-			fmt.Fprintf(os.Stdout, "Access Token:  %s\n", session.AccessToken())
-			return nil
+			if !operator {
+				return nil
+			}
+
+			// Operator mode: admin invites, then the user's own session
+			// joins each room. Invite-only rooms require both steps.
+			return onboardOperator(ctx, client, credentials, userID, session)
 		},
 	}
+}
+
+// onboardOperator invites a user to all Bureau infrastructure rooms and
+// joins them, so they're a full member immediately. The admin session
+// (from the credential file) handles invites; the user's own session
+// handles joins. Each step is idempotent: already-invited users skip
+// the invite, already-joined users skip the join.
+func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID string, userSession *messaging.Session) error {
+	adminUserID := credentials["MATRIX_ADMIN_USER"]
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminUserID == "" || adminToken == "" {
+		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	}
+
+	adminSession := client.SessionFromToken(adminUserID, adminToken)
+
+	// Bureau infrastructure rooms from the credential file, in the order
+	// they appear in setup. Each entry maps a human-readable name to the
+	// credential file key holding the room ID.
+	bureauRooms := []struct {
+		name          string
+		credentialKey string
+	}{
+		{"bureau (space)", "MATRIX_SPACE_ROOM"},
+		{"bureau/agents", "MATRIX_AGENTS_ROOM"},
+		{"bureau/system", "MATRIX_SYSTEM_ROOM"},
+		{"bureau/machines", "MATRIX_MACHINES_ROOM"},
+		{"bureau/services", "MATRIX_SERVICES_ROOM"},
+	}
+
+	for _, room := range bureauRooms {
+		roomID := credentials[room.credentialKey]
+		if roomID == "" {
+			return fmt.Errorf("credential file missing %s", room.credentialKey)
+		}
+
+		// Step 1: Admin invites the user. Idempotent — M_FORBIDDEN
+		// means the user is already invited or already a member.
+		alreadyMember := false
+		err := adminSession.InviteUser(ctx, roomID, userID)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				alreadyMember = true
+			} else {
+				return fmt.Errorf("invite %s to %s (%s): %w", userID, room.name, roomID, err)
+			}
+		}
+
+		// Step 2: User joins the room. Idempotent — joining a room
+		// you're already in is a no-op.
+		_, err = userSession.JoinRoom(ctx, roomID)
+		if err != nil {
+			return fmt.Errorf("join %s (%s): %w", room.name, roomID, err)
+		}
+
+		if alreadyMember {
+			fmt.Fprintf(os.Stderr, "  %-20s already a member\n", room.name)
+		} else {
+			fmt.Fprintf(os.Stderr, "  %-20s joined\n", room.name)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "Operator %s is a member of all Bureau rooms.\n", userID)
+	return nil
 }
 
 // readPassword reads a password from a file path into a secret.Buffer.

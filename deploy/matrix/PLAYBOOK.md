@@ -171,26 +171,22 @@ fi
 
 The admin account created by setup (`bureau-admin`) is a service account
 with a derived password — it's not meant for interactive login. Create a
-personal account you can log into via Element or any Matrix client.
+personal operator account with `--operator`, which registers the account
+and invites you to all Bureau infrastructure rooms in one step.
 
 ```bash
 ./bureau matrix user create ben \
   --credential-file ./bureau-creds \
-  --password-file -
+  --password-file - \
+  --operator
 ```
 
-You'll be prompted to enter and confirm a password (echo disabled). Then
-invite yourself to the Bureau rooms:
+You'll be prompted to enter and confirm a password (echo disabled). The
+command creates the account and invites you to the Bureau space plus all
+four standard rooms (agents, system, machines, services).
 
-```bash
-./bureau matrix user invite '@ben:bureau.local' \
-  --credential-file ./bureau-creds \
-  --room '#bureau/agents:bureau.local'
-
-./bureau matrix user invite '@ben:bureau.local' \
-  --credential-file ./bureau-creds \
-  --room '#bureau/system:bureau.local'
-```
+This command is idempotent: re-running it after the account exists skips
+registration and ensures you're invited to any rooms you might be missing.
 
 To log in with Element, point it at the homeserver URL
 (`http://localhost:6167`) and sign in with your username and password.

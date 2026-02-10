@@ -121,20 +121,36 @@ func run() error {
 	}
 	logger.Info("config room ready", "room_id", configRoomID, "alias", configRoomAlias)
 
-	// Resolve the machines room for status reporting.
+	// Resolve and join the global rooms. The rooms are invite-only (created
+	// with the private_chat preset by bureau matrix setup), so the machine
+	// account must have been invited by the admin before these joins can
+	// succeed. The launcher joins machines on first boot; the daemon
+	// defensively re-joins on every startup to handle membership recovery
+	// (e.g., homeserver reset, account re-creation).
+
 	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
 	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machines room alias %q: %w", machinesAlias, err)
 	}
+	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
+		logger.Warn("failed to join machines room (requires admin invitation)",
+			"room_id", machinesRoomID, "alias", machinesAlias, "error", err)
+	}
 
-	// Resolve the services room for the service directory.
 	servicesAlias := principal.RoomAlias("bureau/services", serverName)
 	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
 	if err != nil {
 		return fmt.Errorf("resolving services room alias %q: %w", servicesAlias, err)
 	}
-	logger.Info("services room ready", "room_id", servicesRoomID, "alias", servicesAlias)
+	if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
+		logger.Warn("failed to join services room (requires admin invitation)",
+			"room_id", servicesRoomID, "alias", servicesAlias, "error", err)
+	}
+	logger.Info("global rooms ready",
+		"machines_room", machinesRoomID,
+		"services_room", servicesRoomID,
+	)
 
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 

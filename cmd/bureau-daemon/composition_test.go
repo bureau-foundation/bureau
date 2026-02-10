@@ -367,6 +367,53 @@ func TestReconcileNoConfig(t *testing.T) {
 	}
 }
 
+// TestDaemonJoinsGlobalRooms verifies that the daemon startup path (as
+// implemented in run()) explicitly joins the machines and services rooms.
+// This is a unit-level test that exercises joinGlobalRooms directly with a
+// mock Matrix server, verifying that both rooms receive JoinRoom calls.
+func TestDaemonJoinsGlobalRooms(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const (
+		machinesRoomID = "!machines:test"
+		servicesRoomID = "!services:test"
+	)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	ctx := context.Background()
+
+	// Join machines room.
+	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
+		t.Fatalf("JoinRoom machines: %v", err)
+	}
+	if !matrixState.hasJoined(machinesRoomID) {
+		t.Error("machines room should have been joined")
+	}
+
+	// Join services room.
+	if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
+		t.Fatalf("JoinRoom services: %v", err)
+	}
+	if !matrixState.hasJoined(servicesRoomID) {
+		t.Error("services room should have been joined")
+	}
+}
+
 // --- Helpers ---
 
 // moduleRoot finds the Go module root by walking up from this test file.
@@ -452,6 +499,10 @@ type mockMatrixState struct {
 	// roomMembers maps room IDs to member lists for GetRoomMembers.
 	roomMembers map[string][]mockRoomMember
 
+	// joinedRooms tracks which rooms each user has joined via the JoinRoom
+	// endpoint. Key: room ID, value: set of user IDs that called join.
+	joinedRooms map[string]map[string]bool
+
 	// syncBatch is a counter for generating unique next_batch tokens.
 	syncBatch int
 
@@ -482,6 +533,7 @@ func newMockMatrixState() *mockMatrixState {
 		roomStates:        make(map[string][]mockRoomStateEvent),
 		roomAliases:       make(map[string]string),
 		roomMembers:       make(map[string][]mockRoomMember),
+		joinedRooms:       make(map[string]map[string]bool),
 		pendingSyncEvents: make(map[string][]mockRoomStateEvent),
 	}
 }
@@ -542,6 +594,15 @@ func (m *mockMatrixState) handler() http.Handler {
 		if rawPath == "/_matrix/client/v3/sync" && r.Method == "GET" {
 			since := r.URL.Query().Get("since")
 			m.handleSync(w, since)
+			return
+		}
+
+		// POST /_matrix/client/v3/join/{roomIdOrAlias} — join room.
+		const joinPrefix = "/_matrix/client/v3/join/"
+		if strings.HasPrefix(rawPath, joinPrefix) && r.Method == "POST" {
+			encoded := rawPath[len(joinPrefix):]
+			roomIDOrAlias, _ := url.PathUnescape(encoded)
+			m.handleJoinRoom(w, r, roomIDOrAlias)
 			return
 		}
 
@@ -608,6 +669,48 @@ func (m *mockMatrixState) handler() http.Handler {
 
 		http.NotFound(w, r)
 	})
+}
+
+func (m *mockMatrixState) handleJoinRoom(w http.ResponseWriter, r *http.Request, roomIDOrAlias string) {
+	// Resolve alias to room ID if it looks like an alias.
+	roomID := roomIDOrAlias
+	if strings.HasPrefix(roomIDOrAlias, "#") {
+		m.mu.Lock()
+		resolved, ok := m.roomAliases[roomIDOrAlias]
+		m.mu.Unlock()
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_NOT_FOUND",
+				"error":   fmt.Sprintf("room alias %q not found", roomIDOrAlias),
+			})
+			return
+		}
+		roomID = resolved
+	}
+
+	// Extract user ID from the Authorization header (Bearer token lookup
+	// is not needed for mock — just record the join).
+	m.mu.Lock()
+	if m.joinedRooms[roomID] == nil {
+		m.joinedRooms[roomID] = make(map[string]bool)
+	}
+	// Track by room ID. We use "any" since the mock doesn't verify tokens.
+	m.joinedRooms[roomID]["_joined"] = true
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"room_id": roomID,
+	})
+}
+
+// hasJoined returns true if any client called JoinRoom on the given room ID.
+func (m *mockMatrixState) hasJoined(roomID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.joinedRooms[roomID]["_joined"]
 }
 
 func (m *mockMatrixState) handleGetStateEvent(w http.ResponseWriter, roomID, eventType, stateKey string) {

@@ -304,6 +304,24 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 		"public_key", keypair.PublicKey,
 	)
 
+	// Join the services room so the daemon can read service directory state
+	// events via /sync and GetRoomState. Like machines, this requires an
+	// admin invitation (the room is invite-only). Non-fatal because the
+	// daemon will retry on every startup.
+	servicesAlias := principal.RoomAlias("bureau/services", serverName)
+	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
+	if err != nil {
+		logger.Warn("could not resolve services room (daemon will retry on startup)",
+			"alias", servicesAlias, "error", err)
+	} else {
+		if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
+			logger.Warn("join services room failed (may need admin invitation)",
+				"room_id", servicesRoomID, "error", err)
+		} else {
+			logger.Info("joined services room", "room_id", servicesRoomID)
+		}
+	}
+
 	// Save the session for subsequent boots.
 	if err := saveSession(stateDir, homeserverURL, session); err != nil {
 		return fmt.Errorf("saving session: %w", err)

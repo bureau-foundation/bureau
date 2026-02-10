@@ -610,6 +610,366 @@ func BenchmarkHTTPServiceSSE(b *testing.B) {
 	}
 }
 
+// TestMatrixProxyIntegration tests the complete agent → proxy → Matrix
+// homeserver flow. An agent sends a Matrix client-server API request to
+// /http/matrix/... and the proxy forwards it to the mock homeserver with
+// the injected Bearer token, stripping any agent-provided Authorization header.
+func TestMatrixProxyIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	socketPath := filepath.Join(tempDir, "proxy.sock")
+
+	// Mock Matrix homeserver that verifies the Authorization header and
+	// echoes request details.
+	homeserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer syt_real_agent_token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_UNKNOWN_TOKEN",
+				"error":   fmt.Sprintf("got %q, want Bearer syt_real_agent_token", authHeader),
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{
+			"event_id": "$abc123:bureau.local",
+			"method":   r.Method,
+			"path":     r.URL.Path,
+		})
+	}))
+	defer homeserver.Close()
+
+	// Create proxy server with Matrix service configured the same way
+	// createMatrixService in cmd/bureau-proxy/main.go does.
+	server, err := NewServer(ServerConfig{
+		SocketPath: socketPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	matrixService, err := NewHTTPService(HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: homeserver.URL,
+		InjectHeaders: map[string]string{
+			"Authorization": "MATRIX_BEARER",
+		},
+		StripHeaders: []string{"Authorization"},
+		Credential: &MapCredentialSource{
+			Credentials: map[string]string{
+				"MATRIX_BEARER": "Bearer syt_real_agent_token",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create matrix service: %v", err)
+	}
+
+	server.RegisterHTTPService("matrix", matrixService)
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+
+	t.Run("send message", func(t *testing.T) {
+		body := `{"msgtype":"m.text","body":"hello from agent"}`
+		req, _ := http.NewRequest("PUT",
+			"http://localhost/http/matrix/_matrix/client/v3/rooms/!room:bureau.local/send/m.room.message/txn1",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		// Agent tries to set its own auth — proxy must strip it and inject the real one.
+		req.Header.Set("Authorization", "Bearer sk-agent-attempt-to-override")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]string
+		json.NewDecoder(resp.Body).Decode(&result)
+
+		if result["event_id"] != "$abc123:bureau.local" {
+			t.Errorf("event_id = %q, want $abc123:bureau.local", result["event_id"])
+		}
+		if result["method"] != "PUT" {
+			t.Errorf("method = %q, want PUT", result["method"])
+		}
+		if result["path"] != "/_matrix/client/v3/rooms/!room:bureau.local/send/m.room.message/txn1" {
+			t.Errorf("path = %q, want /_matrix/client/v3/rooms/!room:bureau.local/send/m.room.message/txn1", result["path"])
+		}
+	})
+
+	t.Run("room messages", func(t *testing.T) {
+		req, _ := http.NewRequest("GET",
+			"http://localhost/http/matrix/_matrix/client/v3/rooms/!room:bureau.local/messages?dir=b&limit=10",
+			nil)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]string
+		json.NewDecoder(resp.Body).Decode(&result)
+
+		if result["method"] != "GET" {
+			t.Errorf("method = %q, want GET", result["method"])
+		}
+	})
+
+	t.Run("sync", func(t *testing.T) {
+		req, _ := http.NewRequest("GET",
+			"http://localhost/http/matrix/_matrix/client/v3/sync?timeout=0",
+			nil)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+}
+
+// TestMatrixAPIFilter tests the Matrix API surface restriction. The proxy
+// only allows specific Matrix client-server API endpoints that agents need.
+// Administrative, discovery, and account management endpoints are blocked.
+func TestMatrixAPIFilter(t *testing.T) {
+	// Mock homeserver that returns 200 for everything (we're testing the filter,
+	// not the homeserver).
+	homeserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"path":   r.URL.Path,
+		})
+	}))
+	defer homeserver.Close()
+
+	// The exact filter from cmd/bureau-proxy/main.go's matrixAPIFilter().
+	filter := &GlobFilter{
+		Allowed: []string{
+			"PUT /_matrix/client/v3/rooms/*/send/*",
+			"GET /_matrix/client/v3/rooms/*/messages*",
+			"GET /_matrix/client/v3/rooms/*/state*",
+			"PUT /_matrix/client/v3/rooms/*/state/*",
+			"GET /_matrix/client/v3/rooms/*/relations/*",
+			"GET /_matrix/client/v3/sync*",
+			"GET /_matrix/client/v3/account/whoami",
+			"POST /_matrix/client/v3/join/*",
+			"GET /_matrix/client/v3/joined_rooms",
+		},
+	}
+
+	service, err := NewHTTPService(HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: homeserver.URL,
+		Filter:   filter,
+	})
+	if err != nil {
+		t.Fatalf("failed to create service: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+	}{
+		// Allowed endpoints.
+		{
+			name:       "send message",
+			method:     "PUT",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/send/m.room.message/txn1",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "read messages",
+			method:     "GET",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/messages?dir=b&limit=10",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "read state",
+			method:     "GET",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/state",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "read state event",
+			method:     "GET",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/state/m.bureau.machine_config/machine/workstation",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "write state event",
+			method:     "PUT",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/state/m.bureau.service/service/stt/whisper",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "read thread",
+			method:     "GET",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/relations/$event123/m.thread",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "sync",
+			method:     "GET",
+			path:       "/_matrix/client/v3/sync?timeout=30000",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "sync without params",
+			method:     "GET",
+			path:       "/_matrix/client/v3/sync",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "whoami",
+			method:     "GET",
+			path:       "/_matrix/client/v3/account/whoami",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "join room",
+			method:     "POST",
+			path:       "/_matrix/client/v3/join/!room:bureau.local",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "joined rooms",
+			method:     "GET",
+			path:       "/_matrix/client/v3/joined_rooms",
+			wantStatus: http.StatusOK,
+		},
+
+		// Blocked endpoints — administrative/discovery operations.
+		{
+			name:       "alias resolution blocked",
+			method:     "GET",
+			path:       "/_matrix/client/v3/directory/room/%23bureau%2Fmachines:bureau.local",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "public rooms blocked",
+			method:     "GET",
+			path:       "/_matrix/client/v3/publicRooms",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "user directory search blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/user_directory/search",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "create room blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/createRoom",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "invite user blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/invite",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "kick user blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/kick",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "register account blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/register",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "login blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/login",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "media upload blocked",
+			method:     "POST",
+			path:       "/_matrix/media/v3/upload",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "profile read blocked",
+			method:     "GET",
+			path:       "/_matrix/client/v3/profile/@agent:bureau.local",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "set displayname blocked",
+			method:     "PUT",
+			path:       "/_matrix/client/v3/profile/@agent:bureau.local/displayname",
+			wantStatus: http.StatusForbidden,
+		},
+
+		// Method mismatch — right path, wrong method.
+		{
+			name:       "POST to sync blocked",
+			method:     "POST",
+			path:       "/_matrix/client/v3/sync",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "GET to send blocked",
+			method:     "GET",
+			path:       "/_matrix/client/v3/rooms/!room:bureau.local/send/m.room.message/txn1",
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(test.method, test.path, nil)
+			recorder := httptest.NewRecorder()
+			service.ServeHTTP(recorder, req)
+
+			if recorder.Code != test.wantStatus {
+				t.Errorf("%s %s: got status %d, want %d (body: %s)",
+					test.method, test.path, recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+		})
+	}
+}
+
 // Test that large SSE payloads stream correctly
 func TestHTTPServiceLargeSSEPayload(t *testing.T) {
 	// Create a large payload (simulating base64-encoded audio or images)

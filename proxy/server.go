@@ -15,13 +15,16 @@ import (
 
 // Server is a credential proxy server that listens on a Unix socket and optionally TCP.
 type Server struct {
-	socketPath    string
-	listenAddress string
-	handler       *Handler
-	httpServer    *http.Server
-	unixListener  net.Listener
-	tcpListener   net.Listener
-	logger        *slog.Logger
+	socketPath      string
+	adminSocketPath string
+	listenAddress   string
+	handler         *Handler
+	httpServer      *http.Server
+	adminServer     *http.Server
+	unixListener    net.Listener
+	adminListener   net.Listener
+	tcpListener     net.Listener
+	logger          *slog.Logger
 }
 
 // ServerConfig holds configuration for creating a new Server.
@@ -29,6 +32,12 @@ type ServerConfig struct {
 	SocketPath    string
 	ListenAddress string // Optional TCP address (e.g., "127.0.0.1:8080")
 	Logger        *slog.Logger
+
+	// AdminSocketPath is an optional separate Unix socket for admin operations.
+	// When set, admin endpoints (service registration, etc.) are only available
+	// on this socket. The daemon connects here; agents never see it.
+	// When empty, admin endpoints are not exposed.
+	AdminSocketPath string
 }
 
 // NewServer creates a new proxy server.
@@ -44,23 +53,45 @@ func NewServer(config ServerConfig) (*Server, error) {
 
 	handler := NewHandler(logger)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/proxy", handler.HandleProxy)
-	mux.HandleFunc("GET /health", handler.HandleHealth)
-	// HTTP proxy routes - catch all methods and paths under /http/
-	mux.HandleFunc("/http/", handler.HandleHTTPProxy)
+	// Agent-facing mux: only endpoints safe for sandboxed agents.
+	agentMux := http.NewServeMux()
+	agentMux.HandleFunc("POST /v1/proxy", handler.HandleProxy)
+	agentMux.HandleFunc("GET /v1/identity", handler.HandleIdentity)
+	agentMux.HandleFunc("GET /health", handler.HandleHealth)
+	agentMux.HandleFunc("/http/", handler.HandleHTTPProxy)
 
-	return &Server{
-		socketPath:    config.SocketPath,
-		listenAddress: config.ListenAddress,
-		handler:       handler,
+	server := &Server{
+		socketPath:      config.SocketPath,
+		adminSocketPath: config.AdminSocketPath,
+		listenAddress:   config.ListenAddress,
+		handler:         handler,
 		httpServer: &http.Server{
-			Handler:      mux,
+			Handler:      agentMux,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 5 * time.Minute, // Long timeout for streaming
 		},
 		logger: logger,
-	}, nil
+	}
+
+	// Admin mux: all agent endpoints plus service management. The admin
+	// socket is only accessible to the daemon (not bind-mounted into
+	// sandboxes), so there is no agent-accessible attack surface.
+	if config.AdminSocketPath != "" {
+		adminMux := http.NewServeMux()
+		adminMux.HandleFunc("GET /v1/admin/services", handler.HandleAdminListServices)
+		adminMux.HandleFunc("PUT /v1/admin/services/{name}", handler.HandleAdminRegisterService)
+		adminMux.HandleFunc("DELETE /v1/admin/services/{name}", handler.HandleAdminUnregisterService)
+		// Fall through to agent endpoints for all other paths.
+		adminMux.Handle("/", agentMux)
+
+		server.adminServer = &http.Server{
+			Handler:      adminMux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		}
+	}
+
+	return server, nil
 }
 
 // RegisterService registers a CLI service that can be proxied.
@@ -71,6 +102,23 @@ func (s *Server) RegisterService(name string, service Service) {
 // RegisterHTTPService registers an HTTP proxy service.
 func (s *Server) RegisterHTTPService(name string, service *HTTPService) {
 	s.handler.RegisterHTTPService(name, service)
+}
+
+// UnregisterHTTPService removes an HTTP proxy service by name.
+// Returns true if the service existed and was removed.
+func (s *Server) UnregisterHTTPService(name string) bool {
+	return s.handler.UnregisterHTTPService(name)
+}
+
+// ListHTTPServices returns the names of all registered HTTP proxy services.
+func (s *Server) ListHTTPServices() []string {
+	return s.handler.ListHTTPServices()
+}
+
+// SetIdentity configures the agent's identity, making it available via the
+// GET /v1/identity endpoint.
+func (s *Server) SetIdentity(identity IdentityInfo) {
+	s.handler.SetIdentity(identity)
 }
 
 // Start begins listening on the Unix socket and optionally TCP.
@@ -100,6 +148,35 @@ func (s *Server) Start() error {
 			s.logger.Error("unix server error", "error", err)
 		}
 	}()
+
+	// Optionally start admin socket (daemon-only, not visible to sandboxes)
+	if s.adminSocketPath != "" && s.adminServer != nil {
+		if err := os.Remove(s.adminSocketPath); err != nil && !os.IsNotExist(err) {
+			unixListener.Close()
+			return fmt.Errorf("failed to remove existing admin socket: %w", err)
+		}
+
+		adminListener, err := net.Listen("unix", s.adminSocketPath)
+		if err != nil {
+			unixListener.Close()
+			return fmt.Errorf("failed to listen on admin socket: %w", err)
+		}
+		s.adminListener = adminListener
+
+		if err := os.Chmod(s.adminSocketPath, 0660); err != nil {
+			adminListener.Close()
+			unixListener.Close()
+			return fmt.Errorf("failed to chmod admin socket: %w", err)
+		}
+
+		s.logger.Info("proxy admin server started", "socket", s.adminSocketPath)
+
+		go func() {
+			if err := s.adminServer.Serve(adminListener); err != nil && err != http.ErrServerClosed {
+				s.logger.Error("admin server error", "error", err)
+			}
+		}()
+	}
 
 	// Optionally start TCP listener
 	if s.listenAddress != "" {
@@ -152,8 +229,16 @@ func notifySystemd(state string) {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("shutting down proxy server")
 	err := s.httpServer.Shutdown(ctx)
+	if s.adminServer != nil {
+		if adminErr := s.adminServer.Shutdown(ctx); adminErr != nil && err == nil {
+			err = adminErr
+		}
+	}
 	if s.unixListener != nil {
 		os.Remove(s.socketPath)
+	}
+	if s.adminListener != nil {
+		os.Remove(s.adminSocketPath)
 	}
 	if s.tcpListener != nil {
 		s.tcpListener.Close()

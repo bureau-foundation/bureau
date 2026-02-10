@@ -5,6 +5,9 @@ package proxy
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +147,99 @@ func (s *ChainCredentialSource) Get(name string) string {
 	return ""
 }
 
+// PipeCredentialSource reads credentials from a JSON payload piped to an
+// io.Reader (typically stdin) at construction time. This is the production
+// credential delivery mechanism: the launcher decrypts a credential bundle
+// and pipes it to the proxy process's stdin. The raw JSON buffer is zeroed
+// after parsing to minimize the time all credentials coexist in a single
+// contiguous memory region.
+//
+// The JSON payload has the following structure:
+//
+//	{
+//	  "matrix_homeserver_url": "http://localhost:6167",
+//	  "matrix_token": "syt_...",
+//	  "matrix_user_id": "@iree/amdgpu/pm:bureau.local",
+//	  "credentials": {
+//	    "OPENAI_API_KEY": "sk-...",
+//	    "ANTHROPIC_API_KEY": "sk-ant-..."
+//	  }
+//	}
+//
+// All fields are flattened into a single credential map with uppercase keys:
+// MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_BEARER (derived as "Bearer " +
+// token for Authorization header injection), MATRIX_USER_ID, and whatever
+// keys appear in the credentials object (stored verbatim). Lookup is
+// exact-match (no normalization).
+type PipeCredentialSource struct {
+	credentials map[string]string
+}
+
+// pipeCredentialPayload is the JSON structure read from stdin.
+type pipeCredentialPayload struct {
+	MatrixHomeserverURL string            `json:"matrix_homeserver_url"`
+	MatrixToken         string            `json:"matrix_token"`
+	MatrixUserID        string            `json:"matrix_user_id"`
+	Credentials         map[string]string `json:"credentials"`
+}
+
+// ReadPipeCredentials reads a JSON credential payload from reader and returns
+// a PipeCredentialSource. The reader is read to completion (stdin is one-shot).
+// The raw buffer is zeroed after parsing. Returns an error if the payload
+// cannot be read or parsed, or if required fields are missing.
+func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
+	buffer, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("reading credential payload: %w", err)
+	}
+
+	// Ensure we zero the buffer regardless of parse outcome.
+	defer func() {
+		for i := range buffer {
+			buffer[i] = 0
+		}
+	}()
+
+	if len(buffer) == 0 {
+		return nil, fmt.Errorf("credential payload is empty")
+	}
+
+	var payload pipeCredentialPayload
+	if err := json.Unmarshal(buffer, &payload); err != nil {
+		return nil, fmt.Errorf("parsing credential payload: %w", err)
+	}
+
+	if payload.MatrixHomeserverURL == "" {
+		return nil, fmt.Errorf("credential payload missing required field: matrix_homeserver_url")
+	}
+	if payload.MatrixToken == "" {
+		return nil, fmt.Errorf("credential payload missing required field: matrix_token")
+	}
+	if payload.MatrixUserID == "" {
+		return nil, fmt.Errorf("credential payload missing required field: matrix_user_id")
+	}
+
+	credentials := make(map[string]string, len(payload.Credentials)+4)
+	for key, value := range payload.Credentials {
+		credentials[key] = value
+	}
+	// Top-level fields are set AFTER the credentials map so they cannot
+	// be overridden by a key collision in the credentials object.
+	credentials["MATRIX_HOMESERVER_URL"] = payload.MatrixHomeserverURL
+	credentials["MATRIX_TOKEN"] = payload.MatrixToken
+	credentials["MATRIX_BEARER"] = "Bearer " + payload.MatrixToken
+	credentials["MATRIX_USER_ID"] = payload.MatrixUserID
+
+	return &PipeCredentialSource{credentials: credentials}, nil
+}
+
+// Get retrieves a credential by exact name. No normalization is applied —
+// the key must match exactly as it appeared in the JSON payload (or
+// "MATRIX_TOKEN" / "MATRIX_USER_ID" for the top-level fields).
+func (s *PipeCredentialSource) Get(name string) string {
+	return s.credentials[name]
+}
+
 // Verify credential sources implement CredentialSource interface.
 var (
 	_ CredentialSource = (*EnvCredentialSource)(nil)
@@ -151,4 +247,5 @@ var (
 	_ CredentialSource = (*SystemdCredentialSource)(nil)
 	_ CredentialSource = (*MapCredentialSource)(nil)
 	_ CredentialSource = (*ChainCredentialSource)(nil)
+	_ CredentialSource = (*PipeCredentialSource)(nil)
 )

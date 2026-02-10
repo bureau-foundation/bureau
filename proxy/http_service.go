@@ -4,9 +4,11 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,7 +35,18 @@ type HTTPServiceConfig struct {
 	Name string
 
 	// Upstream is the target URL (e.g., "https://api.openai.com").
+	// For Unix socket upstreams, set UpstreamUnix instead and leave this
+	// empty — the upstream URL will default to "http://localhost".
 	Upstream string
+
+	// UpstreamUnix is the path to a Unix socket to use as the upstream.
+	// When set, all HTTP requests are sent over this socket. The Upstream
+	// field (or "http://localhost" if empty) is used only for path
+	// construction and the Host header.
+	//
+	// This enables local service routing: the daemon configures a proxy
+	// to forward requests to another principal's proxy socket.
+	UpstreamUnix string
 
 	// InjectHeaders maps header names to credential names.
 	// Example: {"Authorization": "openai-bearer"} injects the "openai-bearer"
@@ -59,11 +72,18 @@ func NewHTTPService(config HTTPServiceConfig) (*HTTPService, error) {
 	if config.Name == "" {
 		return nil, fmt.Errorf("service name is required")
 	}
-	if config.Upstream == "" {
-		return nil, fmt.Errorf("upstream URL is required")
+	if config.Upstream == "" && config.UpstreamUnix == "" {
+		return nil, fmt.Errorf("upstream URL or upstream unix socket is required")
 	}
 
-	upstream, err := url.Parse(config.Upstream)
+	// For Unix socket upstreams, default the URL to http://localhost so path
+	// construction works. All actual I/O goes through the socket.
+	upstreamURL := config.Upstream
+	if upstreamURL == "" {
+		upstreamURL = "http://localhost"
+	}
+
+	upstream, err := url.Parse(upstreamURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid upstream URL: %w", err)
 	}
@@ -75,15 +95,25 @@ func NewHTTPService(config HTTPServiceConfig) (*HTTPService, error) {
 
 	// Create HTTP client with reasonable timeouts.
 	// No timeout on response body reading - SSE streams can be long-lived.
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	}
+
+	// For Unix socket upstreams, override the dialer to connect to the socket
+	// regardless of the hostname in the URL.
+	if config.UpstreamUnix != "" {
+		socketPath := config.UpstreamUnix
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		}
+	}
+
 	client := &http.Client{
-		Timeout: 0, // No overall timeout - SSE streams are long-lived
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-			// Don't follow redirects automatically - pass them through
-			DisableCompression: false,
-		},
+		Timeout:   0, // No overall timeout - SSE streams are long-lived
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

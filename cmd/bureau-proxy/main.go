@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,11 +31,13 @@ func run() error {
 	var configPath string
 	var credentialFile string
 	var credentialPrefix string
+	var credentialStdin bool
 	var showVersion bool
 
 	flag.StringVar(&configPath, "config", "", "path to config file (required)")
 	flag.StringVar(&credentialFile, "credential-file", "", "path to credentials file (key=value format, more secure than env vars)")
 	flag.StringVar(&credentialPrefix, "credential-prefix", "BUREAU_", "prefix for environment variable credentials (dev mode)")
+	flag.BoolVar(&credentialStdin, "credential-stdin", false, "read JSON credential payload from stdin (production: launcher pipes credentials)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -71,12 +74,22 @@ func run() error {
 	)
 
 	// Set up credential sources in priority order:
-	// 1. systemd credentials (production)
-	// 2. File-based credentials (secure dev - file not visible in /proc)
-	// 3. Environment variables (fallback - WARNING: visible in /proc/*/environ)
-	sources := []proxy.CredentialSource{
-		&proxy.SystemdCredentialSource{},
+	// 1. Stdin pipe (production: launcher delivers credentials via stdin)
+	// 2. systemd credentials (production alternative)
+	// 3. File-based credentials (secure dev - file not visible in /proc)
+	// 4. Environment variables (fallback - WARNING: visible in /proc/*/environ)
+	sources := []proxy.CredentialSource{}
+	if credentialStdin {
+		pipeSource, err := proxy.ReadPipeCredentials(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("failed to read credentials from stdin: %w", err)
+		}
+		sources = append(sources, pipeSource)
+		logger.Info("loaded credentials from stdin",
+			"matrix_user_id", pipeSource.Get("MATRIX_USER_ID"),
+		)
 	}
+	sources = append(sources, &proxy.SystemdCredentialSource{})
 	if credentialFile != "" {
 		sources = append(sources, &proxy.FileCredentialSource{Path: credentialFile})
 		logger.Info("using credential file", "path", credentialFile)
@@ -86,16 +99,21 @@ func run() error {
 
 	// Create server
 	server, err := proxy.NewServer(proxy.ServerConfig{
-		SocketPath:    config.SocketPath,
-		ListenAddress: config.ListenAddress,
-		Logger:        logger,
+		SocketPath:      config.SocketPath,
+		AdminSocketPath: config.AdminSocketPath,
+		ListenAddress:   config.ListenAddress,
+		Logger:          logger,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
 
-	// Register services from config
+	// Register services from config.
 	for name, serviceConfig := range config.Services {
+		if name == "matrix" {
+			return fmt.Errorf("service name %q is reserved for the built-in Matrix proxy", name)
+		}
+
 		switch serviceConfig.Type {
 		case "cli":
 			service, err := createCLIService(name, serviceConfig, credentialSource)
@@ -122,6 +140,34 @@ func run() error {
 		default:
 			return fmt.Errorf("service %q: unknown type %q", name, serviceConfig.Type)
 		}
+	}
+
+	// Register built-in Matrix proxy service. Every Bureau proxy forwards
+	// Matrix client-server API calls to the homeserver with token injection.
+	// The homeserver URL and token come from PipeCredentialSource (production)
+	// or FileCredentialSource/EnvCredentialSource (dev). Agents inside sandboxes
+	// reach Matrix via: PUT /http/matrix/_matrix/client/v3/rooms/{roomId}/send/...
+	if matrixService, err := createMatrixService(credentialSource, logger); err != nil {
+		logger.Warn("matrix proxy service not registered", "reason", err)
+	} else {
+		server.RegisterHTTPService("matrix", matrixService)
+		logger.Info("registered built-in Matrix proxy service",
+			"upstream", credentialSource.Get("MATRIX_HOMESERVER_URL"),
+			"matrix_user_id", credentialSource.Get("MATRIX_USER_ID"),
+		)
+	}
+
+	// Set agent identity from credentials so the GET /v1/identity endpoint
+	// can return the agent's Matrix user ID without a homeserver round-trip.
+	if matrixUserID := credentialSource.Get("MATRIX_USER_ID"); matrixUserID != "" {
+		identity := proxy.IdentityInfo{UserID: matrixUserID}
+		// Extract server name from the Matrix user ID: @localpart:server → server.
+		// Use first colon — Matrix localparts cannot contain colons, but server
+		// names can include a port (e.g., bureau.local:8448).
+		if colonIndex := strings.Index(matrixUserID, ":"); colonIndex >= 0 {
+			identity.ServerName = matrixUserID[colonIndex+1:]
+		}
+		server.SetIdentity(identity)
 	}
 
 	// Start server
@@ -165,6 +211,102 @@ func createCLIService(name string, config proxy.ServiceConfig, credentials proxy
 		Filter:     filter,
 		Credential: credentials,
 	})
+}
+
+// createMatrixService creates the built-in Matrix proxy service from credentials.
+// Returns an error if the required Matrix credentials (homeserver URL and token)
+// are not available — callers should treat this as "Matrix not configured" rather
+// than a fatal error, since the proxy can still serve other services.
+//
+// In production (PipeCredentialSource), MATRIX_BEARER is derived automatically
+// from matrix_token. In dev mode (FileCredentialSource, EnvCredentialSource),
+// if MATRIX_BEARER is not set but MATRIX_TOKEN is, this function wraps the
+// credential source to synthesize the Bearer value.
+func createMatrixService(credentials proxy.CredentialSource, logger *slog.Logger) (*proxy.HTTPService, error) {
+	homeserverURL := credentials.Get("MATRIX_HOMESERVER_URL")
+	if homeserverURL == "" {
+		return nil, fmt.Errorf("MATRIX_HOMESERVER_URL not available in credentials")
+	}
+
+	// Check for MATRIX_BEARER (available from PipeCredentialSource). If
+	// absent, try to synthesize from MATRIX_TOKEN (file/env credential
+	// sources store the raw token without Bearer prefix).
+	effectiveCredentials := credentials
+	if credentials.Get("MATRIX_BEARER") == "" {
+		matrixToken := credentials.Get("MATRIX_TOKEN")
+		if matrixToken == "" {
+			return nil, fmt.Errorf("neither MATRIX_BEARER nor MATRIX_TOKEN available in credentials")
+		}
+		effectiveCredentials = &proxy.ChainCredentialSource{
+			Sources: []proxy.CredentialSource{
+				&proxy.MapCredentialSource{
+					Credentials: map[string]string{
+						"MATRIX_BEARER": "Bearer " + matrixToken,
+					},
+				},
+				credentials,
+			},
+		}
+	}
+
+	return proxy.NewHTTPService(proxy.HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: homeserverURL,
+		InjectHeaders: map[string]string{
+			"Authorization": "MATRIX_BEARER",
+		},
+		StripHeaders: []string{
+			// Agents must not be able to override the injected token.
+			"Authorization",
+		},
+		Filter:     matrixAPIFilter(),
+		Credential: effectiveCredentials,
+		Logger:     logger,
+	})
+}
+
+// matrixAPIFilter returns a GlobFilter that restricts agents to only the
+// Matrix client-server API endpoints they need. This is defense-in-depth:
+// even if an agent is compromised, it cannot discover rooms by alias, browse
+// the room directory, enumerate users, or perform administrative operations.
+//
+// The filter uses an allowlist — any endpoint not explicitly listed is blocked.
+// The glob `*` matches any characters including `/`, so patterns like
+// `"* /_matrix/client/v3/rooms/*/send/*"` match all methods, room IDs, event
+// types, and transaction IDs.
+//
+// Room-level access control (restricting which specific rooms an agent can
+// reach) requires room assignment data from the launcher's credential payload.
+// That is tracked separately from this endpoint-level filtering.
+func matrixAPIFilter() *proxy.GlobFilter {
+	return &proxy.GlobFilter{
+		Allowed: []string{
+			// Send events (messages, state, etc.) to rooms.
+			"PUT /_matrix/client/v3/rooms/*/send/*",
+
+			// Read room messages (paginated history).
+			"GET /_matrix/client/v3/rooms/*/messages*",
+
+			// Read and write state events (service registration, config).
+			"GET /_matrix/client/v3/rooms/*/state*",
+			"PUT /_matrix/client/v3/rooms/*/state/*",
+
+			// Read thread messages via relations API.
+			"GET /_matrix/client/v3/rooms/*/relations/*",
+
+			// Sync (long-poll for new events).
+			"GET /_matrix/client/v3/sync*",
+
+			// Identity — agent can discover its own Matrix user ID.
+			"GET /_matrix/client/v3/account/whoami",
+
+			// Join rooms the agent has been invited to.
+			"POST /_matrix/client/v3/join/*",
+
+			// Room membership (needed for joined_rooms check).
+			"GET /_matrix/client/v3/joined_rooms",
+		},
+	}
 }
 
 // createHTTPService creates an HTTPService from configuration.

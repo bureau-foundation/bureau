@@ -1,0 +1,562 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Bureau-credentials provisions encrypted credential bundles and machine
+// configurations to Matrix. It reads credentials from stdin (never from CLI
+// arguments) and encrypts them to the target machine's age public key before
+// publishing as Matrix state events.
+//
+// The tool operates on per-machine config rooms in Matrix:
+//
+//   - "provision" encrypts credentials and publishes m.bureau.credentials
+//   - "assign" writes m.bureau.machine_config to assign principals to a machine
+//   - "list" shows provisioned credential bundles (key names only, not values)
+//   - "keygen" generates an age keypair for escrow use
+//
+// All subcommands that access Matrix require a --config flag pointing to the
+// credential file written by bureau-matrix-setup.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/version"
+	"github.com/bureau-foundation/bureau/messaging"
+	"github.com/bureau-foundation/bureau/proxy"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	if len(os.Args) < 2 {
+		printUsage()
+		return fmt.Errorf("subcommand required")
+	}
+
+	subcommand := os.Args[1]
+	switch subcommand {
+	case "keygen":
+		return runKeygen()
+	case "provision":
+		return runProvision(os.Args[2:])
+	case "assign":
+		return runAssign(os.Args[2:])
+	case "list":
+		return runList(os.Args[2:])
+	case "version":
+		fmt.Printf("bureau-credentials %s\n", version.Info())
+		return nil
+	case "-h", "--help", "help":
+		printUsage()
+		return nil
+	default:
+		printUsage()
+		return fmt.Errorf("unknown subcommand: %q", subcommand)
+	}
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `Usage: bureau-credentials <subcommand> [flags]
+
+Subcommands:
+  keygen      Generate an age keypair (for operator escrow)
+  provision   Encrypt credentials and publish to Matrix
+  assign      Assign a principal to a machine
+  list        List provisioned credential bundles
+  version     Print version information
+
+Run 'bureau-credentials <subcommand> --help' for subcommand flags.
+`)
+}
+
+// runKeygen generates a new age keypair and prints it.
+// The public key goes to stdout (for sharing/embedding).
+// The private key goes to stderr (or a file, for safekeeping).
+func runKeygen() error {
+	keypair, err := sealed.GenerateKeypair()
+	if err != nil {
+		return fmt.Errorf("generating keypair: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "# Private key (keep this secret — store securely):\n")
+	fmt.Fprintf(os.Stderr, "%s\n", keypair.PrivateKey)
+	fmt.Fprintf(os.Stdout, "%s\n", keypair.PublicKey)
+	return nil
+}
+
+// matrixConfig holds the Matrix connection parameters read from the config file.
+type matrixConfig struct {
+	HomeserverURL string
+	AdminToken    string
+	AdminUserID   string
+	ServerName    string
+}
+
+// loadMatrixConfig reads Matrix connection parameters from a credential file
+// (the same format written by bureau-matrix-setup).
+func loadMatrixConfig(configPath, serverName string) (*matrixConfig, error) {
+	source := &proxy.FileCredentialSource{Path: configPath}
+
+	homeserverURL := source.Get("matrix-homeserver-url")
+	if homeserverURL == "" {
+		return nil, fmt.Errorf("MATRIX_HOMESERVER_URL not found in %s", configPath)
+	}
+
+	adminToken := source.Get("matrix-admin-token")
+	if adminToken == "" {
+		return nil, fmt.Errorf("MATRIX_ADMIN_TOKEN not found in %s", configPath)
+	}
+
+	adminUserID := source.Get("matrix-admin-user")
+	if adminUserID == "" {
+		return nil, fmt.Errorf("MATRIX_ADMIN_USER not found in %s", configPath)
+	}
+
+	return &matrixConfig{
+		HomeserverURL: homeserverURL,
+		AdminToken:    adminToken,
+		AdminUserID:   adminUserID,
+		ServerName:    serverName,
+	}, nil
+}
+
+// createSession creates an authenticated Matrix session from the config.
+func createSession(config *matrixConfig) (*messaging.Session, error) {
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: config.HomeserverURL,
+		Logger:        slog.Default(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating matrix client: %w", err)
+	}
+
+	return client.SessionFromToken(config.AdminUserID, config.AdminToken), nil
+}
+
+// runProvision encrypts credentials and publishes them to Matrix.
+func runProvision(args []string) error {
+	flags := flag.NewFlagSet("provision", flag.ExitOnError)
+	var (
+		configPath    string
+		machineName   string
+		principalName string
+		serverName    string
+		escrowKey     string
+		fromFile      string
+	)
+
+	flags.StringVar(&configPath, "config", "", "path to bureau-matrix-setup credential file (required)")
+	flags.StringVar(&machineName, "machine", "", "machine localpart (e.g., machine/workstation) (required)")
+	flags.StringVar(&principalName, "principal", "", "principal localpart (e.g., iree/amdgpu/pm) (required)")
+	flags.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flags.StringVar(&escrowKey, "escrow-key", "", "operator escrow age public key (optional)")
+	flags.StringVar(&fromFile, "from-file", "", "read credentials from file instead of stdin (JSON object)")
+	flags.Parse(args)
+
+	if configPath == "" || machineName == "" || principalName == "" {
+		flags.Usage()
+		return fmt.Errorf("--config, --machine, and --principal are required")
+	}
+
+	if err := principal.ValidateLocalpart(machineName); err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+	if err := principal.ValidateLocalpart(principalName); err != nil {
+		return fmt.Errorf("invalid principal name: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Read credentials from stdin or file.
+	var credentialReader io.Reader
+	if fromFile != "" {
+		file, err := os.Open(fromFile)
+		if err != nil {
+			return fmt.Errorf("opening credential file: %w", err)
+		}
+		defer file.Close()
+		credentialReader = file
+	} else {
+		credentialReader = os.Stdin
+	}
+
+	credentialData, err := io.ReadAll(credentialReader)
+	if err != nil {
+		return fmt.Errorf("reading credentials: %w", err)
+	}
+	defer func() {
+		// Zero the credential data after use.
+		for i := range credentialData {
+			credentialData[i] = 0
+		}
+	}()
+
+	if len(credentialData) == 0 {
+		return fmt.Errorf("no credential data provided (pipe JSON to stdin or use --from-file)")
+	}
+
+	// Parse the credential JSON to validate and extract key names.
+	var credentials map[string]string
+	if err := json.Unmarshal(credentialData, &credentials); err != nil {
+		return fmt.Errorf("parsing credential JSON: %w", err)
+	}
+	if len(credentials) == 0 {
+		return fmt.Errorf("credential JSON is empty")
+	}
+
+	credentialKeys := make([]string, 0, len(credentials))
+	for key := range credentials {
+		credentialKeys = append(credentialKeys, key)
+	}
+
+	// Connect to Matrix.
+	matrixConf, err := loadMatrixConfig(configPath, serverName)
+	if err != nil {
+		return err
+	}
+
+	session, err := createSession(matrixConf)
+	if err != nil {
+		return err
+	}
+
+	// Fetch the machine's public key.
+	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
+	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	if err != nil {
+		return fmt.Errorf("resolving machines room: %w", err)
+	}
+
+	machineKeyContent, err := session.GetStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName)
+	if err != nil {
+		return fmt.Errorf("fetching machine key for %q: %w", machineName, err)
+	}
+
+	var machineKey schema.MachineKey
+	if err := json.Unmarshal(machineKeyContent, &machineKey); err != nil {
+		return fmt.Errorf("parsing machine key: %w", err)
+	}
+
+	if machineKey.Algorithm != "age-x25519" {
+		return fmt.Errorf("unsupported machine key algorithm: %q (expected age-x25519)", machineKey.Algorithm)
+	}
+	if err := sealed.ParsePublicKey(machineKey.PublicKey); err != nil {
+		return fmt.Errorf("invalid machine public key: %w", err)
+	}
+
+	// Build the recipient list: machine key + optional escrow key.
+	recipientKeys := []string{machineKey.PublicKey}
+	encryptedFor := []string{principal.MatrixUserID(machineName, serverName)}
+
+	if escrowKey != "" {
+		if err := sealed.ParsePublicKey(escrowKey); err != nil {
+			return fmt.Errorf("invalid escrow key: %w", err)
+		}
+		recipientKeys = append(recipientKeys, escrowKey)
+		encryptedFor = append(encryptedFor, "escrow:operator")
+	}
+
+	// Encrypt the credential bundle.
+	ciphertext, err := sealed.EncryptJSON(credentialData, recipientKeys)
+	if err != nil {
+		return fmt.Errorf("encrypting credentials: %w", err)
+	}
+
+	// Ensure the config room exists.
+	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, matrixConf.AdminUserID)
+	if err != nil {
+		return fmt.Errorf("ensuring config room: %w", err)
+	}
+
+	// Publish the credentials state event.
+	principalUserID := principal.MatrixUserID(principalName, serverName)
+	credEvent := schema.Credentials{
+		Version:       1,
+		Principal:     principalUserID,
+		EncryptedFor:  encryptedFor,
+		Keys:          credentialKeys,
+		Ciphertext:    ciphertext,
+		ProvisionedBy: matrixConf.AdminUserID,
+		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, principalName, credEvent)
+	if err != nil {
+		return fmt.Errorf("publishing credentials: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Provisioned credentials for %s on %s\n", principalName, machineName)
+	fmt.Fprintf(os.Stderr, "  Keys: %s\n", strings.Join(credentialKeys, ", "))
+	fmt.Fprintf(os.Stderr, "  Encrypted for: %s\n", strings.Join(encryptedFor, ", "))
+	fmt.Fprintf(os.Stderr, "  Config room: %s\n", configRoomID)
+	fmt.Fprintf(os.Stderr, "  Event: %s\n", eventID)
+
+	return nil
+}
+
+// runAssign writes a MachineConfig state event to assign a principal to a machine.
+func runAssign(args []string) error {
+	flags := flag.NewFlagSet("assign", flag.ExitOnError)
+	var (
+		configPath    string
+		machineName   string
+		principalName string
+		template      string
+		serverName    string
+		autoStart     bool
+	)
+
+	flags.StringVar(&configPath, "config", "", "path to bureau-matrix-setup credential file (required)")
+	flags.StringVar(&machineName, "machine", "", "machine localpart (required)")
+	flags.StringVar(&principalName, "principal", "", "principal localpart to assign (required)")
+	flags.StringVar(&template, "template", "", "sandbox template name (required)")
+	flags.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flags.BoolVar(&autoStart, "auto-start", true, "start the principal's sandbox automatically")
+	flags.Parse(args)
+
+	if configPath == "" || machineName == "" || principalName == "" || template == "" {
+		flags.Usage()
+		return fmt.Errorf("--config, --machine, --principal, and --template are required")
+	}
+
+	if err := principal.ValidateLocalpart(machineName); err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+	if err := principal.ValidateLocalpart(principalName); err != nil {
+		return fmt.Errorf("invalid principal name: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	matrixConf, err := loadMatrixConfig(configPath, serverName)
+	if err != nil {
+		return err
+	}
+
+	session, err := createSession(matrixConf)
+	if err != nil {
+		return err
+	}
+
+	// Ensure the config room exists.
+	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, matrixConf.AdminUserID)
+	if err != nil {
+		return fmt.Errorf("ensuring config room: %w", err)
+	}
+
+	// Read the current MachineConfig (if any) to merge the new assignment.
+	var config schema.MachineConfig
+	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName)
+	if err == nil {
+		if err := json.Unmarshal(existingContent, &config); err != nil {
+			return fmt.Errorf("parsing existing machine config: %w", err)
+		}
+	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+		return fmt.Errorf("reading machine config: %w", err)
+	}
+
+	// Check if the principal is already assigned.
+	found := false
+	for i, assignment := range config.Principals {
+		if assignment.Localpart == principalName {
+			// Update the existing assignment.
+			config.Principals[i].Template = template
+			config.Principals[i].AutoStart = autoStart
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		config.Principals = append(config.Principals, schema.PrincipalAssignment{
+			Localpart: principalName,
+			Template:  template,
+			AutoStart: autoStart,
+		})
+	}
+
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName, config)
+	if err != nil {
+		return fmt.Errorf("publishing machine config: %w", err)
+	}
+
+	action := "Assigned"
+	if found {
+		action = "Updated assignment for"
+	}
+	fmt.Fprintf(os.Stderr, "%s %s on %s (template=%s, auto_start=%v)\n",
+		action, principalName, machineName, template, autoStart)
+	fmt.Fprintf(os.Stderr, "  Config room: %s\n", configRoomID)
+	fmt.Fprintf(os.Stderr, "  Event: %s\n", eventID)
+
+	return nil
+}
+
+// runList shows provisioned credential bundles for a machine.
+func runList(args []string) error {
+	flags := flag.NewFlagSet("list", flag.ExitOnError)
+	var (
+		configPath  string
+		machineName string
+		serverName  string
+	)
+
+	flags.StringVar(&configPath, "config", "", "path to bureau-matrix-setup credential file (required)")
+	flags.StringVar(&machineName, "machine", "", "machine localpart (required)")
+	flags.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flags.Parse(args)
+
+	if configPath == "" || machineName == "" {
+		flags.Usage()
+		return fmt.Errorf("--config and --machine are required")
+	}
+
+	if err := principal.ValidateLocalpart(machineName); err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	matrixConf, err := loadMatrixConfig(configPath, serverName)
+	if err != nil {
+		return err
+	}
+
+	session, err := createSession(matrixConf)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the config room.
+	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			fmt.Fprintf(os.Stderr, "No config room found for %s\n", machineName)
+			return nil
+		}
+		return fmt.Errorf("resolving config room: %w", err)
+	}
+
+	// Read all state events to find MachineConfig and Credentials.
+	events, err := session.GetRoomState(ctx, configRoomID)
+	if err != nil {
+		return fmt.Errorf("reading room state: %w", err)
+	}
+
+	// Display machine config.
+	fmt.Printf("Machine: %s\n", machineName)
+	fmt.Printf("Config room: %s\n\n", configRoomID)
+
+	for _, event := range events {
+		if event.Type == schema.EventTypeMachineConfig && event.StateKey != nil {
+			contentJSON, _ := json.Marshal(event.Content)
+			var config schema.MachineConfig
+			json.Unmarshal(contentJSON, &config)
+
+			fmt.Printf("Assigned principals:\n")
+			if len(config.Principals) == 0 {
+				fmt.Printf("  (none)\n")
+			}
+			for _, assignment := range config.Principals {
+				autoStartStr := ""
+				if assignment.AutoStart {
+					autoStartStr = " [auto-start]"
+				}
+				fmt.Printf("  %s (template=%s)%s\n", assignment.Localpart, assignment.Template, autoStartStr)
+			}
+			fmt.Println()
+		}
+	}
+
+	// Display credential bundles.
+	fmt.Printf("Credential bundles:\n")
+	credentialCount := 0
+	for _, event := range events {
+		if event.Type == schema.EventTypeCredentials && event.StateKey != nil {
+			contentJSON, _ := json.Marshal(event.Content)
+			var creds schema.Credentials
+			json.Unmarshal(contentJSON, &creds)
+
+			fmt.Printf("  %s:\n", *event.StateKey)
+			fmt.Printf("    Keys: %s\n", strings.Join(creds.Keys, ", "))
+			fmt.Printf("    Encrypted for: %s\n", strings.Join(creds.EncryptedFor, ", "))
+			fmt.Printf("    Provisioned by: %s\n", creds.ProvisionedBy)
+			if creds.ProvisionedAt != "" {
+				fmt.Printf("    Provisioned at: %s\n", creds.ProvisionedAt)
+			}
+			credentialCount++
+		}
+	}
+	if credentialCount == 0 {
+		fmt.Printf("  (none)\n")
+	}
+
+	return nil
+}
+
+// ensureConfigRoom ensures the per-machine config room exists. Creates it if
+// missing, with the admin user as the room admin and the machine user invited.
+func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, machineName, serverName, adminUserID string) (string, error) {
+	roomID, err := session.ResolveAlias(ctx, alias)
+	if err == nil {
+		return roomID, nil
+	}
+
+	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+		return "", fmt.Errorf("resolving config room alias %q: %w", alias, err)
+	}
+
+	// Room doesn't exist — create it. The admin creates this room (unlike
+	// the daemon version where the machine creates it), so the admin already
+	// has power level 100.
+	aliasLocalpart := principal.RoomAliasLocalpart(alias)
+	machineUserID := principal.MatrixUserID(machineName, serverName)
+
+	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
+		Name:       "Config: " + machineName,
+		Topic:      "Machine configuration and credentials for " + machineName,
+		Alias:      aliasLocalpart,
+		Preset:     "private_chat",
+		Invite:     []string{machineUserID},
+		Visibility: "private",
+		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID),
+	})
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeRoomInUse) {
+			// Race: room created between our check and creation attempt.
+			roomID, err = session.ResolveAlias(ctx, alias)
+			if err != nil {
+				return "", fmt.Errorf("room exists but cannot resolve alias %q: %w", alias, err)
+			}
+			return roomID, nil
+		}
+		return "", fmt.Errorf("creating config room: %w", err)
+	}
+
+	return response.RoomID, nil
+}
+

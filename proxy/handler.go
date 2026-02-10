@@ -16,10 +16,21 @@ import (
 // Maximum request body size (64KB is plenty for CLI args)
 const maxRequestBodySize = 64 * 1024
 
+// IdentityInfo holds the agent's identity information, set by the server
+// after loading credentials. Returned by the GET /v1/identity endpoint.
+type IdentityInfo struct {
+	// UserID is the agent's full Matrix user ID (e.g., "@iree/amdgpu/pm:bureau.local").
+	UserID string `json:"user_id"`
+
+	// ServerName is the Matrix server name (e.g., "bureau.local").
+	ServerName string `json:"server_name,omitempty"`
+}
+
 // Handler handles HTTP requests to the proxy server.
 type Handler struct {
 	services     map[string]Service      // CLI services (JSON-RPC style)
 	httpServices map[string]*HTTPService // HTTP proxy services
+	identity     *IdentityInfo           // agent identity, nil if not set
 	mu           sync.RWMutex
 	logger       *slog.Logger
 }
@@ -49,10 +60,60 @@ func (h *Handler) RegisterHTTPService(name string, service *HTTPService) {
 	h.logger.Info("registered http service", "name", name, "upstream", service.upstream.String())
 }
 
+// UnregisterHTTPService removes an HTTP proxy service by name.
+// Returns true if the service existed and was removed, false if it wasn't found.
+func (h *Handler) UnregisterHTTPService(name string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, existed := h.httpServices[name]
+	if existed {
+		delete(h.httpServices, name)
+		h.logger.Info("unregistered http service", "name", name)
+	}
+	return existed
+}
+
+// ListHTTPServices returns the names of all registered HTTP proxy services.
+func (h *Handler) ListHTTPServices() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	names := make([]string, 0, len(h.httpServices))
+	for name := range h.httpServices {
+		names = append(names, name)
+	}
+	return names
+}
+
+// SetIdentity sets the agent's identity information. This is called by the
+// server after loading credentials. Once set, the GET /v1/identity endpoint
+// returns this information to the agent.
+func (h *Handler) SetIdentity(identity IdentityInfo) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.identity = &identity
+	h.logger.Info("agent identity configured", "user_id", identity.UserID)
+}
+
 // HandleHealth handles health check requests.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// HandleIdentity returns the agent's Matrix identity. Agents use this to
+// discover their own user ID without holding credentials directly.
+func (h *Handler) HandleIdentity(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	identity := h.identity
+	h.mu.RUnlock()
+
+	if identity == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "identity not configured")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(identity)
 }
 
 // HandleProxy handles proxy requests.
@@ -285,4 +346,112 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Delegate to the HTTP service
 	service.ServeHTTP(w, r)
+}
+
+// AdminServiceRequest is the JSON body for PUT /v1/admin/services/{name}.
+type AdminServiceRequest struct {
+	// UpstreamURL is the upstream HTTP(S) URL. At least one of UpstreamURL
+	// or UpstreamUnix is required. When both are provided, UpstreamURL
+	// provides the scheme, host, and path prefix for URL construction
+	// (e.g., "http://localhost/http/stt-whisper"), and UpstreamUnix
+	// provides the physical transport (the actual Unix socket to connect
+	// to). This is used for cross-principal routing: the path prefix
+	// encodes where the service lives on the provider's proxy, and the
+	// socket provides the connection to that proxy.
+	UpstreamURL string `json:"upstream_url,omitempty"`
+
+	// UpstreamUnix is the path to a Unix socket upstream. Used for local
+	// service routing where the upstream is another principal's proxy socket.
+	// Can be combined with UpstreamURL (see above).
+	UpstreamUnix string `json:"upstream_unix,omitempty"`
+
+	// InjectHeaders maps header names to credential names for injection.
+	InjectHeaders map[string]string `json:"inject_headers,omitempty"`
+
+	// StripHeaders lists headers to remove from incoming requests.
+	StripHeaders []string `json:"strip_headers,omitempty"`
+}
+
+// AdminServiceInfo is returned by GET /v1/admin/services and
+// GET /v1/admin/services/{name}.
+type AdminServiceInfo struct {
+	Name     string `json:"name"`
+	Upstream string `json:"upstream"`
+}
+
+// HandleAdminListServices returns the list of registered HTTP services.
+func (h *Handler) HandleAdminListServices(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	services := make([]AdminServiceInfo, 0, len(h.httpServices))
+	for name, service := range h.httpServices {
+		services = append(services, AdminServiceInfo{
+			Name:     name,
+			Upstream: service.upstream.String(),
+		})
+	}
+	h.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(services)
+}
+
+// HandleAdminRegisterService creates or replaces an HTTP proxy service.
+// The service name is extracted from the URL path.
+func (h *Handler) HandleAdminRegisterService(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		h.sendError(w, http.StatusBadRequest, "service name is required")
+		return
+	}
+
+	var req AdminServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid request body: %v", err)
+		return
+	}
+
+	if req.UpstreamURL == "" && req.UpstreamUnix == "" {
+		h.sendError(w, http.StatusBadRequest, "upstream_url or upstream_unix is required")
+		return
+	}
+
+	service, err := NewHTTPService(HTTPServiceConfig{
+		Name:          name,
+		Upstream:      req.UpstreamURL,
+		UpstreamUnix:  req.UpstreamUnix,
+		InjectHeaders: req.InjectHeaders,
+		StripHeaders:  req.StripHeaders,
+		Logger:        h.logger,
+	})
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "failed to create service: %v", err)
+		return
+	}
+
+	h.RegisterHTTPService(name, service)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(AdminServiceInfo{
+		Name:     name,
+		Upstream: service.upstream.String(),
+	})
+}
+
+// HandleAdminUnregisterService removes an HTTP proxy service.
+// The service name is extracted from the URL path.
+func (h *Handler) HandleAdminUnregisterService(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		h.sendError(w, http.StatusBadRequest, "service name is required")
+		return
+	}
+
+	if !h.UnregisterHTTPService(name) {
+		h.sendError(w, http.StatusNotFound, "unknown service: %s", name)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "removed", "name": name})
 }

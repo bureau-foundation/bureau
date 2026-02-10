@@ -767,6 +767,128 @@ func TestFileCredentialCleanup(t *testing.T) {
 	}
 }
 
+func TestIdentityEndpoint(t *testing.T) {
+	tempDir := t.TempDir()
+	socketPath := filepath.Join(tempDir, "proxy.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath: socketPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+
+	t.Run("identity not configured", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/identity")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", resp.StatusCode)
+		}
+
+		var result Response
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if !strings.Contains(result.Error, "identity not configured") {
+			t.Errorf("expected error about identity not configured, got %q", result.Error)
+		}
+	})
+
+	t.Run("identity configured", func(t *testing.T) {
+		server.SetIdentity(IdentityInfo{
+			UserID:     "@iree/amdgpu/pm:bureau.local",
+			ServerName: "bureau.local",
+		})
+
+		resp, err := client.Get("http://localhost/v1/identity")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(contentType, "application/json") {
+			t.Errorf("expected content-type application/json, got %q", contentType)
+		}
+
+		var identity IdentityInfo
+		if err := json.NewDecoder(resp.Body).Decode(&identity); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if identity.UserID != "@iree/amdgpu/pm:bureau.local" {
+			t.Errorf("expected user_id %q, got %q", "@iree/amdgpu/pm:bureau.local", identity.UserID)
+		}
+		if identity.ServerName != "bureau.local" {
+			t.Errorf("expected server_name %q, got %q", "bureau.local", identity.ServerName)
+		}
+	})
+
+	t.Run("identity without server name", func(t *testing.T) {
+		server.SetIdentity(IdentityInfo{
+			UserID: "@agent:other.host",
+		})
+
+		resp, err := client.Get("http://localhost/v1/identity")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		var identity IdentityInfo
+		if err := json.NewDecoder(resp.Body).Decode(&identity); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if identity.UserID != "@agent:other.host" {
+			t.Errorf("expected user_id %q, got %q", "@agent:other.host", identity.UserID)
+		}
+		if identity.ServerName != "" {
+			t.Errorf("expected empty server_name, got %q", identity.ServerName)
+		}
+	})
+
+	t.Run("wrong method returns 405", func(t *testing.T) {
+		reqData := []byte(`{}`)
+		resp, err := client.Post("http://localhost/v1/identity", "application/json", bytes.NewReader(reqData))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405, got %d", resp.StatusCode)
+		}
+	})
+}
+
 // errorService always returns an error
 type errorService struct {
 	name string
@@ -826,5 +948,380 @@ func TestServerErrorHandling(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	if !strings.Contains(result.Error, "something went wrong") {
 		t.Errorf("expected error message, got %q", result.Error)
+	}
+}
+
+func TestAdminEndpoints(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	t.Run("list services empty", func(t *testing.T) {
+		resp, err := adminClient.Get("http://localhost/v1/admin/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		var services []AdminServiceInfo
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 0 {
+			t.Errorf("expected 0 services, got %d", len(services))
+		}
+	})
+
+	t.Run("register service with upstream URL", func(t *testing.T) {
+		body, _ := json.Marshal(AdminServiceRequest{
+			UpstreamURL: "http://localhost:9999",
+		})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/test-api", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 201, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var info AdminServiceInfo
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if info.Name != "test-api" {
+			t.Errorf("expected name 'test-api', got %q", info.Name)
+		}
+	})
+
+	t.Run("register service with unix socket", func(t *testing.T) {
+		body, _ := json.Marshal(AdminServiceRequest{
+			UpstreamUnix: "/run/bureau/principal/service/stt/whisper.sock",
+		})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/stt-whisper", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 201, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+
+	t.Run("list services after registration", func(t *testing.T) {
+		resp, err := adminClient.Get("http://localhost/v1/admin/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		var services []AdminServiceInfo
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(services) != 2 {
+			t.Errorf("expected 2 services, got %d", len(services))
+		}
+	})
+
+	t.Run("unregister service", func(t *testing.T) {
+		req, _ := http.NewRequest("DELETE", "http://localhost/v1/admin/services/test-api", nil)
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		// Verify it was removed.
+		listResp, err := adminClient.Get("http://localhost/v1/admin/services")
+		if err != nil {
+			t.Fatalf("list request failed: %v", err)
+		}
+		defer listResp.Body.Close()
+		var services []AdminServiceInfo
+		json.NewDecoder(listResp.Body).Decode(&services)
+		if len(services) != 1 {
+			t.Errorf("expected 1 service after removal, got %d", len(services))
+		}
+	})
+
+	t.Run("unregister nonexistent service", func(t *testing.T) {
+		req, _ := http.NewRequest("DELETE", "http://localhost/v1/admin/services/nonexistent", nil)
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("expected status 404, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("register rejects missing upstream", func(t *testing.T) {
+		body, _ := json.Marshal(AdminServiceRequest{})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/bad", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("register with both URL and unix socket", func(t *testing.T) {
+		// Both can be provided: the URL gives the path prefix for routing
+		// (e.g., /http/stt-whisper on the provider proxy) and the Unix
+		// socket provides the physical transport.
+		body, _ := json.Marshal(AdminServiceRequest{
+			UpstreamURL:  "http://localhost/http/stt-whisper",
+			UpstreamUnix: "/run/bureau/principal/service/stt/whisper.sock",
+		})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/service-stt-whisper", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 201, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var info AdminServiceInfo
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		// The upstream URL should include the path prefix.
+		if info.Upstream != "http://localhost/http/stt-whisper" {
+			t.Errorf("expected upstream 'http://localhost/http/stt-whisper', got %q", info.Upstream)
+		}
+
+		// Clean up for the list count in subsequent tests.
+		delReq, _ := http.NewRequest("DELETE", "http://localhost/v1/admin/services/service-stt-whisper", nil)
+		adminClient.Do(delReq)
+	})
+
+	t.Run("admin endpoints not on agent socket", func(t *testing.T) {
+		// Admin endpoints should not be accessible via the agent socket.
+		resp, err := agentClient.Get("http://localhost/v1/admin/services")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// The agent mux doesn't have /v1/admin/services, so Go's default
+		// ServeMux returns 404.
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("expected admin endpoint to return 404 on agent socket, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("agent endpoints work via admin socket", func(t *testing.T) {
+		resp, err := adminClient.Get("http://localhost/health")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestUnixSocketUpstream(t *testing.T) {
+	// Test end-to-end: agent → consumer proxy → provider proxy (via Unix socket)
+	//
+	// This simulates the real local service routing path where both the
+	// consumer and provider are Bureau proxy instances. The provider proxy
+	// has the actual service backend registered; the consumer proxy
+	// forwards through the provider's proxy socket with a path prefix
+	// that routes to the correct service on the provider.
+	tempDir := t.TempDir()
+
+	// --- Service backend: a plain HTTP server simulating Whisper STT ---
+	backendSocket := filepath.Join(tempDir, "whisper-backend.sock")
+	backendMux := http.NewServeMux()
+	backendMux.HandleFunc("/v1/transcribe", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"text":   "hello world",
+			"method": r.Method,
+		})
+	})
+	backendListener, err := net.Listen("unix", backendSocket)
+	if err != nil {
+		t.Fatalf("failed to listen on backend socket: %v", err)
+	}
+	backendServer := &http.Server{Handler: backendMux}
+	go backendServer.Serve(backendListener)
+	defer backendServer.Close()
+
+	// --- Provider proxy: the principal's proxy with the STT service registered ---
+	providerSocket := filepath.Join(tempDir, "provider.sock")
+	providerAdmin := filepath.Join(tempDir, "provider-admin.sock")
+
+	provider, err := NewServer(ServerConfig{
+		SocketPath:      providerSocket,
+		AdminSocketPath: providerAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create provider server: %v", err)
+	}
+
+	// Register the backend service on the provider proxy. By convention,
+	// the service name matches the flat form of the service localpart.
+	backendService, err := NewHTTPService(HTTPServiceConfig{
+		Name:         "service-stt-whisper",
+		UpstreamUnix: backendSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create backend service: %v", err)
+	}
+	provider.RegisterHTTPService("service-stt-whisper", backendService)
+
+	if err := provider.Start(); err != nil {
+		t.Fatalf("failed to start provider server: %v", err)
+	}
+	defer provider.Shutdown(context.Background())
+
+	// --- Consumer proxy: forwards to provider proxy via Unix socket ---
+	consumerSocket := filepath.Join(tempDir, "consumer.sock")
+	consumerAdmin := filepath.Join(tempDir, "consumer-admin.sock")
+
+	consumer, err := NewServer(ServerConfig{
+		SocketPath:      consumerSocket,
+		AdminSocketPath: consumerAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create consumer server: %v", err)
+	}
+
+	if err := consumer.Start(); err != nil {
+		t.Fatalf("failed to start consumer server: %v", err)
+	}
+	defer consumer.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Register the service route on the consumer proxy via admin API.
+	// The upstream URL includes the /http/service-stt-whisper path prefix
+	// so requests are forwarded to the correct service on the provider.
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", consumerAdmin)
+			},
+		},
+	}
+
+	registerBody, _ := json.Marshal(AdminServiceRequest{
+		UpstreamURL:  "http://localhost/http/service-stt-whisper",
+		UpstreamUnix: providerSocket,
+	})
+	registerReq, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/service-stt-whisper", bytes.NewReader(registerBody))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerResp, err := adminClient.Do(registerReq)
+	if err != nil {
+		t.Fatalf("register request failed: %v", err)
+	}
+	registerResp.Body.Close()
+	if registerResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", registerResp.StatusCode)
+	}
+
+	// --- Agent: connects to consumer proxy and calls the service ---
+	// The full path: agent → consumer proxy (/http/service-stt-whisper/v1/transcribe)
+	//   → consumer strips /http/service-stt-whisper/, forwards /v1/transcribe
+	//     to upstream http://localhost/http/service-stt-whisper via provider socket
+	//   → provider proxy receives /http/service-stt-whisper/v1/transcribe
+	//   → provider strips /http/service-stt-whisper/, forwards /v1/transcribe
+	//     to backend socket → backend responds
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", consumerSocket)
+			},
+		},
+	}
+
+	resp, err := agentClient.Post("http://localhost/http/service-stt-whisper/v1/transcribe", "application/json", nil)
+	if err != nil {
+		t.Fatalf("agent request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if result["text"] != "hello world" {
+		t.Errorf("expected text 'hello world', got %q", result["text"])
+	}
+	if result["method"] != "POST" {
+		t.Errorf("expected method 'POST', got %q", result["method"])
 	}
 }

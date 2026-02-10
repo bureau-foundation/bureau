@@ -5,10 +5,16 @@
 //
 // The proxy supports multiple service types:
 //   - CLI services: Execute command-line tools with injected credentials
-//   - HTTP services: Reverse proxy HTTP requests with injected headers (future)
+//   - HTTP services: Reverse proxy HTTP requests with injected headers
 //
-// Services are configured via YAML and can have custom filters to control
-// which operations are allowed.
+// HTTP services (including the built-in Matrix proxy) inject credentials as
+// HTTP headers and forward requests to upstream APIs. The Matrix proxy is
+// auto-registered when Matrix credentials are available, enabling sandboxed
+// agents to reach the Matrix homeserver via /http/matrix/... without holding
+// tokens directly.
+//
+// Services are configured via YAML (for external APIs like OpenAI, Anthropic)
+// or registered automatically (for the built-in Matrix proxy).
 package proxy
 
 import (

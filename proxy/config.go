@@ -16,6 +16,13 @@ type Config struct {
 	// Defaults to /run/bureau/proxy.sock.
 	SocketPath string `yaml:"socket_path"`
 
+	// AdminSocketPath is an optional separate Unix socket for admin operations.
+	// When set, admin endpoints (dynamic service registration/removal) are
+	// available on this socket. The daemon connects here to configure service
+	// routing; agents never see this socket (it is not bind-mounted into
+	// sandboxes).
+	AdminSocketPath string `yaml:"admin_socket_path"`
+
 	// ListenAddress is an optional TCP address to listen on (e.g., "127.0.0.1:8080").
 	// If set, the proxy listens on both the Unix socket and TCP.
 	// This is useful for agents that can't use Unix sockets directly (e.g., HTTP SDKs).

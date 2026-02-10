@@ -63,7 +63,6 @@ func run() error {
 		stateDir           string
 		launcherSocket     string
 		adminUser          string
-		transportListen    string
 		relaySocket        string
 		observeSocket      string
 		tmuxSocket         string
@@ -79,7 +78,6 @@ func run() error {
 	flag.StringVar(&stateDir, "state-dir", "/var/lib/bureau", "directory containing session.json from the launcher")
 	flag.StringVar(&launcherSocket, "launcher-socket", "/run/bureau/launcher.sock", "path to the launcher IPC socket")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
-	flag.StringVar(&transportListen, "transport-listen", "", "TCP address for inbound transport connections from peer daemons (e.g., :7891)")
 	flag.StringVar(&relaySocket, "relay-socket", "/run/bureau/relay.sock", "Unix socket path for the transport relay (consumer proxies connect here for remote services)")
 	flag.StringVar(&observeSocket, "observe-socket", "/run/bureau/observe.sock", "Unix socket for observation requests from clients")
 	flag.StringVar(&tmuxSocket, "tmux-socket", "/run/bureau/tmux.sock", "tmux server socket for Bureau-managed sessions")
@@ -171,13 +169,11 @@ func run() error {
 		logger:              logger,
 	}
 
-	// Start transport listener and relay if configured.
-	if transportListen != "" {
-		if err := daemon.startTransport(ctx, transportListen, relaySocket); err != nil {
-			return fmt.Errorf("starting transport: %w", err)
-		}
-		defer daemon.stopTransport()
+	// Start WebRTC transport and relay socket.
+	if err := daemon.startTransport(ctx, relaySocket); err != nil {
+		return fmt.Errorf("starting transport: %w", err)
 	}
+	defer daemon.stopTransport()
 
 	// Start observation socket listener.
 	if daemon.observeSocketPath != "" {
@@ -199,10 +195,8 @@ func run() error {
 
 	// Sync peer transport addresses before the first service directory
 	// sync so we know how to reach remote machines.
-	if daemon.transportListener != nil {
-		if err := daemon.syncPeerAddresses(ctx); err != nil {
-			logger.Error("initial peer address sync failed", "error", err)
-		}
+	if err := daemon.syncPeerAddresses(ctx); err != nil {
+		logger.Error("initial peer address sync failed", "error", err)
 	}
 
 	// Initial service directory sync.
@@ -871,24 +865,33 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, se
 	return nil
 }
 
-// startTransport initializes and starts the transport listener (TCP inbound)
-// and relay socket (Unix socket for consumer proxy outbound routing). Both
-// run HTTP servers: the transport listener accepts requests from peer daemons
-// and routes them to local provider proxies; the relay accepts requests from
-// consumer proxies and forwards them to peer daemons.
-func (d *Daemon) startTransport(ctx context.Context, listenAddress, relaySocketPath string) error {
-	// Create the TCP transport listener.
-	tcpListener, err := transport.NewTCPListener(listenAddress)
+// startTransport initializes the WebRTC transport (for peer daemon
+// communication) and the relay Unix socket (for consumer proxy outbound
+// routing). The WebRTC transport handles both inbound and outbound
+// connections via the same pool of PeerConnections; signaling is done
+// through Matrix state events in the machines room.
+func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) error {
+	// Fetch initial TURN credentials from the homeserver.
+	turn, err := d.session.TURNCredentials(ctx)
 	if err != nil {
-		return fmt.Errorf("creating transport listener on %s: %w", listenAddress, err)
+		d.logger.Warn("failed to fetch TURN credentials, using host candidates only", "error", err)
+		// Proceed without TURN — host/srflx candidates may suffice on LAN.
 	}
-	d.transportListener = tcpListener
-	d.transportDialer = &transport.TCPDialer{Timeout: 10 * time.Second}
+	iceConfig := transport.ICEConfigFromTURN(turn)
+
+	// Create the Matrix signaler for SDP exchange.
+	signaler := transport.NewMatrixSignaler(d.session, d.machinesRoomID, d.logger)
+
+	// Create the WebRTC transport (implements both Listener and Dialer).
+	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machineName, iceConfig, d.logger)
+	d.transportListener = webrtcTransport
+	d.transportDialer = webrtcTransport
 	d.relaySocketPath = relaySocketPath
 
-	d.logger.Info("transport listener started",
-		"listen_address", tcpListener.Address(),
+	d.logger.Info("WebRTC transport started",
+		"machine", d.machineName,
 		"relay_socket", relaySocketPath,
+		"turn_configured", turn != nil,
 	)
 
 	// Start the inbound handler on the transport listener. This serves
@@ -899,33 +902,38 @@ func (d *Daemon) startTransport(ctx context.Context, listenAddress, relaySocketP
 	inboundMux.HandleFunc("/observe/", d.handleTransportObserve)
 
 	go func() {
-		if err := tcpListener.Serve(ctx, inboundMux); err != nil {
-			d.logger.Error("transport listener error", "error", err)
+		if err := webrtcTransport.Serve(ctx, inboundMux); err != nil {
+			d.logger.Error("transport serve error", "error", err)
 		}
 	}()
+
+	// Start TURN credential refresh goroutine.
+	if turn != nil {
+		go d.refreshTURNCredentials(ctx, webrtcTransport, turn.TTL)
+	}
 
 	// Create the relay Unix socket. Consumer proxies register remote
 	// services pointing here; the relay handler forwards requests to
 	// the correct peer daemon via the transport.
 	if err := os.MkdirAll(filepath.Dir(relaySocketPath), 0755); err != nil {
-		tcpListener.Close()
+		webrtcTransport.Close()
 		return fmt.Errorf("creating relay socket directory: %w", err)
 	}
 	if err := os.Remove(relaySocketPath); err != nil && !os.IsNotExist(err) {
-		tcpListener.Close()
+		webrtcTransport.Close()
 		return fmt.Errorf("removing existing relay socket: %w", err)
 	}
 
 	relayListener, err := net.Listen("unix", relaySocketPath)
 	if err != nil {
-		tcpListener.Close()
+		webrtcTransport.Close()
 		return fmt.Errorf("creating relay socket at %s: %w", relaySocketPath, err)
 	}
 	d.relayListener = relayListener
 
 	if err := os.Chmod(relaySocketPath, 0660); err != nil {
 		relayListener.Close()
-		tcpListener.Close()
+		webrtcTransport.Close()
 		return fmt.Errorf("setting relay socket permissions: %w", err)
 	}
 
@@ -959,6 +967,37 @@ func (d *Daemon) stopTransport() {
 	}
 	if d.relayListener != nil {
 		os.Remove(d.relaySocketPath)
+	}
+}
+
+// refreshTURNCredentials periodically fetches fresh TURN credentials from
+// the Matrix homeserver and updates the WebRTC transport's ICE configuration.
+// TURN credentials are time-limited HMAC tokens; the TTL comes from the
+// homeserver's /voip/turnServer response.
+func (d *Daemon) refreshTURNCredentials(ctx context.Context, webrtcTransport *transport.WebRTCTransport, ttlSeconds int) {
+	// Refresh at half the TTL to avoid using expired credentials, with a
+	// floor of 5 minutes to prevent hammering the homeserver.
+	interval := time.Duration(ttlSeconds/2) * time.Second
+	if interval < 5*time.Minute {
+		interval = 5 * time.Minute
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			turn, err := d.session.TURNCredentials(ctx)
+			if err != nil {
+				d.logger.Warn("TURN credential refresh failed", "error", err)
+				continue
+			}
+			webrtcTransport.UpdateICEConfig(transport.ICEConfigFromTURN(turn))
+			d.logger.Debug("TURN credentials refreshed")
+		}
 	}
 }
 
@@ -1203,10 +1242,8 @@ func (d *Daemon) pollLoop(ctx context.Context) {
 
 			// Sync peer transport addresses before the service
 			// directory so we have up-to-date routing information.
-			if d.transportListener != nil {
-				if err := d.syncPeerAddresses(ctx); err != nil {
-					d.logger.Error("peer address sync failed", "error", err)
-				}
+			if err := d.syncPeerAddresses(ctx); err != nil {
+				d.logger.Error("peer address sync failed", "error", err)
 			}
 
 			added, removed, updated, err := d.syncServiceDirectory(ctx)
@@ -1249,10 +1286,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		lastActivity = d.lastActivityAt.UTC().Format(time.RFC3339)
 	}
 
-	var transportAddress string
-	if d.transportListener != nil {
-		transportAddress = d.transportListener.Address()
-	}
+	transportAddress := d.transportListener.Address()
 
 	status := schema.MachineStatus{
 		Principal: d.machineUserID,
@@ -1634,8 +1668,10 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 		"peer", peerAddress,
 	)
 
-	// Dial the remote daemon's transport listener.
-	rawConnection, err := net.DialTimeout("tcp", peerAddress, 10*time.Second)
+	// Dial the remote daemon via the transport layer (WebRTC data channel).
+	dialContext, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer dialCancel()
+	rawConnection, err := d.transportDialer.DialContext(dialContext, peerAddress)
 	if err != nil {
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("cannot reach peer at %s: %v", peerAddress, err))
@@ -1645,9 +1681,11 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 	// Build and send an HTTP POST to the remote daemon's observation handler.
 	// The principal localpart contains '/' which is fine in the URL path —
 	// the remote handler strips the /observe/ prefix and takes the rest.
+	// The Host header uses "transport" as a placeholder — the transport
+	// layer ignores it since the connection is already routed to the peer.
 	requestBody, _ := json.Marshal(request)
 	httpRequest, err := http.NewRequest("POST",
-		"http://"+peerAddress+"/observe/"+request.Principal,
+		"http://transport/observe/"+request.Principal,
 		bytes.NewReader(requestBody))
 	if err != nil {
 		rawConnection.Close()

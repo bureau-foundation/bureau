@@ -65,6 +65,27 @@ const (
 	// Room: #bureau/services:<server>
 	EventTypeService = "m.bureau.service"
 
+	// EventTypeWebRTCOffer is published to #bureau/machines when a daemon
+	// wants to establish a WebRTC PeerConnection to another daemon. The
+	// offerer gathers all ICE candidates (vanilla ICE), generates a
+	// complete SDP offer, and publishes it as a state event. The target
+	// daemon polls for offers directed at it and responds with an answer.
+	//
+	// State key: "<offerer-localpart>|<target-localpart>"
+	// The pipe character is not valid in Matrix localparts, so it
+	// unambiguously separates the two machine identities.
+	//
+	// Room: #bureau/machines:<server>
+	EventTypeWebRTCOffer = "m.bureau.webrtc_offer"
+
+	// EventTypeWebRTCAnswer is published by the target daemon in response
+	// to a WebRTC offer. Uses the same state key format as the offer so
+	// the offerer can poll for answers to its outstanding offers.
+	//
+	// State key: "<offerer-localpart>|<target-localpart>"
+	// Room: #bureau/machines:<server>
+	EventTypeWebRTCAnswer = "m.bureau.webrtc_answer"
+
 	// EventTypeLayout describes the tmux session structure for an
 	// observation target. Published to the room associated with the
 	// target: a principal's room, a channel room, or a machine's config
@@ -123,12 +144,11 @@ type MachineStatus struct {
 	// timestamp. Empty on the first heartbeat before any activity occurs.
 	LastActivityAt string `json:"last_activity_at,omitempty"`
 
-	// TransportAddress is the address where this machine's daemon accepts
-	// transport connections from peer daemons for cross-machine service
-	// routing (e.g., "192.168.1.10:7891" for TCP transport). Peer daemons
-	// read this field to discover how to reach this machine.
-	// Empty if the daemon is not accepting inbound transport connections
-	// (local-only mode).
+	// TransportAddress identifies this machine for daemon-to-daemon
+	// transport. With WebRTC, this is the machine's Matrix user ID
+	// (e.g., "@machine/workstation:bureau.local") — peer daemons use it
+	// as the signaling target for WebRTC connection establishment.
+	// Empty if the daemon is not accepting transport connections.
 	TransportAddress string `json:"transport_address,omitempty"`
 }
 
@@ -269,6 +289,22 @@ type Service struct {
 	// into the fixed fields (e.g., supported languages, model version,
 	// max batch size). Consumers can filter on these.
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// WebRTCSignal is the content of both EventTypeWebRTCOffer and
+// EventTypeWebRTCAnswer state events. Contains a complete SDP with all
+// ICE candidates gathered (vanilla ICE — no trickle). The same struct
+// is used for both offers and answers; the event type distinguishes them.
+type WebRTCSignal struct {
+	// SDP is the complete Session Description Protocol string including
+	// all gathered ICE candidates. For offers this is type "offer"; for
+	// answers this is type "answer".
+	SDP string `json:"sdp"`
+
+	// Timestamp is an ISO 8601 timestamp of when the signal was created.
+	// Used to detect stale signals: if the receiver has already processed
+	// a newer signal for this peer pair, this one is ignored.
+	Timestamp string `json:"timestamp"`
 }
 
 // LayoutContent is the content of an EventTypeLayout state event. It describes

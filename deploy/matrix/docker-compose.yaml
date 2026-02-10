@@ -14,6 +14,20 @@ services:
       CONTINUWUITY_REGISTRATION_TOKEN: "${BUREAU_MATRIX_REGISTRATION_TOKEN}"
       CONTINUWUITY_ALLOW_REGISTRATION: "true"
       CONTINUWUITY_ALLOW_FEDERATION: "false"
+      CONTINUWUITY_TURN_URIS: '["turn:${BUREAU_TURN_HOST:-localhost}:3478?transport=udp","turn:${BUREAU_TURN_HOST:-localhost}:3478?transport=tcp"]'
+      CONTINUWUITY_TURN_SECRET: "${BUREAU_TURN_SECRET}"
+
+  turn:
+    image: coturn/coturn:latest
+    container_name: bureau-turn
+    restart: unless-stopped
+    # host networking is required for coturn to correctly detect external
+    # IPs and relay UDP traffic. Docker's port mapping for large UDP ranges
+    # (49152-65535) is prohibitively expensive and unreliable.
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/turnserver.conf:ro
+    command: ["-c", "/etc/turnserver.conf"]
 
 volumes:
   matrix-data:

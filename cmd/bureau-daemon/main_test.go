@@ -24,8 +24,16 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/transport"
 )
+
+// testTCPDialer implements transport.Dialer using plain TCP. This is used
+// by daemon tests where the "peer daemon" is a simple TCP-based HTTP server
+// rather than a full WebRTC transport, keeping tests fast and deterministic.
+type testTCPDialer struct{}
+
+func (d *testTCPDialer) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "tcp", address)
+}
 
 func TestRoomAliasLocalpart(t *testing.T) {
 	tests := []struct {
@@ -1024,11 +1032,9 @@ func TestRelayHandler(t *testing.T) {
 		peerAddresses: map[string]string{
 			"@machine/cloud-gpu:bureau.local": peerAddress,
 		},
-		peerTransports: make(map[string]http.RoundTripper),
-		transportDialer: &transport.TCPDialer{
-			Timeout: 5 * time.Second,
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		peerTransports:  make(map[string]http.RoundTripper),
+		transportDialer: &testTCPDialer{},
+		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Create a relay socket and serve the relay handler.
@@ -1201,7 +1207,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// Integration test: a request travels through the complete
 	// cross-machine routing chain:
 	//
-	//   client → relay socket → TCP transport → inbound handler → provider socket → backend
+	//   client → relay socket → transport → inbound handler → provider socket → backend
 	//
 	// Machine A (consumer side): relay socket
 	// Machine B (provider side): transport listener + provider proxy
@@ -1340,7 +1346,7 @@ func TestCrossTransportRouting(t *testing.T) {
 			"@machine/cloud-gpu:bureau.local": transportListener.Addr().String(),
 		},
 		peerTransports:  make(map[string]http.RoundTripper),
-		transportDialer: &transport.TCPDialer{Timeout: 5 * time.Second},
+		transportDialer: &testTCPDialer{},
 		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 

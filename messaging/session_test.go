@@ -787,6 +787,63 @@ func TestTransactionIDUniqueness(t *testing.T) {
 	}
 }
 
+func TestTURNCredentials(t *testing.T) {
+	_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assertAuth(t, request, "test-token")
+		if request.URL.Path != "/_matrix/client/v3/voip/turnServer" {
+			t.Errorf("unexpected path: %s", request.URL.Path)
+		}
+		if request.Method != http.MethodGet {
+			t.Errorf("unexpected method: %s", request.Method)
+		}
+		writeJSON(writer, map[string]any{
+			"username": "1234567890:@user:test.local",
+			"password": "hmac-secret",
+			"uris":     []string{"turn:turn.test.local:3478?transport=udp", "turn:turn.test.local:3478?transport=tcp"},
+			"ttl":      86400,
+		})
+	}))
+
+	credentials, err := session.TURNCredentials(context.Background())
+	if err != nil {
+		t.Fatalf("TURNCredentials failed: %v", err)
+	}
+	if credentials.Username != "1234567890:@user:test.local" {
+		t.Errorf("Username = %q, want %q", credentials.Username, "1234567890:@user:test.local")
+	}
+	if credentials.Password != "hmac-secret" {
+		t.Errorf("Password = %q, want %q", credentials.Password, "hmac-secret")
+	}
+	if len(credentials.URIs) != 2 {
+		t.Fatalf("URIs length = %d, want 2", len(credentials.URIs))
+	}
+	if credentials.URIs[0] != "turn:turn.test.local:3478?transport=udp" {
+		t.Errorf("URIs[0] = %q, want TURN UDP URI", credentials.URIs[0])
+	}
+	if credentials.TTL != 86400 {
+		t.Errorf("TTL = %d, want 86400", credentials.TTL)
+	}
+}
+
+func TestTURNCredentials_NotConfigured(t *testing.T) {
+	_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/_matrix/client/v3/voip/turnServer" {
+			writer.WriteHeader(http.StatusNotFound)
+			writeJSON(writer, map[string]string{
+				"errcode": "M_NOT_FOUND",
+				"error":   "TURN is not configured",
+			})
+			return
+		}
+		http.Error(writer, "not found", http.StatusNotFound)
+	}))
+
+	_, err := session.TURNCredentials(context.Background())
+	if err == nil {
+		t.Fatal("expected error for unconfigured TURN, got nil")
+	}
+}
+
 // Test helpers.
 
 func assertAuth(t *testing.T, request *http.Request, expectedToken string) {

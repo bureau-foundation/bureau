@@ -7,8 +7,10 @@
 // machines without exposing transport details to sandboxed agents or their
 // proxies.
 //
-// Initial implementation: TCP (for development and same-LAN deployments).
-// Future: WebRTC data channels with ICE/TURN for NAT traversal.
+// The production implementation uses WebRTC data channels (pion/webrtc) with
+// ICE/TURN for NAT traversal and Matrix state events for signaling. Each
+// peer daemon gets one PeerConnection with SCTP-multiplexed data channels —
+// no head-of-line blocking between concurrent service requests.
 //
 // The daemon uses a Listener to accept inbound requests from peer daemons
 // and routes them to local provider proxies. It uses a Dialer (via a relay

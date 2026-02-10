@@ -388,6 +388,26 @@ func (s *Session) GetDisplayName(ctx context.Context, userID string) (string, er
 	return response.DisplayName, nil
 }
 
+// TURNCredentials fetches time-limited TURN server credentials from the
+// homeserver. The homeserver generates these using its configured turn_secret
+// (shared with coturn via HMAC-SHA1). Returns the TURN URIs, ephemeral
+// username/password, and credential lifetime.
+//
+// Corresponds to GET /_matrix/client/v3/voip/turnServer.
+func (s *Session) TURNCredentials(ctx context.Context) (*TURNCredentialsResponse, error) {
+	body, err := s.client.doRequest(ctx, http.MethodGet,
+		"/_matrix/client/v3/voip/turnServer", s.accessToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: get TURN credentials failed: %w", err)
+	}
+
+	var response TURNCredentialsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse TURN credentials: %w", err)
+	}
+	return &response, nil
+}
+
 // nextTransactionID generates a unique transaction ID for idempotent event sending.
 // Format: "bureau-<timestamp_ms>-<counter>" to ensure uniqueness across restarts.
 func (s *Session) nextTransactionID() string {

@@ -5,3 +5,11 @@ port = [6167]
 address = "0.0.0.0"
 allow_registration = true
 allow_federation = false
+
+# TURN server configuration for WebRTC NAT traversal. The homeserver
+# serves time-limited HMAC credentials via /_matrix/client/v3/voip/turnServer.
+# The shared secret must match coturn's static-auth-secret in turnserver.conf.
+# Actual values are injected via environment variables (CONTINUWUITY_TURN_URIS,
+# CONTINUWUITY_TURN_SECRET).
+turn_uris = []
+turn_secret = ""

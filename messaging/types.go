@@ -261,6 +261,20 @@ type ServerVersionsResponse struct {
 	UnstableFeatures map[string]bool `json:"unstable_features,omitempty"`
 }
 
+// TURNCredentialsResponse is returned by the /_matrix/client/v3/voip/turnServer
+// endpoint. Contains time-limited HMAC-SHA1 credentials for TURN server access.
+// The homeserver generates these from its configured turn_secret (shared with coturn).
+type TURNCredentialsResponse struct {
+	// Username is the TURN username (typically a Unix timestamp).
+	Username string `json:"username"`
+	// Password is the HMAC-SHA1 credential derived from the shared secret.
+	Password string `json:"password"`
+	// URIs lists the TURN server URIs (e.g., ["turn:host:3478?transport=udp"]).
+	URIs []string `json:"uris"`
+	// TTL is the credential lifetime in seconds.
+	TTL int `json:"ttl"`
+}
+
 // LoginRequest is the request body for password login.
 type LoginRequest struct {
 	Type     string `json:"type"`

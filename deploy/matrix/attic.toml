@@ -1,0 +1,34 @@
+# Attic Nix binary cache server configuration.
+#
+# Runs alongside Continuwuity and coturn in the Bureau docker-compose stack.
+# SQLite for storage metadata, local filesystem for NAR data.
+
+listen = "[::]:5580"
+
+[database]
+# SQLite database inside the persistent volume. ?mode=rwc creates the file
+# if it doesn't exist. Single-node deployment doesn't need PostgreSQL.
+url = "sqlite:///var/lib/attic/server.db?mode=rwc"
+
+[storage]
+type = "local"
+path = "/var/lib/attic/storage"
+
+[chunking]
+# Content-addressed deduplication at the NAR chunk level. Multiple
+# derivations sharing the same Go standard library (or any common data)
+# are stored once. Thresholds are in bytes.
+nar-size-threshold = 65536   # NARs smaller than 64 KiB are stored whole.
+min-size = 16384             # 16 KiB minimum chunk.
+avg-size = 65536             # 64 KiB target chunk.
+max-size = 262144            # 256 KiB maximum chunk.
+
+[compression]
+type = "zstd"
+
+[garbage-collection]
+# Run GC every 12 hours. Unreferenced store paths are retained for 7 days
+# before deletion. This gives time for rollbacks and debugging without
+# accumulating unbounded storage.
+interval = "12 hours"
+default-retention-period = "7 days"

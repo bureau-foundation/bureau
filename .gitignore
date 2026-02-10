@@ -69,5 +69,6 @@ secrets/
 history
 .history/
 
-# Deploy secrets (written by bureau matrix setup, not committed)
+# Deploy secrets (written by bureau matrix setup / attic bootstrap, not committed)
 deploy/matrix/bureau-creds
+deploy/matrix/.env-attic-token

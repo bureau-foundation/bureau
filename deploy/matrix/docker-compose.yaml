@@ -29,5 +29,25 @@ services:
       - ./turnserver.conf:/etc/turnserver.conf:ro
     command: ["-c", "/etc/turnserver.conf"]
 
+  attic:
+    image: ghcr.io/zhaofengli/attic:latest
+    container_name: bureau-attic
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:5580:5580"
+    volumes:
+      - attic-data:/var/lib/attic
+      - ./attic.toml:/etc/attic/server.toml:ro
+    command: ["-f", "/etc/attic/server.toml"]
+    environment:
+      ATTIC_SERVER_TOKEN_HS256_SECRET_BASE64: "${BUREAU_ATTIC_TOKEN_SECRET}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5580 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
 volumes:
   matrix-data:
+  attic-data:

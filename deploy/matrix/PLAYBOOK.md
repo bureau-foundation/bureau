@@ -12,17 +12,18 @@ infrastructure health including TURN/WebRTC.
 
 The Nix dev shell provides Go, curl, jq, and all other tools.
 
-Build the CLI:
+Build the CLI and put it on your PATH:
 
 ```bash
-go build -o bureau ./cmd/bureau/
+bazel build //cmd/bureau
+export PATH="$PWD/bazel-bin/cmd/bureau/bureau_:$PATH"
 ```
 
 ## 1. Generate Secrets
 
-Two secrets are needed: a registration token (for Matrix account creation)
-and a TURN shared secret (for WebRTC NAT traversal). Both are 256-bit
-random hex strings.
+Three secrets are needed: a registration token (Matrix account creation),
+a TURN shared secret (WebRTC NAT traversal), and an attic JWT secret
+(Nix binary cache API authentication).
 
 ```bash
 cd deploy/matrix
@@ -30,6 +31,7 @@ cd deploy/matrix
 # Generate fresh secrets.
 REGISTRATION_TOKEN=$(openssl rand -hex 32)
 TURN_SECRET=$(openssl rand -hex 32)
+ATTIC_TOKEN_SECRET=$(openssl rand 64 | base64 -w0)
 
 # Write .env file (not committed to git).
 cat > .env <<EOF
@@ -37,6 +39,7 @@ BUREAU_MATRIX_SERVER_NAME=bureau.local
 BUREAU_MATRIX_REGISTRATION_TOKEN=${REGISTRATION_TOKEN}
 BUREAU_TURN_SECRET=${TURN_SECRET}
 BUREAU_TURN_HOST=localhost
+BUREAU_ATTIC_TOKEN_SECRET=${ATTIC_TOKEN_SECRET}
 EOF
 
 # Write the registration token to a standalone file for bureau matrix setup,
@@ -47,19 +50,20 @@ echo "${REGISTRATION_TOKEN}" > .env-token
 
 ## 2. Start Infrastructure
 
-Bring up both services: Continuwuity (Matrix homeserver) and coturn (TURN
-relay for WebRTC). coturn uses host networking because Docker port mapping
-for the UDP relay range (49152-65535) is unreliable and expensive.
+Bring up all services: Continuwuity (Matrix homeserver), coturn (TURN relay
+for WebRTC), and attic (Nix binary cache). coturn uses host networking
+because Docker port mapping for the UDP relay range (49152-65535) is
+unreliable and expensive.
 
 ```bash
 # Wipe any previous state for a clean start.
 docker compose down -v
 
-# Start both services.
+# Start all services.
 docker compose up -d
 ```
 
-Wait for the homeserver to become reachable:
+Wait for the homeserver and attic to become reachable:
 
 ```bash
 until curl -sf http://localhost:6167/_matrix/client/versions > /dev/null; do
@@ -67,6 +71,12 @@ until curl -sf http://localhost:6167/_matrix/client/versions > /dev/null; do
   sleep 2
 done
 echo "Homeserver is ready."
+
+until curl -sf http://localhost:5580 > /dev/null 2>&1; do
+  echo "Waiting for attic..."
+  sleep 2
+done
+echo "Attic is ready."
 ```
 
 Verify coturn is listening:
@@ -83,7 +93,7 @@ ss -tlnp | grep 3478 || echo "WARN: coturn not listening on 3478"
 machines, services). It writes a credential file for subsequent commands.
 
 ```bash
-./bureau matrix setup \
+bureau matrix setup \
   --homeserver http://localhost:6167 \
   --registration-token-file .env-token \
   --credential-file ./bureau-creds \
@@ -109,7 +119,7 @@ authentication, space, rooms, hierarchy, power levels, and credential
 cross-reference.
 
 ```bash
-./bureau matrix doctor --credential-file ./bureau-creds
+bureau matrix doctor --credential-file ./bureau-creds
 ```
 
 All checks should pass. If any fail, re-run setup (it's idempotent).
@@ -117,7 +127,7 @@ All checks should pass. If any fail, re-run setup (it's idempotent).
 Machine-readable output for scripting:
 
 ```bash
-./bureau matrix doctor --credential-file ./bureau-creds --json | jq .
+bureau matrix doctor --credential-file ./bureau-creds --json | jq .
 ```
 
 ## 5. Verify TURN Credentials
@@ -168,7 +178,56 @@ else
 fi
 ```
 
-## 6. Create Your Operator Account
+## 6. Bootstrap the Binary Cache
+
+attic needs a cache created and an API token generated before it can accept
+pushes. The `atticadm` tool runs inside the container (it needs access to
+the JWT signing secret via the server config).
+
+Generate an admin token with full permissions:
+
+```bash
+ATTIC_TOKEN=$(docker exec bureau-attic atticadm make-token \
+  --sub "admin" \
+  --validity "10y" \
+  --pull "*" --push "*" \
+  --create-cache "*" --configure-cache "*" \
+  --configure-cache-retention "*" --destroy-cache "*" --delete "*" \
+  -f /etc/attic/server.toml)
+
+echo "${ATTIC_TOKEN}"
+```
+
+Configure the local attic CLI (available in the Nix dev shell) and create
+the cache:
+
+```bash
+attic login bureau http://localhost:5580 "${ATTIC_TOKEN}"
+attic cache create bureau
+```
+
+Verify the cache exists and the endpoint serves Nix binary cache metadata:
+
+```bash
+curl -s http://localhost:5580/bureau/nix-cache-info
+```
+
+Expected output includes `StoreDir: /nix/store` and `WantMassQuery: 1`.
+
+Save the token alongside the other credentials (not committed to git):
+
+```bash
+echo "${ATTIC_TOKEN}" > .env-attic-token
+```
+
+To push derivations later (once the Nix flake is built):
+
+```bash
+nix build .#bureau-daemon
+attic push bureau ./result
+```
+
+## 7. Create Your Operator Account
 
 The admin account created by setup (`bureau-admin`) is a service account
 with a derived password — it's not meant for interactive login. Create a
@@ -176,7 +235,7 @@ personal operator account with `--operator`, which registers the account
 and invites you to all Bureau infrastructure rooms in one step.
 
 ```bash
-./bureau matrix user create ben \
+bureau matrix user create ben \
   --credential-file ./bureau-creds \
   --password-file - \
   --operator
@@ -192,14 +251,14 @@ registration and ensures you're invited to any rooms you might be missing.
 To log in with Element, point it at the homeserver URL
 (`http://localhost:6167`) and sign in with your username and password.
 
-## 7. Create a Project Space
+## 8. Create a Project Space
 
 Spaces organize related rooms. Create an "IREE" project space as a
 realistic multi-space scenario (Bureau itself is the first space; projects
 are additional spaces).
 
 ```bash
-./bureau matrix space create iree \
+bureau matrix space create iree \
   --credential-file ./bureau-creds \
   --name "IREE" \
   --topic "IREE compiler infrastructure"
@@ -208,24 +267,24 @@ are additional spaces).
 List all spaces to confirm:
 
 ```bash
-./bureau matrix space list --credential-file ./bureau-creds
+bureau matrix space list --credential-file ./bureau-creds
 ```
 
-## 8. Create Project Rooms
+## 9. Create Project Rooms
 
 Create rooms within the project space. Rooms under a space use hierarchical
 aliases: `iree/amdgpu/general` lives under the `iree` space.
 
 ```bash
 # General discussion room for the AMDGPU target.
-./bureau matrix room create iree/amdgpu/general \
+bureau matrix room create iree/amdgpu/general \
   --credential-file ./bureau-creds \
   --name "IREE AMDGPU General" \
   --topic "AMDGPU target discussion and coordination" \
   --space '#iree:bureau.local'
 
 # A room where agents publish build results.
-./bureau matrix room create iree/builds \
+bureau matrix room create iree/builds \
   --credential-file ./bureau-creds \
   --name "IREE Builds" \
   --topic "Build status and artifacts" \
@@ -235,10 +294,10 @@ aliases: `iree/amdgpu/general` lives under the `iree` space.
 List rooms in the space:
 
 ```bash
-./bureau matrix room list --credential-file ./bureau-creds --space '#iree:bureau.local'
+bureau matrix room list --credential-file ./bureau-creds --space '#iree:bureau.local'
 ```
 
-## 9. Register Agent Accounts
+## 10. Register Agent Accounts
 
 Register accounts for agents that will operate within Bureau. Each agent
 gets its own Matrix identity, managed by the launcher and proxied through
@@ -248,26 +307,26 @@ the per-sandbox proxy.
 # Create agent accounts. No --password-file means the password is derived
 # deterministically from the registration token (agents don't need
 # interactive login — the proxy handles auth for them).
-./bureau matrix user create iree-builder --credential-file ./bureau-creds
-./bureau matrix user create iree-reviewer --credential-file ./bureau-creds
+bureau matrix user create iree-builder --credential-file ./bureau-creds
+bureau matrix user create iree-reviewer --credential-file ./bureau-creds
 ```
 
-## 10. Invite Agents to Rooms
+## 11. Invite Agents to Rooms
 
 Invite the agent accounts to the project rooms so they can participate.
 
 ```bash
 # Invite iree-builder to the builds room.
-./bureau matrix user invite @iree-builder:bureau.local \
+bureau matrix user invite @iree-builder:bureau.local \
   --credential-file ./bureau-creds \
   --room '#iree/builds:bureau.local'
 
 # Invite both agents to the general room.
-./bureau matrix user invite @iree-builder:bureau.local \
+bureau matrix user invite @iree-builder:bureau.local \
   --credential-file ./bureau-creds \
   --room '#iree/amdgpu/general:bureau.local'
 
-./bureau matrix user invite @iree-reviewer:bureau.local \
+bureau matrix user invite @iree-reviewer:bureau.local \
   --credential-file ./bureau-creds \
   --room '#iree/amdgpu/general:bureau.local'
 ```
@@ -275,43 +334,43 @@ Invite the agent accounts to the project rooms so they can participate.
 List room members to verify:
 
 ```bash
-./bureau matrix room members \
+bureau matrix room members \
   --credential-file ./bureau-creds \
   '#iree/amdgpu/general:bureau.local'
 ```
 
-## 11. Send Test Messages
+## 12. Send Test Messages
 
 Verify messaging works end-to-end.
 
 ```bash
 # Send a message to the system room.
-./bureau matrix send \
+bureau matrix send \
   --credential-file ./bureau-creds \
   '#bureau/system:bureau.local' \
   "Bureau deployment complete."
 
 # Send a message to a project room.
-./bureau matrix send \
+bureau matrix send \
   --credential-file ./bureau-creds \
   '#iree/amdgpu/general:bureau.local' \
   "IREE AMDGPU workspace initialized."
 ```
 
-## 12. Read and Write State Events
+## 13. Read and Write State Events
 
 State events are persistent room configuration. Bureau uses custom state
 events for machine keys, service registration, and layout.
 
 ```bash
 # Read power levels for the machines room.
-./bureau matrix state get \
+bureau matrix state get \
   --credential-file ./bureau-creds \
   '#bureau/machines:bureau.local' \
   m.room.power_levels | jq .
 
 # Write a test Bureau state event to the services room.
-./bureau matrix state set \
+bureau matrix state set \
   --credential-file ./bureau-creds \
   --key 'test/echo' \
   '#bureau/services:bureau.local' \
@@ -322,40 +381,40 @@ events for machine keys, service registration, and layout.
 Read it back:
 
 ```bash
-./bureau matrix state get \
+bureau matrix state get \
   --credential-file ./bureau-creds \
   --key 'test/echo' \
   '#bureau/services:bureau.local' \
   m.bureau.service | jq .
 ```
 
-## 13. Final Doctor Check
+## 14. Final Doctor Check
 
 Run doctor one more time. All original checks should still pass (nothing
 we did should have broken the base infrastructure).
 
 ```bash
-./bureau matrix doctor --credential-file ./bureau-creds
+bureau matrix doctor --credential-file ./bureau-creds
 ```
 
-## 14. Re-run Setup (Idempotency)
+## 15. Re-run Setup (Idempotency)
 
 Verify that setup is safe to re-run. It should detect existing resources
 and skip creation.
 
 ```bash
-./bureau matrix setup \
+bureau matrix setup \
   --homeserver http://localhost:6167 \
   --registration-token-file .env-token \
   --credential-file ./bureau-creds \
   --server-name bureau.local
 ```
 
-## 15. Teardown
+## 16. Teardown
 
 ```bash
 docker compose -f deploy/matrix/docker-compose.yaml down -v
-rm -f ./bureau-creds .env-token
+rm -f ./bureau-creds .env-token .env-attic-token
 ```
 
 ## Friction Log

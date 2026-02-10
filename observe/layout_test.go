@@ -12,6 +12,7 @@ import (
 )
 
 func TestReadTmuxLayoutSinglePane(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "test-single", "sleep 3600")
 
@@ -45,6 +46,7 @@ func TestReadTmuxLayoutSinglePane(t *testing.T) {
 }
 
 func TestReadTmuxLayoutHorizontalSplit(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "test-hsplit", "sleep 3600")
 	mustTmux(t, serverSocket, "rename-window", "-t", "test-hsplit", "agents")
@@ -79,6 +81,7 @@ func TestReadTmuxLayoutHorizontalSplit(t *testing.T) {
 }
 
 func TestReadTmuxLayoutVerticalSplit(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "test-vsplit", "sleep 3600")
 	mustTmux(t, serverSocket, "rename-window", "-t", "test-vsplit", "stack")
@@ -106,6 +109,7 @@ func TestReadTmuxLayoutVerticalSplit(t *testing.T) {
 }
 
 func TestReadTmuxLayoutMultipleWindows(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "test-multiwin", "sleep 3600")
 	mustTmux(t, serverSocket, "rename-window", "-t", "test-multiwin", "agents")
@@ -131,6 +135,7 @@ func TestReadTmuxLayoutMultipleWindows(t *testing.T) {
 }
 
 func TestReadTmuxLayoutSessionNotFound(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	// Start the server with a dummy session so it's running.
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
@@ -142,6 +147,7 @@ func TestReadTmuxLayoutSessionNotFound(t *testing.T) {
 }
 
 func TestApplyLayoutCreatesSession(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	layout := &Layout{
@@ -179,6 +185,7 @@ func TestApplyLayoutCreatesSession(t *testing.T) {
 }
 
 func TestApplyLayoutWithSplits(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	layout := &Layout{
@@ -220,6 +227,7 @@ func TestApplyLayoutWithSplits(t *testing.T) {
 }
 
 func TestApplyLayoutMultipleWindows(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	layout := &Layout{
@@ -260,6 +268,7 @@ func TestApplyLayoutMultipleWindows(t *testing.T) {
 }
 
 func TestApplyLayoutEmptyLayoutError(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	// Need a running server for has-session check.
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
@@ -274,6 +283,7 @@ func TestApplyLayoutEmptyLayoutError(t *testing.T) {
 }
 
 func TestApplyLayoutEmptyWindowError(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
 
@@ -293,6 +303,7 @@ func TestApplyLayoutEmptyWindowError(t *testing.T) {
 }
 
 func TestApplyThenReadRoundTrip(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	original := &Layout{
@@ -371,6 +382,7 @@ func TestApplyThenReadRoundTrip(t *testing.T) {
 }
 
 func TestApplyLayoutWithSessionSlashes(t *testing.T) {
+	t.Parallel()
 	// Bureau session names use slashes: "bureau/iree/amdgpu/pm".
 	// Verify tmux handles these correctly.
 	serverSocket := TmuxServer(t)
@@ -404,6 +416,7 @@ func TestApplyLayoutWithSessionSlashes(t *testing.T) {
 }
 
 func TestResolveCommand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		pane Pane
@@ -438,6 +451,7 @@ func TestResolveCommand(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			got := resolveCommand(test.pane)
 			if got != test.want {
 				t.Errorf("resolveCommand() = %q, want %q", got, test.want)
@@ -447,6 +461,7 @@ func TestResolveCommand(t *testing.T) {
 }
 
 func TestInferPaneSplitsEmpty(t *testing.T) {
+	t.Parallel()
 	result := inferPaneSplits(nil)
 	if result != nil {
 		t.Errorf("inferPaneSplits(nil) = %v, want nil", result)
@@ -454,6 +469,7 @@ func TestInferPaneSplitsEmpty(t *testing.T) {
 }
 
 func TestInferPaneSplitsSinglePane(t *testing.T) {
+	t.Parallel()
 	panes := []tmuxPane{
 		{index: 0, width: 160, height: 48, left: 0, top: 0, command: "sleep"},
 	}
@@ -470,6 +486,7 @@ func TestInferPaneSplitsSinglePane(t *testing.T) {
 }
 
 func TestInferPaneSplitsHorizontal(t *testing.T) {
+	t.Parallel()
 	// Two panes side by side (same top, different left).
 	panes := []tmuxPane{
 		{index: 0, width: 79, height: 48, left: 0, top: 0, command: "vim"},
@@ -489,6 +506,7 @@ func TestInferPaneSplitsHorizontal(t *testing.T) {
 }
 
 func TestInferPaneSplitsVertical(t *testing.T) {
+	t.Parallel()
 	// Two panes stacked (same left, different top).
 	panes := []tmuxPane{
 		{index: 0, width: 160, height: 23, left: 0, top: 0, command: "vim"},
@@ -510,12 +528,14 @@ func TestInferPaneSplitsVertical(t *testing.T) {
 // --- LayoutEqual tests ---
 
 func TestLayoutEqualBothNil(t *testing.T) {
+	t.Parallel()
 	if !LayoutEqual(nil, nil) {
 		t.Error("LayoutEqual(nil, nil) = false, want true")
 	}
 }
 
 func TestLayoutEqualOneNil(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{Prefix: "C-a", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
 	if LayoutEqual(layout, nil) {
 		t.Error("LayoutEqual(layout, nil) = true, want false")
@@ -526,6 +546,7 @@ func TestLayoutEqualOneNil(t *testing.T) {
 }
 
 func TestLayoutEqualIdentical(t *testing.T) {
+	t.Parallel()
 	a := &Layout{
 		Prefix: "C-a",
 		Windows: []Window{
@@ -570,6 +591,7 @@ func TestLayoutEqualIdentical(t *testing.T) {
 }
 
 func TestLayoutEqualDifferentPrefix(t *testing.T) {
+	t.Parallel()
 	a := &Layout{Prefix: "C-a", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
 	b := &Layout{Prefix: "C-b", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
 	if LayoutEqual(a, b) {
@@ -578,6 +600,7 @@ func TestLayoutEqualDifferentPrefix(t *testing.T) {
 }
 
 func TestLayoutEqualDifferentWindowCount(t *testing.T) {
+	t.Parallel()
 	a := &Layout{Windows: []Window{
 		{Name: "one", Panes: []Pane{{Command: "zsh"}}},
 	}}
@@ -591,6 +614,7 @@ func TestLayoutEqualDifferentWindowCount(t *testing.T) {
 }
 
 func TestLayoutEqualDifferentWindowName(t *testing.T) {
+	t.Parallel()
 	a := &Layout{Windows: []Window{{Name: "agents", Panes: []Pane{{Command: "zsh"}}}}}
 	b := &Layout{Windows: []Window{{Name: "tools", Panes: []Pane{{Command: "zsh"}}}}}
 	if LayoutEqual(a, b) {
@@ -599,6 +623,7 @@ func TestLayoutEqualDifferentWindowName(t *testing.T) {
 }
 
 func TestLayoutEqualDifferentPaneFields(t *testing.T) {
+	t.Parallel()
 	base := func() *Layout {
 		return &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
 			{Command: "sleep", Split: "horizontal", Size: 50},
@@ -645,6 +670,7 @@ func TestLayoutEqualDifferentPaneFields(t *testing.T) {
 }
 
 func TestLayoutEqualObserveMembers(t *testing.T) {
+	t.Parallel()
 	// Both have ObserveMembers with same role — equal.
 	a := &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
 		{ObserveMembers: &MemberFilter{Role: "agent"}},
@@ -672,6 +698,7 @@ func TestLayoutEqualObserveMembers(t *testing.T) {
 // --- LayoutToSchema / SchemaToLayout conversion tests ---
 
 func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Prefix: "C-a",
 		Windows: []Window{
@@ -739,6 +766,7 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 }
 
 func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
+	t.Parallel()
 	content := schema.LayoutContent{
 		Prefix:        "C-b",
 		SourceMachine: "@machine/workstation:bureau.local",
@@ -796,6 +824,7 @@ func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 }
 
 func TestLayoutSchemaRoundTrip(t *testing.T) {
+	t.Parallel()
 	// Convert Layout → Schema → Layout and verify equality via LayoutEqual.
 	original := &Layout{
 		Prefix: "C-a",
@@ -833,6 +862,7 @@ func TestLayoutSchemaRoundTrip(t *testing.T) {
 }
 
 func TestLayoutToSchemaNilObserveMembers(t *testing.T) {
+	t.Parallel()
 	// Verify nil ObserveMembers doesn't become a non-nil pointer after conversion.
 	layout := &Layout{
 		Windows: []Window{{

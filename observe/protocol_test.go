@@ -9,6 +9,7 @@ import (
 )
 
 func TestWriteReadMessageRoundTrip(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		message Message
@@ -37,6 +38,7 @@ func TestWriteReadMessageRoundTrip(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			var buffer bytes.Buffer
 			if err := WriteMessage(&buffer, test.message); err != nil {
 				t.Fatalf("WriteMessage: %v", err)
@@ -58,6 +60,7 @@ func TestWriteReadMessageRoundTrip(t *testing.T) {
 }
 
 func TestWriteReadMultipleMessages(t *testing.T) {
+	t.Parallel()
 	var buffer bytes.Buffer
 
 	messages := []Message{
@@ -89,6 +92,7 @@ func TestWriteReadMultipleMessages(t *testing.T) {
 }
 
 func TestParseResizePayload(t *testing.T) {
+	t.Parallel()
 	message := NewResizeMessage(132, 43)
 	columns, rows, err := ParseResizePayload(message.Payload)
 	if err != nil {
@@ -103,6 +107,7 @@ func TestParseResizePayload(t *testing.T) {
 }
 
 func TestParseResizePayloadInvalidLength(t *testing.T) {
+	t.Parallel()
 	_, _, err := ParseResizePayload([]byte{0x00, 0x01})
 	if err == nil {
 		t.Fatal("expected error for short payload")
@@ -110,6 +115,7 @@ func TestParseResizePayloadInvalidLength(t *testing.T) {
 }
 
 func TestReadMessagePayloadTooLarge(t *testing.T) {
+	t.Parallel()
 	var buffer bytes.Buffer
 	// Write a header claiming a payload larger than maxPayloadLength.
 	header := []byte{MessageTypeData, 0x01, 0x00, 0x00, 0x01} // 16 MB + 1

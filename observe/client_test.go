@@ -132,6 +132,7 @@ var testMetadata = MetadataPayload{
 }
 
 func TestConnectSuccess(t *testing.T) {
+	t.Parallel()
 	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
 
 	// Run the handshake in a goroutine since Connect blocks until it
@@ -169,6 +170,7 @@ func TestConnectSuccess(t *testing.T) {
 }
 
 func TestConnectDenied(t *testing.T) {
+	t.Parallel()
 	socketPath := filepath.Join(t.TempDir(), "observe.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -205,6 +207,7 @@ func TestConnectDenied(t *testing.T) {
 }
 
 func TestConnectNoSocket(t *testing.T) {
+	t.Parallel()
 	_, err := Connect("/nonexistent/path/observe.sock", ObserveRequest{
 		Principal: "test/agent",
 		Mode:      "readwrite",
@@ -215,6 +218,7 @@ func TestConnectNoSocket(t *testing.T) {
 }
 
 func TestSessionRunReceivesHistory(t *testing.T) {
+	t.Parallel()
 	daemon, socketPath := newTestDaemon(t, testMetadata, []byte("previous output\r\n"))
 
 	go func() {
@@ -250,6 +254,7 @@ func TestSessionRunReceivesHistory(t *testing.T) {
 }
 
 func TestSessionRunRelaysData(t *testing.T) {
+	t.Parallel()
 	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
 
 	go func() {
@@ -283,6 +288,7 @@ func TestSessionRunRelaysData(t *testing.T) {
 }
 
 func TestSessionRunSendsInput(t *testing.T) {
+	t.Parallel()
 	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
 
 	go func() {
@@ -328,6 +334,7 @@ func TestSessionRunSendsInput(t *testing.T) {
 }
 
 func TestSessionRunWithPipe(t *testing.T) {
+	t.Parallel()
 	// Test using net.Pipe directly (no real unix socket) to verify the
 	// protocol exchange works end-to-end.
 	clientConn, daemonConn := net.Pipe()

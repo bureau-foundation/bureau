@@ -51,6 +51,7 @@ func mockDaemonServer(t *testing.T, response QueryLayoutResponse) string {
 }
 
 func TestQueryLayoutSuccess(t *testing.T) {
+	t.Parallel()
 	expectedLayout := &Layout{
 		Windows: []Window{
 			{
@@ -93,6 +94,7 @@ func TestQueryLayoutSuccess(t *testing.T) {
 }
 
 func TestQueryLayoutDaemonError(t *testing.T) {
+	t.Parallel()
 	socketPath := mockDaemonServer(t, QueryLayoutResponse{
 		OK:    false,
 		Error: "channel not found",
@@ -108,6 +110,7 @@ func TestQueryLayoutDaemonError(t *testing.T) {
 }
 
 func TestQueryLayoutEmptyLayout(t *testing.T) {
+	t.Parallel()
 	socketPath := mockDaemonServer(t, QueryLayoutResponse{
 		OK:     true,
 		Layout: nil,
@@ -123,6 +126,7 @@ func TestQueryLayoutEmptyLayout(t *testing.T) {
 }
 
 func TestQueryLayoutConnectionRefused(t *testing.T) {
+	t.Parallel()
 	socketPath := filepath.Join(t.TempDir(), "nonexistent.sock")
 
 	_, err := QueryLayout(socketPath, "#test:bureau.local")
@@ -132,6 +136,7 @@ func TestQueryLayoutConnectionRefused(t *testing.T) {
 }
 
 func TestQueryLayoutSocketClosed(t *testing.T) {
+	t.Parallel()
 	// Create a socket that accepts but immediately closes the connection.
 	socketPath := filepath.Join(t.TempDir(), "observe.sock")
 	listener, err := net.Listen("unix", socketPath)
@@ -155,6 +160,7 @@ func TestQueryLayoutSocketClosed(t *testing.T) {
 }
 
 func TestQueryLayoutRequestFormat(t *testing.T) {
+	t.Parallel()
 	// Verify the wire format of the query request by capturing it at
 	// the socket level.
 	socketPath := filepath.Join(t.TempDir(), "observe.sock")

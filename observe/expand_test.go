@@ -6,6 +6,7 @@ package observe
 import "testing"
 
 func TestExpandMembersNilLayout(t *testing.T) {
+	t.Parallel()
 	result := ExpandMembers(nil, []RoomMember{{Localpart: "a/b"}})
 	if result != nil {
 		t.Errorf("ExpandMembers(nil, ...) = %v, want nil", result)
@@ -13,6 +14,7 @@ func TestExpandMembersNilLayout(t *testing.T) {
 }
 
 func TestExpandMembersNoObserveMembers(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Prefix: "C-a",
 		Windows: []Window{
@@ -46,6 +48,7 @@ func TestExpandMembersNoObserveMembers(t *testing.T) {
 }
 
 func TestExpandMembersAllMembers(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{
@@ -100,6 +103,7 @@ func TestExpandMembersAllMembers(t *testing.T) {
 }
 
 func TestExpandMembersFilterByRole(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{
@@ -156,6 +160,7 @@ func TestExpandMembersFilterByRole(t *testing.T) {
 }
 
 func TestExpandMembersNoMatchRemovesPane(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{
@@ -190,6 +195,7 @@ func TestExpandMembersNoMatchRemovesPane(t *testing.T) {
 }
 
 func TestExpandMembersEmptyWindowRemoved(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{
@@ -222,6 +228,7 @@ func TestExpandMembersEmptyWindowRemoved(t *testing.T) {
 }
 
 func TestExpandMembersMixedPanes(t *testing.T) {
+	t.Parallel()
 	// Layout with a static command pane followed by an observe_members pane.
 	layout := &Layout{
 		Windows: []Window{
@@ -269,6 +276,7 @@ func TestExpandMembersMixedPanes(t *testing.T) {
 }
 
 func TestExpandMembersPreservesOriginal(t *testing.T) {
+	t.Parallel()
 	original := &Layout{
 		Prefix: "C-b",
 		Windows: []Window{
@@ -306,6 +314,7 @@ func TestExpandMembersPreservesOriginal(t *testing.T) {
 }
 
 func TestExpandMembersEmptyMembersList(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{
@@ -326,6 +335,7 @@ func TestExpandMembersEmptyMembersList(t *testing.T) {
 }
 
 func TestFilterMembersEmptyRole(t *testing.T) {
+	t.Parallel()
 	members := []RoomMember{
 		{Localpart: "a", Role: "agent"},
 		{Localpart: "b", Role: "service"},
@@ -340,6 +350,7 @@ func TestFilterMembersEmptyRole(t *testing.T) {
 }
 
 func TestFilterMembersSpecificRole(t *testing.T) {
+	t.Parallel()
 	members := []RoomMember{
 		{Localpart: "a", Role: "agent"},
 		{Localpart: "b", Role: "service"},

@@ -10,6 +10,7 @@ import (
 )
 
 func TestDashboardCommandPanes(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	layout := &Layout{
@@ -51,6 +52,7 @@ func TestDashboardCommandPanes(t *testing.T) {
 }
 
 func TestDashboardObservePanes(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	daemonSocket := "/run/bureau/observe.sock"
 
@@ -108,6 +110,7 @@ func TestDashboardObservePanes(t *testing.T) {
 }
 
 func TestDashboardMixedPaneTypes(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	initTmuxServerWithRemainOnExit(t, serverSocket)
 
@@ -150,6 +153,7 @@ func TestDashboardMixedPaneTypes(t *testing.T) {
 }
 
 func TestDashboardRolePaneShowsIdentity(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	layout := &Layout{
@@ -179,6 +183,7 @@ func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 }
 
 func TestDashboardNilLayoutError(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	// Need a running server.
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
@@ -193,6 +198,7 @@ func TestDashboardNilLayoutError(t *testing.T) {
 }
 
 func TestDashboardEmptyDaemonSocketError(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
 
@@ -212,6 +218,7 @@ func TestDashboardEmptyDaemonSocketError(t *testing.T) {
 }
 
 func TestDashboardEmptyLayoutError(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
 
@@ -225,6 +232,7 @@ func TestDashboardEmptyLayoutError(t *testing.T) {
 }
 
 func TestResolveLayoutPreservesOriginal(t *testing.T) {
+	t.Parallel()
 	original := &Layout{
 		Prefix: "C-a",
 		Windows: []Window{
@@ -282,6 +290,7 @@ func TestResolveLayoutPreservesOriginal(t *testing.T) {
 }
 
 func TestResolveLayoutEmptyPaneGetsNoCommand(t *testing.T) {
+	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
 			{

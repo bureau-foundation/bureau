@@ -9,6 +9,7 @@ import (
 )
 
 func TestRingBufferBasicWriteRead(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	ring.Write([]byte("hello"))
@@ -21,6 +22,7 @@ func TestRingBufferBasicWriteRead(t *testing.T) {
 }
 
 func TestRingBufferReadFromOffset(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	ring.Write([]byte("abcde"))
@@ -34,6 +36,7 @@ func TestRingBufferReadFromOffset(t *testing.T) {
 }
 
 func TestRingBufferReadFromCurrentOffset(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	ring.Write([]byte("data"))
@@ -47,6 +50,7 @@ func TestRingBufferReadFromCurrentOffset(t *testing.T) {
 }
 
 func TestRingBufferReadFromFutureOffset(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	ring.Write([]byte("data"))
@@ -59,6 +63,7 @@ func TestRingBufferReadFromFutureOffset(t *testing.T) {
 }
 
 func TestRingBufferWrapAround(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(10)
 
 	// Write 15 bytes into a 10-byte buffer. The first 5 bytes are lost.
@@ -75,6 +80,7 @@ func TestRingBufferWrapAround(t *testing.T) {
 }
 
 func TestRingBufferWrapAroundPartialRead(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(10)
 
 	ring.Write([]byte("abcdefghijklmno")) // 15 bytes, buffer holds "fghijklmno"
@@ -87,6 +93,7 @@ func TestRingBufferWrapAroundPartialRead(t *testing.T) {
 }
 
 func TestRingBufferIncrementalWrites(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(10)
 
 	// Write byte by byte to test wrapping with small writes.
@@ -103,6 +110,7 @@ func TestRingBufferIncrementalWrites(t *testing.T) {
 }
 
 func TestRingBufferCurrentOffset(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	if ring.CurrentOffset() != 0 {
@@ -121,6 +129,7 @@ func TestRingBufferCurrentOffset(t *testing.T) {
 }
 
 func TestRingBufferEmptyRead(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	got := ring.ReadFrom(0)
@@ -130,6 +139,7 @@ func TestRingBufferEmptyRead(t *testing.T) {
 }
 
 func TestRingBufferPreservesEscapeSequences(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(1024)
 
 	// Terminal escape sequences must be preserved byte-for-byte.
@@ -143,6 +153,7 @@ func TestRingBufferPreservesEscapeSequences(t *testing.T) {
 }
 
 func TestRingBufferLargeWrite(t *testing.T) {
+	t.Parallel()
 	ring := NewRingBuffer(100)
 
 	// Write more than the buffer capacity in a single call.

@@ -11,6 +11,7 @@ import (
 )
 
 func TestListTargets(t *testing.T) {
+	t.Parallel()
 	socketDir := t.TempDir()
 	socketPath := filepath.Join(socketDir, "observe.sock")
 
@@ -129,6 +130,7 @@ func TestListTargets(t *testing.T) {
 }
 
 func TestListTargets_ErrorResponse(t *testing.T) {
+	t.Parallel()
 	socketDir := t.TempDir()
 	socketPath := filepath.Join(socketDir, "observe.sock")
 
@@ -162,6 +164,7 @@ func TestListTargets_ErrorResponse(t *testing.T) {
 }
 
 func TestListTargets_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	socketDir := t.TempDir()
 	socketPath := filepath.Join(socketDir, "observe.sock")
 

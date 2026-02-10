@@ -84,6 +84,7 @@ func consumeHandshake(t *testing.T, conn net.Conn) MetadataPayload {
 }
 
 func TestRelayMetadataAndHistory(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-meta", "")
 
@@ -122,6 +123,7 @@ func TestRelayMetadataAndHistory(t *testing.T) {
 }
 
 func TestRelayReadOutput(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-read", "")
 
@@ -146,6 +148,7 @@ func TestRelayReadOutput(t *testing.T) {
 }
 
 func TestRelaySendInput(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-input", "")
 
@@ -178,6 +181,7 @@ func TestRelaySendInput(t *testing.T) {
 }
 
 func TestRelayReadOnly(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-ro", "")
 
@@ -215,6 +219,7 @@ func TestRelayReadOnly(t *testing.T) {
 }
 
 func TestRelayResize(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-resize", "")
 
@@ -255,6 +260,7 @@ func TestRelayResize(t *testing.T) {
 }
 
 func TestRelaySessionEnd(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-end", "")
 
@@ -281,6 +287,7 @@ func TestRelaySessionEnd(t *testing.T) {
 }
 
 func TestRelayConnectionClose(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "test-close", "")
 

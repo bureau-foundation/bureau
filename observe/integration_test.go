@@ -253,6 +253,7 @@ func pollForTmuxContent(t *testing.T, serverSocket, target, expected string, tim
 // This exercises both client.go and relay.go together against a real
 // tmux session, with the bridge simulating the daemon's routing layer.
 func TestIntegrationRoundTrip(t *testing.T) {
+	t.Parallel()
 	fixture := setupIntegration(t, "integration/roundtrip", false)
 
 	// Verify metadata came from the real relay (which queries tmux).
@@ -301,6 +302,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 // the relay level while still allowing output to flow from tmux back
 // through the full stack to the client.
 func TestIntegrationReadOnly(t *testing.T) {
+	t.Parallel()
 	fixture := setupIntegration(t, "integration/readonly", true)
 
 	// Send input through the client. In read-only mode, the relay
@@ -329,6 +331,7 @@ func TestIntegrationReadOnly(t *testing.T) {
 // TestIntegrationResize verifies that terminal resize messages propagate
 // through the full stack: client → bridge → relay → PTY TIOCSWINSZ → tmux.
 func TestIntegrationResize(t *testing.T) {
+	t.Parallel()
 	fixture := setupIntegration(t, "integration/resize", false)
 
 	// Send a resize message through the full pipeline. writeMessage is
@@ -358,6 +361,7 @@ func TestIntegrationResize(t *testing.T) {
 // PTY close → relay closes connection → bridge propagates → client's
 // Session.Run returns.
 func TestIntegrationSessionEnd(t *testing.T) {
+	t.Parallel()
 	fixture := setupIntegration(t, "integration/end", false)
 
 	// Kill the tmux session. The relay should detect the exit and

@@ -12,6 +12,7 @@ import (
 // TestControlClientDebounce verifies that rapid layout notifications
 // coalesce into a single LayoutChanged event after the debounce interval.
 func TestControlClientDebounce(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/debounce", "")
 
@@ -51,6 +52,7 @@ func TestControlClientDebounce(t *testing.T) {
 // TestControlClientWindowAdd verifies that creating a new window
 // triggers a layout change event.
 func TestControlClientWindowAdd(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/winadd", "")
 
@@ -74,6 +76,7 @@ func TestControlClientWindowAdd(t *testing.T) {
 // TestControlClientWindowRename verifies that renaming a window
 // triggers a layout change event.
 func TestControlClientWindowRename(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/winrename", "")
 
@@ -97,6 +100,7 @@ func TestControlClientWindowRename(t *testing.T) {
 // a layout change event. When the window is not the currently attached
 // one, tmux sends %unlinked-window-close instead of %window-close.
 func TestControlClientWindowClose(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/winclose", "")
 
@@ -125,6 +129,7 @@ func TestControlClientWindowClose(t *testing.T) {
 // TestControlClientIgnoresNonLayoutEvents verifies that notifications
 // unrelated to layout (like %output) do not trigger events.
 func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/ignore", "")
 
@@ -150,6 +155,7 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 // stops the control client cleanly: the events channel is closed and
 // Stop returns promptly.
 func TestControlClientCleanShutdown(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/shutdown", "")
 
@@ -187,6 +193,7 @@ func TestControlClientCleanShutdown(t *testing.T) {
 // TestControlClientSessionExit verifies that killing the tmux session
 // causes the control client to shut down cleanly.
 func TestControlClientSessionExit(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/exit", "")
 
@@ -221,6 +228,7 @@ func TestControlClientSessionExit(t *testing.T) {
 // client does not constrain the terminal dimensions of a session
 // created with a specific size.
 func TestControlClientNoSizeConstraint(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 
 	// Create a session with a known size.
@@ -254,6 +262,7 @@ func TestControlClientNoSizeConstraint(t *testing.T) {
 // TestControlClientResponseBlockFiltering verifies that lines inside
 // %begin/%end response blocks are not treated as notifications.
 func TestControlClientResponseBlockFiltering(t *testing.T) {
+	t.Parallel()
 	serverSocket := TmuxServer(t)
 	sessionName := TmuxSession(t, serverSocket, "control/blocks", "")
 
@@ -279,6 +288,7 @@ func TestControlClientResponseBlockFiltering(t *testing.T) {
 
 // TestIsLayoutNotification exercises the notification classifier.
 func TestIsLayoutNotification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		line     string
 		expected bool

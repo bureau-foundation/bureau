@@ -1,0 +1,579 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// TestDaemonLauncherIntegration exercises the full daemon → launcher → proxy
+// composition: the daemon reads machine config from a mock Matrix server,
+// sends IPC requests to a real launcher subprocess, and the launcher spawns
+// real proxy processes. This verifies that the three components compose
+// correctly — matching IPC wire formats, credential flow, socket paths, and
+// process lifecycle management.
+//
+// The test runs three phases:
+//   - Phase 1: Config assigns a principal → daemon creates sandbox → proxy is running
+//   - Phase 2: Config removes the principal → daemon destroys sandbox → proxy is gone
+//   - Phase 3: Config re-adds the principal → daemon recreates sandbox → proxy works again
+func TestDaemonLauncherIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds binaries and manages subprocesses")
+	}
+
+	// Build both binaries.
+	proxyBinary := buildBinary(t, "./cmd/bureau-proxy")
+	launcherBinary := buildBinary(t, "./cmd/bureau-launcher")
+
+	// Generate a machine keypair (the launcher decrypts credentials with this).
+	keypair, err := sealed.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
+	// Prepare the launcher's state directory with the keypair and a session.
+	// Having the keypair files present tells the launcher this isn't first boot,
+	// so it skips registration and just loads the session.
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), []byte(keypair.PrivateKey), 0600); err != nil {
+		t.Fatalf("writing private key: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.pub"), []byte(keypair.PublicKey), 0644); err != nil {
+		t.Fatalf("writing public key: %v", err)
+	}
+
+	// Socket paths — all under a test-specific temp directory.
+	socketDir := t.TempDir()
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	socketBase := filepath.Join(socketDir, "principal") + "/"
+	adminBase := filepath.Join(socketDir, "admin") + "/"
+
+	// Set up the mock Matrix server.
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	// Room IDs used throughout the test. The mock matches on these exactly
+	// (after URL-decoding the request path).
+	const (
+		configRoomID   = "!config:test"
+		machinesRoomID = "!machines:test"
+		servicesRoomID = "!services:test"
+	)
+
+	// Configure mock Matrix: assign one principal with AutoStart.
+	principalLocalpart := "test/echo"
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: principalLocalpart,
+			Template:  "echo-test",
+			AutoStart: true,
+		}},
+	})
+
+	// Encrypt credentials for the test principal. The launcher will decrypt
+	// these with its keypair and pipe them to the proxy's stdin.
+	credentialMap := map[string]string{
+		"MATRIX_TOKEN":          "syt_test_echo_token",
+		"MATRIX_HOMESERVER_URL": matrixServer.URL,
+		"MATRIX_USER_ID":        "@test/echo:bureau.local",
+		"API_KEY":               "test-api-key-value",
+	}
+	credentialJSON, err := json.Marshal(credentialMap)
+	if err != nil {
+		t.Fatalf("marshaling credentials: %v", err)
+	}
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{keypair.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypting credentials: %v", err)
+	}
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, principalLocalpart, schema.Credentials{
+		Version:       1,
+		Principal:     "@test/echo:bureau.local",
+		EncryptedFor:  []string{"@machine/test:bureau.local"},
+		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID", "API_KEY"},
+		Ciphertext:    ciphertext,
+		ProvisionedBy: "@bureau-admin:bureau.local",
+		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// Write session.json for the launcher. The launcher loads this on startup
+	// but doesn't use the session after first boot — it only listens for IPC.
+	// The token and URL don't need to reach a real server.
+	sessionJSON, _ := json.Marshal(sessionData{
+		HomeserverURL: matrixServer.URL,
+		UserID:        "@machine/test:bureau.local",
+		AccessToken:   "syt_launcher_session_token",
+	})
+	if err := os.WriteFile(filepath.Join(stateDir, "session.json"), sessionJSON, 0600); err != nil {
+		t.Fatalf("writing session.json: %v", err)
+	}
+
+	// Start the launcher subprocess.
+	launcherCmd := exec.Command(launcherBinary,
+		"--machine-name", "machine/test",
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--proxy-binary", proxyBinary,
+		"--socket-base-path", socketBase,
+		"--admin-base-path", adminBase,
+		"--homeserver", matrixServer.URL,
+		"--server-name", "bureau.local",
+	)
+	launcherCmd.Stderr = os.Stderr
+	if err := launcherCmd.Start(); err != nil {
+		t.Fatalf("starting launcher: %v", err)
+	}
+	t.Cleanup(func() {
+		// Send SIGTERM so the launcher can gracefully shut down its proxies.
+		launcherCmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { launcherCmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			launcherCmd.Process.Kill()
+			launcherCmd.Wait()
+		}
+	})
+
+	// Wait for the launcher's IPC socket to appear.
+	waitForFile(t, launcherSocket, 10*time.Second)
+
+	// Create a messaging session for the daemon pointing at the mock Matrix.
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_daemon_session_token")
+
+	// Construct the daemon directly (not via run()) so we control the lifecycle
+	// and avoid signal handling, polling loops, etc.
+	daemon := &Daemon{
+		session:        session,
+		machineName:    "machine/test",
+		machineUserID:  "@machine/test:bureau.local",
+		serverName:     "bureau.local",
+		configRoomID:   configRoomID,
+		machinesRoomID: machinesRoomID,
+		servicesRoomID: servicesRoomID,
+		launcherSocket: launcherSocket,
+		pollInterval:   time.Hour,
+		statusInterval: time.Hour,
+		running:        make(map[string]bool),
+		services:       make(map[string]*schema.Service),
+		proxyRoutes:    make(map[string]string),
+		peerAddresses:  make(map[string]string),
+		peerTransports: make(map[string]http.RoundTripper),
+		adminSocketPathFunc: func(localpart string) string {
+			return adminBase + localpart + principal.SocketSuffix
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	ctx := context.Background()
+	agentSocket := socketBase + principalLocalpart + principal.SocketSuffix
+	adminSocket := adminBase + principalLocalpart + principal.SocketSuffix
+
+	// --- Phase 1: Reconcile should create a sandbox for test/echo. ---
+
+	if err := daemon.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile (create): %v", err)
+	}
+
+	if !daemon.running[principalLocalpart] {
+		t.Fatalf("%s should be running after reconcile", principalLocalpart)
+	}
+
+	// Verify the proxy's agent socket is functional.
+	agentClient := unixHTTPClient(agentSocket)
+	healthResponse, err := agentClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check on agent socket: %v", err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Errorf("health check status = %d, want 200", healthResponse.StatusCode)
+	}
+
+	// Verify the proxy's admin socket is functional.
+	adminClient := unixHTTPClient(adminSocket)
+	adminHealthResponse, err := adminClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check on admin socket: %v", err)
+	}
+	adminHealthResponse.Body.Close()
+	if adminHealthResponse.StatusCode != http.StatusOK {
+		t.Errorf("admin health check status = %d, want 200", adminHealthResponse.StatusCode)
+	}
+
+	// Verify the proxy received the correct identity from the credential
+	// payload. This confirms the full credential flow: mock Matrix →
+	// daemon reads encrypted ciphertext → launcher decrypts → pipes JSON
+	// to proxy stdin → proxy parses Matrix user ID.
+	identityResponse, err := agentClient.Get("http://localhost/v1/identity")
+	if err != nil {
+		t.Fatalf("identity request: %v", err)
+	}
+	identityBody, _ := io.ReadAll(identityResponse.Body)
+	identityResponse.Body.Close()
+
+	var identity struct {
+		UserID     string `json:"user_id"`
+		ServerName string `json:"server_name"`
+	}
+	if err := json.Unmarshal(identityBody, &identity); err != nil {
+		t.Fatalf("parsing identity response %q: %v", string(identityBody), err)
+	}
+	if identity.UserID != "@test/echo:bureau.local" {
+		t.Errorf("identity user_id = %q, want @test/echo:bureau.local", identity.UserID)
+	}
+
+	// --- Phase 2: Remove principal from config → destroy sandbox. ---
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: nil,
+	})
+
+	if err := daemon.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile (destroy): %v", err)
+	}
+
+	if daemon.running[principalLocalpart] {
+		t.Errorf("%s should not be running after config removal", principalLocalpart)
+	}
+
+	// Verify the proxy sockets were cleaned up by the launcher.
+	if _, err := os.Stat(agentSocket); !os.IsNotExist(err) {
+		t.Errorf("agent socket should be removed after destroy (stat error: %v)", err)
+	}
+	if _, err := os.Stat(adminSocket); !os.IsNotExist(err) {
+		t.Errorf("admin socket should be removed after destroy (stat error: %v)", err)
+	}
+
+	// --- Phase 3: Re-add principal → recreate sandbox. ---
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: principalLocalpart,
+			Template:  "echo-test",
+			AutoStart: true,
+		}},
+	})
+
+	if err := daemon.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile (recreate): %v", err)
+	}
+
+	if !daemon.running[principalLocalpart] {
+		t.Fatalf("%s should be running after re-add", principalLocalpart)
+	}
+
+	// Verify the recreated proxy is functional (fresh client — old socket is gone).
+	agentClient = unixHTTPClient(agentSocket)
+	healthResponse, err = agentClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check after recreate: %v", err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Errorf("health check after recreate status = %d, want 200", healthResponse.StatusCode)
+	}
+}
+
+// TestReconcileNoConfig verifies that reconcile handles the M_NOT_FOUND
+// case gracefully — when no MachineConfig state event exists in the config
+// room, the daemon should succeed (treating it as "nothing to do") rather
+// than failing.
+func TestReconcileNoConfig(t *testing.T) {
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+
+	daemon := &Daemon{
+		session:        session,
+		machineName:    "machine/test",
+		machineUserID:  "@machine/test:bureau.local",
+		serverName:     "bureau.local",
+		configRoomID:   "!config:test",
+		machinesRoomID: "!machines:test",
+		servicesRoomID: "!services:test",
+		launcherSocket: "/nonexistent/launcher.sock",
+		running:        make(map[string]bool),
+		services:       make(map[string]*schema.Service),
+		proxyRoutes:    make(map[string]string),
+		peerAddresses:  make(map[string]string),
+		peerTransports: make(map[string]http.RoundTripper),
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// The mock has no state event for m.bureau.machine_config, so the
+	// mock returns M_NOT_FOUND. Reconcile should treat this as "no config yet"
+	// and return nil.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile with no config should succeed, got: %v", err)
+	}
+
+	if len(daemon.running) != 0 {
+		t.Errorf("no principals should be running, got %d", len(daemon.running))
+	}
+}
+
+// --- Helpers ---
+
+// moduleRoot finds the Go module root by walking up from this test file.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	// This file is at cmd/bureau-daemon/composition_test.go — module root
+	// is two directories up.
+	root := filepath.Join(filepath.Dir(filename), "..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("expected go.mod at %s: %v", root, err)
+	}
+	return root
+}
+
+// buildBinary compiles a Go binary from the given package path and returns
+// the path to the compiled binary. The binary is built in a temp directory
+// that is cleaned up when the test finishes.
+func buildBinary(t *testing.T, pkg string) string {
+	t.Helper()
+	name := filepath.Base(pkg)
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, name)
+	cmd := exec.Command("go", "build", "-o", outputPath, pkg)
+	cmd.Dir = moduleRoot(t)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("building %s: %v\n%s", pkg, err, output)
+	}
+	return outputPath
+}
+
+// waitForFile polls until a file appears at the given path.
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s", timeout, path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// unixHTTPClient creates an HTTP client that connects via the given Unix socket.
+func unixHTTPClient(socketPath string) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+}
+
+// --- Mock Matrix Server ---
+
+// mockMatrixState holds configurable state for a mock Matrix homeserver.
+// Thread-safe: state can be updated between reconcile calls from the test
+// goroutine while the mock server handles requests.
+type mockMatrixState struct {
+	mu sync.Mutex
+
+	// stateEvents stores individual state event content. Key format:
+	// "roomID\x00eventType\x00stateKey" → JSON content bytes.
+	stateEvents map[string]json.RawMessage
+
+	// roomStates stores arrays of state events for GetRoomState responses.
+	// Key: roomID.
+	roomStates map[string][]mockRoomStateEvent
+}
+
+// mockRoomStateEvent represents a single state event in a GetRoomState response.
+// The Content field uses map[string]any because that's what the messaging
+// library's Event type uses after JSON unmarshaling.
+type mockRoomStateEvent struct {
+	Type     string         `json:"type"`
+	StateKey *string        `json:"state_key"`
+	Content  map[string]any `json:"content"`
+}
+
+func newMockMatrixState() *mockMatrixState {
+	return &mockMatrixState{
+		stateEvents: make(map[string]json.RawMessage),
+		roomStates:  make(map[string][]mockRoomStateEvent),
+	}
+}
+
+func (m *mockMatrixState) setStateEvent(roomID, eventType, stateKey string, content any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, _ := json.Marshal(content)
+	key := roomID + "\x00" + eventType + "\x00" + stateKey
+	m.stateEvents[key] = data
+}
+
+func (m *mockMatrixState) setRoomState(roomID string, events []mockRoomStateEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roomStates[roomID] = events
+}
+
+// handler returns an http.Handler that implements the subset of the Matrix
+// client-server API used by the daemon: GetStateEvent, GetRoomState, and
+// SendStateEvent.
+//
+// URL path parsing handles percent-encoded room IDs and state keys (the
+// messaging library uses url.PathEscape which encodes /, :, ! etc.). The
+// handler splits on literal "/" in the raw path and decodes each segment
+// individually, so an encoded state key like "test%2Fecho" is correctly
+// decoded to "test/echo".
+func (m *mockMatrixState) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Use RawPath to preserve percent-encoded slashes in state keys.
+		rawPath := r.URL.RawPath
+		if rawPath == "" {
+			rawPath = r.URL.Path
+		}
+
+		const roomsPrefix = "/_matrix/client/v3/rooms/"
+		if !strings.HasPrefix(rawPath, roomsPrefix) {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Split into room ID and the rest of the path.
+		rest := rawPath[len(roomsPrefix):]
+		segments := strings.SplitN(rest, "/", 2)
+		if len(segments) < 2 {
+			http.NotFound(w, r)
+			return
+		}
+
+		roomID, _ := url.PathUnescape(segments[0])
+		pathAfterRoom := segments[1]
+
+		// GET /rooms/{roomId}/state — return all state events.
+		if pathAfterRoom == "state" && r.Method == "GET" {
+			m.handleGetRoomState(w, roomID)
+			return
+		}
+
+		// GET or PUT /rooms/{roomId}/state/{eventType}/{stateKey}
+		if strings.HasPrefix(pathAfterRoom, "state/") {
+			stateRest := pathAfterRoom[len("state/"):]
+			typeAndKey := strings.SplitN(stateRest, "/", 2)
+			if len(typeAndKey) < 2 {
+				http.NotFound(w, r)
+				return
+			}
+
+			eventType, _ := url.PathUnescape(typeAndKey[0])
+			stateKey, _ := url.PathUnescape(typeAndKey[1])
+
+			switch r.Method {
+			case "GET":
+				m.handleGetStateEvent(w, roomID, eventType, stateKey)
+			case "PUT":
+				m.handlePutStateEvent(w, r, roomID, eventType, stateKey)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		http.NotFound(w, r)
+	})
+}
+
+func (m *mockMatrixState) handleGetStateEvent(w http.ResponseWriter, roomID, eventType, stateKey string) {
+	m.mu.Lock()
+	key := roomID + "\x00" + eventType + "\x00" + stateKey
+	data, ok := m.stateEvents[key]
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"errcode": "M_NOT_FOUND",
+			"error":   fmt.Sprintf("state event not found: %s/%s in %s", eventType, stateKey, roomID),
+		})
+		return
+	}
+
+	w.Write(data)
+}
+
+func (m *mockMatrixState) handleGetRoomState(w http.ResponseWriter, roomID string) {
+	m.mu.Lock()
+	events, ok := m.roomStates[roomID]
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ok || len(events) == 0 {
+		w.Write([]byte("[]"))
+		return
+	}
+
+	json.NewEncoder(w).Encode(events)
+}
+
+func (m *mockMatrixState) handlePutStateEvent(w http.ResponseWriter, r *http.Request, roomID, eventType, stateKey string) {
+	body, _ := io.ReadAll(r.Body)
+
+	// Store the event (so it can be read back via GetStateEvent).
+	m.mu.Lock()
+	key := roomID + "\x00" + eventType + "\x00" + stateKey
+	m.stateEvents[key] = json.RawMessage(body)
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"event_id": "$mock-event-id",
+	})
+}

@@ -1,6 +1,4 @@
 # Bureau Bazel configuration.
-#
-# Remote execution settings will be added when Buildbarn is deployed.
 # Per-user overrides go in .bazelrc.local (gitignored).
 
 # Hermetic action environment: don't leak host env vars into build actions.
@@ -30,6 +28,14 @@ build:release --workspace_status_command=script/bazel-workspace-status
 build:ci --color=no
 build:ci --curses=no
 test:ci --test_output=errors
+
+# Remote execution via Buildbarn (deploy/buildbarn/).
+# Activate with: bazel build --config=remote //...
+# The execution platform must match the worker's platform properties exactly
+# (see deploy/buildbarn/bb-worker.jsonnet).
+build:remote --remote_executor=grpc://localhost:8980
+build:remote --jobs=64
+build:remote --extra_execution_platforms=//:remote_linux_amd64
 
 # Import per-user local overrides if present.
 try-import %workspace%/.bazelrc.local

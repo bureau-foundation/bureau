@@ -43,6 +43,67 @@ services:
     volumes:
       - ./bb-scheduler.jsonnet:/config/bb-scheduler.jsonnet:ro
 
+  runner-installer:
+    image: ghcr.io/buildbarn/bb-runner-installer:20260130T092441Z-749fb40
+    container_name: bureau-bb-runner-installer
+    volumes:
+      - bb-runner-bin:/bb
+
+  worker-init:
+    image: busybox:1.37
+    container_name: bureau-bb-worker-init
+    depends_on:
+      runner-installer:
+        condition: service_completed_successfully
+    volumes:
+      - bb-worker-data:/worker
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /worker/build /worker/cache &&
+        chmod 0777 /worker/build &&
+        chmod 0700 /worker/cache
+
+  worker:
+    image: ghcr.io/buildbarn/bb-worker:20260130T092441Z-749fb40
+    container_name: bureau-bb-worker
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      worker-init:
+        condition: service_completed_successfully
+    command:
+      - /config/bb-worker.jsonnet
+    volumes:
+      - ./bb-worker.jsonnet:/config/bb-worker.jsonnet:ro
+      - bb-worker-data:/worker
+
+  runner:
+    image: ubuntu:24.04
+    container_name: bureau-bb-runner
+    restart: unless-stopped
+    depends_on:
+      runner-installer:
+        condition: service_completed_successfully
+      worker-init:
+        condition: service_completed_successfully
+    command:
+      - /bb/tini
+      - --
+      - /bb/bb_runner
+      - /config/bb-runner.jsonnet
+    network_mode: none
+    volumes:
+      - ./bb-runner.jsonnet:/config/bb-runner.jsonnet:ro
+      - bb-runner-bin:/bb:ro
+      - bb-worker-data:/worker
+
 volumes:
   bb-storage-cas:
   bb-storage-ac:
+  bb-runner-bin:
+  bb-worker-data:

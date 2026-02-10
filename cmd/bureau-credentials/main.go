@@ -95,9 +95,10 @@ func runKeygen() error {
 	if err != nil {
 		return fmt.Errorf("generating keypair: %w", err)
 	}
+	defer keypair.Close()
 
 	fmt.Fprintf(os.Stderr, "# Private key (keep this secret — store securely):\n")
-	fmt.Fprintf(os.Stderr, "%s\n", keypair.PrivateKey)
+	fmt.Fprintf(os.Stderr, "%s\n", keypair.PrivateKey.String())
 	fmt.Fprintf(os.Stdout, "%s\n", keypair.PublicKey)
 	return nil
 }

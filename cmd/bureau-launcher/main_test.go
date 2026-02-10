@@ -164,14 +164,15 @@ func TestLoadOrGenerateKeypair_FirstBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrGenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 	if !firstBoot {
 		t.Error("expected firstBoot = true on first call")
 	}
 	if !strings.HasPrefix(keypair.PublicKey, "age1") {
 		t.Errorf("public key = %q, want age1 prefix", keypair.PublicKey)
 	}
-	if !strings.HasPrefix(keypair.PrivateKey, "AGE-SECRET-KEY-1") {
-		t.Errorf("private key = %q, want AGE-SECRET-KEY-1 prefix", keypair.PrivateKey)
+	if !strings.HasPrefix(keypair.PrivateKey.String(), "AGE-SECRET-KEY-1") {
+		t.Errorf("private key = %q, want AGE-SECRET-KEY-1 prefix", keypair.PrivateKey.String())
 	}
 
 	// Verify files were written.
@@ -205,6 +206,7 @@ func TestLoadOrGenerateKeypair_SubsequentBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first loadOrGenerateKeypair() error: %v", err)
 	}
+	defer keypair1.Close()
 	if !firstBoot1 {
 		t.Fatal("expected firstBoot = true on first call")
 	}
@@ -214,6 +216,7 @@ func TestLoadOrGenerateKeypair_SubsequentBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second loadOrGenerateKeypair() error: %v", err)
 	}
+	defer keypair2.Close()
 	if firstBoot2 {
 		t.Error("expected firstBoot = false on second call")
 	}
@@ -221,7 +224,7 @@ func TestLoadOrGenerateKeypair_SubsequentBoot(t *testing.T) {
 	if keypair2.PublicKey != keypair1.PublicKey {
 		t.Errorf("public key changed: %q != %q", keypair2.PublicKey, keypair1.PublicKey)
 	}
-	if keypair2.PrivateKey != keypair1.PrivateKey {
+	if !keypair2.PrivateKey.Equal(keypair1.PrivateKey) {
 		t.Errorf("private key changed on reload")
 	}
 }
@@ -235,12 +238,16 @@ func TestLoadOrGenerateKeypair_TrimsWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrGenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	// Overwrite the key files with trailing newlines (simulating
 	// a text editor or echo command).
 	privateKeyPath := filepath.Join(stateDir, "machine-key.txt")
 	publicKeyPath := filepath.Join(stateDir, "machine-key.pub")
-	os.WriteFile(privateKeyPath, []byte(keypair.PrivateKey+"\n"), 0600)
+	keyWithNewline := make([]byte, keypair.PrivateKey.Len()+1)
+	copy(keyWithNewline, keypair.PrivateKey.Bytes())
+	keyWithNewline[len(keyWithNewline)-1] = '\n'
+	os.WriteFile(privateKeyPath, keyWithNewline, 0600)
 	os.WriteFile(publicKeyPath, []byte(keypair.PublicKey+"\n"), 0644)
 
 	// Reload should still work and produce the same keys.
@@ -248,13 +255,14 @@ func TestLoadOrGenerateKeypair_TrimsWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrGenerateKeypair() after whitespace injection: %v", err)
 	}
+	defer keypair2.Close()
 	if firstBoot {
 		t.Error("expected firstBoot = false on reload")
 	}
 	if keypair2.PublicKey != keypair.PublicKey {
 		t.Errorf("public key mismatch after whitespace trimming: %q != %q", keypair2.PublicKey, keypair.PublicKey)
 	}
-	if keypair2.PrivateKey != keypair.PrivateKey {
+	if !keypair2.PrivateKey.Equal(keypair.PrivateKey) {
 		t.Errorf("private key mismatch after whitespace trimming")
 	}
 }
@@ -283,7 +291,8 @@ func TestLoadOrGenerateKeypair_InvalidKeyFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKeypair() error: %v", err)
 		}
-		os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), []byte(keypair.PrivateKey), 0600)
+		defer keypair.Close()
+		os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), keypair.PrivateKey.Bytes(), 0600)
 		// No public key file.
 
 		_, _, err = loadOrGenerateKeypair(stateDir, logger)
@@ -352,6 +361,7 @@ func TestHandleCreateSandbox_CredentialDecryption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	launcher := &Launcher{
 		keypair:   keypair,
@@ -396,6 +406,7 @@ func TestHandleCreateSandbox_InvalidCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	launcher := &Launcher{
 		keypair:   keypair,
@@ -836,6 +847,7 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 	if err != nil {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
+	t.Cleanup(func() { keypair.Close() })
 
 	tempDir := t.TempDir()
 

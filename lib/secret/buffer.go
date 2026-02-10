@@ -16,7 +16,9 @@
 package secret
 
 import (
+	"crypto/subtle"
 	"fmt"
+	"io"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -98,6 +100,36 @@ func NewFromBytes(source []byte) (*Buffer, error) {
 	return buffer, nil
 }
 
+// NewFromReader reads all data from reader into a secret buffer. Reads up
+// to maxSize bytes; returns an error if the reader produces no data or
+// exceeds maxSize. The data briefly exists on the Go heap during the read
+// before being moved into the mmap region and zeroed from the heap.
+func NewFromReader(reader io.Reader, maxSize int) (*Buffer, error) {
+	if maxSize <= 0 {
+		return nil, fmt.Errorf("secret: maxSize must be positive, got %d", maxSize)
+	}
+
+	// Read up to maxSize+1 bytes. If we get more than maxSize, the reader
+	// has more data than allowed.
+	limited := io.LimitReader(reader, int64(maxSize+1))
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("secret: reading from reader: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("secret: reader produced no data")
+	}
+	if len(data) > maxSize {
+		for index := range data {
+			data[index] = 0
+		}
+		return nil, fmt.Errorf("secret: reader exceeded maximum size of %d bytes", maxSize)
+	}
+
+	// NewFromBytes copies into mmap and zeros the heap slice.
+	return NewFromBytes(data)
+}
+
 // Bytes returns the secret data. The returned slice points directly into
 // the mmap region — do not hold references to it beyond the lifetime of
 // the Buffer. Panics if the buffer has been closed.
@@ -135,6 +167,30 @@ func (b *Buffer) Len() int {
 	defer b.mu.Unlock()
 
 	return b.length
+}
+
+// Equal reports whether b and other hold identical content. Uses
+// constant-time comparison (crypto/subtle.ConstantTimeCompare) to prevent
+// timing side channels during password/token verification.
+//
+// Both buffers must be open. Panics if either has been closed.
+func (b *Buffer) Equal(other *Buffer) bool {
+	return subtle.ConstantTimeCompare(b.Bytes(), other.Bytes()) == 1
+}
+
+// WriteTo writes the buffer contents to writer. Implements io.WriterTo
+// for efficient transfer to pipes, sockets, and files without creating
+// an intermediate heap string. Panics if the buffer has been closed.
+func (b *Buffer) WriteTo(writer io.Writer) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.closed {
+		panic("secret: read from closed buffer")
+	}
+
+	written, err := writer.Write(b.data[:b.length])
+	return int64(written), err
 }
 
 // Close zeros the buffer contents, unlocks and unmaps the memory.

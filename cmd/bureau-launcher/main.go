@@ -17,6 +17,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,6 +38,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -101,6 +103,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("keypair: %w", err)
 	}
+	defer keypair.Close()
 	logger.Info("machine keypair loaded",
 		"public_key", keypair.PublicKey,
 		"first_boot", firstBoot,
@@ -176,20 +179,38 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 	if err == nil {
 		publicKeyData, err := os.ReadFile(publicKeyPath)
 		if err != nil {
+			for i := range privateKeyData {
+				privateKeyData[i] = 0
+			}
 			return nil, false, fmt.Errorf("private key exists but public key missing at %s: %w", publicKeyPath, err)
 		}
 
-		privateKey := strings.TrimSpace(string(privateKeyData))
+		// Move the private key into mmap-backed memory. bytes.TrimSpace
+		// returns a sub-slice of privateKeyData; NewFromBytes copies it
+		// into mmap and zeros the sub-slice. We then zero all of
+		// privateKeyData to catch any leading/trailing whitespace bytes
+		// that NewFromBytes didn't reach.
+		trimmedKey := bytes.TrimSpace(privateKeyData)
+		privateKeyBuffer, bufferError := secret.NewFromBytes(trimmedKey)
+		for i := range privateKeyData {
+			privateKeyData[i] = 0
+		}
+		if bufferError != nil {
+			return nil, false, fmt.Errorf("protecting private key: %w", bufferError)
+		}
+
 		publicKey := strings.TrimSpace(string(publicKeyData))
 
-		if err := sealed.ParsePrivateKey(privateKey); err != nil {
+		if err := sealed.ParsePrivateKey(privateKeyBuffer); err != nil {
+			privateKeyBuffer.Close()
 			return nil, false, fmt.Errorf("stored private key is invalid: %w", err)
 		}
 		if err := sealed.ParsePublicKey(publicKey); err != nil {
+			privateKeyBuffer.Close()
 			return nil, false, fmt.Errorf("stored public key is invalid: %w", err)
 		}
 
-		return &sealed.Keypair{PrivateKey: privateKey, PublicKey: publicKey}, false, nil
+		return &sealed.Keypair{PrivateKey: privateKeyBuffer, PublicKey: publicKey}, false, nil
 	}
 
 	if !os.IsNotExist(err) {
@@ -206,16 +227,19 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 
 	// Ensure the state directory exists.
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		keypair.Close()
 		return nil, false, fmt.Errorf("creating state directory %s: %w", stateDir, err)
 	}
 
 	// Write the private key (0600 — owner-only read/write).
-	if err := os.WriteFile(privateKeyPath, []byte(keypair.PrivateKey), 0600); err != nil {
+	if err := os.WriteFile(privateKeyPath, keypair.PrivateKey.Bytes(), 0600); err != nil {
+		keypair.Close()
 		return nil, false, fmt.Errorf("writing private key to %s: %w", privateKeyPath, err)
 	}
 
 	// Write the public key (0644 — readable by all, this is public data).
 	if err := os.WriteFile(publicKeyPath, []byte(keypair.PublicKey), 0644); err != nil {
+		keypair.Close()
 		return nil, false, fmt.Errorf("writing public key to %s: %w", publicKeyPath, err)
 	}
 
@@ -505,14 +529,10 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		if err != nil {
 			return IPCResponse{OK: false, Error: fmt.Sprintf("decrypting credentials: %v", err)}
 		}
+		defer decrypted.Close()
 
-		if err := json.Unmarshal(decrypted, &credentials); err != nil {
+		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
 			return IPCResponse{OK: false, Error: fmt.Sprintf("parsing decrypted credentials: %v", err)}
-		}
-
-		// Zero the decrypted bytes.
-		for i := range decrypted {
-			decrypted[i] = 0
 		}
 	}
 

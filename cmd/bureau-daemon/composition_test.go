@@ -54,12 +54,13 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
+	defer keypair.Close()
 
 	// Prepare the launcher's state directory with the keypair and a session.
 	// Having the keypair files present tells the launcher this isn't first boot,
 	// so it skips registration and just loads the session.
 	stateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), []byte(keypair.PrivateKey), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), keypair.PrivateKey.Bytes(), 0600); err != nil {
 		t.Fatalf("writing private key: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.pub"), []byte(keypair.PublicKey), 0644); err != nil {

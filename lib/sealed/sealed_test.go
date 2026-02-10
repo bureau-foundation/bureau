@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 func TestGenerateKeypair(t *testing.T) {
@@ -15,17 +17,18 @@ func TestGenerateKeypair(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
-	if !strings.HasPrefix(keypair.PrivateKey, "AGE-SECRET-KEY-1") {
-		t.Errorf("PrivateKey = %q, want prefix AGE-SECRET-KEY-1", keypair.PrivateKey)
+	privateKeyString := keypair.PrivateKey.String()
+	if !strings.HasPrefix(privateKeyString, "AGE-SECRET-KEY-1") {
+		t.Errorf("PrivateKey = %q, want prefix AGE-SECRET-KEY-1", privateKeyString)
 	}
 	if !strings.HasPrefix(keypair.PublicKey, "age1") {
 		t.Errorf("PublicKey = %q, want prefix age1", keypair.PublicKey)
 	}
 
-	// Keys should not be empty.
-	if len(keypair.PrivateKey) < 20 {
-		t.Errorf("PrivateKey too short: %d chars", len(keypair.PrivateKey))
+	if keypair.PrivateKey.Len() < 20 {
+		t.Errorf("PrivateKey too short: %d chars", keypair.PrivateKey.Len())
 	}
 	if len(keypair.PublicKey) < 20 {
 		t.Errorf("PublicKey too short: %d chars", len(keypair.PublicKey))
@@ -37,12 +40,15 @@ func TestGenerateKeypair_Unique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair1.Close()
+
 	keypair2, err := GenerateKeypair()
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair2.Close()
 
-	if keypair1.PrivateKey == keypair2.PrivateKey {
+	if keypair1.PrivateKey.String() == keypair2.PrivateKey.String() {
 		t.Error("two generated keypairs have identical private keys")
 	}
 	if keypair1.PublicKey == keypair2.PublicKey {
@@ -55,6 +61,7 @@ func TestEncryptDecrypt_SingleRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	plaintext := []byte("hello, bureau credentials")
 	ciphertext, err := Encrypt(plaintext, []string{keypair.PublicKey})
@@ -77,8 +84,10 @@ func TestEncryptDecrypt_SingleRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt() error: %v", err)
 	}
-	if string(decrypted) != string(plaintext) {
-		t.Errorf("Decrypt() = %q, want %q", decrypted, plaintext)
+	defer decrypted.Close()
+
+	if decrypted.String() != string(plaintext) {
+		t.Errorf("Decrypt() = %q, want %q", decrypted.String(), plaintext)
 	}
 }
 
@@ -88,10 +97,13 @@ func TestEncryptDecrypt_MultipleRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer machine.Close()
+
 	operator, err := GenerateKeypair()
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer operator.Close()
 
 	plaintext := []byte(`{"OPENAI_API_KEY":"sk-test","ANTHROPIC_API_KEY":"sk-ant-test"}`)
 	ciphertext, err := Encrypt(plaintext, []string{machine.PublicKey, operator.PublicKey})
@@ -104,16 +116,20 @@ func TestEncryptDecrypt_MultipleRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt(machine) error: %v", err)
 	}
-	if string(decryptedByMachine) != string(plaintext) {
-		t.Errorf("Decrypt(machine) = %q, want %q", decryptedByMachine, plaintext)
+	defer decryptedByMachine.Close()
+
+	if decryptedByMachine.String() != string(plaintext) {
+		t.Errorf("Decrypt(machine) = %q, want %q", decryptedByMachine.String(), plaintext)
 	}
 
 	decryptedByOperator, err := Decrypt(ciphertext, operator.PrivateKey)
 	if err != nil {
 		t.Fatalf("Decrypt(operator) error: %v", err)
 	}
-	if string(decryptedByOperator) != string(plaintext) {
-		t.Errorf("Decrypt(operator) = %q, want %q", decryptedByOperator, plaintext)
+	defer decryptedByOperator.Close()
+
+	if decryptedByOperator.String() != string(plaintext) {
+		t.Errorf("Decrypt(operator) = %q, want %q", decryptedByOperator.String(), plaintext)
 	}
 }
 
@@ -122,10 +138,13 @@ func TestDecrypt_WrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
+
 	wrongKeypair, err := GenerateKeypair()
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer wrongKeypair.Close()
 
 	plaintext := []byte("secret data")
 	ciphertext, err := Encrypt(plaintext, []string{keypair.PublicKey})
@@ -171,12 +190,20 @@ func TestDecrypt_InvalidPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
+
 	ciphertext, err := Encrypt([]byte("data"), []string{keypair.PublicKey})
 	if err != nil {
 		t.Fatalf("Encrypt() error: %v", err)
 	}
 
-	_, err = Decrypt(ciphertext, "not-a-valid-private-key")
+	invalidKey, err := secret.NewFromBytes([]byte("not-a-valid-private-key"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer invalidKey.Close()
+
+	_, err = Decrypt(ciphertext, invalidKey)
 	if err == nil {
 		t.Error("Decrypt() with invalid private key should return error")
 	}
@@ -190,6 +217,7 @@ func TestDecrypt_InvalidBase64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	_, err = Decrypt("not-valid-base64!!!", keypair.PrivateKey)
 	if err == nil {
@@ -205,6 +233,7 @@ func TestDecrypt_CorruptedCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	// Valid base64 but not valid age ciphertext.
 	corruptedBase64 := base64.StdEncoding.EncodeToString([]byte("this is not age ciphertext"))
@@ -220,6 +249,7 @@ func TestEncryptDecrypt_EmptyPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	ciphertext, err := Encrypt([]byte{}, []string{keypair.PublicKey})
 	if err != nil {
@@ -230,8 +260,11 @@ func TestEncryptDecrypt_EmptyPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt(empty) error: %v", err)
 	}
-	if len(decrypted) != 0 {
-		t.Errorf("Decrypt(empty) = %q, want empty", decrypted)
+	defer decrypted.Close()
+
+	// Empty plaintext gets a 1-byte zero-filled buffer.
+	if decrypted.Len() != 1 {
+		t.Errorf("Decrypt(empty) length = %d, want 1", decrypted.Len())
 	}
 }
 
@@ -240,6 +273,7 @@ func TestEncryptDecrypt_LargePlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	// Simulate a large credential bundle (many API keys).
 	largePlaintext := make([]byte, 64*1024)
@@ -256,12 +290,15 @@ func TestEncryptDecrypt_LargePlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt(large) error: %v", err)
 	}
-	if len(decrypted) != len(largePlaintext) {
-		t.Fatalf("Decrypt(large) length = %d, want %d", len(decrypted), len(largePlaintext))
+	defer decrypted.Close()
+
+	decryptedBytes := decrypted.Bytes()
+	if len(decryptedBytes) != len(largePlaintext) {
+		t.Fatalf("Decrypt(large) length = %d, want %d", len(decryptedBytes), len(largePlaintext))
 	}
 	for i := range largePlaintext {
-		if decrypted[i] != largePlaintext[i] {
-			t.Errorf("Decrypt(large) byte %d = %d, want %d", i, decrypted[i], largePlaintext[i])
+		if decryptedBytes[i] != largePlaintext[i] {
+			t.Errorf("Decrypt(large) byte %d = %d, want %d", i, decryptedBytes[i], largePlaintext[i])
 			break
 		}
 	}
@@ -274,10 +311,13 @@ func TestEncryptJSON_DecryptJSON_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer machine.Close()
+
 	operator, err := GenerateKeypair()
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer operator.Close()
 
 	credentials := map[string]string{
 		"OPENAI_API_KEY":    "sk-test-key-12345",
@@ -300,9 +340,10 @@ func TestEncryptJSON_DecryptJSON_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptJSON() error: %v", err)
 	}
+	defer decryptedJSON.Close()
 
 	var decryptedCredentials map[string]string
-	if err := json.Unmarshal(decryptedJSON, &decryptedCredentials); err != nil {
+	if err := json.Unmarshal(decryptedJSON.Bytes(), &decryptedCredentials); err != nil {
 		t.Fatalf("json.Unmarshal() error: %v", err)
 	}
 
@@ -326,6 +367,7 @@ func TestParsePublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	if err := ParsePublicKey(keypair.PublicKey); err != nil {
 		t.Errorf("ParsePublicKey(valid) error: %v", err)
@@ -345,16 +387,29 @@ func TestParsePrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	if err := ParsePrivateKey(keypair.PrivateKey); err != nil {
 		t.Errorf("ParsePrivateKey(valid) error: %v", err)
 	}
 
-	if err := ParsePrivateKey("not-a-valid-key"); err == nil {
+	invalidKey, err := secret.NewFromBytes([]byte("not-a-valid-key"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer invalidKey.Close()
+
+	if err := ParsePrivateKey(invalidKey); err == nil {
 		t.Error("ParsePrivateKey(invalid) should return error")
 	}
 
-	if err := ParsePrivateKey(""); err == nil {
+	emptyKey, err := secret.NewFromBytes([]byte(" "))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer emptyKey.Close()
+
+	if err := ParsePrivateKey(emptyKey); err == nil {
 		t.Error("ParsePrivateKey(empty) should return error")
 	}
 }
@@ -367,6 +422,7 @@ func TestEncryptDecrypt_DeterministicRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeypair() error: %v", err)
 	}
+	defer keypair.Close()
 
 	plaintext := []byte("persistent secret")
 	ciphertext, err := Encrypt(plaintext, []string{keypair.PublicKey})
@@ -376,7 +432,12 @@ func TestEncryptDecrypt_DeterministicRecovery(t *testing.T) {
 
 	// Simulate serializing and deserializing the private key (e.g., stored
 	// in kernel keyring, retrieved later).
-	savedPrivateKey := keypair.PrivateKey
+	savedPrivateKey, err := secret.NewFromBytes([]byte(keypair.PrivateKey.String()))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer savedPrivateKey.Close()
+
 	if err := ParsePrivateKey(savedPrivateKey); err != nil {
 		t.Fatalf("saved private key is invalid: %v", err)
 	}
@@ -385,7 +446,23 @@ func TestEncryptDecrypt_DeterministicRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt() with saved key error: %v", err)
 	}
-	if string(decrypted) != string(plaintext) {
-		t.Errorf("Decrypt() = %q, want %q", decrypted, plaintext)
+	defer decrypted.Close()
+
+	if decrypted.String() != string(plaintext) {
+		t.Errorf("Decrypt() = %q, want %q", decrypted.String(), plaintext)
+	}
+}
+
+func TestKeypair_Close_Idempotent(t *testing.T) {
+	keypair, err := GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error: %v", err)
+	}
+
+	if err := keypair.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := keypair.Close(); err != nil {
+		t.Fatalf("second Close failed: %v", err)
 	}
 }

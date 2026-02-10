@@ -4,6 +4,9 @@
 package secret
 
 import (
+	"bytes"
+	"io"
+	"strings"
 	"testing"
 )
 
@@ -159,4 +162,170 @@ func TestBuffer_String_PanicsAfterClose(t *testing.T) {
 	}()
 
 	buffer.String()
+}
+
+func TestNewFromReader(t *testing.T) {
+	reader := strings.NewReader("secret-from-reader")
+	buffer, err := NewFromReader(reader, 1024)
+	if err != nil {
+		t.Fatalf("NewFromReader failed: %v", err)
+	}
+	defer buffer.Close()
+
+	if got := buffer.String(); got != "secret-from-reader" {
+		t.Errorf("expected %q, got %q", "secret-from-reader", got)
+	}
+	if buffer.Len() != len("secret-from-reader") {
+		t.Errorf("expected length %d, got %d", len("secret-from-reader"), buffer.Len())
+	}
+}
+
+func TestNewFromReader_Empty(t *testing.T) {
+	reader := strings.NewReader("")
+	_, err := NewFromReader(reader, 1024)
+	if err == nil {
+		t.Fatal("expected error for empty reader")
+	}
+}
+
+func TestNewFromReader_ExceedsMaxSize(t *testing.T) {
+	reader := strings.NewReader("this is longer than five bytes")
+	_, err := NewFromReader(reader, 5)
+	if err == nil {
+		t.Fatal("expected error when reader exceeds maxSize")
+	}
+}
+
+func TestNewFromReader_ExactMaxSize(t *testing.T) {
+	content := "exact"
+	reader := strings.NewReader(content)
+	buffer, err := NewFromReader(reader, len(content))
+	if err != nil {
+		t.Fatalf("NewFromReader at exact maxSize failed: %v", err)
+	}
+	defer buffer.Close()
+
+	if got := buffer.String(); got != content {
+		t.Errorf("expected %q, got %q", content, got)
+	}
+}
+
+func TestNewFromReader_InvalidMaxSize(t *testing.T) {
+	reader := strings.NewReader("data")
+	_, err := NewFromReader(reader, 0)
+	if err == nil {
+		t.Fatal("expected error for zero maxSize")
+	}
+
+	_, err = NewFromReader(reader, -1)
+	if err == nil {
+		t.Fatal("expected error for negative maxSize")
+	}
+}
+
+func TestNewFromReader_ReadError(t *testing.T) {
+	reader := io.NopCloser(&failingReader{})
+	_, err := NewFromReader(reader, 1024)
+	if err == nil {
+		t.Fatal("expected error from failing reader")
+	}
+}
+
+type failingReader struct{}
+
+func (r *failingReader) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+func TestEqual_Match(t *testing.T) {
+	first, err := NewFromBytes([]byte("same-secret"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer first.Close()
+
+	second, err := NewFromBytes([]byte("same-secret"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer second.Close()
+
+	if !first.Equal(second) {
+		t.Error("expected Equal to return true for identical content")
+	}
+}
+
+func TestEqual_Mismatch(t *testing.T) {
+	first, err := NewFromBytes([]byte("secret-a"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer first.Close()
+
+	second, err := NewFromBytes([]byte("secret-b"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer second.Close()
+
+	if first.Equal(second) {
+		t.Error("expected Equal to return false for different content")
+	}
+}
+
+func TestEqual_DifferentLengths(t *testing.T) {
+	first, err := NewFromBytes([]byte("short"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer first.Close()
+
+	second, err := NewFromBytes([]byte("much-longer-secret"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer second.Close()
+
+	if first.Equal(second) {
+		t.Error("expected Equal to return false for different lengths")
+	}
+}
+
+func TestWriteTo(t *testing.T) {
+	buffer, err := NewFromBytes([]byte("write-me-out"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer buffer.Close()
+
+	var output bytes.Buffer
+	written, err := buffer.WriteTo(&output)
+	if err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	if written != int64(len("write-me-out")) {
+		t.Errorf("expected %d bytes written, got %d", len("write-me-out"), written)
+	}
+	if output.String() != "write-me-out" {
+		t.Errorf("expected %q, got %q", "write-me-out", output.String())
+	}
+}
+
+func TestWriteTo_PanicsAfterClose(t *testing.T) {
+	buffer, err := New(16)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	buffer.Close()
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected panic on WriteTo after Close")
+		}
+	}()
+
+	var output bytes.Buffer
+	buffer.WriteTo(&output)
 }

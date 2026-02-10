@@ -10,6 +10,10 @@
 // The base64 encoding is handled internally — callers pass plaintext []byte in
 // and get base64 strings out (and vice versa for decryption).
 //
+// Private keys and decrypted plaintext are returned as *secret.Buffer values,
+// which are backed by mmap memory outside the Go heap (locked against swap,
+// excluded from core dumps, zeroed on close).
+//
 // This package is used by:
 //   - The launcher (decrypt credential bundles with the machine's private key)
 //   - bureau-credentials (encrypt credential bundles to machine public keys + operator escrow)
@@ -23,31 +27,62 @@ import (
 	"strings"
 
 	"filippo.io/age"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
-// Keypair holds an age x25519 keypair. The private key is an AGE-SECRET-KEY-1
-// Bech32 string; the public key is an age1 Bech32 string.
+// Keypair holds an age x25519 keypair. The private key is stored in a
+// secret.Buffer (mmap-backed, locked against swap, excluded from core dumps).
+// The public key is a plain string (safe to publish).
+//
+// The caller must call Close when the keypair is no longer needed.
 type Keypair struct {
-	// PrivateKey is the secret key in AGE-SECRET-KEY-1... format.
-	// Must never be logged, stored in plaintext on disk, or included in
-	// CLI arguments. See CREDENTIALS.md for the sealed storage lifecycle.
-	PrivateKey string
+	// PrivateKey is the secret key in AGE-SECRET-KEY-1... format, stored
+	// in mmap memory outside the Go heap. Must never be logged, stored in
+	// plaintext on disk, or included in CLI arguments. See CREDENTIALS.md
+	// for the sealed storage lifecycle.
+	PrivateKey *secret.Buffer
 
 	// PublicKey is the corresponding public key in age1... format.
 	// Safe to publish (e.g., in m.bureau.machine_key state events).
 	PublicKey string
 }
 
-// GenerateKeypair generates a new age x25519 keypair. The private key should
-// be sealed to the TPM or kernel keyring immediately after generation —
-// see CREDENTIALS.md for the machine key lifecycle.
+// Close releases the private key memory (zeros, unlocks, unmaps).
+// Idempotent — safe to call multiple times.
+func (k *Keypair) Close() error {
+	if k.PrivateKey != nil {
+		return k.PrivateKey.Close()
+	}
+	return nil
+}
+
+// GenerateKeypair generates a new age x25519 keypair. The private key is
+// returned in a secret.Buffer. The private key should be sealed to the TPM
+// or kernel keyring immediately after generation — see CREDENTIALS.md for
+// the machine key lifecycle.
+//
+// The caller must call Close on the returned Keypair when done.
 func GenerateKeypair() (*Keypair, error) {
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
 		return nil, fmt.Errorf("generating age keypair: %w", err)
 	}
+
+	// Move the private key string into mmap-backed memory immediately.
+	privateKeyString := identity.String()
+	privateKeyBytes := []byte(privateKeyString)
+	privateKey, err := secret.NewFromBytes(privateKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("protecting private key: %w", err)
+	}
+	// privateKeyBytes is zeroed by NewFromBytes. privateKeyString is on the
+	// heap and will be GC'd — unavoidable since age.GenerateX25519Identity
+	// returns a struct with string methods. The mmap buffer is the durable
+	// copy.
+
 	return &Keypair{
-		PrivateKey: identity.String(),
+		PrivateKey: privateKey,
 		PublicKey:  identity.Recipient().String(),
 	}, nil
 }
@@ -88,11 +123,17 @@ func Encrypt(plaintext []byte, recipientKeys []string) (string, error) {
 }
 
 // Decrypt decrypts a base64-encoded ciphertext string using the given private
-// key (AGE-SECRET-KEY-1... format). Returns the plaintext bytes.
+// key. Returns the plaintext in a secret.Buffer (mmap-backed, zeroed on close).
 //
-// The private key is typically loaded from the kernel keyring by the launcher.
-func Decrypt(ciphertext string, privateKey string) ([]byte, error) {
-	identity, err := age.ParseX25519Identity(privateKey)
+// The private key is borrowed (read via .String() to parse the age identity)
+// and is NOT closed by this function.
+//
+// The caller must call Close on the returned buffer when the plaintext is no
+// longer needed.
+func Decrypt(ciphertext string, privateKey *secret.Buffer) (*secret.Buffer, error) {
+	// Convert the buffer to a string at the API boundary — age.ParseX25519Identity
+	// requires a string. The heap copy is brief and request-scoped.
+	identity, err := age.ParseX25519Identity(privateKey.String())
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
@@ -112,7 +153,27 @@ func Decrypt(ciphertext string, privateKey string) ([]byte, error) {
 		return nil, fmt.Errorf("reading decrypted plaintext: %w", err)
 	}
 
-	return plaintext, nil
+	// Move the decrypted plaintext into mmap-backed memory immediately.
+	// NewFromBytes zeros the heap copy.
+	if len(plaintext) == 0 {
+		// age can produce empty plaintext (encrypted empty file).
+		// Return a minimal buffer.
+		buffer, err := secret.New(1)
+		if err != nil {
+			return nil, fmt.Errorf("protecting decrypted plaintext: %w", err)
+		}
+		return buffer, nil
+	}
+
+	buffer, err := secret.NewFromBytes(plaintext)
+	if err != nil {
+		// Zero the plaintext before returning the error.
+		for index := range plaintext {
+			plaintext[index] = 0
+		}
+		return nil, fmt.Errorf("protecting decrypted plaintext: %w", err)
+	}
+	return buffer, nil
 }
 
 // ParsePublicKey validates and parses an age public key string. Returns an
@@ -126,10 +187,11 @@ func ParsePublicKey(publicKey string) error {
 	return nil
 }
 
-// ParsePrivateKey validates and parses an age private key string. Returns an
-// error if the key is not a valid age x25519 private key.
-func ParsePrivateKey(privateKey string) error {
-	_, err := age.ParseX25519Identity(privateKey)
+// ParsePrivateKey validates and parses an age private key stored in a
+// secret.Buffer. Returns an error if the key is not a valid age x25519
+// private key.
+func ParsePrivateKey(privateKey *secret.Buffer) error {
+	_, err := age.ParseX25519Identity(privateKey.String())
 	if err != nil {
 		return fmt.Errorf("invalid age private key: %w", err)
 	}
@@ -144,10 +206,9 @@ func EncryptJSON(jsonPayload []byte, recipientKeys []string) (string, error) {
 }
 
 // DecryptJSON is a convenience wrapper that decrypts a base64-encoded ciphertext
-// and returns the plaintext JSON bytes. The caller is responsible for
-// json.Unmarshaling the result. It is identical to Decrypt but makes the
-// intended use case explicit in the call site.
-func DecryptJSON(ciphertext string, privateKey string) ([]byte, error) {
+// and returns the plaintext JSON in a secret.Buffer. The caller is responsible
+// for using buffer.Bytes() with json.Unmarshal, then calling buffer.Close().
+func DecryptJSON(ciphertext string, privateKey *secret.Buffer) (*secret.Buffer, error) {
 	return Decrypt(ciphertext, privateKey)
 }
 

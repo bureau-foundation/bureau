@@ -11,14 +11,15 @@
 //
 // Commands:
 //
-//	login       Authenticate as an operator
-//	whoami      Show the current operator identity
-//	list        List observable targets
-//	dashboard   Open a composite observation view (machine, channel, or file)
-//	observe     Attach to a single principal's terminal session
-//	matrix      Matrix homeserver operations
-//	template    Manage sandbox templates
-//	version     Print version information
+//	login         Authenticate as an operator
+//	whoami        Show the current operator identity
+//	list          List observable targets
+//	dashboard     Open a composite observation view (machine, channel, or file)
+//	observe       Attach to a single principal's terminal session
+//	matrix        Matrix homeserver operations
+//	template      Manage sandbox templates
+//	environment   Manage fleet environment profiles
+//	version       Print version information
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
@@ -60,6 +62,7 @@ observation, and structured messaging via Matrix.`,
 			observecmd.ListCommand(),
 			matrix.Command(),
 			templatecmd.Command(),
+			environmentcmd.Command(),
 			{
 				Name:    "version",
 				Summary: "Print version information",
@@ -93,6 +96,10 @@ observation, and structured messaging via Matrix.`,
 			{
 				Description: "List available sandbox templates",
 				Command:     "bureau template list bureau/templates",
+			},
+			{
+				Description: "Build and deploy an environment profile",
+				Command:     "bureau environment build workstation --out-link deploy/buildbarn/runner-env",
 			},
 			{
 				Description: "Bootstrap the Matrix homeserver",

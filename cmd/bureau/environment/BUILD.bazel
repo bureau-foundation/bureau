@@ -1,0 +1,28 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "environment",
+    srcs = [
+        "build.go",
+        "command.go",
+        "list.go",
+        "nix.go",
+        "status.go",
+        "system.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/environment",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "@com_github_spf13_pflag//:pflag",
+    ],
+)
+
+go_test(
+    name = "environment_test",
+    srcs = ["nix_test.go"],
+    embed = [":environment"],
+)

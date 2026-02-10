@@ -10,6 +10,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/environment",
         "//cmd/bureau/matrix",
         "//cmd/bureau/observe",
         "//cmd/bureau/template",

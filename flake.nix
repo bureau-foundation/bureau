@@ -15,7 +15,18 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    # Base packages required by Bureau's own tests in any execution
+    # environment (Buildbarn runner, sandbox, etc.). The environment repo
+    # (bureau-foundation/environment) composes on top of this list —
+    # project-specific tools go there, not here.
+    #
+    # This is a function, not a derivation, so it lives outside the
+    # per-system wrapper. Callers pass their own pkgs to get the right
+    # system's packages.
+    {
+      lib.baseRunnerPackages = pkgs: [ pkgs.tmux ];
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -93,15 +104,15 @@
           // {
             default = self.packages.${system}.bureau;
 
-            # Tools available inside the Buildbarn runner container via
-            # bind-mounted /nix/store. Build with:
+            # Minimal environment for Bureau's own CI and local development.
+            # Contains only what Bureau's tests need (see lib.baseRunnerPackages).
+            # Production and multi-project environments are defined in the
+            # bureau-foundation/environment repo, which composes on top of
+            # this base. Build with:
             #   nix build .#runner-env --out-link deploy/buildbarn/runner-env
-            # The runner-env/bin directory is mounted at /usr/local/bin in
-            # the runner. Adding a package here makes it available to all
-            # remote build and test actions.
             runner-env = pkgs.buildEnv {
               name = "bureau-runner-env";
-              paths = [ pkgs.tmux ];
+              paths = self.lib.baseRunnerPackages pkgs;
             };
           };
 

@@ -37,10 +37,10 @@ type QueryLayoutRequest struct {
 	Token string `json:"token"`
 }
 
-// QueryLayoutResponse is the daemon's response to a QueryLayoutRequest.
-// On success, Layout contains the fully expanded layout (ObserveMembers
-// panes replaced with concrete Observe panes). On failure, OK is false
-// and Error describes the problem.
+// QueryLayoutResponse is the daemon's response to a QueryLayoutRequest
+// or MachineLayoutRequest. On success, Layout contains the fully expanded
+// layout (ObserveMembers panes replaced with concrete Observe panes). On
+// failure, OK is false and Error describes the problem.
 //
 // After sending this response, the daemon closes the connection. There
 // is no streaming phase — this is pure request/response.
@@ -51,6 +51,11 @@ type QueryLayoutResponse struct {
 	// Layout is the expanded layout ready for Dashboard(). Only set
 	// when OK is true.
 	Layout *Layout `json:"layout,omitempty"`
+
+	// Machine is the localpart of the machine that generated this layout
+	// (e.g., "machine/workstation"). Set by query_machine_layout responses
+	// for session naming; empty for query_layout (channel) responses.
+	Machine string `json:"machine,omitempty"`
 
 	// Error describes why the request failed. Only set when OK is false.
 	Error string `json:"error,omitempty"`

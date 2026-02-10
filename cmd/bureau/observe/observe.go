@@ -140,15 +140,24 @@ arrange them.
 Requires authentication: run "bureau login" first to save your session.
 The saved session is loaded automatically (like SSH keys).
 
-Layout sources (exactly one required):
+Layout sources:
+  (no args)        Machine dashboard: all principals on this machine
   --layout-file    Read layout from a local JSON file
   <channel>        Fetch layout from a channel's Matrix state via the daemon
+
+With no arguments, the dashboard shows all observable principals running
+on the local machine, arranged as a vertical stack. This is the default
+sysadmin view.
 
 Each "observe" pane in the layout connects to the daemon's observation
 relay for the target principal. "command" panes run local commands.
 "role" panes display their role identity.`,
 		Usage: "bureau dashboard [channel] [flags]",
 		Examples: []cli.Example{
+			{
+				Description: "Machine dashboard (all running principals)",
+				Command:     "bureau dashboard",
+			},
 			{
 				Description: "Open a dashboard from a layout file",
 				Command:     "bureau dashboard --layout-file ./workspace.json",
@@ -236,7 +245,18 @@ relay for the target principal. "command" panes run local commands.
 				sessionName = "observe/" + name
 
 			default:
-				return fmt.Errorf("layout source required: use --layout-file or specify a channel\n\nUsage: bureau dashboard [channel] [flags]")
+				// No layout source specified — machine dashboard. Query the
+				// daemon for a dynamically generated layout showing all
+				// principals running on this machine.
+				response, err := observe.QueryMachineLayout(socketPath, observe.MachineLayoutRequest{
+					Observer: operatorSession.UserID,
+					Token:    operatorSession.AccessToken,
+				})
+				if err != nil {
+					return fmt.Errorf("query machine layout: %w", err)
+				}
+				layout = response.Layout
+				sessionName = "observe/machine/" + response.Machine
 			}
 
 			// --- Create the dashboard tmux session ---

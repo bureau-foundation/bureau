@@ -42,6 +42,7 @@ type observeRequest struct {
 	// Action selects the request type:
 	//   - "" or "observe": streaming observation session
 	//   - "query_layout": fetch and expand a channel's layout
+	//   - "query_machine_layout": generate layout from running principals
 	//   - "list": list known principals and machines
 	Action string `json:"action,omitempty"`
 
@@ -197,6 +198,8 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		d.handleObserveSession(clientConnection, request)
 	case "query_layout":
 		d.handleQueryLayout(clientConnection, request)
+	case "query_machine_layout":
+		d.handleMachineLayout(clientConnection, request)
 	case "list":
 		d.handleList(clientConnection, request)
 	default:
@@ -382,6 +385,49 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		Layout: expanded,
 	}
 	json.NewEncoder(clientConnection).Encode(response)
+}
+
+// handleMachineLayout handles a query_machine_layout request: generates a
+// layout from the principals currently running on this machine, filtered
+// by the observer's authorization.
+//
+// This is the "show me everything on this machine" entry point — the
+// daemon generates the layout dynamically from d.running rather than
+// fetching a stored layout from Matrix.
+//
+// Authentication is handled by handleObserveClient before dispatch.
+// This is pure request/response — the connection is closed after the response.
+func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeRequest) {
+	d.logger.Info("query_machine_layout requested",
+		"observer", request.Observer,
+	)
+
+	// Collect running principals that the observer is authorized to see.
+	var authorizedPrincipals []string
+	for localpart := range d.running {
+		if d.authorizeList(request.Observer, localpart) {
+			authorizedPrincipals = append(authorizedPrincipals, localpart)
+		}
+	}
+
+	layout := observe.GenerateMachineLayout(d.machineName, authorizedPrincipals)
+	if layout == nil {
+		d.sendObserveError(clientConnection,
+			"no observable principals running on this machine")
+		return
+	}
+
+	d.logger.Info("query_machine_layout completed",
+		"observer", request.Observer,
+		"machine", d.machineName,
+		"principals", len(authorizedPrincipals),
+	)
+
+	json.NewEncoder(clientConnection).Encode(observe.QueryLayoutResponse{
+		OK:      true,
+		Layout:  layout,
+		Machine: d.machineName,
+	})
 }
 
 // handleList handles a "list" request: enumerates all known principals and

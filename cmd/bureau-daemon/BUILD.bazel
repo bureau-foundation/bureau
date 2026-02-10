@@ -39,6 +39,7 @@ go_test(
     srcs = [
         "composition_test.go",
         "layout_watcher_test.go",
+        "machine_layout_test.go",
         "main_test.go",
         "observe_auth_test.go",
         "observe_test.go",

@@ -8,7 +8,6 @@ package observe
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -55,8 +56,8 @@ Use this for monitoring without risk of accidental input.`,
 				Command:     "bureau observe iree/amdgpu/pm --socket /tmp/test.sock",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("observe", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("observe", pflag.ContinueOnError)
 			flagSet.BoolVar(&readonly, "readonly", false, "observe without input (read-only mode)")
 			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
 			return flagSet
@@ -109,10 +110,10 @@ Use this for monitoring without risk of accidental input.`,
 // workstream views.
 func DashboardCommand() *cli.Command {
 	var (
-		socketPath    string
-		layoutFile    string
-		tmuxSocket    string
-		detach        bool
+		socketPath string
+		layoutFile string
+		tmuxSocket string
+		detach     bool
 	)
 
 	return &cli.Command{
@@ -144,8 +145,8 @@ relay for the target principal. "command" panes run local commands.
 				Command:     "bureau dashboard --layout-file ./workspace.json --detach",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("dashboard", pflag.ContinueOnError)
 			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
 			flagSet.StringVar(&layoutFile, "layout-file", "", "read layout from a JSON file")
 			flagSet.StringVar(&tmuxSocket, "tmux-socket", "", "tmux server socket (default: user's default tmux)")
@@ -286,8 +287,8 @@ namespace.`,
 				Command:     "bureau list --observable",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("list", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
 			flagSet.BoolVar(&observable, "observable", false, "show only targets that can be observed")
 			flagSet.StringVar(&socketPath, "socket", "/run/bureau/observe.sock", "daemon observation socket path")
 			return flagSet

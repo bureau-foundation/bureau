@@ -5,9 +5,10 @@ package cli
 
 import (
 	"bytes"
-	"flag"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func TestCommand_Execute_DispatchesToSubcommand(t *testing.T) {
@@ -81,8 +82,8 @@ func TestCommand_Execute_FlagParsing(t *testing.T) {
 
 	command := &Command{
 		Name: "observe",
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("observe", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("observe", pflag.ContinueOnError)
 			flagSet.StringVar(&socketPath, "socket", "/default.sock", "socket path")
 			return flagSet
 		},
@@ -108,8 +109,8 @@ func TestCommand_Execute_FlagParsing(t *testing.T) {
 func TestCommand_Execute_UnknownFlagSuggestion(t *testing.T) {
 	command := &Command{
 		Name: "observe",
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("observe", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("observe", pflag.ContinueOnError)
 			flagSet.Bool("readonly", false, "read-only mode")
 			flagSet.String("socket", "/default.sock", "socket path")
 			return flagSet
@@ -138,8 +139,8 @@ func TestCommand_Execute_UnknownFlagSuggestion(t *testing.T) {
 func TestCommand_Execute_UnknownFlagNoSuggestion(t *testing.T) {
 	command := &Command{
 		Name: "observe",
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("observe", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("observe", pflag.ContinueOnError)
 			flagSet.Bool("readonly", false, "read-only mode")
 			return flagSet
 		},
@@ -282,8 +283,8 @@ func TestCommand_PrintHelp_WithFlags(t *testing.T) {
 		Name:    "observe",
 		Summary: "Attach to a terminal session",
 		Usage:   "bureau observe <target> [flags]",
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("observe", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("observe", pflag.ContinueOnError)
 			flagSet.String("socket", "/run/bureau/observe.sock", "daemon observation socket")
 			flagSet.Bool("readonly", false, "observe without input")
 			return flagSet

@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,20 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
-
-// stringSliceFlag accumulates values from repeated flag occurrences.
-// Usage: --invite @alice:local --invite @bob:local
-type stringSliceFlag []string
-
-func (f *stringSliceFlag) String() string { return strings.Join(*f, ", ") }
-func (f *stringSliceFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
 
 // SetupCommand returns the "setup" subcommand for bootstrapping a Matrix
 // homeserver. This is the only matrix subcommand that talks directly to
@@ -43,7 +34,7 @@ func SetupCommand() *cli.Command {
 		credentialFile        string
 		serverName            string
 		adminUsername         string
-		inviteUsers           stringSliceFlag
+		inviteUsers           []string
 	)
 
 	return &cli.Command{
@@ -76,14 +67,14 @@ Standard rooms created:
 				Command:     "bureau matrix setup --registration-token-file ./token --credential-file ./creds --invite @alice:bureau.local",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("setup", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("setup", pflag.ContinueOnError)
 			flagSet.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 			flagSet.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (required)")
 			flagSet.StringVar(&credentialFile, "credential-file", "", "path to write Bureau credentials (required)")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user/room IDs")
 			flagSet.StringVar(&adminUsername, "admin-user", "bureau-admin", "admin account username")
-			flagSet.Var(&inviteUsers, "invite", "Matrix user ID to invite to all Bureau rooms (repeatable)")
+			flagSet.StringArrayVar(&inviteUsers, "invite", nil, "Matrix user ID to invite to all Bureau rooms (repeatable)")
 			return flagSet
 		},
 		Run: func(args []string) error {
@@ -309,11 +300,11 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 	}
 
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:       name,
-		Alias:      aliasLocal,
-		Topic:      topic,
-		Preset:     "private_chat",
-		Visibility: "private",
+		Name:                      name,
+		Alias:                     aliasLocal,
+		Topic:                     topic,
+		Preset:                    "private_chat",
+		Visibility:                "private",
 		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID(), memberSettableEventTypes),
 	})
 	if err != nil {

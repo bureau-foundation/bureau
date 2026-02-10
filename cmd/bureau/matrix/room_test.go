@@ -552,28 +552,3 @@ func TestInspectRoomState(t *testing.T) {
 	})
 }
 
-func TestMemberStateEventsFlag(t *testing.T) {
-	var flag memberStateEventsFlag
-
-	if flag.String() != "" {
-		t.Errorf("empty flag should have empty String(), got %q", flag.String())
-	}
-
-	flag.Set("m.bureau.machine_key")
-	flag.Set("m.bureau.service")
-
-	if len(flag) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(flag))
-	}
-	if flag[0] != "m.bureau.machine_key" {
-		t.Errorf("flag[0] = %q, want m.bureau.machine_key", flag[0])
-	}
-	if flag[1] != "m.bureau.service" {
-		t.Errorf("flag[1] = %q, want m.bureau.service", flag[1])
-	}
-
-	expected := "m.bureau.machine_key, m.bureau.service"
-	if flag.String() != expected {
-		t.Errorf("String() = %q, want %q", flag.String(), expected)
-	}
-}

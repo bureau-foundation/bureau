@@ -4,8 +4,9 @@
 package cli
 
 import (
-	"flag"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
 // suggestCommand returns the name of the closest matching subcommand to
@@ -30,10 +31,10 @@ func suggestCommand(unknown string, commands []*Command) string {
 // suggestFlag looks at the args for the first unrecognized flag and returns
 // the closest defined flag name, formatted with the appropriate prefix
 // (-- or -). Returns "" if no good suggestion is found.
-func suggestFlag(args []string, flagSet *flag.FlagSet) string {
+func suggestFlag(args []string, flagSet *pflag.FlagSet) string {
 	// Collect defined flag names.
 	var defined []string
-	flagSet.VisitAll(func(f *flag.Flag) {
+	flagSet.VisitAll(func(f *pflag.Flag) {
 		defined = append(defined, f.Name)
 	})
 
@@ -51,7 +52,7 @@ func suggestFlag(args []string, flagSet *flag.FlagSet) string {
 
 		// Check if this flag is defined.
 		isDefined := false
-		flagSet.VisitAll(func(f *flag.Flag) {
+		flagSet.VisitAll(func(f *pflag.Flag) {
 			if f.Name == name {
 				isDefined = true
 			}

@@ -2,10 +2,16 @@ module github.com/bureau-foundation/bureau
 
 go 1.25.6
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	filippo.io/age v1.3.1
+	github.com/pion/webrtc/v4 v4.2.3
+	github.com/spf13/pflag v1.0.10
+	golang.org/x/sys v0.41.0
+	golang.org/x/term v0.40.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
-	filippo.io/age v1.3.1 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
@@ -23,12 +29,8 @@ require (
 	github.com/pion/stun/v3 v3.1.1 // indirect
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.1.4 // indirect
-	github.com/pion/webrtc/v4 v4.2.3 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 )

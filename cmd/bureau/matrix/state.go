@@ -6,11 +6,12 @@ package matrix
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
@@ -63,8 +64,8 @@ or machine ID as the state key.`,
 				Command:     "bureau matrix state get --credential-file ./creds '!room:bureau.local' m.bureau.machine_config '@machine/work:bureau.local'",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("get", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("get", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -148,8 +149,8 @@ specific state key.`,
 				Command:     `echo '{"topic":"Piped topic"}' | bureau matrix state set --credential-file ./creds --stdin '!room:bureau.local' m.room.topic`,
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("set", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("set", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&stateKey, "state-key", "", "state key for the event (default: empty string)")
 			flagSet.BoolVar(&useStdin, "stdin", false, "read JSON body from stdin instead of positional argument")

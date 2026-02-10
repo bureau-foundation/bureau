@@ -5,11 +5,12 @@ package matrix
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -64,8 +65,8 @@ Does not require an existing session — this creates a fresh account.`,
 				Command:     "echo $TOKEN | bureau matrix user create bob --registration-token-file -",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("create", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("create", pflag.ContinueOnError)
 			flagSet.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 			flagSet.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (required)")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user IDs")
@@ -147,8 +148,8 @@ authenticated user has joined.`,
 				Command:     "bureau matrix user list --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("list", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID to list members of (optional)")
 			return flagSet
@@ -256,8 +257,8 @@ func userInviteCommand() *cli.Command {
 				Command:     "bureau matrix user invite @alice:bureau.local '#bureau/agents:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("invite", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("invite", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -317,8 +318,8 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				Command:     "bureau matrix user kick @bob:bureau.local '#bureau/agents:bureau.local' --reason 'misbehaving agent' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("kick", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("kick", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&reason, "reason", "", "reason for the kick (optional)")
 			return flagSet
@@ -373,8 +374,8 @@ account is in use.`,
 				Command:     "bureau matrix user whoami --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("whoami", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("whoami", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -401,4 +402,3 @@ account is in use.`,
 		},
 	}
 }
-

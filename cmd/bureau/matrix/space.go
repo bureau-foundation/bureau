@@ -5,12 +5,13 @@ package matrix
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -62,8 +63,8 @@ part only — the server name is appended automatically.`,
 				Command:     "bureau matrix space create 'Research' --topic 'Research coordination' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("space create", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("space create", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&alias, "alias", "", "local alias for the space (defaults to lowercased name with hyphens)")
 			flagSet.StringVar(&topic, "topic", "", "space topic")
@@ -128,8 +129,8 @@ table of room ID, alias, and name.`,
 				Command:     "bureau matrix space list --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("space list", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("space list", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -189,8 +190,8 @@ reclaim the room.`,
 				Command:     "bureau matrix space delete '!abc123:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("space delete", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("space delete", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -243,8 +244,8 @@ Displays a table of user ID, display name, and membership state
 				Command:     "bureau matrix space members '#my-project:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("space members", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("space members", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},

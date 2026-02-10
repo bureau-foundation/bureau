@@ -10,12 +10,13 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/spf13/pflag"
 )
 
 // Command represents a CLI command or subcommand.
@@ -37,9 +38,9 @@ type Command struct {
 	// Examples are shown in the help output after the description.
 	Examples []Example
 
-	// Flags returns a configured *flag.FlagSet for this command. Called
+	// Flags returns a configured *pflag.FlagSet for this command. Called
 	// lazily on first use. If nil, the command accepts no flags.
-	Flags func() *flag.FlagSet
+	Flags func() *pflag.FlagSet
 
 	// Subcommands are nested commands dispatched by the first positional arg.
 	Subcommands []*Command
@@ -118,7 +119,7 @@ func (c *Command) Execute(args []string) error {
 			// applicable, then a pointer to --help for full usage.
 			errMsg := err.Error()
 
-			if strings.Contains(errMsg, "flag provided but not defined") {
+			if strings.Contains(errMsg, "unknown flag") {
 				// Recreate the flagSet to get a clean copy for suggestion
 				// lookup (the failed parse may have consumed state).
 				suggestion := suggestFlag(args, c.Flags())

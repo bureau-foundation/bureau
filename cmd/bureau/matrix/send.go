@@ -5,11 +5,12 @@ package matrix
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -49,8 +50,8 @@ Bureau protocol events).`,
 				Command:     "bureau matrix send --credential-file ./creds --event-type m.bureau.status '!room:bureau.local' '{\"status\":\"active\"}'",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("send", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("send", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&threadID, "thread", "", "event ID of thread root to reply within")
 			flagSet.StringVar(&eventType, "event-type", "", "custom event type (default: m.room.message)")

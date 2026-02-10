@@ -6,11 +6,12 @@ package matrix
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -29,8 +30,8 @@ import (
 //
 //	var session SessionConfig
 //	command := &cli.Command{
-//	    Flags: func() *flag.FlagSet {
-//	        fs := flag.NewFlagSet("mycommand", flag.ContinueOnError)
+//	    Flags: func() *pflag.FlagSet {
+//	        fs := pflag.NewFlagSet("mycommand", pflag.ContinueOnError)
 //	        session.AddFlags(fs)
 //	        return fs
 //	    },
@@ -49,7 +50,7 @@ type SessionConfig struct {
 // AddFlags registers --credential-file, --homeserver, --token, and --user-id
 // on the given flag set. --credential-file is the primary interface; the
 // others are overrides for when you need to specify values directly.
-func (c *SessionConfig) AddFlags(flagSet *flag.FlagSet) {
+func (c *SessionConfig) AddFlags(flagSet *pflag.FlagSet) {
 	flagSet.StringVar(&c.CredentialFile, "credential-file", "", "path to Bureau credential file from 'bureau matrix setup' (required unless --homeserver/--token/--user-id are all set)")
 	flagSet.StringVar(&c.HomeserverURL, "homeserver", "", "Matrix homeserver URL (overrides credential file)")
 	flagSet.StringVar(&c.Token, "token", "", "Matrix access token (overrides credential file)")

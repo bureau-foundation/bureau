@@ -4,8 +4,9 @@
 package cli
 
 import (
-	"flag"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func TestLevenshtein(t *testing.T) {
@@ -17,10 +18,10 @@ func TestLevenshtein(t *testing.T) {
 		{"", "abc", 3},
 		{"abc", "", 3},
 		{"abc", "abc", 0},
-		{"abc", "abd", 1},       // substitution
-		{"abc", "ab", 1},        // deletion
-		{"ab", "abc", 1},        // insertion
-		{"abc", "bac", 2},       // transposition (counted as 2 edits)
+		{"abc", "abd", 1}, // substitution
+		{"abc", "ab", 1},  // deletion
+		{"ab", "abc", 1},  // insertion
+		{"abc", "bac", 2}, // transposition (counted as 2 edits)
 		{"kitten", "sitting", 3},
 		{"observe", "obsreve", 2},
 		{"matrix", "matrx", 1},
@@ -68,14 +69,14 @@ func TestSuggestCommand(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"obsreve", "observe"},   // typo
-		{"matrx", "matrix"},     // missing letter
-		{"matrixx", "matrix"},   // extra letter
-		{"vrsion", "version"},   // missing letter
-		{"lst", "list"},         // missing letters
+		{"obsreve", "observe"},    // typo
+		{"matrx", "matrix"},       // missing letter
+		{"matrixx", "matrix"},     // extra letter
+		{"vrsion", "version"},     // missing letter
+		{"lst", "list"},           // missing letters
 		{"dashbord", "dashboard"}, // missing letter
-		{"zzzzzzzzz", ""},       // nothing close
-		{"m", ""},               // too short to match well
+		{"zzzzzzzzz", ""},         // nothing close
+		{"m", ""},                 // too short to match well
 	}
 
 	for _, test := range tests {
@@ -89,8 +90,8 @@ func TestSuggestCommand(t *testing.T) {
 }
 
 func TestSuggestFlag(t *testing.T) {
-	makeFlagSet := func() *flag.FlagSet {
-		flagSet := flag.NewFlagSet("test", flag.ContinueOnError)
+	makeFlagSet := func() *pflag.FlagSet {
+		flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
 		flagSet.String("homeserver", "", "")
 		flagSet.String("token", "", "")
 		flagSet.String("socket", "", "")

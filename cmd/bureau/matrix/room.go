@@ -5,12 +5,12 @@ package matrix
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -38,26 +38,14 @@ aliases that mirror the principal naming convention:
 	}
 }
 
-// memberStateEventsFlag accumulates Bureau event types that room members
-// at power level 0 are allowed to set. Repeatable flag:
-//
-//	--member-state-event m.bureau.machine_key --member-state-event m.bureau.service
-type memberStateEventsFlag []string
-
-func (f *memberStateEventsFlag) String() string { return strings.Join(*f, ", ") }
-func (f *memberStateEventsFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
-
 func roomCreateCommand() *cli.Command {
 	var (
-		session            SessionConfig
-		space              string
-		name               string
-		topic              string
-		serverName         string
-		memberStateEvents  memberStateEventsFlag
+		session           SessionConfig
+		space             string
+		name              string
+		topic             string
+		serverName        string
+		memberStateEvents []string
 	)
 
 	return &cli.Command{
@@ -83,14 +71,14 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				Command:     "bureau matrix room create bureau/machines --space '#bureau:bureau.local' --name 'Bureau Machines' --member-state-event m.bureau.machine_key --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("room create", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("room create", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&space, "space", "", "parent space alias or room ID (required)")
 			flagSet.StringVar(&name, "name", "", "room display name (defaults to alias)")
 			flagSet.StringVar(&topic, "topic", "", "room topic")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for m.space.child via field")
-			flagSet.Var(&memberStateEvents, "member-state-event", "state event type that members can set (repeatable)")
+			flagSet.StringArrayVar(&memberStateEvents, "member-state-event", nil, "state event type that members can set (repeatable)")
 			return flagSet
 		},
 		Run: func(args []string) error {
@@ -179,8 +167,8 @@ lists all joined rooms that are NOT spaces.`,
 				Command:     "bureau matrix room list --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("room list", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("room list", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&space, "space", "", "list only rooms that are children of this space (alias or room ID)")
 			return flagSet
@@ -312,8 +300,8 @@ to clear the m.space.child event in the space.`,
 				Command:     "bureau matrix room delete '#iree/amdgpu/general:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("room delete", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("room delete", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},
@@ -366,8 +354,8 @@ Displays a table of user ID, display name, and membership state
 				Command:     "bureau matrix room members '#bureau/agents:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("room members", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("room members", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			return flagSet
 		},

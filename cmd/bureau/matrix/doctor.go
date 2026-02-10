@@ -6,11 +6,12 @@ package matrix
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -50,8 +51,8 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				Command:     "bureau matrix doctor --credential-file ./creds --json",
 			},
 		},
-		Flags: func() *flag.FlagSet {
-			flagSet := flag.NewFlagSet("doctor", flag.ContinueOnError)
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("doctor", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing aliases")
 			flagSet.BoolVar(&jsonOutput, "json", false, "machine-readable JSON output")

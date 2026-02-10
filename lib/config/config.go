@@ -113,14 +113,6 @@ type ProxyConfig struct {
 
 // SandboxConfig configures the execution sandbox.
 type SandboxConfig struct {
-	// DefaultProfile is the sandbox profile used when none is specified.
-	// Default: developer
-	DefaultProfile string `yaml:"default_profile"`
-
-	// ProfilesFile is the path to sandbox profiles configuration.
-	// Default: /etc/bureau/sandbox-profiles.yaml (or embedded defaults)
-	ProfilesFile string `yaml:"profiles_file"`
-
 	// Fallback configures behavior when sandbox capabilities are unavailable.
 	Fallback FallbackConfig `yaml:"fallback"`
 }
@@ -183,8 +175,6 @@ func Default() *Config {
 			CredentialPrefix: "BUREAU_",
 		},
 		Sandbox: SandboxConfig{
-			DefaultProfile: "developer",
-			ProfilesFile:   "",
 			Fallback: FallbackConfig{
 				NoUserns:  "skip",
 				NoBwrap:   "error",
@@ -263,7 +253,6 @@ func (c *Config) applyEnvironmentOverrides() {
 					AutoStart: false,
 				},
 				Sandbox: &SandboxConfig{
-					DefaultProfile: "assistant",
 					Fallback: FallbackConfig{
 						NoUserns: "error",
 					},
@@ -309,12 +298,6 @@ func (c *Config) applyEnvironmentOverrides() {
 	}
 
 	if overrides.Sandbox != nil {
-		if overrides.Sandbox.DefaultProfile != "" {
-			c.Sandbox.DefaultProfile = overrides.Sandbox.DefaultProfile
-		}
-		if overrides.Sandbox.ProfilesFile != "" {
-			c.Sandbox.ProfilesFile = overrides.Sandbox.ProfilesFile
-		}
 		if overrides.Sandbox.Fallback.NoUserns != "" {
 			c.Sandbox.Fallback.NoUserns = overrides.Sandbox.Fallback.NoUserns
 		}
@@ -356,7 +339,6 @@ func (c *Config) expandVariables() {
 	c.Paths.AgentTypes = expandVars(c.Paths.AgentTypes, vars)
 	c.Proxy.SocketPath = expandVars(c.Proxy.SocketPath, vars)
 	c.Proxy.ConfigFile = expandVars(c.Proxy.ConfigFile, vars)
-	c.Sandbox.ProfilesFile = expandVars(c.Sandbox.ProfilesFile, vars)
 }
 
 // expandVars expands ${VAR} and ${VAR:-default} patterns.
@@ -400,10 +382,6 @@ func (c *Config) Validate() error {
 
 	if c.Proxy.SocketPath == "" {
 		errs = append(errs, fmt.Errorf("proxy.socket_path is required"))
-	}
-
-	if c.Sandbox.DefaultProfile == "" {
-		errs = append(errs, fmt.Errorf("sandbox.default_profile is required"))
 	}
 
 	fallbackValues := []string{"skip", "warn", "error"}

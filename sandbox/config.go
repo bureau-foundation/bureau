@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Profile defines the sandbox configuration for a particular role.
@@ -89,57 +87,6 @@ type SecurityConfig struct {
 	NoNewPrivs    bool `yaml:"no_new_privs"`
 }
 
-// ProfilesConfig is the top-level configuration containing multiple profiles.
-type ProfilesConfig struct {
-	Profiles map[string]*Profile `yaml:"profiles"`
-}
-
-// LoadProfilesConfig loads profiles from a YAML file.
-func LoadProfilesConfig(path string) (*ProfilesConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read profiles config: %w", err)
-	}
-
-	return ParseProfilesConfig(data)
-}
-
-// ParseProfilesConfig parses profiles from YAML data.
-func ParseProfilesConfig(data []byte) (*ProfilesConfig, error) {
-	var config ProfilesConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse profiles config: %w", err)
-	}
-
-	// Set Name field from map key for convenience.
-	for name, profile := range config.Profiles {
-		profile.Name = name
-	}
-
-	return &config, nil
-}
-
-// ResolveProfile resolves a profile by name, applying inheritance.
-func (c *ProfilesConfig) ResolveProfile(name string) (*Profile, error) {
-	profile, ok := c.Profiles[name]
-	if !ok {
-		return nil, fmt.Errorf("profile not found: %s", name)
-	}
-
-	if profile.Inherit == "" {
-		return profile.Clone(), nil
-	}
-
-	// Resolve parent first.
-	parent, err := c.ResolveProfile(profile.Inherit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve parent profile %q: %w", profile.Inherit, err)
-	}
-
-	// Merge child into parent.
-	return mergeProfiles(parent, profile), nil
-}
-
 // Clone creates a deep copy of the profile.
 func (p *Profile) Clone() *Profile {
 	clone := &Profile{
@@ -172,9 +119,9 @@ func (p *Profile) Clone() *Profile {
 	return clone
 }
 
-// mergeProfiles merges child profile settings into parent.
+// MergeProfiles merges child profile settings into parent.
 // Child settings override parent settings.
-func mergeProfiles(parent, child *Profile) *Profile {
+func MergeProfiles(parent, child *Profile) *Profile {
 	result := parent.Clone()
 	result.Name = child.Name
 	result.Inherit = ""

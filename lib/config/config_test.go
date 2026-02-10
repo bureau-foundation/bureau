@@ -16,10 +16,6 @@ func TestDefault(t *testing.T) {
 		t.Errorf("expected environment=development, got %s", cfg.Environment)
 	}
 
-	if cfg.Sandbox.DefaultProfile != "developer" {
-		t.Errorf("expected default_profile=developer, got %s", cfg.Sandbox.DefaultProfile)
-	}
-
 	if cfg.Proxy.SocketPath != "/run/bureau/proxy.sock" {
 		t.Errorf("expected socket_path=/run/bureau/proxy.sock, got %s", cfg.Proxy.SocketPath)
 	}
@@ -101,7 +97,6 @@ proxy:
   auto_start: false
 
 sandbox:
-  default_profile: readonly
   fallback:
     no_userns: warn
 
@@ -134,10 +129,6 @@ launcher:
 		t.Error("expected auto_start=false")
 	}
 
-	if cfg.Sandbox.DefaultProfile != "readonly" {
-		t.Errorf("expected default_profile=readonly, got %s", cfg.Sandbox.DefaultProfile)
-	}
-
 	if cfg.Sandbox.Fallback.NoUserns != "warn" {
 		t.Errorf("expected no_userns=warn, got %s", cfg.Sandbox.Fallback.NoUserns)
 	}
@@ -161,7 +152,6 @@ proxy:
   auto_start: true
 
 sandbox:
-  default_profile: developer
   fallback:
     no_userns: skip
 
@@ -171,7 +161,6 @@ production:
   proxy:
     auto_start: false
   sandbox:
-    default_profile: assistant
     fallback:
       no_userns: error
 `
@@ -192,10 +181,6 @@ production:
 
 	if cfg.Proxy.AutoStart {
 		t.Error("expected auto_start=false from production override")
-	}
-
-	if cfg.Sandbox.DefaultProfile != "assistant" {
-		t.Errorf("expected default_profile=assistant, got %s", cfg.Sandbox.DefaultProfile)
 	}
 
 	if cfg.Sandbox.Fallback.NoUserns != "error" {

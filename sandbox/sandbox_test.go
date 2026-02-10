@@ -12,6 +12,47 @@ import (
 	"testing"
 )
 
+// testSandboxProfile returns a minimal profile suitable for sandbox tests.
+// This constructs the profile directly rather than loading from any external
+// source — sandbox configuration comes from Matrix templates at runtime,
+// not compiled-in YAML.
+func testSandboxProfile() *Profile {
+	return &Profile{
+		Name:        "test",
+		Description: "Minimal profile for sandbox tests",
+		Filesystem: []Mount{
+			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
+			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/lib", Dest: "/lib", Mode: "ro"},
+			{Source: "/lib64", Dest: "/lib64", Mode: "ro", Optional: true},
+			{Source: "/etc/passwd", Dest: "/etc/passwd", Mode: "ro"},
+			{Source: "/etc/group", Dest: "/etc/group", Mode: "ro"},
+			{Source: "/nix", Dest: "/nix", Mode: "ro", Optional: true},
+		},
+		Namespaces: NamespaceConfig{
+			PID: true,
+			Net: true,
+			IPC: true,
+			UTS: true,
+		},
+		Environment: map[string]string{
+			"PATH":                "/workspace/bin:/usr/local/bin:/usr/bin:/bin",
+			"HOME":                "/workspace",
+			"TERM":                "${TERM}",
+			"BUREAU_SANDBOX":      "1",
+			"BUREAU_PROXY_SOCKET": "/run/bureau/proxy.sock",
+		},
+		Security: SecurityConfig{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+	}
+}
+
 // testCapabilities caches capability detection across tests.
 var testCapabilities *Capabilities
 
@@ -34,16 +75,7 @@ func skipIfNoSandbox(t *testing.T) {
 }
 
 func TestSandboxDryRun(t *testing.T) {
-	// This test doesn't require actual sandbox execution.
-	loader := NewProfileLoader()
-	if err := loader.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults failed: %v", err)
-	}
-
-	profile, err := loader.Resolve("developer")
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	profile := testSandboxProfile()
 
 	// Create temp worktree.
 	worktree := t.TempDir()
@@ -85,15 +117,7 @@ func TestSandboxDryRun(t *testing.T) {
 }
 
 func TestSandboxValidate(t *testing.T) {
-	loader := NewProfileLoader()
-	if err := loader.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults failed: %v", err)
-	}
-
-	profile, err := loader.Resolve("developer")
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	profile := testSandboxProfile()
 
 	worktree := t.TempDir()
 
@@ -106,14 +130,14 @@ func TestSandboxValidate(t *testing.T) {
 	}
 
 	// Validate should produce output.
-	var buf bytes.Buffer
-	err = sb.Validate(&buf)
+	var buffer bytes.Buffer
+	err = sb.Validate(&buffer)
 
-	output := buf.String()
+	output := buffer.String()
 	t.Logf("Validation output:\n%s", output)
 
 	// Should mention the profile.
-	if !strings.Contains(output, "developer") {
+	if !strings.Contains(output, "test") {
 		t.Errorf("expected profile name in output")
 	}
 
@@ -126,15 +150,7 @@ func TestSandboxValidate(t *testing.T) {
 func TestSandboxRunSimple(t *testing.T) {
 	skipIfNoSandbox(t)
 
-	loader := NewProfileLoader()
-	if err := loader.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults failed: %v", err)
-	}
-
-	profile, err := loader.Resolve("developer")
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	profile := testSandboxProfile()
 
 	worktree := t.TempDir()
 
@@ -164,15 +180,7 @@ func TestSandboxRunSimple(t *testing.T) {
 func TestSandboxRunWriteWorktree(t *testing.T) {
 	skipIfNoSandbox(t)
 
-	loader := NewProfileLoader()
-	if err := loader.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults failed: %v", err)
-	}
-
-	profile, err := loader.Resolve("developer")
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	profile := testSandboxProfile()
 
 	worktree := t.TempDir()
 
@@ -207,15 +215,7 @@ func TestSandboxRunWriteWorktree(t *testing.T) {
 func TestSandboxExitCode(t *testing.T) {
 	skipIfNoSandbox(t)
 
-	loader := NewProfileLoader()
-	if err := loader.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults failed: %v", err)
-	}
-
-	profile, err := loader.Resolve("developer")
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
+	profile := testSandboxProfile()
 
 	worktree := t.TempDir()
 

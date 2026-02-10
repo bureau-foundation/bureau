@@ -7,138 +7,75 @@ import (
 	"testing"
 )
 
-func TestParseProfilesConfig(t *testing.T) {
-	yaml := `
-profiles:
-  test:
-    description: "Test profile"
-    filesystem:
-      - source: /tmp
-        dest: /test
-        mode: ro
-    namespaces:
-      pid: true
-      net: true
-    environment:
-      FOO: bar
-    resources:
-      tasks_max: 100
-      memory_max: "4G"
-    security:
-      new_session: true
-`
-	config, err := ParseProfilesConfig([]byte(yaml))
-	if err != nil {
-		t.Fatalf("ParseProfilesConfig failed: %v", err)
+func TestMergeProfiles(t *testing.T) {
+	t.Parallel()
+
+	parent := &Profile{
+		Name:        "parent",
+		Description: "Parent profile",
+		Filesystem: []Mount{
+			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/tmp", Dest: "/tmp", Mode: "rw"},
+		},
+		Namespaces: NamespaceConfig{
+			PID: true,
+			Net: true,
+		},
+		Environment: map[string]string{
+			"PATH": "/usr/bin",
+			"HOME": "/home",
+		},
+		Resources: ResourceConfig{
+			TasksMax:  100,
+			MemoryMax: "4G",
+		},
+		Security: SecurityConfig{
+			NewSession: true,
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp"},
 	}
 
-	profile, ok := config.Profiles["test"]
-	if !ok {
-		t.Fatal("profile 'test' not found")
+	child := &Profile{
+		Name:        "child",
+		Description: "Child profile",
+		Filesystem: []Mount{
+			{Source: "/workspace", Dest: "/tmp", Mode: "ro"},
+		},
+		Environment: map[string]string{
+			"HOME":  "/workspace",
+			"EXTRA": "value",
+		},
+		Resources: ResourceConfig{
+			MemoryMax: "2G",
+		},
 	}
 
-	if profile.Name != "test" {
-		t.Errorf("expected name 'test', got %q", profile.Name)
+	merged := MergeProfiles(parent, child)
+
+	// Name comes from child.
+	if merged.Name != "child" {
+		t.Errorf("expected name 'child', got %q", merged.Name)
 	}
 
-	if profile.Description != "Test profile" {
-		t.Errorf("expected description 'Test profile', got %q", profile.Description)
+	// Inherit is cleared after merge.
+	if merged.Inherit != "" {
+		t.Errorf("expected empty inherit after merge, got %q", merged.Inherit)
 	}
 
-	if len(profile.Filesystem) != 1 {
-		t.Errorf("expected 1 mount, got %d", len(profile.Filesystem))
-	} else {
-		m := profile.Filesystem[0]
-		if m.Source != "/tmp" || m.Dest != "/test" || m.Mode != "ro" {
-			t.Errorf("unexpected mount: %+v", m)
-		}
+	// Description comes from child.
+	if merged.Description != "Child profile" {
+		t.Errorf("expected 'Child profile', got %q", merged.Description)
 	}
 
-	if !profile.Namespaces.PID {
-		t.Error("expected PID namespace")
-	}
-	if !profile.Namespaces.Net {
-		t.Error("expected Net namespace")
-	}
-
-	if profile.Environment["FOO"] != "bar" {
-		t.Errorf("expected FOO=bar, got %q", profile.Environment["FOO"])
-	}
-
-	if profile.Resources.TasksMax != 100 {
-		t.Errorf("expected tasks_max=100, got %d", profile.Resources.TasksMax)
-	}
-
-	if profile.Resources.MemoryMax != "4G" {
-		t.Errorf("expected memory_max=4G, got %q", profile.Resources.MemoryMax)
-	}
-
-	if !profile.Security.NewSession {
-		t.Error("expected new_session=true")
-	}
-}
-
-func TestProfileInheritance(t *testing.T) {
-	yaml := `
-profiles:
-  parent:
-    description: "Parent profile"
-    filesystem:
-      - source: /usr
-        dest: /usr
-        mode: ro
-      - source: /tmp
-        dest: /tmp
-        mode: rw
-    namespaces:
-      pid: true
-      net: true
-    environment:
-      PATH: /usr/bin
-      HOME: /home
-    resources:
-      tasks_max: 100
-      memory_max: "4G"
-    security:
-      new_session: true
-
-  child:
-    description: "Child profile"
-    inherit: parent
-    filesystem:
-      - source: /workspace
-        dest: /tmp
-        mode: ro
-    environment:
-      HOME: /workspace
-      EXTRA: value
-    resources:
-      memory_max: "2G"
-`
-	config, err := ParseProfilesConfig([]byte(yaml))
-	if err != nil {
-		t.Fatalf("ParseProfilesConfig failed: %v", err)
-	}
-
-	child, err := config.ResolveProfile("child")
-	if err != nil {
-		t.Fatalf("ResolveProfile failed: %v", err)
-	}
-
-	// Child should have its own description.
-	if child.Description != "Child profile" {
-		t.Errorf("expected 'Child profile', got %q", child.Description)
-	}
-
-	// Namespaces should be inherited.
-	if !child.Namespaces.PID || !child.Namespaces.Net {
+	// Namespaces inherited from parent (child has zero-value NamespaceConfig).
+	if !merged.Namespaces.PID || !merged.Namespaces.Net {
 		t.Error("expected inherited namespaces")
 	}
 
-	// Filesystem should have parent's /usr and child's override of /tmp.
+	// Filesystem: parent's /usr kept, child's /tmp overrides parent's /tmp.
 	foundUsr := false
 	foundTmp := false
-	for _, m := range child.Filesystem {
+	for _, m := range merged.Filesystem {
 		if m.Dest == "/usr" && m.Source == "/usr" && m.Mode == "ro" {
 			foundUsr = true
 		}
@@ -150,35 +87,78 @@ profiles:
 		t.Error("expected inherited /usr mount")
 	}
 	if !foundTmp {
-		t.Error("expected overridden /tmp mount")
+		t.Error("expected child's /tmp mount to override parent's")
 	}
 
-	// Environment should be merged.
-	if child.Environment["PATH"] != "/usr/bin" {
-		t.Errorf("expected inherited PATH, got %q", child.Environment["PATH"])
+	// Environment: merged (parent PATH kept, child HOME overrides, child EXTRA added).
+	if merged.Environment["PATH"] != "/usr/bin" {
+		t.Errorf("expected inherited PATH, got %q", merged.Environment["PATH"])
 	}
-	if child.Environment["HOME"] != "/workspace" {
-		t.Errorf("expected overridden HOME=/workspace, got %q", child.Environment["HOME"])
+	if merged.Environment["HOME"] != "/workspace" {
+		t.Errorf("expected overridden HOME=/workspace, got %q", merged.Environment["HOME"])
 	}
-	if child.Environment["EXTRA"] != "value" {
-		t.Errorf("expected EXTRA=value, got %q", child.Environment["EXTRA"])
-	}
-
-	// Resources should be overridden where specified.
-	if child.Resources.TasksMax != 100 {
-		t.Errorf("expected inherited tasks_max=100, got %d", child.Resources.TasksMax)
-	}
-	if child.Resources.MemoryMax != "2G" {
-		t.Errorf("expected overridden memory_max=2G, got %q", child.Resources.MemoryMax)
+	if merged.Environment["EXTRA"] != "value" {
+		t.Errorf("expected EXTRA=value, got %q", merged.Environment["EXTRA"])
 	}
 
-	// Security should be inherited.
-	if !child.Security.NewSession {
+	// Resources: non-zero child fields override, zero-value fields inherit.
+	if merged.Resources.TasksMax != 100 {
+		t.Errorf("expected inherited tasks_max=100, got %d", merged.Resources.TasksMax)
+	}
+	if merged.Resources.MemoryMax != "2G" {
+		t.Errorf("expected overridden memory_max=2G, got %q", merged.Resources.MemoryMax)
+	}
+
+	// Security inherited from parent.
+	if !merged.Security.NewSession {
 		t.Error("expected inherited new_session")
+	}
+
+	// CreateDirs inherited from parent (child has none to add).
+	if len(merged.CreateDirs) != 2 {
+		t.Errorf("expected 2 create_dirs, got %d", len(merged.CreateDirs))
+	}
+
+	// Verify parent was not mutated.
+	if parent.Name != "parent" {
+		t.Error("parent was mutated by merge")
+	}
+	if parent.Environment["HOME"] != "/home" {
+		t.Error("parent environment was mutated by merge")
+	}
+}
+
+func TestMergeProfilesCreateDirsDeduplicate(t *testing.T) {
+	t.Parallel()
+
+	parent := &Profile{
+		Name:       "parent",
+		CreateDirs: []string{"/tmp", "/var/tmp"},
+	}
+
+	child := &Profile{
+		Name:       "child",
+		CreateDirs: []string{"/tmp", "/run/bureau"},
+	}
+
+	merged := MergeProfiles(parent, child)
+
+	dirSet := make(map[string]bool)
+	for _, d := range merged.CreateDirs {
+		if dirSet[d] {
+			t.Errorf("duplicate create_dir: %s", d)
+		}
+		dirSet[d] = true
+	}
+
+	if !dirSet["/tmp"] || !dirSet["/var/tmp"] || !dirSet["/run/bureau"] {
+		t.Errorf("expected all three dirs, got %v", merged.CreateDirs)
 	}
 }
 
 func TestVariableExpansion(t *testing.T) {
+	t.Parallel()
+
 	vars := Variables{
 		"WORKTREE":     "/home/user/work",
 		"PROXY_SOCKET": "/run/proxy.sock",
@@ -205,6 +185,8 @@ func TestVariableExpansion(t *testing.T) {
 }
 
 func TestExpandProfile(t *testing.T) {
+	t.Parallel()
+
 	vars := Variables{
 		"WORKTREE":     "/home/user/work",
 		"PROXY_SOCKET": "/run/proxy.sock",
@@ -254,6 +236,8 @@ func TestExpandProfile(t *testing.T) {
 }
 
 func TestProfileValidation(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		profile   Profile
@@ -323,6 +307,7 @@ func TestProfileValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.profile.Validate()
 			if tt.expectErr && err == nil {
 				t.Error("expected validation error, got nil")
@@ -335,6 +320,8 @@ func TestProfileValidation(t *testing.T) {
 }
 
 func TestResourceConfigHasLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		config   ResourceConfig
@@ -378,10 +365,27 @@ func TestResourceConfigHasLimits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := tt.config.HasLimits()
 			if result != tt.expected {
 				t.Errorf("HasLimits() = %v, expected %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDefaultVariables(t *testing.T) {
+	t.Parallel()
+
+	vars := DefaultVariables()
+
+	// BUREAU_ROOT should be set.
+	if vars["BUREAU_ROOT"] == "" {
+		t.Error("BUREAU_ROOT should be set")
+	}
+
+	// PROXY_SOCKET should default to /run/bureau/proxy.sock.
+	if vars["PROXY_SOCKET"] != "/run/bureau/proxy.sock" {
+		t.Errorf("expected PROXY_SOCKET=/run/bureau/proxy.sock, got %q", vars["PROXY_SOCKET"])
 	}
 }

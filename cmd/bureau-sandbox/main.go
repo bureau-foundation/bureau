@@ -7,8 +7,6 @@
 //
 //	bureau-sandbox run [flags] -- <command> [args...]
 //	bureau-sandbox validate [flags]
-//	bureau-sandbox list-profiles
-//	bureau-sandbox show-profile <name>
 //	bureau-sandbox test [flags]
 package main
 
@@ -22,9 +20,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bureau-foundation/bureau/lib/config"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/sandbox"
+
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -51,10 +50,6 @@ func main() {
 		err = runCmd(args, logger)
 	case "validate":
 		err = validateCmd(args, logger)
-	case "list-profiles":
-		err = listProfilesCmd(args)
-	case "show-profile":
-		err = showProfileCmd(args)
 	case "test":
 		err = testCmd(args, logger)
 	case "version", "--version", "-v":
@@ -88,23 +83,42 @@ USAGE
 COMMANDS
     run           Run a command in the sandbox
     validate      Validate sandbox configuration
-    list-profiles List available profiles
-    show-profile  Show profile details
     test          Run escape detection tests
     version       Show version
 
 EXAMPLES
-    # Run a command in the developer profile
-    bureau-sandbox run --profile=developer --worktree=/path/to/work -- bash
+    # Run a command with an explicit profile file
+    bureau-sandbox run --profile-file=myprofile.yaml --worktree=/path/to/work -- bash
 
     # Validate configuration before running
-    bureau-sandbox validate --profile=developer --worktree=/path/to/work
+    bureau-sandbox validate --profile-file=myprofile.yaml --worktree=/path/to/work
 
     # Run with GPU support
-    bureau-sandbox run --profile=developer --gpu --worktree=/path/to/work -- python train.py
+    bureau-sandbox run --profile-file=myprofile.yaml --gpu --worktree=/path/to/work -- python train.py
 
     # Dry run to see the bwrap command
-    bureau-sandbox run --profile=developer --worktree=/path/to/work --dry-run -- bash
+    bureau-sandbox run --profile-file=myprofile.yaml --worktree=/path/to/work --dry-run -- bash
+
+PROFILE FILES
+    Profile files are YAML containing a sandbox profile definition:
+
+        description: "My sandbox profile"
+        filesystem:
+          - source: /usr
+            dest: /usr
+            mode: ro
+        namespaces:
+          pid: true
+          net: true
+        environment:
+          PATH: "/usr/bin:/bin"
+        security:
+          new_session: true
+          die_with_parent: true
+          no_new_privs: true
+
+    In production, sandbox configuration comes from Matrix templates resolved
+    by the daemon. This CLI is for manual testing and development.
 
 ENVIRONMENT
     BUREAU_ROOT          Base directory for Bureau (default: ~/.cache/bureau)
@@ -115,51 +129,35 @@ For more information, see: https://github.com/bureau-foundation/bureau
 `)
 }
 
-// loadProfiles loads sandbox profiles from the appropriate source.
-// If BUREAU_CONFIG is set and contains sandbox.profiles_file, load from there.
-// Otherwise fall back to standard search paths.
-func loadProfiles(logger *slog.Logger) (*sandbox.ProfileLoader, error) {
-	loader := sandbox.NewProfileLoader()
-	loader.SetLogger(logger)
-
-	// Load defaults first.
-	if err := loader.LoadDefaults(); err != nil {
-		return nil, err
+// loadProfileFile loads a sandbox profile from a YAML file.
+// The file should contain a single profile definition (not wrapped in a
+// "profiles:" key). Inheritance is not supported in standalone profile files;
+// template inheritance is resolved by the daemon via Matrix.
+func loadProfileFile(path string) (*sandbox.Profile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading profile file: %w", err)
 	}
 
-	// Check if BUREAU_CONFIG specifies a profiles file.
-	if configPath := os.Getenv("BUREAU_CONFIG"); configPath != "" {
-		cfg, err := config.LoadFile(configPath)
-		if err != nil {
-			logger.Warn("failed to load BUREAU_CONFIG, using search paths", "error", err)
-		} else if cfg.Sandbox.ProfilesFile != "" {
-			logger.Info("loading profiles from config", "path", cfg.Sandbox.ProfilesFile)
-			if err := loader.LoadFile(cfg.Sandbox.ProfilesFile); err != nil {
-				return nil, fmt.Errorf("failed to load profiles from %s: %w", cfg.Sandbox.ProfilesFile, err)
-			}
-			return loader, nil
-		}
+	var profile sandbox.Profile
+	if err := yaml.Unmarshal(data, &profile); err != nil {
+		return nil, fmt.Errorf("parsing profile file %s: %w", path, err)
 	}
 
-	// Fall back to search paths.
-	for _, path := range sandbox.ConfigSearchPaths() {
-		if _, err := os.Stat(path); err == nil {
-			if err := loader.LoadFile(path); err != nil {
-				return nil, fmt.Errorf("failed to load %s: %w", path, err)
-			}
-		} else {
-			loader.SetLogger(logger) // Re-set to log "not found" messages
-		}
+	if profile.Inherit != "" {
+		return nil, fmt.Errorf("profile file %s uses 'inherit: %s' but inheritance is not "+
+			"supported in standalone profile files; use a fully-resolved profile or "+
+			"templates via Matrix", path, profile.Inherit)
 	}
 
-	return loader, nil
+	return &profile, nil
 }
 
 // runCmd implements the "run" command.
 func runCmd(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
-	profile := fs.String("profile", "developer", "Profile name")
+	profileFile := fs.String("profile-file", "", "Path to a YAML sandbox profile definition (required)")
 	worktree := fs.String("worktree", "", "Path to agent worktree (required)")
 	proxySocket := fs.String("proxy-socket", "", "Override proxy socket path")
 	scopeName := fs.String("name", "", "Systemd scope name for resource tracking")
@@ -186,9 +184,9 @@ FLAGS
 		fs.PrintDefaults()
 		fmt.Print(`
 EXAMPLES
-    bureau-sandbox run --profile=developer --worktree=/work -- bash
-    bureau-sandbox run --profile=developer --worktree=/work --gpu -- python train.py
-    bureau-sandbox run --profile=developer --worktree=/work --dry-run -- bash
+    bureau-sandbox run --profile-file=dev.yaml --worktree=/work -- bash
+    bureau-sandbox run --profile-file=dev.yaml --worktree=/work --gpu -- python train.py
+    bureau-sandbox run --profile-file=dev.yaml --worktree=/work --dry-run -- bash
 `)
 	}
 
@@ -202,18 +200,16 @@ EXAMPLES
 		return fmt.Errorf("command is required after --")
 	}
 
+	if *profileFile == "" {
+		return fmt.Errorf("--profile-file is required: specify a YAML file containing the sandbox profile definition")
+	}
+
 	if *worktree == "" {
 		return fmt.Errorf("--worktree is required")
 	}
 
-	// Load profiles with verbose logging.
-	loader, err := loadProfiles(logger)
-	if err != nil {
-		return fmt.Errorf("failed to load profiles: %w", err)
-	}
-
-	// Resolve profile.
-	prof, err := loader.Resolve(*profile)
+	// Load profile from file.
+	profile, err := loadProfileFile(*profileFile)
 	if err != nil {
 		return err
 	}
@@ -230,7 +226,7 @@ EXAMPLES
 
 	// Create sandbox.
 	sb, err := sandbox.New(sandbox.Config{
-		Profile:     prof,
+		Profile:     profile,
 		Worktree:    *worktree,
 		ProxySocket: *proxySocket,
 		ScopeName:   *scopeName,
@@ -263,10 +259,10 @@ EXAMPLES
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
+		<-signalChannel
 		cancel()
 	}()
 
@@ -278,7 +274,7 @@ EXAMPLES
 func validateCmd(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 
-	profile := fs.String("profile", "developer", "Profile name")
+	profileFile := fs.String("profile-file", "", "Path to a YAML sandbox profile definition (required)")
 	worktree := fs.String("worktree", "", "Path to agent worktree (required)")
 	proxySocket := fs.String("proxy-socket", "", "Override proxy socket path")
 	gpu := fs.Bool("gpu", false, "Also validate GPU requirements")
@@ -298,25 +294,23 @@ FLAGS
 		return err
 	}
 
+	if *profileFile == "" {
+		return fmt.Errorf("--profile-file is required: specify a YAML file containing the sandbox profile definition")
+	}
+
 	if *worktree == "" {
 		return fmt.Errorf("--worktree is required")
 	}
 
-	// Load profiles with verbose logging.
-	loader, err := loadProfiles(logger)
-	if err != nil {
-		return fmt.Errorf("failed to load profiles: %w", err)
-	}
-
-	// Resolve profile.
-	prof, err := loader.Resolve(*profile)
+	// Load profile from file.
+	profile, err := loadProfileFile(*profileFile)
 	if err != nil {
 		return err
 	}
 
 	// Run validation.
 	validator := sandbox.NewValidator()
-	validator.ValidateAll(prof, *worktree, *proxySocket)
+	validator.ValidateAll(profile, *worktree, *proxySocket)
 
 	if *gpu {
 		validator.ValidateGPU()
@@ -330,112 +324,10 @@ FLAGS
 	return nil
 }
 
-// listProfilesCmd implements the "list-profiles" command.
-func listProfilesCmd(args []string) error {
-	loader, err := sandbox.LoadFromSearchPaths()
-	if err != nil {
-		return fmt.Errorf("failed to load profiles: %w", err)
-	}
-
-	profiles := loader.List()
-	fmt.Println("Available profiles:")
-	for _, name := range profiles {
-		prof, err := loader.Resolve(name)
-		if err != nil {
-			fmt.Printf("  %s (error: %v)\n", name, err)
-			continue
-		}
-		fmt.Printf("  %s - %s\n", name, prof.Description)
-	}
-
-	return nil
-}
-
-// showProfileCmd implements the "show-profile" command.
-func showProfileCmd(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("profile name required")
-	}
-	name := args[0]
-
-	loader, err := sandbox.LoadFromSearchPaths()
-	if err != nil {
-		return fmt.Errorf("failed to load profiles: %w", err)
-	}
-
-	prof, err := loader.Resolve(name)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Profile: %s\n", prof.Name)
-	fmt.Printf("Description: %s\n", prof.Description)
-	fmt.Println()
-
-	fmt.Println("Namespaces:")
-	fmt.Printf("  PID: %v\n", prof.Namespaces.PID)
-	fmt.Printf("  Net: %v\n", prof.Namespaces.Net)
-	fmt.Printf("  IPC: %v\n", prof.Namespaces.IPC)
-	fmt.Printf("  UTS: %v\n", prof.Namespaces.UTS)
-	fmt.Printf("  Cgroup: %v\n", prof.Namespaces.Cgroup)
-	fmt.Println()
-
-	fmt.Println("Security:")
-	fmt.Printf("  New Session: %v\n", prof.Security.NewSession)
-	fmt.Printf("  Die With Parent: %v\n", prof.Security.DieWithParent)
-	fmt.Printf("  No New Privs: %v\n", prof.Security.NoNewPrivs)
-	fmt.Println()
-
-	fmt.Println("Resources:")
-	if prof.Resources.TasksMax > 0 {
-		fmt.Printf("  Tasks Max: %d\n", prof.Resources.TasksMax)
-	} else {
-		fmt.Printf("  Tasks Max: unlimited\n")
-	}
-	if prof.Resources.MemoryMax != "" {
-		fmt.Printf("  Memory Max: %s\n", prof.Resources.MemoryMax)
-	} else {
-		fmt.Printf("  Memory Max: unlimited\n")
-	}
-	if prof.Resources.CPUQuota != "" {
-		fmt.Printf("  CPU Quota: %s\n", prof.Resources.CPUQuota)
-	} else {
-		fmt.Printf("  CPU Quota: unlimited\n")
-	}
-	fmt.Println()
-
-	fmt.Println("Filesystem Mounts:")
-	for _, m := range prof.Filesystem {
-		mode := m.Mode
-		if mode == "" {
-			mode = "rw"
-		}
-		optional := ""
-		if m.Optional {
-			optional = " (optional)"
-		}
-		if m.Type == "" || m.Type == "bind" || m.Type == "dev-bind" {
-			fmt.Printf("  %s -> %s [%s]%s\n", m.Source, m.Dest, mode, optional)
-		} else {
-			fmt.Printf("  %s at %s%s\n", m.Type, m.Dest, optional)
-		}
-	}
-	fmt.Println()
-
-	fmt.Println("Environment:")
-	for k, v := range prof.Environment {
-		fmt.Printf("  %s=%s\n", k, v)
-	}
-
-	return nil
-}
-
 // testCmd implements the "test" command.
 func testCmd(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
 
-	profile := fs.String("profile", "developer", "Profile name")
-	worktree := fs.String("worktree", "", "Path to test worktree")
 	category := fs.String("category", "", "Run only tests in this category")
 
 	fs.Usage = func() {
@@ -461,7 +353,7 @@ CATEGORIES
 NOTE
     This command should be run INSIDE a sandbox. To test your sandbox:
 
-    bureau-sandbox run --profile=developer --worktree=/tmp/test -- \
+    bureau-sandbox run --profile-file=dev.yaml --worktree=/tmp/test -- \
         bureau-sandbox test
 `)
 	}
@@ -475,11 +367,7 @@ NOTE
 		fmt.Println("Warning: Not running inside a sandbox (BUREAU_SANDBOX != 1)")
 		fmt.Println("For proper testing, run this command inside a sandbox:")
 		fmt.Println()
-		if *worktree != "" {
-			fmt.Printf("  bureau-sandbox run --profile=%s --worktree=%s -- \\\n", *profile, *worktree)
-		} else {
-			fmt.Printf("  bureau-sandbox run --profile=%s --worktree=/tmp/test -- \\\n", *profile)
-		}
+		fmt.Println("  bureau-sandbox run --profile-file=<profile.yaml> --worktree=/tmp/test -- \\")
 		fmt.Println("      bureau-sandbox test")
 		fmt.Println()
 		fmt.Println("Running tests anyway (results may not reflect sandbox isolation)...")

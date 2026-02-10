@@ -36,6 +36,11 @@ test:ci --test_output=errors
 build:remote --remote_executor=grpc://localhost:8980
 build:remote --jobs=64
 build:remote --extra_execution_platforms=//:remote_linux_amd64
+# Extend PATH for remote test actions so tests can find Nix-provided tools
+# (tmux, etc.) mounted at /usr/local/bin in the runner container. Build
+# actions keep the default PATH (/bin:/usr/bin) — they don't need external
+# tools since the Go SDK is shipped via CAS.
+test:remote --test_env=PATH=/bin:/usr/bin:/usr/local/bin
 
 # Import per-user local overrides if present.
 try-import %workspace%/.bazelrc.local

@@ -92,6 +92,17 @@
           )
           // {
             default = self.packages.${system}.bureau;
+
+            # Tools available inside the Buildbarn runner container via
+            # bind-mounted /nix/store. Build with:
+            #   nix build .#runner-env --out-link deploy/buildbarn/runner-env
+            # The runner-env/bin directory is mounted at /usr/local/bin in
+            # the runner. Adding a package here makes it available to all
+            # remote build and test actions.
+            runner-env = pkgs.buildEnv {
+              name = "bureau-runner-env";
+              paths = [ pkgs.tmux ];
+            };
           };
 
         devShells.default = pkgs.mkShell {

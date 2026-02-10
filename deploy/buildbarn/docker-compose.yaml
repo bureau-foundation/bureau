@@ -100,6 +100,8 @@ services:
       - ./bb-runner.jsonnet:/config/bb-runner.jsonnet:ro
       - bb-runner-bin:/bb:ro
       - bb-worker-data:/worker
+      - /nix/store:/nix/store:ro
+      - ./runner-env/bin:/usr/local/bin:ro
 
 volumes:
   bb-storage-cas:

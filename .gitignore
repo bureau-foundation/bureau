@@ -76,3 +76,6 @@ history
 # Deploy secrets (written by bureau matrix setup / attic bootstrap, not committed)
 deploy/matrix/bureau-creds
 deploy/matrix/.env-attic-token
+
+# Nix runner environment (symlink to /nix/store, machine-local)
+deploy/buildbarn/runner-env

@@ -71,7 +71,41 @@ container restarts.
 | 8983 | gRPC | bb-scheduler | Worker endpoint (bb-worker registers here) |
 | 8984 | gRPC | bb-scheduler | BuildQueueState (monitoring/tooling) |
 
-## 1. Start the Stack
+## 1. Build the Runner Environment
+
+The runner container bind-mounts `/nix/store` from the host and exposes
+Nix-provided tools at `/usr/local/bin`. This is how remote build actions
+get access to tools like tmux, and eventually clang, Vulkan SDKs, etc.
+
+Build the runner environment derivation:
+
+```bash
+nix build .#runner-env --out-link deploy/buildbarn/runner-env
+```
+
+This creates a symlink at `deploy/buildbarn/runner-env` pointing into
+`/nix/store/...`. The symlink is gitignored (machine-local). Docker
+Compose resolves it at container start, mounting the derivation's `bin/`
+directory at `/usr/local/bin` inside the runner.
+
+Re-run this command after:
+- `nix flake update` (dependency versions changed)
+- Adding packages to `runner-env` in `flake.nix`
+
+To add a tool to the runner, add it to the `paths` list in the
+`runner-env` package definition in `flake.nix`:
+
+```nix
+runner-env = pkgs.buildEnv {
+  name = "bureau-runner-env";
+  paths = [ pkgs.tmux pkgs.clang /* add packages here */ ];
+};
+```
+
+Each package brings its full transitive closure into `/nix/store`
+automatically. The runner sees all of them via the bind-mount.
+
+## 2. Start the Stack
 
 ```bash
 cd deploy/buildbarn
@@ -97,7 +131,7 @@ The CAS blocks file is declared as 32 GB but starts near zero — it grows
 as build artifacts are cached. Persistence checkpoints are written every
 5 minutes, so the cache survives container restarts.
 
-## 2. Verify the Services
+## 3. Verify the Services
 
 bb-storage diagnostics:
 
@@ -121,7 +155,7 @@ Check that the worker has registered with the scheduler by browsing
 the admin UI at http://localhost:7982/ — you should see a worker listed
 under the `linux` platform queue.
 
-## 3. Configure Bazel
+## 4. Configure Bazel
 
 The Bureau repo ships a `remote` config in `.bazelrc`:
 
@@ -151,7 +185,7 @@ Per-machine overrides (different host, different job count) go in
 echo 'build:remote --remote_executor=grpc://buildserver:8980' >> .bazelrc.local
 ```
 
-## 4. Verify Remote Execution
+## 5. Verify Remote Execution
 
 Build, clean, and build again. The second build should execute remotely
 with full cache hits:
@@ -169,25 +203,13 @@ bazel build --config=remote //...
 Look for `remote cache hit` in the build output. Check the scheduler
 admin UI at http://localhost:7982/ — completed actions should be visible.
 
-Tests that depend on external tools (tmux, network access) will fail
-remotely because the runner container is a minimal Ubuntu image with no
-network. Run these locally or with `--test_strategy=local`:
-
-```bash
-bazel test --config=remote //... --test_strategy=local
-```
-
-This executes test actions locally while still using the remote cache for
-build actions. Once the runner has access to the full Nix store (via
-bind-mount), all tests can execute remotely.
-
 You can also check Prometheus metrics:
 
 ```bash
 curl -s http://localhost:9980/metrics | grep -i 'blob_access'
 ```
 
-## 5. Teardown
+## 6. Teardown
 
 ```bash
 docker compose down

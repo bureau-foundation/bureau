@@ -1,0 +1,7 @@
+[global]
+server_name = "bureau.local"
+database_path = "/var/lib/continuwuity"
+port = [6167]
+address = "0.0.0.0"
+allow_registration = true
+allow_federation = false

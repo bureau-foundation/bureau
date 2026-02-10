@@ -1,0 +1,19 @@
+services:
+  matrix:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    container_name: bureau-matrix
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:6167:6167"
+    volumes:
+      - matrix-data:/var/lib/continuwuity
+      - ./continuwuity.toml:/etc/conduwuit/conduwuit.toml:ro
+    environment:
+      CONDUWUIT_CONFIG: "/etc/conduwuit/conduwuit.toml"
+      CONTINUWUITY_SERVER_NAME: "${BUREAU_MATRIX_SERVER_NAME:-bureau.local}"
+      CONTINUWUITY_REGISTRATION_TOKEN: "${BUREAU_MATRIX_REGISTRATION_TOKEN}"
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+
+volumes:
+  matrix-data:

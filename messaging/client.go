@@ -1,0 +1,334 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package messaging wraps the Matrix client-server API for Bureau's needs.
+//
+// The package provides two types:
+//   - Client handles unauthenticated operations (registration, login).
+//   - Session wraps a Client with an access token for authenticated operations
+//     (room management, messaging, sync).
+//
+// Sessions are lightweight (a pointer to the parent Client plus an access token
+// string) and safe to create in large numbers. The proxy holds one Client and
+// many Sessions — one per agent sandbox.
+package messaging
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// ClientConfig holds configuration for creating a Client.
+type ClientConfig struct {
+	// HomeserverURL is the base URL of the Matrix homeserver (e.g., "http://localhost:6167").
+	HomeserverURL string
+	// HTTPClient is used for all requests. If nil, http.DefaultClient is used.
+	HTTPClient *http.Client
+	// Logger is used for structured logging. If nil, slog.Default() is used.
+	Logger *slog.Logger
+}
+
+// Client is an unauthenticated Matrix client.
+// It holds the homeserver URL and HTTP transport, shared across Sessions.
+type Client struct {
+	baseURL    string
+	httpClient *http.Client
+	logger     *slog.Logger
+}
+
+// NewClient creates a new unauthenticated Matrix client.
+func NewClient(config ClientConfig) (*Client, error) {
+	if config.HomeserverURL == "" {
+		return nil, fmt.Errorf("messaging: HomeserverURL is required")
+	}
+
+	// Validate the URL structure. We store the string form (with trailing
+	// slash stripped) and build request URLs by direct concatenation. This
+	// avoids double-encoding issues with Go's url.URL.String(), which
+	// re-encodes Path even when RawPath is set if it doesn't consider
+	// RawPath a valid encoding of Path.
+	if _, err := url.Parse(config.HomeserverURL); err != nil {
+		return nil, fmt.Errorf("messaging: invalid HomeserverURL %q: %w", config.HomeserverURL, err)
+	}
+
+	httpClient := config.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &Client{
+		baseURL:    strings.TrimRight(config.HomeserverURL, "/"),
+		httpClient: httpClient,
+		logger:     logger,
+	}, nil
+}
+
+// Register creates a new account using token-authenticated registration (MSC3231).
+// Returns a Session for the newly created account.
+//
+// The registration flow uses the User-Interactive Authentication API (UIAA):
+//   - First request returns 401 with available flows.
+//   - Second request includes the auth stage with the registration token.
+func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Session, error) {
+	if request.Username == "" {
+		return nil, fmt.Errorf("messaging: username is required for registration")
+	}
+	if request.Password == "" {
+		return nil, fmt.Errorf("messaging: password is required for registration")
+	}
+
+	// Matrix registration uses the UIAA flow. First attempt without auth
+	// to get the session ID, then complete with the registration token.
+	firstAttempt := map[string]any{
+		"username": request.Username,
+		"password": request.Password,
+	}
+	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", "", firstAttempt)
+	if err == nil {
+		// Registration succeeded without UIAA (unlikely but possible if server
+		// has no auth requirements).
+		var authResponse AuthResponse
+		if parseErr := json.Unmarshal(body, &authResponse); parseErr != nil {
+			return nil, fmt.Errorf("messaging: failed to parse register response: %w", parseErr)
+		}
+		return c.sessionFromAuth(&authResponse), nil
+	}
+
+	// Expect 401 with UIAA session.
+	if !isUnauthorizedUIAA(err) {
+		return nil, fmt.Errorf("messaging: registration failed: %w", err)
+	}
+
+	// Extract the session ID from the 401 response.
+	// The body is returned alongside the error by doRequest.
+	sessionID, err := extractUIAASession(body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Complete registration with the token auth stage.
+	auth := map[string]any{
+		"type":    "m.login.registration_token",
+		"token":   request.RegistrationToken,
+		"session": sessionID,
+	}
+	completeRequest := map[string]any{
+		"username": request.Username,
+		"password": request.Password,
+		"auth":     auth,
+	}
+	body, err = c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", "", completeRequest)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: registration failed: %w", err)
+	}
+
+	var authResponse AuthResponse
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse register response: %w", err)
+	}
+
+	c.logger.Info("registered matrix account",
+		"user_id", authResponse.UserID,
+		"device_id", authResponse.DeviceID,
+	)
+
+	return c.sessionFromAuth(&authResponse), nil
+}
+
+// Login authenticates with username and password, returning a Session.
+func (c *Client) Login(ctx context.Context, username, password string) (*Session, error) {
+	if username == "" {
+		return nil, fmt.Errorf("messaging: username is required for login")
+	}
+	if password == "" {
+		return nil, fmt.Errorf("messaging: password is required for login")
+	}
+
+	loginRequest := LoginRequest{
+		Type:                     "m.login.password",
+		User:                     username,
+		Password:                 password,
+		InitialDeviceDisplayName: "bureau",
+	}
+
+	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/login", "", loginRequest)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: login failed: %w", err)
+	}
+
+	var authResponse AuthResponse
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse login response: %w", err)
+	}
+
+	c.logger.Info("logged in to matrix",
+		"user_id", authResponse.UserID,
+		"device_id", authResponse.DeviceID,
+	)
+
+	return c.sessionFromAuth(&authResponse), nil
+}
+
+// SessionFromToken creates a Session from an existing access token.
+// This does NOT validate the token — the first API call will fail if invalid.
+// userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local").
+func (c *Client) SessionFromToken(userID, accessToken string) *Session {
+	return &Session{
+		client:      c,
+		accessToken: accessToken,
+		userID:      userID,
+	}
+}
+
+func (c *Client) sessionFromAuth(auth *AuthResponse) *Session {
+	return &Session{
+		client:      c,
+		accessToken: auth.AccessToken,
+		userID:      auth.UserID,
+		deviceID:    auth.DeviceID,
+	}
+}
+
+// doRequest performs an HTTP request to the homeserver and returns the response body.
+// On 2xx, returns the body. On 4xx/5xx, returns a *MatrixError.
+// accessToken may be empty for unauthenticated endpoints.
+// query may be nil for endpoints without query parameters.
+func (c *Client) doRequest(ctx context.Context, method, path, accessToken string, requestBody any, query ...url.Values) ([]byte, error) {
+	requestURL := c.baseURL + path
+	if len(query) > 0 && query[0] != nil {
+		requestURL += "?" + query[0].Encode()
+	}
+
+	var bodyReader io.Reader
+	if requestBody != nil {
+		encoded, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("messaging: failed to encode request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(encoded)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: failed to create request: %w", err)
+	}
+
+	if requestBody != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if accessToken != "" {
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: request to %s %s failed: %w", method, path, err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: failed to read response body: %w", err)
+	}
+
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return responseBody, nil
+	}
+
+	// All Matrix error responses use the same JSON shape.
+	var matrixErr MatrixError
+	if jsonErr := json.Unmarshal(responseBody, &matrixErr); jsonErr != nil {
+		// Server returned non-JSON error. This should not happen with a
+		// spec-compliant server, but fail loud with the raw body.
+		return nil, fmt.Errorf("messaging: unexpected %d response from %s %s: %s",
+			response.StatusCode, method, path, string(responseBody))
+	}
+	matrixErr.StatusCode = response.StatusCode
+
+	return responseBody, &matrixErr
+}
+
+// doRequestRaw performs an HTTP request with a raw body (for media upload).
+func (c *Client) doRequestRaw(ctx context.Context, method, path, accessToken, contentType string, body io.Reader) ([]byte, error) {
+	requestURL := c.baseURL + path
+
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: failed to create request: %w", err)
+	}
+
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
+	if accessToken != "" {
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: request to %s %s failed: %w", method, path, err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: failed to read response body: %w", err)
+	}
+
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return responseBody, nil
+	}
+
+	var matrixErr MatrixError
+	if jsonErr := json.Unmarshal(responseBody, &matrixErr); jsonErr != nil {
+		return nil, fmt.Errorf("messaging: unexpected %d response from %s %s: %s",
+			response.StatusCode, method, path, string(responseBody))
+	}
+	matrixErr.StatusCode = response.StatusCode
+
+	return nil, &matrixErr
+}
+
+// isUnauthorizedUIAA checks if an error is a 401 from the UIAA flow.
+// This is the expected response when registration requires authentication stages.
+func isUnauthorizedUIAA(err error) bool {
+	var matrixErr *MatrixError
+	if err == nil {
+		return false
+	}
+	switch e := err.(type) { //nolint:errorlint // direct type assertion, no wrapping
+	case *MatrixError:
+		matrixErr = e
+	default:
+		return false
+	}
+	return matrixErr.StatusCode == http.StatusUnauthorized
+}
+
+// extractUIAASession extracts the session ID from a UIAA 401 response.
+// The 401 response body is returned alongside the error by doRequest.
+func extractUIAASession(body []byte) (string, error) {
+	// The UIAA 401 response has a "session" field at the top level.
+	var uiaaResponse struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(body, &uiaaResponse); err != nil {
+		return "", fmt.Errorf("messaging: failed to parse UIAA response: %w", err)
+	}
+	if uiaaResponse.Session == "" {
+		return "", fmt.Errorf("messaging: UIAA response missing session ID")
+	}
+	return uiaaResponse.Session, nil
+}

@@ -125,7 +125,7 @@ arrange them.
 
 Layout sources (exactly one required):
   --layout-file    Read layout from a local JSON file
-  <channel>        Fetch layout from a channel's Matrix state (not yet supported)
+  <channel>        Fetch layout from a channel's Matrix state via the daemon
 
 Each "observe" pane in the layout connects to the daemon's observation
 relay for the target principal. "command" panes run local commands.
@@ -184,7 +184,24 @@ relay for the target principal. "command" panes run local commands.
 				sessionName = "observe/" + name
 
 			case channel != "":
-				return fmt.Errorf("fetching layouts from channels requires daemon query support (use --layout-file for now)")
+				// Strip surrounding quotes that shell quoting may leave.
+				channel = strings.Trim(channel, "'\"")
+				var err error
+				layout, err = observe.QueryLayout(socketPath, channel)
+				if err != nil {
+					return fmt.Errorf("query channel layout: %w", err)
+				}
+				// Derive session name from the channel alias. Strip the
+				// sigil and server name to get a clean path:
+				// "#iree/amdgpu/general:bureau.local" → "observe/iree/amdgpu/general"
+				name := channel
+				if strings.HasPrefix(name, "#") {
+					name = name[1:]
+				}
+				if colonIndex := strings.Index(name, ":"); colonIndex >= 0 {
+					name = name[:colonIndex]
+				}
+				sessionName = "observe/" + name
 
 			default:
 				return fmt.Errorf("layout source required: use --layout-file or specify a channel\n\nUsage: bureau dashboard [channel] [flags]")

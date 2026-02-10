@@ -1476,11 +1476,22 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 // another agent) and to parallel the existing pattern with launcherIPCRequest.
 // The JSON wire format is the contract between client and daemon.
 type observeRequest struct {
+	// Action selects the request type. Empty or "observe" starts a
+	// streaming observation session. "query_layout" fetches and expands
+	// a channel's layout (pure request/response, no streaming).
+	Action string `json:"action,omitempty"`
+
 	// Principal is the localpart of the target (e.g., "iree/amdgpu/pm").
-	Principal string `json:"principal"`
+	// Used when Action is "observe" (or empty).
+	Principal string `json:"principal,omitempty"`
 
 	// Mode is "readwrite" or "readonly".
-	Mode string `json:"mode"`
+	// Used when Action is "observe" (or empty).
+	Mode string `json:"mode,omitempty"`
+
+	// Channel is the Matrix room alias (e.g., "#iree/amdgpu/general:bureau.local").
+	// Used when Action is "query_layout".
+	Channel string `json:"channel,omitempty"`
 }
 
 // observeResponse mirrors observe.ObserveResponse. Defined locally for the
@@ -1556,14 +1567,15 @@ func (d *Daemon) acceptObserveConnections(ctx context.Context) {
 	}
 }
 
-// handleObserveClient processes a single observation request. It reads the
-// JSON handshake, determines whether the principal is local or remote, and
-// either forks a relay or forwards through the transport.
+// handleObserveClient processes a single request on the observe socket.
+// It reads the initial JSON line, dispatches on the action field, and
+// either establishes a streaming observation session or handles a
+// request/response query.
 func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 	defer clientConnection.Close()
 
 	// Set a deadline for the JSON handshake. Cleared before entering
-	// the streaming bridge.
+	// the streaming bridge (for observe) or left in place for queries.
 	clientConnection.SetDeadline(time.Now().Add(10 * time.Second))
 
 	var request observeRequest
@@ -1572,6 +1584,21 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		return
 	}
 
+	switch request.Action {
+	case "", "observe":
+		d.handleObserveSession(clientConnection, request)
+	case "query_layout":
+		d.handleQueryLayout(clientConnection, request)
+	default:
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("unknown action %q", request.Action))
+	}
+}
+
+// handleObserveSession handles a streaming observation request. It validates
+// the principal, determines whether it is local or remote, and either forks
+// a relay or forwards through the transport.
+func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observeRequest) {
 	if err := principal.ValidateLocalpart(request.Principal); err != nil {
 		d.sendObserveError(clientConnection, fmt.Sprintf("invalid principal: %v", err))
 		return
@@ -1603,6 +1630,100 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 
 	d.sendObserveError(clientConnection,
 		fmt.Sprintf("principal %q not found", request.Principal))
+}
+
+// handleQueryLayout handles a query_layout request: resolves a channel alias
+// to a room ID, fetches the m.bureau.layout state event and room membership,
+// expands ObserveMembers panes, and returns the concrete layout as JSON.
+//
+// This is pure request/response — the connection is closed after the response.
+func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeRequest) {
+	if request.Channel == "" {
+		d.sendObserveError(clientConnection, "channel is required for query_layout")
+		return
+	}
+
+	// Use a generous timeout for the Matrix queries (alias resolution +
+	// state event fetch + membership fetch).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	d.logger.Info("query_layout requested", "channel", request.Channel)
+
+	// Resolve the channel alias to a room ID.
+	roomID, err := d.session.ResolveAlias(ctx, request.Channel)
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("resolve channel %q: %v", request.Channel, err))
+		return
+	}
+
+	// Fetch the m.bureau.layout state event from the channel room.
+	// Channel-level layouts use an empty state key (as opposed to
+	// per-principal layouts which use the principal's localpart).
+	rawLayout, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeLayout, "")
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("fetch layout for %q: %v", request.Channel, err))
+		return
+	}
+
+	var layoutContent schema.LayoutContent
+	if err := json.Unmarshal(rawLayout, &layoutContent); err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("parse layout for %q: %v", request.Channel, err))
+		return
+	}
+
+	layout := observe.SchemaToLayout(layoutContent)
+
+	// Fetch room members for ObserveMembers pane expansion.
+	matrixMembers, err := d.session.GetRoomMembers(ctx, roomID)
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("fetch members for %q: %v", request.Channel, err))
+		return
+	}
+
+	// Convert messaging.RoomMember to observe.RoomMember. Only include
+	// joined members — invited, left, and banned members are excluded.
+	var observeMembers []observe.RoomMember
+	for _, member := range matrixMembers {
+		if member.Membership != "join" {
+			continue
+		}
+		localpart, localpartErr := principal.LocalpartFromMatrixID(member.UserID)
+		if localpartErr != nil {
+			// Skip members whose user IDs don't match the Bureau
+			// @localpart:server convention (e.g., the admin account
+			// might be @admin:bureau.local without a hierarchical
+			// localpart).
+			continue
+		}
+		observeMembers = append(observeMembers, observe.RoomMember{
+			Localpart: localpart,
+			// Role is not yet populated from Matrix — Bureau role
+			// metadata will come from a principal identity state
+			// event. For now, role-based ObserveMembers filtering
+			// matches no roles, so all-members filters work but
+			// role-specific filters return empty.
+		})
+	}
+
+	expanded := observe.ExpandMembers(layout, observeMembers)
+
+	d.logger.Info("query_layout completed",
+		"channel", request.Channel,
+		"room_id", roomID,
+		"members", len(observeMembers),
+		"windows", len(expanded.Windows),
+	)
+
+	response := observe.QueryLayoutResponse{
+		OK:     true,
+		Layout: expanded,
+	}
+	json.NewEncoder(clientConnection).Encode(response)
 }
 
 // handleLocalObserve handles observation of a principal running on this machine.

@@ -434,6 +434,20 @@ type mockMatrixState struct {
 	// roomStates stores arrays of state events for GetRoomState responses.
 	// Key: roomID.
 	roomStates map[string][]mockRoomStateEvent
+
+	// roomAliases maps room aliases to room IDs for ResolveAlias.
+	// Key: full alias (e.g., "#iree/amdgpu/general:bureau.local").
+	roomAliases map[string]string
+
+	// roomMembers maps room IDs to member lists for GetRoomMembers.
+	roomMembers map[string][]mockRoomMember
+}
+
+// mockRoomMember represents a member for the /members endpoint.
+type mockRoomMember struct {
+	UserID      string `json:"user_id"`
+	Membership  string `json:"membership"`
+	DisplayName string `json:"displayname,omitempty"`
 }
 
 // mockRoomStateEvent represents a single state event in a GetRoomState response.
@@ -449,6 +463,8 @@ func newMockMatrixState() *mockMatrixState {
 	return &mockMatrixState{
 		stateEvents: make(map[string]json.RawMessage),
 		roomStates:  make(map[string][]mockRoomStateEvent),
+		roomAliases: make(map[string]string),
+		roomMembers: make(map[string][]mockRoomMember),
 	}
 }
 
@@ -466,9 +482,21 @@ func (m *mockMatrixState) setRoomState(roomID string, events []mockRoomStateEven
 	m.roomStates[roomID] = events
 }
 
+func (m *mockMatrixState) setRoomAlias(alias, roomID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roomAliases[alias] = roomID
+}
+
+func (m *mockMatrixState) setRoomMembers(roomID string, members []mockRoomMember) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roomMembers[roomID] = members
+}
+
 // handler returns an http.Handler that implements the subset of the Matrix
-// client-server API used by the daemon: GetStateEvent, GetRoomState, and
-// SendStateEvent.
+// client-server API used by the daemon: GetStateEvent, GetRoomState,
+// SendStateEvent, ResolveAlias, and GetRoomMembers.
 //
 // URL path parsing handles percent-encoded room IDs and state keys (the
 // messaging library uses url.PathEscape which encodes /, :, ! etc.). The
@@ -481,6 +509,15 @@ func (m *mockMatrixState) handler() http.Handler {
 		rawPath := r.URL.RawPath
 		if rawPath == "" {
 			rawPath = r.URL.Path
+		}
+
+		// GET /_matrix/client/v3/directory/room/{alias} — resolve alias.
+		const directoryPrefix = "/_matrix/client/v3/directory/room/"
+		if strings.HasPrefix(rawPath, directoryPrefix) && r.Method == "GET" {
+			encodedAlias := rawPath[len(directoryPrefix):]
+			alias, _ := url.PathUnescape(encodedAlias)
+			m.handleResolveAlias(w, alias)
+			return
 		}
 
 		const roomsPrefix = "/_matrix/client/v3/rooms/"
@@ -526,6 +563,12 @@ func (m *mockMatrixState) handler() http.Handler {
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
+			return
+		}
+
+		// GET /rooms/{roomId}/members — return room members.
+		if pathAfterRoom == "members" && r.Method == "GET" {
+			m.handleGetRoomMembers(w, roomID)
 			return
 		}
 
@@ -579,4 +622,53 @@ func (m *mockMatrixState) handlePutStateEvent(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]string{
 		"event_id": "$mock-event-id",
 	})
+}
+
+func (m *mockMatrixState) handleResolveAlias(w http.ResponseWriter, alias string) {
+	m.mu.Lock()
+	roomID, ok := m.roomAliases[alias]
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"errcode": "M_NOT_FOUND",
+			"error":   fmt.Sprintf("room alias %q not found", alias),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"room_id": roomID,
+		"servers": []string{"bureau.local"},
+	})
+}
+
+func (m *mockMatrixState) handleGetRoomMembers(w http.ResponseWriter, roomID string) {
+	m.mu.Lock()
+	members, ok := m.roomMembers[roomID]
+	m.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]any{"chunk": []any{}})
+		return
+	}
+
+	// Build the member events in the format that GetRoomMembers expects.
+	var chunk []map[string]any
+	for _, member := range members {
+		chunk = append(chunk, map[string]any{
+			"type":      "m.room.member",
+			"state_key": member.UserID,
+			"sender":    member.UserID,
+			"content": map[string]any{
+				"membership":  member.Membership,
+				"displayname": member.DisplayName,
+			},
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{"chunk": chunk})
 }

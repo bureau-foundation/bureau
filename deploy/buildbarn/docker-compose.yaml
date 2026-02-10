@@ -1,0 +1,34 @@
+services:
+  storage-init:
+    image: busybox:1.37
+    container_name: bureau-bb-storage-init
+    volumes:
+      - bb-storage-cas:/storage-cas
+      - bb-storage-ac:/storage-ac
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /storage-cas/persistent_state /storage-ac/persistent_state &&
+        chmod 0700 /storage-cas /storage-cas/persistent_state /storage-ac /storage-ac/persistent_state
+
+  storage:
+    image: ghcr.io/buildbarn/bb-storage:20260210T042351Z-d641698
+    container_name: bureau-bb-storage
+    restart: unless-stopped
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    command:
+      - /config/bb-storage.jsonnet
+    ports:
+      - "0.0.0.0:8980:8980"
+      - "0.0.0.0:9980:9980"
+    volumes:
+      - ./bb-storage.jsonnet:/config/bb-storage.jsonnet:ro
+      - bb-storage-cas:/storage-cas
+      - bb-storage-ac:/storage-ac
+
+volumes:
+  bb-storage-cas:
+  bb-storage-ac:

@@ -35,12 +35,19 @@ func ObserveCommand() *cli.Command {
 		Summary: "Attach to a principal's terminal session",
 		Description: `Attach to a principal's terminal session via the observation relay.
 
+Requires authentication: run "bureau login" first to save your session.
+The saved session is loaded automatically (like SSH keys).
+
 The target is a principal localpart (e.g., "iree/amdgpu/pm") or Matrix
 ID (e.g., "@iree/amdgpu/pm:bureau.local"). The leading "@" is stripped
 automatically.
 
 In read-only mode, keystrokes are not forwarded to the remote session.
-Use this for monitoring without risk of accidental input.`,
+Use this for monitoring without risk of accidental input.
+
+Access is controlled by the ObservePolicy on the target's MachineConfig.
+If you get "not authorized", ask a deployment admin to add your principal
+to the target's AllowedObservers list.`,
 		Usage: "bureau observe <target> [flags]",
 		Examples: []cli.Example{
 			{
@@ -129,6 +136,9 @@ func DashboardCommand() *cli.Command {
 		Description: `Open a composite workstream view where each pane observes a different
 principal. The layout defines which principals to show and how to
 arrange them.
+
+Requires authentication: run "bureau login" first to save your session.
+The saved session is loaded automatically (like SSH keys).
 
 Layout sources (exactly one required):
   --layout-file    Read layout from a local JSON file
@@ -312,6 +322,10 @@ func ListCommand() *cli.Command {
 		Name:    "list",
 		Summary: "List observable targets",
 		Description: `List principals and machines known to the daemon.
+
+Requires authentication: run "bureau login" first to save your session.
+The saved session is loaded automatically (like SSH keys). The list is
+filtered to only principals your account is authorized to observe.
 
 With --observable, only targets that can currently be observed (have
 an active tmux session or are reachable via transport) are shown.

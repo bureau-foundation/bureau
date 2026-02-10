@@ -234,7 +234,7 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 			"requested_mode", requestedMode,
 		)
 		d.sendObserveError(clientConnection,
-			fmt.Sprintf("not authorized to observe %q", request.Principal))
+			fmt.Sprintf("not authorized to observe %q — check AllowedObservers in the principal's ObservePolicy or the machine's DefaultObservePolicy", request.Principal))
 		return
 	}
 
@@ -728,7 +728,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(observeResponse{
-			Error: fmt.Sprintf("not authorized to observe %q", request.Principal),
+			Error: fmt.Sprintf("not authorized to observe %q — check AllowedObservers in the principal's ObservePolicy or the machine's DefaultObservePolicy", request.Principal),
 		})
 		return
 	}
@@ -883,8 +883,7 @@ func (d *Daemon) forkObserveRelay(sessionName string, readOnly bool) (net.Conn, 
 // the principal is a known remote service with a reachable peer.
 //
 // This provides best-effort remote observation for service principals. For
-// non-service principals (regular agents), a future principal directory
-// would be needed.
+// non-service principals, a future principal directory would be needed.
 func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok bool) {
 	if d.transportDialer == nil {
 		return "", false

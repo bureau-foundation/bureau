@@ -21,7 +21,7 @@ func (d *Daemon) authenticateObserver(ctx context.Context, token string) (string
 
 	userID, err := d.tokenVerifier.Verify(ctx, token)
 	if err != nil {
-		return "", fmt.Errorf("authentication failed: invalid or expired token")
+		return "", fmt.Errorf("authentication failed: invalid or expired token (run \"bureau login\" to refresh)")
 	}
 
 	return userID, nil

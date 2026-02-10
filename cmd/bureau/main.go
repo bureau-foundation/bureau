@@ -11,6 +11,8 @@
 //
 // Commands:
 //
+//	login       Authenticate as an operator
+//	whoami      Show the current operator identity
 //	observe     Attach to a principal's terminal session
 //	dashboard   Open a composite workstream view
 //	list        List observable targets
@@ -50,6 +52,7 @@ Manage sandboxed agent processes with credential isolation, live
 observation, and structured messaging via Matrix.`,
 		Subcommands: []*cli.Command{
 			cli.LoginCommand(),
+			cli.WhoAmICommand(),
 			observecmd.ObserveCommand(),
 			observecmd.DashboardCommand(),
 			observecmd.ListCommand(),

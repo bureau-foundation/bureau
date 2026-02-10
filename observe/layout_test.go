@@ -673,19 +673,19 @@ func TestLayoutEqualObserveMembers(t *testing.T) {
 	t.Parallel()
 	// Both have ObserveMembers with same role — equal.
 	a := &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
-		{ObserveMembers: &MemberFilter{Role: "agent"}},
+		{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}},
 	}}}}
 	b := &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
-		{ObserveMembers: &MemberFilter{Role: "agent"}},
+		{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}},
 	}}}}
 	if !LayoutEqual(a, b) {
 		t.Error("layouts with identical ObserveMembers should be equal")
 	}
 
-	// Different ObserveMembers role — not equal.
-	b.Windows[0].Panes[0].ObserveMembers.Role = "service"
+	// Different ObserveMembers labels — not equal.
+	b.Windows[0].Panes[0].ObserveMembers.Labels = map[string]string{"role": "service"}
 	if LayoutEqual(a, b) {
-		t.Error("layouts with different ObserveMembers roles should not be equal")
+		t.Error("layouts with different ObserveMembers labels should not be equal")
 	}
 
 	// One nil, one non-nil — not equal.
@@ -708,7 +708,7 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 					{Observe: "iree/amdgpu/pm"},
 					{Command: "beads-tui", Split: "horizontal", Size: 40},
 					{Role: "agent", Split: "vertical", Size: 60},
-					{ObserveMembers: &MemberFilter{Role: "agent"}, Split: "horizontal"},
+					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}, Split: "horizontal"},
 				},
 			},
 		},
@@ -759,9 +759,9 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 	if window.Panes[3].ObserveMembers == nil {
 		t.Fatal("pane[3].ObserveMembers should not be nil")
 	}
-	if window.Panes[3].ObserveMembers.Role != "agent" {
-		t.Errorf("pane[3].ObserveMembers.Role = %q, want %q",
-			window.Panes[3].ObserveMembers.Role, "agent")
+	if window.Panes[3].ObserveMembers.Labels["role"] != "agent" {
+		t.Errorf("pane[3].ObserveMembers.Labels[role] = %q, want %q",
+			window.Panes[3].ObserveMembers.Labels["role"], "agent")
 	}
 }
 
@@ -778,7 +778,7 @@ func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 					{Observe: "iree/amdgpu/pm"},
 					{Command: "htop", Split: "horizontal", Size: 30},
 					{Role: "shell", Split: "vertical", Size: 50},
-					{ObserveMembers: &schema.LayoutMemberFilter{Role: "service"}},
+					{ObserveMembers: &schema.LayoutMemberFilter{Labels: map[string]string{"role": "service"}}},
 				},
 			},
 		},
@@ -817,9 +817,9 @@ func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 	if window.Panes[3].ObserveMembers == nil {
 		t.Fatal("pane[3].ObserveMembers should not be nil")
 	}
-	if window.Panes[3].ObserveMembers.Role != "service" {
-		t.Errorf("pane[3].ObserveMembers.Role = %q, want %q",
-			window.Panes[3].ObserveMembers.Role, "service")
+	if window.Panes[3].ObserveMembers.Labels["role"] != "service" {
+		t.Errorf("pane[3].ObserveMembers.Labels[role] = %q, want %q",
+			window.Panes[3].ObserveMembers.Labels["role"], "service")
 	}
 }
 
@@ -846,7 +846,7 @@ func TestLayoutSchemaRoundTrip(t *testing.T) {
 			{
 				Name: "dynamic",
 				Panes: []Pane{
-					{ObserveMembers: &MemberFilter{Role: "agent"}},
+					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}},
 				},
 			},
 		},

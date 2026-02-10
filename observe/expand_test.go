@@ -102,7 +102,7 @@ func TestExpandMembersAllMembers(t *testing.T) {
 	}
 }
 
-func TestExpandMembersFilterByRole(t *testing.T) {
+func TestExpandMembersFilterByLabel(t *testing.T) {
 	t.Parallel()
 	layout := &Layout{
 		Windows: []Window{
@@ -110,7 +110,7 @@ func TestExpandMembersFilterByRole(t *testing.T) {
 				Name: "agents-only",
 				Panes: []Pane{
 					{
-						ObserveMembers: &MemberFilter{Role: "agent"},
+						ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}},
 						Split:          "horizontal",
 						Size:           60,
 					},
@@ -120,10 +120,10 @@ func TestExpandMembersFilterByRole(t *testing.T) {
 	}
 
 	members := []RoomMember{
-		{Localpart: "iree/amdgpu/pm", Role: "agent"},
-		{Localpart: "service/stt/whisper", Role: "service"},
-		{Localpart: "iree/amdgpu/codegen", Role: "agent"},
-		{Localpart: "machine/workstation", Role: "machine"},
+		{Localpart: "iree/amdgpu/pm", Labels: map[string]string{"role": "agent", "team": "iree"}},
+		{Localpart: "service/stt/whisper", Labels: map[string]string{"role": "service"}},
+		{Localpart: "iree/amdgpu/codegen", Labels: map[string]string{"role": "agent", "team": "iree"}},
+		{Localpart: "machine/workstation", Labels: map[string]string{"role": "machine"}},
 	}
 
 	result := ExpandMembers(layout, members)
@@ -168,7 +168,7 @@ func TestExpandMembersNoMatchRemovesPane(t *testing.T) {
 				Panes: []Pane{
 					{Command: "htop"},
 					{
-						ObserveMembers: &MemberFilter{Role: "nonexistent"},
+						ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "nonexistent"}},
 						Split:          "horizontal",
 					},
 				},
@@ -177,7 +177,7 @@ func TestExpandMembersNoMatchRemovesPane(t *testing.T) {
 	}
 
 	members := []RoomMember{
-		{Localpart: "iree/amdgpu/pm", Role: "agent"},
+		{Localpart: "iree/amdgpu/pm", Labels: map[string]string{"role": "agent"}},
 	}
 
 	result := ExpandMembers(layout, members)
@@ -207,16 +207,16 @@ func TestExpandMembersEmptyWindowRemoved(t *testing.T) {
 			{
 				Name: "dynamic",
 				Panes: []Pane{
-					{ObserveMembers: &MemberFilter{Role: "nonexistent"}},
+					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "nonexistent"}}},
 				},
 			},
 		},
 	}
 
-	// No members match the "nonexistent" role, so the dynamic window
+	// No members match the "nonexistent" label, so the dynamic window
 	// should be removed entirely.
 	result := ExpandMembers(layout, []RoomMember{
-		{Localpart: "test/agent", Role: "agent"},
+		{Localpart: "test/agent", Labels: map[string]string{"role": "agent"}},
 	})
 
 	if len(result.Windows) != 1 {
@@ -283,14 +283,14 @@ func TestExpandMembersPreservesOriginal(t *testing.T) {
 			{
 				Name: "main",
 				Panes: []Pane{
-					{ObserveMembers: &MemberFilter{Role: "agent"}},
+					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}},
 				},
 			},
 		},
 	}
 
 	result := ExpandMembers(original, []RoomMember{
-		{Localpart: "test/a", Role: "agent"},
+		{Localpart: "test/a", Labels: map[string]string{"role": "agent"}},
 	})
 
 	// Original should be unmodified.
@@ -334,34 +334,78 @@ func TestExpandMembersEmptyMembersList(t *testing.T) {
 	}
 }
 
-func TestFilterMembersEmptyRole(t *testing.T) {
+func TestFilterMembersEmptyLabels(t *testing.T) {
 	t.Parallel()
 	members := []RoomMember{
-		{Localpart: "a", Role: "agent"},
-		{Localpart: "b", Role: "service"},
-		{Localpart: "c", Role: ""},
+		{Localpart: "a", Labels: map[string]string{"role": "agent"}},
+		{Localpart: "b", Labels: map[string]string{"role": "service"}},
+		{Localpart: "c"},
 	}
 
-	// Empty role matches all.
+	// Empty labels matches all.
 	result := filterMembers(members, &MemberFilter{})
 	if len(result) != 3 {
-		t.Errorf("filterMembers with empty role returned %d, want 3", len(result))
+		t.Errorf("filterMembers with empty labels returned %d, want 3", len(result))
 	}
 }
 
-func TestFilterMembersSpecificRole(t *testing.T) {
+func TestFilterMembersSingleLabel(t *testing.T) {
 	t.Parallel()
 	members := []RoomMember{
-		{Localpart: "a", Role: "agent"},
-		{Localpart: "b", Role: "service"},
-		{Localpart: "c", Role: "agent"},
+		{Localpart: "a", Labels: map[string]string{"role": "agent"}},
+		{Localpart: "b", Labels: map[string]string{"role": "service"}},
+		{Localpart: "c", Labels: map[string]string{"role": "agent", "team": "iree"}},
 	}
 
-	result := filterMembers(members, &MemberFilter{Role: "agent"})
+	result := filterMembers(members, &MemberFilter{Labels: map[string]string{"role": "agent"}})
 	if len(result) != 2 {
 		t.Errorf("filterMembers with role=agent returned %d, want 2", len(result))
 	}
 	if result[0].Localpart != "a" || result[1].Localpart != "c" {
 		t.Errorf("filterMembers returned wrong members: %v", result)
+	}
+}
+
+func TestFilterMembersMultipleLabels(t *testing.T) {
+	t.Parallel()
+	members := []RoomMember{
+		{Localpart: "a", Labels: map[string]string{"role": "agent", "team": "iree"}},
+		{Localpart: "b", Labels: map[string]string{"role": "agent", "team": "infra"}},
+		{Localpart: "c", Labels: map[string]string{"role": "service", "team": "iree"}},
+		{Localpart: "d", Labels: map[string]string{"role": "agent", "team": "iree", "tier": "gpu"}},
+	}
+
+	// Both labels must match.
+	result := filterMembers(members, &MemberFilter{Labels: map[string]string{"role": "agent", "team": "iree"}})
+	if len(result) != 2 {
+		t.Errorf("filterMembers with role=agent,team=iree returned %d, want 2", len(result))
+	}
+	if result[0].Localpart != "a" || result[1].Localpart != "d" {
+		t.Errorf("filterMembers returned wrong members: %v", result)
+	}
+}
+
+func TestFilterMembersNilMemberLabels(t *testing.T) {
+	t.Parallel()
+	// Members with nil labels should not match label-specific filters
+	// but should match empty filters.
+	members := []RoomMember{
+		{Localpart: "a"},
+		{Localpart: "b", Labels: map[string]string{"role": "agent"}},
+	}
+
+	// With filter: only "b" matches.
+	result := filterMembers(members, &MemberFilter{Labels: map[string]string{"role": "agent"}})
+	if len(result) != 1 {
+		t.Fatalf("filterMembers returned %d, want 1", len(result))
+	}
+	if result[0].Localpart != "b" {
+		t.Errorf("filterMembers returned %q, want %q", result[0].Localpart, "b")
+	}
+
+	// Without filter: both match.
+	result = filterMembers(members, &MemberFilter{})
+	if len(result) != 2 {
+		t.Errorf("filterMembers with empty filter returned %d, want 2", len(result))
 	}
 }

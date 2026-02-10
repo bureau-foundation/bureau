@@ -127,12 +127,14 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 				Localpart:         "iree/amdgpu/pm",
 				Template:          "llm-agent",
 				AutoStart:         true,
+				Labels:            map[string]string{"role": "agent", "team": "iree"},
 				ServiceVisibility: []string{"service/stt/*", "service/embedding/**"},
 			},
 			{
 				Localpart: "service/stt/whisper",
 				Template:  "whisper-stt",
 				AutoStart: true,
+				Labels:    map[string]string{"role": "service"},
 			},
 			{
 				Localpart: "iree/amdgpu/codegen",
@@ -164,6 +166,14 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	assertField(t, first, "template", "llm-agent")
 	assertField(t, first, "auto_start", true)
 
+	// Verify labels appear in the wire format.
+	labels, ok := first["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("labels field missing or wrong type")
+	}
+	assertField(t, labels, "role", "agent")
+	assertField(t, labels, "team", "iree")
+
 	// Verify service_visibility appears in the wire format.
 	visibility, ok := first["service_visibility"].([]any)
 	if !ok {
@@ -180,6 +190,12 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	second := principals[1].(map[string]any)
 	if _, exists := second["service_visibility"]; exists {
 		t.Error("service_visibility should be omitted when nil")
+	}
+
+	// Verify labels are omitted when nil (third principal has no labels).
+	third := principals[2].(map[string]any)
+	if _, exists := third["labels"]; exists {
+		t.Error("labels should be omitted when nil")
 	}
 
 	var decoded MachineConfig
@@ -723,7 +739,7 @@ func TestLayoutContentObserveMembers(t *testing.T) {
 				Name: "team",
 				Panes: []LayoutPane{
 					{
-						ObserveMembers: &LayoutMemberFilter{Role: "agent"},
+						ObserveMembers: &LayoutMemberFilter{Labels: map[string]string{"role": "agent"}},
 						Split:          "horizontal",
 					},
 				},
@@ -749,7 +765,11 @@ func TestLayoutContentObserveMembers(t *testing.T) {
 	if !ok {
 		t.Fatal("observe_members field missing or wrong type")
 	}
-	assertField(t, observeMembers, "role", "agent")
+	labels, ok := observeMembers["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("observe_members.labels field missing or wrong type")
+	}
+	assertField(t, labels, "role", "agent")
 
 	// Other pane mode fields should be absent.
 	for _, field := range []string{"observe", "command", "role"} {
@@ -766,8 +786,8 @@ func TestLayoutContentObserveMembers(t *testing.T) {
 	if decodedPane.ObserveMembers == nil {
 		t.Fatal("ObserveMembers should not be nil after round-trip")
 	}
-	if decodedPane.ObserveMembers.Role != "agent" {
-		t.Errorf("ObserveMembers.Role: got %q, want %q", decodedPane.ObserveMembers.Role, "agent")
+	if decodedPane.ObserveMembers.Labels["role"] != "agent" {
+		t.Errorf("ObserveMembers.Labels[role]: got %q, want %q", decodedPane.ObserveMembers.Labels["role"], "agent")
 	}
 }
 

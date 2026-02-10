@@ -71,9 +71,10 @@ type Pane struct {
 
 // MemberFilter selects room members for dynamic pane creation.
 type MemberFilter struct {
-	// Role filters members by their Bureau role (from the principal's
-	// identity metadata). Empty means all members.
-	Role string `json:"role,omitempty"`
+	// Labels filters members whose labels contain all specified key-value
+	// pairs (subset match). An empty or nil map means all members pass
+	// the filter.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // tmuxPane holds the raw data read from tmux list-panes for a single pane.
@@ -446,8 +447,22 @@ func paneEqual(a, b *Pane) bool {
 	if (a.ObserveMembers == nil) != (b.ObserveMembers == nil) {
 		return false
 	}
-	if a.ObserveMembers != nil && a.ObserveMembers.Role != b.ObserveMembers.Role {
+	if a.ObserveMembers != nil && !labelsEqual(a.ObserveMembers.Labels, b.ObserveMembers.Labels) {
 		return false
+	}
+	return true
+}
+
+// labelsEqual reports whether two label maps have the same keys and values.
+// Two nil maps are equal; a nil map and an empty map are equal.
+func labelsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, valueA := range a {
+		if valueB, ok := b[key]; !ok || valueA != valueB {
+			return false
+		}
 	}
 	return true
 }
@@ -473,7 +488,7 @@ func LayoutToSchema(layout *Layout) schema.LayoutContent {
 			}
 			if pane.ObserveMembers != nil {
 				schemaPane.ObserveMembers = &schema.LayoutMemberFilter{
-					Role: pane.ObserveMembers.Role,
+					Labels: pane.ObserveMembers.Labels,
 				}
 			}
 			schemaWindow.Panes = append(schemaWindow.Panes, schemaPane)
@@ -505,7 +520,7 @@ func SchemaToLayout(content schema.LayoutContent) *Layout {
 			}
 			if schemaPane.ObserveMembers != nil {
 				pane.ObserveMembers = &MemberFilter{
-					Role: schemaPane.ObserveMembers.Role,
+					Labels: schemaPane.ObserveMembers.Labels,
 				}
 			}
 			window.Panes = append(window.Panes, pane)

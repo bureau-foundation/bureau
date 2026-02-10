@@ -377,6 +377,226 @@ func TestQueryLayoutExcludesNonBureauMembers(t *testing.T) {
 	}
 }
 
+func TestQueryLayoutLabelFiltering(t *testing.T) {
+	// A layout with label-based ObserveMembers filtering. The daemon
+	// populates labels from its MachineConfig and only matching members
+	// become observe panes.
+	daemon, matrixState := newTestDaemonWithQuery(t)
+
+	// Give the daemon a config with labeled principals.
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Labels:    map[string]string{"role": "agent", "team": "iree"},
+			},
+			{
+				Localpart: "iree/amdgpu/compiler",
+				Labels:    map[string]string{"role": "agent", "team": "iree"},
+			},
+			{
+				Localpart: "service/stt/whisper",
+				Labels:    map[string]string{"role": "service"},
+			},
+		},
+	}
+
+	channelAlias := "#iree/amdgpu/general:bureau.local"
+	channelRoomID := "!label-room:bureau.local"
+
+	matrixState.setRoomAlias(channelAlias, channelRoomID)
+
+	// Layout filters to only agents.
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
+		Windows: []schema.LayoutWindow{
+			{
+				Name: "agents",
+				Panes: []schema.LayoutPane{
+					{ObserveMembers: &schema.LayoutMemberFilter{
+						Labels: map[string]string{"role": "agent"},
+					}},
+				},
+			},
+		},
+	})
+
+	// All three principals are room members.
+	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
+		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@iree/amdgpu/compiler:bureau.local", Membership: "join"},
+		{UserID: "@service/stt/whisper:bureau.local", Membership: "join"},
+	})
+
+	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
+
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+
+	// Only the two agents should appear (service filtered out).
+	if len(response.Layout.Windows) != 1 {
+		t.Fatalf("expected 1 window, got %d", len(response.Layout.Windows))
+	}
+	panes := response.Layout.Windows[0].Panes
+	if len(panes) != 2 {
+		t.Fatalf("expected 2 panes (agents only), got %d", len(panes))
+	}
+	if panes[0].Observe != "iree/amdgpu/pm" {
+		t.Errorf("pane 0 observe = %q, want %q", panes[0].Observe, "iree/amdgpu/pm")
+	}
+	if panes[1].Observe != "iree/amdgpu/compiler" {
+		t.Errorf("pane 1 observe = %q, want %q", panes[1].Observe, "iree/amdgpu/compiler")
+	}
+}
+
+func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
+	// Filter by multiple labels: role=agent AND team=iree.
+	daemon, matrixState := newTestDaemonWithQuery(t)
+
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Labels:    map[string]string{"role": "agent", "team": "iree"},
+			},
+			{
+				Localpart: "infra/ci/runner",
+				Labels:    map[string]string{"role": "agent", "team": "infra"},
+			},
+			{
+				Localpart: "service/stt/whisper",
+				Labels:    map[string]string{"role": "service", "team": "iree"},
+			},
+		},
+	}
+
+	channelAlias := "#all:bureau.local"
+	channelRoomID := "!multi-label-room:bureau.local"
+
+	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
+		Windows: []schema.LayoutWindow{
+			{
+				Name: "iree-agents",
+				Panes: []schema.LayoutPane{
+					{ObserveMembers: &schema.LayoutMemberFilter{
+						Labels: map[string]string{"role": "agent", "team": "iree"},
+					}},
+				},
+			},
+		},
+	})
+
+	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
+		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@infra/ci/runner:bureau.local", Membership: "join"},
+		{UserID: "@service/stt/whisper:bureau.local", Membership: "join"},
+	})
+
+	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
+
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+
+	// Only iree/amdgpu/pm matches both role=agent AND team=iree.
+	if len(response.Layout.Windows) != 1 {
+		t.Fatalf("expected 1 window, got %d", len(response.Layout.Windows))
+	}
+	panes := response.Layout.Windows[0].Panes
+	if len(panes) != 1 {
+		t.Fatalf("expected 1 pane (iree agents only), got %d", len(panes))
+	}
+	if panes[0].Observe != "iree/amdgpu/pm" {
+		t.Errorf("pane 0 observe = %q, want %q", panes[0].Observe, "iree/amdgpu/pm")
+	}
+}
+
+func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
+	// Members whose localparts are NOT in this daemon's MachineConfig
+	// get nil labels. With an empty filter they should still appear;
+	// with a label filter they should be excluded.
+	daemon, matrixState := newTestDaemonWithQuery(t)
+
+	// Only one local principal configured.
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Labels:    map[string]string{"role": "agent"},
+			},
+		},
+	}
+
+	channelAlias := "#cross:bureau.local"
+	channelRoomID := "!cross-room:bureau.local"
+
+	matrixState.setRoomAlias(channelAlias, channelRoomID)
+
+	// Two windows: one with label filter, one without.
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
+		Windows: []schema.LayoutWindow{
+			{
+				Name: "agents",
+				Panes: []schema.LayoutPane{
+					{ObserveMembers: &schema.LayoutMemberFilter{
+						Labels: map[string]string{"role": "agent"},
+					}},
+				},
+			},
+			{
+				Name: "all",
+				Panes: []schema.LayoutPane{
+					{ObserveMembers: &schema.LayoutMemberFilter{}},
+				},
+			},
+		},
+	})
+
+	// Both local and cross-machine members in the room.
+	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
+		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@remote/agent:other.bureau.local", Membership: "join"},
+	})
+
+	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
+
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+
+	// "agents" window: only iree/amdgpu/pm (has labels).
+	// "all" window: both members (no filter).
+	if len(response.Layout.Windows) != 2 {
+		t.Fatalf("expected 2 windows, got %d", len(response.Layout.Windows))
+	}
+
+	agentsWindow := response.Layout.Windows[0]
+	if len(agentsWindow.Panes) != 1 {
+		t.Fatalf("agents window: expected 1 pane, got %d", len(agentsWindow.Panes))
+	}
+	if agentsWindow.Panes[0].Observe != "iree/amdgpu/pm" {
+		t.Errorf("agents pane observe = %q, want %q", agentsWindow.Panes[0].Observe, "iree/amdgpu/pm")
+	}
+
+	allWindow := response.Layout.Windows[1]
+	if len(allWindow.Panes) != 2 {
+		t.Fatalf("all window: expected 2 panes, got %d", len(allWindow.Panes))
+	}
+}
+
 func TestQueryLayoutBackwardCompatibility(t *testing.T) {
 	// A request without an action field should still be treated as an
 	// observe request (backward compatibility). We can't test the full

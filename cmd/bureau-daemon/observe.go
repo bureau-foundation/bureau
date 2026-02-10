@@ -334,6 +334,19 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		return
 	}
 
+	// Build a lookup table of labels from the local machine's config.
+	// Cross-machine members won't have labels populated (their labels
+	// are only known to their own machine's daemon), so label-based
+	// filters only match principals the daemon has config for.
+	principalLabels := make(map[string]map[string]string)
+	if d.lastConfig != nil {
+		for _, assignment := range d.lastConfig.Principals {
+			if len(assignment.Labels) > 0 {
+				principalLabels[assignment.Localpart] = assignment.Labels
+			}
+		}
+	}
+
 	// Convert messaging.RoomMember to observe.RoomMember. Only include
 	// joined members — invited, left, and banned members are excluded.
 	var observeMembers []observe.RoomMember
@@ -351,11 +364,7 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		}
 		observeMembers = append(observeMembers, observe.RoomMember{
 			Localpart: localpart,
-			// Role is not yet populated from Matrix — Bureau role
-			// metadata will come from a principal identity state
-			// event. For now, role-based ObserveMembers filtering
-			// matches no roles, so all-members filters work but
-			// role-specific filters return empty.
+			Labels:    principalLabels[localpart],
 		})
 	}
 

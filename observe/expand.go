@@ -10,10 +10,11 @@ type RoomMember struct {
 	// Localpart is the principal's localpart (e.g., "iree/amdgpu/pm").
 	Localpart string
 
-	// Role is the principal's Bureau role from identity metadata (e.g.,
-	// "agent", "coordinator"). May be empty if the principal has no role
-	// metadata. Used to filter against MemberFilter.Role.
-	Role string
+	// Labels are the principal's organizational metadata from its
+	// PrincipalAssignment. Used to filter against MemberFilter.Labels.
+	// May be nil if the daemon does not have config for this principal
+	// (e.g., a cross-machine member whose labels are unknown locally).
+	Labels map[string]string
 }
 
 // ExpandMembers replaces ObserveMembers panes in the layout with concrete
@@ -21,8 +22,9 @@ type RoomMember struct {
 // modified; a new layout is returned.
 //
 // For each ObserveMembers pane:
-//   - If MemberFilter.Role is set, only members whose Role matches are
-//     included. If empty, all members are included.
+//   - If MemberFilter.Labels is set, only members whose Labels contain all
+//     specified key-value pairs (subset match) are included. If empty/nil,
+//     all members are included.
 //   - Each matching member becomes an Observe pane with the member's
 //     localpart.
 //   - The first expanded pane inherits the ObserveMembers pane's Split
@@ -92,17 +94,30 @@ func ExpandMembers(layout *Layout, members []RoomMember) *Layout {
 }
 
 // filterMembers returns the subset of members that match the filter criteria.
-// An empty filter role matches all members.
+// An empty/nil filter labels map matches all members. When filter labels are
+// set, a member matches only if its labels contain every key-value pair in
+// the filter (subset match).
 func filterMembers(members []RoomMember, filter *MemberFilter) []RoomMember {
-	if filter.Role == "" {
+	if len(filter.Labels) == 0 {
 		return members
 	}
 
 	var matching []RoomMember
 	for _, member := range members {
-		if member.Role == filter.Role {
+		if labelsMatch(member.Labels, filter.Labels) {
 			matching = append(matching, member)
 		}
 	}
 	return matching
+}
+
+// labelsMatch reports whether the member's labels contain all the required
+// key-value pairs. A nil member labels map only matches if required is empty.
+func labelsMatch(memberLabels, required map[string]string) bool {
+	for key, requiredValue := range required {
+		if memberValue, ok := memberLabels[key]; !ok || memberValue != requiredValue {
+			return false
+		}
+	}
+	return true
 }

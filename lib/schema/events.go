@@ -190,6 +190,19 @@ type PrincipalAssignment struct {
 	// service request, etc.).
 	AutoStart bool `json:"auto_start"`
 
+	// Labels are free-form key-value metadata for organizational purposes:
+	// observation layout filtering, dashboard grouping, UI categorization.
+	// Labels do not affect access control — that's handled by ObservePolicy,
+	// MatrixPolicy, and localpart glob patterns. Changing labels does not
+	// require a sandbox restart; the daemon picks up label changes on the
+	// next config sync.
+	//
+	// Common conventions:
+	//   - "role": "agent", "service", "coordinator" — principal function
+	//   - "team": "iree", "infra" — organizational grouping
+	//   - "tier": "gpu", "cpu" — resource classification
+	Labels map[string]string `json:"labels,omitempty"`
+
 	// MatrixPolicy controls which self-service Matrix operations this
 	// principal's proxy allows. The homeserver enforces room membership
 	// and power levels; this policy controls whether the agent can change
@@ -446,9 +459,12 @@ type LayoutPane struct {
 // LayoutMemberFilter selects room members for dynamic pane creation in
 // channel layouts with ObserveMembers.
 type LayoutMemberFilter struct {
-	// Role filters members by their Bureau role (from the principal's
-	// identity metadata). Empty means all members.
-	Role string `json:"role,omitempty"`
+	// Labels filters members whose PrincipalAssignment labels contain all
+	// specified key-value pairs (subset match). An empty or nil map means
+	// all members pass the filter. Example: {"role": "agent"} matches any
+	// principal labeled role=agent; {"role": "agent", "team": "iree"}
+	// matches only principals with both labels set to those values.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ConfigRoomPowerLevels returns power level overrides for a per-machine config

@@ -206,7 +206,13 @@ attic login bureau http://localhost:5580 "${ATTIC_TOKEN}"
 attic cache create bureau
 ```
 
-Verify the cache exists and the endpoint serves Nix binary cache metadata:
+Make the cache public so any machine can pull without credentials:
+
+```bash
+attic cache configure --public bureau
+```
+
+Verify the cache exists and serves Nix binary cache metadata without auth:
 
 ```bash
 curl -s http://localhost:5580/bureau/nix-cache-info
@@ -214,17 +220,41 @@ curl -s http://localhost:5580/bureau/nix-cache-info
 
 Expected output includes `StoreDir: /nix/store` and `WantMassQuery: 1`.
 
+Note the cache's signing public key (needed for substituter config):
+
+```bash
+attic cache info bureau
+```
+
+The "Public Key" line (e.g. `bureau:D58z2AZ1...`) goes into each
+machine's `nix.conf` as a trusted public key.
+
 Save the token alongside the other credentials (not committed to git):
 
 ```bash
 echo "${ATTIC_TOKEN}" > .env-attic-token
 ```
 
-To push derivations later (once the Nix flake is built):
+Configure this machine as a substituter (pulls pre-built binaries from
+the cache instead of rebuilding):
 
 ```bash
-nix build .#bureau-daemon
-attic push bureau ./result
+PUBLIC_KEY=$(attic cache info bureau 2>&1 \
+  | sed -n 's/.*Public Key: //p')
+
+sudo script/configure-substituter \
+  http://localhost:5580/bureau \
+  "${PUBLIC_KEY}"
+```
+
+Build and push all Bureau binaries:
+
+```bash
+for pkg in bureau bureau-daemon bureau-launcher bureau-proxy \
+           bureau-bridge bureau-sandbox bureau-credentials \
+           bureau-proxy-call bureau-observe-relay; do
+  nix build .#$pkg && attic push bureau ./result
+done
 ```
 
 ## 7. Create Your Operator Account

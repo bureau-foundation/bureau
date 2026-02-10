@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Configure a machine to pull Bureau binaries from the attic cache.
+# Appends substituter and signing key to /etc/nix/nix.custom.conf
+# (Determinate Nix) or /etc/nix/nix.conf (standard Nix).
+#
+# Usage: sudo script/configure-substituter <attic-url> <public-key>
+#
+# Example:
+#   sudo script/configure-substituter \
+#     http://localhost:5580/bureau \
+#     "bureau:D58z2AZ1Lyq/aoBwMUTq12e2I1Gw0n84nTbbUBygPDk="
+#
+# For read-only machines (most production hosts), this is the only
+# Nix configuration needed. No attic credentials, no push access.
+
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+    echo "Usage: sudo $0 <attic-url> <public-key>" >&2
+    echo "  attic-url:   Binary cache endpoint (e.g. http://attic.internal:5580/bureau)" >&2
+    echo "  public-key:  Cache signing key (from 'attic cache info bureau')" >&2
+    exit 1
+fi
+
+ATTIC_URL="$1"
+PUBLIC_KEY="$2"
+
+# Determinate Nix uses nix.custom.conf; standard Nix uses nix.conf directly.
+if [ -f /etc/nix/nix.custom.conf ]; then
+    CONF_FILE=/etc/nix/nix.custom.conf
+else
+    CONF_FILE=/etc/nix/nix.conf
+fi
+
+# Check if already configured.
+if grep -q "$ATTIC_URL" "$CONF_FILE" 2>/dev/null; then
+    echo "Substituter already configured in $CONF_FILE"
+    exit 0
+fi
+
+echo "Configuring Bureau binary cache in $CONF_FILE"
+echo "  Substituter: $ATTIC_URL"
+echo "  Public key:  $PUBLIC_KEY"
+
+cat >> "$CONF_FILE" <<EOF
+
+# Bureau binary cache (attic). Read-only access to pre-built Bureau
+# binaries. Push access is managed separately via attic CLI tokens.
+extra-substituters = $ATTIC_URL
+extra-trusted-public-keys = $PUBLIC_KEY
+EOF
+
+echo "Done. Nix will now check $ATTIC_URL before building Bureau derivations."
+
+# Restart the Nix daemon so it picks up the new config.
+if systemctl is-active nix-daemon.service >/dev/null 2>&1; then
+    echo "Restarting nix-daemon..."
+    systemctl restart nix-daemon.service
+elif systemctl is-active nix-daemon.socket >/dev/null 2>&1; then
+    echo "Restarting nix-daemon socket..."
+    systemctl restart nix-daemon.socket
+else
+    echo "No nix-daemon service found. Config will take effect on next nix invocation."
+fi

@@ -149,6 +149,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	}
 
 	// Start the launcher subprocess.
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	launcherCmd := exec.Command(launcherBinary,
 		"--machine-name", "machine/test",
 		"--state-dir", stateDir,
@@ -159,6 +160,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
 		"--tmux-socket", "", // Disable tmux session management in this test (no tmux binary needed)
+		"--workspace-root", workspaceRoot,
 	)
 	launcherCmd.Stderr = os.Stderr
 	if err := launcherCmd.Start(); err != nil {

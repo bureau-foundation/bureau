@@ -19,6 +19,7 @@
 //	matrix        Matrix homeserver operations
 //	template      Manage sandbox templates
 //	environment   Manage fleet environment profiles
+//	workspace     Manage project workspaces
 //	version       Print version information
 package main
 
@@ -31,6 +32,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
+	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
@@ -63,6 +65,7 @@ observation, and structured messaging via Matrix.`,
 			matrix.Command(),
 			templatecmd.Command(),
 			environmentcmd.Command(),
+			workspacecmd.Command(),
 			{
 				Name:    "version",
 				Summary: "Print version information",
@@ -100,6 +103,10 @@ observation, and structured messaging via Matrix.`,
 			{
 				Description: "Build and deploy an environment profile",
 				Command:     "bureau environment build workstation --out-link deploy/buildbarn/runner-env",
+			},
+			{
+				Description: "Create a workspace for a project",
+				Command:     "bureau workspace create iree/amdgpu/inference --template dev-workspace",
 			},
 			{
 				Description: "Bootstrap the Matrix homeserver",

@@ -22,6 +22,10 @@
 //
 //   - #iree/templates:<server>   — Project-specific templates
 //
+// Workspace rooms (created by bureau workspace create):
+//
+//   - #iree/amdgpu/inference:<server> — Per-workspace: ProjectConfig, WorkspaceReady, WorkspaceTeardown
+//
 // Per-machine rooms (created by the launcher at registration):
 //
 //   - #bureau/config/<machine-localpart>:<server>  — MachineConfig, Credentials for one machine
@@ -119,6 +123,35 @@ const (
 	// resolves the full inheritance chain and merges fields before sending
 	// a fully-resolved SandboxSpec to the launcher via IPC.
 	EventTypeTemplate = "m.bureau.template"
+
+	// EventTypeProject declares a workspace project — the top-level
+	// organizational unit in /var/bureau/workspace/. Contains the git
+	// repository URL (if git-backed), worktree definitions, and directory
+	// structure. The daemon reads this during reconciliation and compares
+	// it to the host filesystem to determine what setup work is needed.
+	//
+	// State key: project name (e.g., "iree", "lore", "bureau")
+	// Room: the project's workspace room
+	EventTypeProject = "m.bureau.project"
+
+	// EventTypeWorkspaceReady is published by the setup principal after
+	// it finishes creating the workspace (clone, worktrees, config files).
+	// Other principals use this as a gate via StartCondition — they don't
+	// start until this event exists in the workspace room.
+	//
+	// State key: "" (singleton per room)
+	// Room: the workspace room
+	EventTypeWorkspaceReady = "m.bureau.workspace.ready"
+
+	// EventTypeWorkspaceTeardown triggers workspace teardown. When the
+	// daemon sees this event, it spawns a teardown principal (if
+	// configured via lifecycle hooks) to archive and clean up the
+	// workspace. Teardown is separate from Matrix room archival — a room
+	// can be tombstoned while its workspace persists, or vice versa.
+	//
+	// State key: "" (singleton per room)
+	// Room: the workspace room
+	EventTypeWorkspaceTeardown = "m.bureau.workspace.teardown"
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -298,6 +331,40 @@ type PrincipalAssignment struct {
 	// inside the sandbox. Use this for per-instance agent configuration:
 	// project context, task assignments, model parameters, etc.
 	Payload map[string]any `json:"payload,omitempty"`
+
+	// StartCondition gates this principal's launch on the existence of a
+	// specific state event in a specific room. When set, the daemon's
+	// reconciliation loop checks whether the referenced event exists
+	// before creating the sandbox. If the event is absent, the principal
+	// is deferred until a subsequent /sync delivers it.
+	//
+	// The primary use case is workspace lifecycle sequencing: agent
+	// principals gate on EventTypeWorkspaceReady so they don't start
+	// until the setup principal has finished creating the workspace.
+	// Other uses include service dependencies, staged rollouts, and
+	// manual approval gates.
+	//
+	// When nil, the principal starts normally (subject to AutoStart).
+	StartCondition *StartCondition `json:"start_condition,omitempty"`
+}
+
+// StartCondition specifies a state event that must exist before a principal
+// can launch. The daemon checks this during reconciliation: resolve the room
+// alias, fetch the state event, and proceed only if it exists.
+type StartCondition struct {
+	// EventType is the Matrix state event type to check for (e.g.,
+	// "m.bureau.workspace.ready"). Must be a valid Matrix event type.
+	EventType string `json:"event_type"`
+
+	// StateKey is the state key to look up. Empty string is valid and
+	// common — it means the singleton instance of that event type.
+	StateKey string `json:"state_key"`
+
+	// RoomAlias is the full Matrix room alias where the event should
+	// exist (e.g., "#iree/amdgpu/inference:bureau.local"). The daemon
+	// resolves this to a room ID (cached) before fetching the event.
+	// When empty, the daemon checks the principal's own config room.
+	RoomAlias string `json:"room_alias,omitempty"`
 }
 
 // MatrixPolicy controls which self-service Matrix operations an agent can
@@ -532,6 +599,107 @@ type TemplateSecurity struct {
 	// (and its children) from gaining privileges through execve of setuid
 	// binaries.
 	NoNewPrivs bool `json:"no_new_privs,omitempty"`
+}
+
+// ProjectConfig is the content of an EventTypeProject state event. It
+// declares a workspace project: the top-level unit in
+// /var/bureau/workspace/<project>/. For git-backed projects, it specifies
+// the repository URL and worktree layout. For non-git projects (creative
+// writing, ML training, etc.), it specifies directory structure.
+//
+// The daemon reads this during reconciliation and compares it to the host
+// filesystem. If the workspace doesn't exist or is missing worktrees, the
+// daemon spawns a setup principal to create them.
+//
+// The room alias maps mechanically to the filesystem path:
+// #iree/amdgpu/inference:bureau.local → /var/bureau/workspace/iree/amdgpu/inference/
+type ProjectConfig struct {
+	// Repository is the git clone URL for git-backed projects (e.g.,
+	// "https://github.com/iree-org/iree.git"). Empty for non-git
+	// workspaces. When set, the setup principal clones this as a bare
+	// repo into .bare/ under the project root.
+	Repository string `json:"repository,omitempty"`
+
+	// WorkspacePath is the project's directory name under
+	// /var/bureau/workspace/ (e.g., "iree", "lore", "bureau"). This is
+	// always the first segment of the room alias and is redundant with
+	// the state key, but included explicitly for clarity and to
+	// decouple the struct from its storage context.
+	WorkspacePath string `json:"workspace_path"`
+
+	// DefaultBranch is the primary branch name for git-backed projects
+	// (e.g., "main", "master"). The setup principal creates a worktree
+	// named "main/" tracking this branch. Empty for non-git workspaces.
+	DefaultBranch string `json:"default_branch,omitempty"`
+
+	// Worktrees maps worktree path suffixes to their configuration for
+	// git-backed projects. The key is the path relative to the project
+	// root (e.g., "amdgpu/inference", "remoting"). The setup principal
+	// creates each worktree via git worktree add.
+	//
+	// Empty or nil for non-git workspaces.
+	Worktrees map[string]WorktreeConfig `json:"worktrees,omitempty"`
+
+	// Directories maps directory path suffixes to their configuration
+	// for non-git workspaces. The key is the path relative to the
+	// project root (e.g., "novel4", "training-data"). The setup
+	// principal creates each directory.
+	//
+	// Empty or nil for git-backed workspaces.
+	Directories map[string]DirectoryConfig `json:"directories,omitempty"`
+}
+
+// WorktreeConfig describes a single git worktree within a project.
+type WorktreeConfig struct {
+	// Branch is the git branch to check out in this worktree (e.g.,
+	// "feature/amdgpu-inference", "main"). The setup principal runs
+	// git worktree add with this branch.
+	Branch string `json:"branch"`
+
+	// Description is a human-readable description of what this worktree
+	// is for (e.g., "AMDGPU inference pipeline development").
+	Description string `json:"description,omitempty"`
+}
+
+// DirectoryConfig describes a single directory within a non-git workspace.
+type DirectoryConfig struct {
+	// Description is a human-readable description of what this directory
+	// is for (e.g., "Fourth novel workspace", "Training dataset").
+	Description string `json:"description,omitempty"`
+}
+
+// WorkspaceReady is the content of an EventTypeWorkspaceReady state event.
+// Published by the setup principal after the workspace is fully initialized.
+// Principals with StartCondition referencing this event will start only
+// after it appears.
+type WorkspaceReady struct {
+	// SetupPrincipal is the localpart of the setup principal that
+	// completed the workspace initialization (e.g., "iree/setup").
+	SetupPrincipal string `json:"setup_principal"`
+
+	// CompletedAt is an ISO 8601 timestamp of when setup finished.
+	CompletedAt string `json:"completed_at"`
+}
+
+// WorkspaceTeardown is the content of an EventTypeWorkspaceTeardown state
+// event. Triggers workspace teardown when published to a workspace room.
+type WorkspaceTeardown struct {
+	// RequestedBy is the Matrix user ID of whoever initiated the
+	// teardown (e.g., "@bureau-admin:bureau.local").
+	RequestedBy string `json:"requested_by"`
+
+	// RequestedAt is an ISO 8601 timestamp of when teardown was
+	// requested.
+	RequestedAt string `json:"requested_at"`
+
+	// Action specifies what to do with the workspace data: "delete"
+	// removes it permanently, "archive" moves it to cold storage.
+	Action string `json:"action"`
+
+	// ArchivePath is the destination for archived data when Action is
+	// "archive" (e.g., "/var/bureau/archive/iree/amdgpu/inference/").
+	// Empty when Action is "delete".
+	ArchivePath string `json:"archive_path,omitempty"`
 }
 
 // Credentials is the content of an EventTypeCredentials state event.

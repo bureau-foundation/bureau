@@ -14,6 +14,30 @@ import (
 	"github.com/bureau-foundation/bureau/sandbox"
 )
 
+// workspaceContext derives workspace variables from a principal localpart.
+// The first segment becomes the project, and the remaining path becomes
+// the worktree path. For example:
+//
+//   - "iree/amdgpu/pm" → project "iree", worktree path "amdgpu/pm"
+//   - "iree/main" → project "iree", worktree path "main"
+//
+// Returns empty strings if the localpart has no slash — a single-segment
+// localpart like "sysadmin" has no meaningful workspace derivation. Templates
+// that reference ${PROJECT} will fail to expand (the literal ${PROJECT}
+// remains in the mount path), which causes a mount error. This is correct:
+// only principals with hierarchical localparts should use workspace templates.
+//
+// This derivation aligns with Bureau's naming convention where the first
+// path segment is the project boundary (see WORKSPACE.md). The template
+// decides whether to use these variables; the derivation is always mechanical.
+func workspaceContext(localpart string) (project string, worktreePath string) {
+	slashIndex := strings.Index(localpart, "/")
+	if slashIndex < 0 {
+		return "", ""
+	}
+	return localpart[:slashIndex], localpart[slashIndex+1:]
+}
+
 // specToProfile converts a schema.SandboxSpec (JSON wire format from the daemon)
 // into a sandbox.Profile (the format that BwrapBuilder consumes). This is the
 // translation layer between the Matrix-native template system and the bwrap

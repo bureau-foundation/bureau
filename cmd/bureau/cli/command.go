@@ -62,6 +62,13 @@ type Example struct {
 	Command string
 }
 
+// ErrNotImplemented returns a standard error for commands that are defined
+// in the CLI tree but not yet implemented. Using a shared function ensures
+// consistent wording and makes it easy to grep for unfinished commands.
+func ErrNotImplemented(command string) error {
+	return fmt.Errorf("%s: not yet implemented", command)
+}
+
 // Execute parses args and dispatches to the appropriate subcommand or Run
 // function. This is the main entry point for the command tree.
 func (c *Command) Execute(args []string) error {

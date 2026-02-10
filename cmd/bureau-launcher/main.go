@@ -63,6 +63,7 @@ func run() error {
 		socketBasePath        string
 		adminBasePath         string
 		tmuxServerSocket      string
+		workspaceRoot         string
 		showVersion           bool
 	)
 
@@ -76,6 +77,7 @@ func run() error {
 	flag.StringVar(&socketBasePath, "socket-base-path", principal.SocketBasePath, "base directory for principal agent sockets")
 	flag.StringVar(&adminBasePath, "admin-base-path", principal.AdminSocketBasePath, "base directory for principal admin sockets")
 	flag.StringVar(&tmuxServerSocket, "tmux-socket", "/run/bureau/tmux.sock", "path for the Bureau tmux server socket (empty to disable tmux session management)")
+	flag.StringVar(&workspaceRoot, "workspace-root", "/var/bureau/workspace", "root directory for project workspaces")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -132,6 +134,17 @@ func run() error {
 		proxyBinaryPath = findProxyBinary(logger)
 	}
 
+	// Ensure the workspace root directory exists. This is the top-level
+	// directory where all project workspaces live. The .cache/ subdirectory
+	// holds cross-project shared caches (pip, huggingface, etc.).
+	if err := os.MkdirAll(workspaceRoot, 0755); err != nil {
+		return fmt.Errorf("creating workspace root %s: %w", workspaceRoot, err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".cache"), 0755); err != nil {
+		return fmt.Errorf("creating workspace cache %s/.cache: %w", workspaceRoot, err)
+	}
+	logger.Info("workspace root ready", "path", workspaceRoot)
+
 	// Start the IPC socket for daemon communication.
 	launcher := &Launcher{
 		session:          session,
@@ -144,6 +157,7 @@ func run() error {
 		socketBasePath:   socketBasePath,
 		adminBasePath:    adminBasePath,
 		tmuxServerSocket: tmuxServerSocket,
+		workspaceRoot:    workspaceRoot,
 		sandboxes:        make(map[string]*managedSandbox),
 		logger:           logger,
 	}
@@ -435,6 +449,7 @@ type Launcher struct {
 	socketBasePath   string // base directory for agent sockets (e.g., /run/bureau/principal/)
 	adminBasePath    string // base directory for admin sockets (e.g., /run/bureau/admin/)
 	tmuxServerSocket string // path to Bureau's dedicated tmux server socket (e.g., /run/bureau/tmux.sock)
+	workspaceRoot    string // root directory for project workspaces (e.g., /var/bureau/workspace/)
 	sandboxes        map[string]*managedSandbox
 	logger           *slog.Logger
 }
@@ -745,6 +760,24 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 
 	// Convert the SandboxSpec to a sandbox.Profile.
 	profile := specToProfile(spec, proxySocketPath)
+
+	// Expand template variables in the profile. Templates reference
+	// workspace paths via ${PROJECT}, ${WORKTREE_PATH}, etc. — these
+	// are resolved here at launch time when concrete values are known.
+	// The SandboxSpec carries unexpanded variable references (documented
+	// in its EnvironmentVariables doc comment); the launcher is where
+	// expansion happens because it has the concrete values.
+	vars := sandbox.Variables{
+		"WORKSPACE_ROOT": l.workspaceRoot,
+		"PROXY_SOCKET":   proxySocketPath,
+		"TERM":           os.Getenv("TERM"),
+	}
+	project, worktreePath := workspaceContext(principalLocalpart)
+	if project != "" {
+		vars["PROJECT"] = project
+		vars["WORKTREE_PATH"] = worktreePath
+	}
+	profile = vars.ExpandProfile(profile)
 
 	// Handle payload: write to file and add a bind mount into the sandbox.
 	if len(spec.Payload) > 0 {

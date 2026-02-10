@@ -1,0 +1,234 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package workspace implements the bureau workspace subcommands for
+// managing project workspaces across the Bureau fleet. A workspace is
+// a host-side directory structure under /var/bureau/workspace/ that
+// gets mounted into sandboxes — source code with git worktrees,
+// creative writing projects, ML training data, or anything else that
+// principals need shared access to.
+//
+// The room alias IS the workspace path: #iree/amdgpu/inference maps
+// mechanically to /var/bureau/workspace/iree/amdgpu/inference/. No
+// lookup table, no configuration — the path is derived from the alias.
+//
+// Commands are organized into lifecycle (create, destroy), status
+// (list, status, du), and git convenience (worktree, fetch) groups.
+// Most commands work remotely through Matrix: the CLI posts a command
+// message, the daemon on the target machine executes it and replies
+// in a thread.
+//
+// See .notes/design/WORKSPACE.md for the full design.
+package workspace
+
+import (
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+)
+
+// Command returns the "workspace" command group.
+func Command() *cli.Command {
+	return &cli.Command{
+		Name:    "workspace",
+		Summary: "Manage project workspaces",
+		Description: `Manage project workspaces across the Bureau fleet.
+
+A workspace is a directory structure under /var/bureau/workspace/ that
+holds source code (git worktrees), datasets, models, documents, or any
+other files that sandboxed principals need access to. The first path
+segment is the project (e.g., "iree", "lore"), and everything below it
+is the project's structure.
+
+The room alias maps directly to the filesystem path:
+
+  #iree/amdgpu/inference  →  /var/bureau/workspace/iree/amdgpu/inference/
+
+For git-backed projects, all worktrees share a single bare object store
+at /var/bureau/workspace/<project>/.bare/, so cloning a large repo (like
+LLVM) once serves all agents working on that project.
+
+Workspace operations work across the fleet via Matrix messaging. Commands
+like "status" and "fetch" are sent to the target machine's daemon, which
+executes them and replies. No SSH required — works through NAT and
+firewalls.`,
+		Subcommands: []*cli.Command{
+			createCommand(),
+			destroyCommand(),
+			listCommand(),
+			statusCommand(),
+			duCommand(),
+			worktreeCommand(),
+			fetchCommand(),
+		},
+		Examples: []cli.Example{
+			{
+				Description: "Create a workspace from the standard dev template",
+				Command:     "bureau workspace create iree/amdgpu/inference --template dev-workspace --param repository=https://github.com/iree-org/iree.git",
+			},
+			{
+				Description: "List all workspaces across the fleet",
+				Command:     "bureau workspace list",
+			},
+			{
+				Description: "Check workspace status on a remote machine",
+				Command:     "bureau workspace status iree/amdgpu/inference",
+			},
+			{
+				Description: "Add a worktree for a new feature branch",
+				Command:     "bureau workspace worktree add iree/amdgpu/pm --branch feature/amdgpu-pm",
+			},
+			{
+				Description: "Tear down a workspace and archive the data",
+				Command:     "bureau workspace destroy iree/amdgpu/inference --archive",
+			},
+		},
+	}
+}
+
+func createCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "create",
+		Summary: "Create a new workspace",
+		Description: `Create a new workspace by setting up the Matrix room and publishing
+state events. The target machine's daemon picks up the configuration
+via /sync and spawns a setup principal to clone the repo, create
+worktrees, and prepare the workspace.
+
+The alias becomes the room alias and filesystem path:
+
+  bureau workspace create iree/amdgpu/inference
+
+creates room #iree/amdgpu/inference and workspace at
+/var/bureau/workspace/iree/amdgpu/inference/ on the target machine.
+
+Without --machine, targets the local machine.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace create")
+		},
+	}
+}
+
+func destroyCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "destroy",
+		Summary: "Tear down a workspace",
+		Description: `Trigger workspace teardown on the hosting machine. The daemon spawns
+a teardown principal that checks for uncommitted changes, archives
+the data (with --archive), and removes the workspace directory.
+
+The Matrix room is preserved by default — its message history remains
+accessible. Use "bureau matrix room leave" separately to remove the
+room.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace destroy")
+		},
+	}
+}
+
+func listCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "list",
+		Summary: "List workspaces across the fleet",
+		Description: `Query Matrix for rooms with workspace project configuration. Shows
+the workspace alias, project, hosting machine, and status.
+
+This is a Matrix-only query — works from any machine without needing
+access to the workspace filesystem.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace list")
+		},
+	}
+}
+
+func statusCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "status",
+		Summary: "Show detailed workspace status",
+		Description: `Query the hosting machine for detailed workspace status: disk usage,
+git status per worktree, running principals, and last activity.
+
+This is a remote command — the daemon on the hosting machine executes
+it and replies via Matrix.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace status")
+		},
+	}
+}
+
+func duCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "du",
+		Summary: "Show workspace disk usage breakdown",
+		Description: `Show disk usage for workspace subdirectories: .bare/ (git objects),
+each worktree, .shared/ (virtualenvs, build caches), and .cache/
+(cross-project caches). Helps identify where disk space went.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace du")
+		},
+	}
+}
+
+func worktreeCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "worktree",
+		Summary: "Manage git worktrees within a workspace",
+		Description: `Add or remove git worktrees in a workspace project. Adding a worktree
+creates both the git worktree on the hosting machine and a Matrix
+room for the new workspace path.`,
+		Subcommands: []*cli.Command{
+			worktreeAddCommand(),
+			worktreeRemoveCommand(),
+		},
+		Examples: []cli.Example{
+			{
+				Description: "Add a worktree for a feature branch",
+				Command:     "bureau workspace worktree add iree/amdgpu/pm --branch feature/amdgpu-pm",
+			},
+			{
+				Description: "Remove a worktree (checks for uncommitted changes)",
+				Command:     "bureau workspace worktree remove iree/amdgpu/pm",
+			},
+		},
+	}
+}
+
+func worktreeAddCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "add",
+		Summary: "Add a git worktree to a workspace",
+		Description: `Create a new git worktree in a workspace project. Creates the
+worktree on the hosting machine (via the daemon) and the
+corresponding Matrix room.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace worktree add")
+		},
+	}
+}
+
+func worktreeRemoveCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "remove",
+		Summary: "Remove a git worktree from a workspace",
+		Description: `Remove a git worktree from a workspace project. Checks for
+uncommitted changes before removing. Also removes the Matrix room
+if it has no other purpose.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace worktree remove")
+		},
+	}
+}
+
+func fetchCommand() *cli.Command {
+	return &cli.Command{
+		Name:    "fetch",
+		Summary: "Fetch latest changes for a workspace",
+		Description: `Run git fetch on the workspace's bare object store. Uses flock
+coordination to prevent concurrent fetch conflicts when multiple
+agents share the same .bare/ directory.
+
+This is a remote command — the daemon on the hosting machine
+executes it.`,
+		Run: func(args []string) error {
+			return cli.ErrNotImplemented("workspace fetch")
+		},
+	}
+}

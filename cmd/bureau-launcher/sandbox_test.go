@@ -489,3 +489,206 @@ func TestIsShellSafe(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		localpart        string
+		wantProject      string
+		wantWorktreePath string
+	}{
+		{
+			name:             "three-segment principal",
+			localpart:        "iree/amdgpu/pm",
+			wantProject:      "iree",
+			wantWorktreePath: "amdgpu/pm",
+		},
+		{
+			name:             "two-segment principal",
+			localpart:        "iree/main",
+			wantProject:      "iree",
+			wantWorktreePath: "main",
+		},
+		{
+			name:             "deep principal path",
+			localpart:        "iree/amdgpu/inference/coordinator",
+			wantProject:      "iree",
+			wantWorktreePath: "amdgpu/inference/coordinator",
+		},
+		{
+			name:             "single-segment principal",
+			localpart:        "sysadmin",
+			wantProject:      "",
+			wantWorktreePath: "",
+		},
+		{
+			name:             "service principal",
+			localpart:        "service/stt/whisper",
+			wantProject:      "service",
+			wantWorktreePath: "stt/whisper",
+		},
+		{
+			name:             "machine principal",
+			localpart:        "machine/workstation",
+			wantProject:      "machine",
+			wantWorktreePath: "workstation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			project, worktreePath := workspaceContext(tt.localpart)
+			if project != tt.wantProject {
+				t.Errorf("project = %q, want %q", project, tt.wantProject)
+			}
+			if worktreePath != tt.wantWorktreePath {
+				t.Errorf("worktreePath = %q, want %q", worktreePath, tt.wantWorktreePath)
+			}
+		})
+	}
+}
+
+// TestSpecToProfile_WorkspaceVariableExpansion verifies that the full pipeline
+// of specToProfile + variable expansion resolves workspace template variables
+// in filesystem mounts, environment values, and create_dirs.
+func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		Command: []string{"/bin/bash"},
+		Filesystem: []schema.TemplateMount{
+			{
+				Source: "/var/bureau/workspace/${PROJECT}/${WORKTREE_PATH}",
+				Dest:   "/workspace",
+				Mode:   "rw",
+			},
+			{
+				Source: "/var/bureau/workspace/${PROJECT}/.bare",
+				Dest:   "/workspace/.bare",
+				Mode:   "rw",
+			},
+			{
+				Source: "${WORKSPACE_ROOT}/${PROJECT}/.shared",
+				Dest:   "/workspace/.shared",
+				Mode:   "rw",
+			},
+			{
+				Source: "${WORKSPACE_ROOT}/.cache",
+				Dest:   "/workspace/.cache",
+				Mode:   "rw",
+			},
+		},
+		EnvironmentVariables: map[string]string{
+			"HOME":           "/workspace",
+			"PROJECT":        "${PROJECT}",
+			"WORKSPACE_ROOT": "${WORKSPACE_ROOT}",
+		},
+		CreateDirs: []string{
+			"${WORKSPACE_ROOT}/${PROJECT}/${WORKTREE_PATH}/.local",
+		},
+	}
+
+	// Step 1: Convert to profile (no expansion yet).
+	profile := specToProfile(spec, "/run/bureau/principal/iree/amdgpu/pm.sock")
+
+	// Step 2: Build variables and expand (this mirrors buildSandboxCommand).
+	vars := sandbox.Variables{
+		"WORKSPACE_ROOT": "/var/bureau/workspace",
+		"PROXY_SOCKET":   "/run/bureau/principal/iree/amdgpu/pm.sock",
+		"TERM":           "xterm-256color",
+	}
+	project, worktreePath := workspaceContext("iree/amdgpu/pm")
+	if project != "" {
+		vars["PROJECT"] = project
+		vars["WORKTREE_PATH"] = worktreePath
+	}
+	expanded := vars.ExpandProfile(profile)
+
+	// Verify filesystem mounts expanded correctly.
+	// First mount: worktree.
+	if expanded.Filesystem[0].Source != "/var/bureau/workspace/iree/amdgpu/pm" {
+		t.Errorf("worktree mount source = %q, want /var/bureau/workspace/iree/amdgpu/pm",
+			expanded.Filesystem[0].Source)
+	}
+	// Second mount: bare repo.
+	if expanded.Filesystem[1].Source != "/var/bureau/workspace/iree/.bare" {
+		t.Errorf("bare mount source = %q, want /var/bureau/workspace/iree/.bare",
+			expanded.Filesystem[1].Source)
+	}
+	// Third mount: shared state (using WORKSPACE_ROOT variable).
+	if expanded.Filesystem[2].Source != "/var/bureau/workspace/iree/.shared" {
+		t.Errorf("shared mount source = %q, want /var/bureau/workspace/iree/.shared",
+			expanded.Filesystem[2].Source)
+	}
+	// Fourth mount: cross-project cache.
+	if expanded.Filesystem[3].Source != "/var/bureau/workspace/.cache" {
+		t.Errorf("cache mount source = %q, want /var/bureau/workspace/.cache",
+			expanded.Filesystem[3].Source)
+	}
+
+	// Verify environment variables expanded.
+	if expanded.Environment["PROJECT"] != "iree" {
+		t.Errorf("PROJECT env = %q, want iree", expanded.Environment["PROJECT"])
+	}
+	if expanded.Environment["WORKSPACE_ROOT"] != "/var/bureau/workspace" {
+		t.Errorf("WORKSPACE_ROOT env = %q, want /var/bureau/workspace",
+			expanded.Environment["WORKSPACE_ROOT"])
+	}
+	// HOME should be unchanged (no variable reference).
+	if expanded.Environment["HOME"] != "/workspace" {
+		t.Errorf("HOME env = %q, want /workspace", expanded.Environment["HOME"])
+	}
+
+	// Verify create_dirs expanded.
+	if len(expanded.CreateDirs) != 1 {
+		t.Fatalf("expected 1 CreateDir, got %d", len(expanded.CreateDirs))
+	}
+	if expanded.CreateDirs[0] != "/var/bureau/workspace/iree/amdgpu/pm/.local" {
+		t.Errorf("CreateDirs[0] = %q, want /var/bureau/workspace/iree/amdgpu/pm/.local",
+			expanded.CreateDirs[0])
+	}
+}
+
+// TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars verifies that
+// single-segment principals (no slash) leave workspace variable references
+// unexpanded. Templates that incorrectly reference ${PROJECT} for such
+// principals will produce literal ${PROJECT} in paths, causing mount
+// failures — which is the correct behavior (fail loud, not silent).
+func TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		Command: []string{"/bin/bash"},
+		Filesystem: []schema.TemplateMount{
+			{
+				Source: "/var/bureau/workspace/${PROJECT}/${WORKTREE_PATH}",
+				Dest:   "/workspace",
+				Mode:   "rw",
+			},
+		},
+	}
+
+	profile := specToProfile(spec, "/run/bureau/principal/sysadmin.sock")
+
+	// Build variables for a single-segment principal.
+	vars := sandbox.Variables{
+		"WORKSPACE_ROOT": "/var/bureau/workspace",
+		"PROXY_SOCKET":   "/run/bureau/principal/sysadmin.sock",
+	}
+	project, worktreePath := workspaceContext("sysadmin")
+	if project != "" {
+		vars["PROJECT"] = project
+		vars["WORKTREE_PATH"] = worktreePath
+	}
+	expanded := vars.ExpandProfile(profile)
+
+	// ${PROJECT} and ${WORKTREE_PATH} should remain unexpanded.
+	if expanded.Filesystem[0].Source != "/var/bureau/workspace/${PROJECT}/${WORKTREE_PATH}" {
+		t.Errorf("mount source = %q, want literal ${PROJECT}/${WORKTREE_PATH} preserved",
+			expanded.Filesystem[0].Source)
+	}
+}

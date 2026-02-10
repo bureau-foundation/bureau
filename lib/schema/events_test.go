@@ -25,6 +25,9 @@ func TestEventTypeConstants(t *testing.T) {
 		{"service", EventTypeService, "m.bureau.service"},
 		{"layout", EventTypeLayout, "m.bureau.layout"},
 		{"template", EventTypeTemplate, "m.bureau.template"},
+		{"project", EventTypeProject, "m.bureau.project"},
+		{"workspace_ready", EventTypeWorkspaceReady, "m.bureau.workspace.ready"},
+		{"workspace_teardown", EventTypeWorkspaceTeardown, "m.bureau.workspace.teardown"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1253,6 +1256,346 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 	assertField(t, raw, "localpart", "service/stt/whisper")
 	assertField(t, raw, "template", "bureau/templates:whisper-stt")
 	assertField(t, raw, "auto_start", true)
+}
+
+func TestProjectConfigGitBackedRoundTrip(t *testing.T) {
+	original := ProjectConfig{
+		Repository:    "https://github.com/iree-org/iree.git",
+		WorkspacePath: "iree",
+		DefaultBranch: "main",
+		Worktrees: map[string]WorktreeConfig{
+			"amdgpu/inference": {Branch: "feature/amdgpu-inference", Description: "AMDGPU inference pipeline"},
+			"amdgpu/pm":        {Branch: "feature/amdgpu-pm"},
+			"remoting":         {Branch: "main"},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "repository", "https://github.com/iree-org/iree.git")
+	assertField(t, raw, "workspace_path", "iree")
+	assertField(t, raw, "default_branch", "main")
+
+	worktrees, ok := raw["worktrees"].(map[string]any)
+	if !ok {
+		t.Fatal("worktrees field missing or wrong type")
+	}
+	if len(worktrees) != 3 {
+		t.Fatalf("worktrees count = %d, want 3", len(worktrees))
+	}
+	inference, ok := worktrees["amdgpu/inference"].(map[string]any)
+	if !ok {
+		t.Fatal("worktrees[amdgpu/inference] missing or wrong type")
+	}
+	assertField(t, inference, "branch", "feature/amdgpu-inference")
+	assertField(t, inference, "description", "AMDGPU inference pipeline")
+
+	// Directories should be omitted for git-backed projects.
+	if _, exists := raw["directories"]; exists {
+		t.Error("directories should be omitted for git-backed projects")
+	}
+
+	var decoded ProjectConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Repository != original.Repository {
+		t.Errorf("Repository: got %q, want %q", decoded.Repository, original.Repository)
+	}
+	if decoded.WorkspacePath != original.WorkspacePath {
+		t.Errorf("WorkspacePath: got %q, want %q", decoded.WorkspacePath, original.WorkspacePath)
+	}
+	if decoded.DefaultBranch != original.DefaultBranch {
+		t.Errorf("DefaultBranch: got %q, want %q", decoded.DefaultBranch, original.DefaultBranch)
+	}
+	if len(decoded.Worktrees) != 3 {
+		t.Fatalf("Worktrees count = %d, want 3", len(decoded.Worktrees))
+	}
+	inferenceConfig := decoded.Worktrees["amdgpu/inference"]
+	if inferenceConfig.Branch != "feature/amdgpu-inference" {
+		t.Errorf("Worktrees[amdgpu/inference].Branch: got %q, want %q",
+			inferenceConfig.Branch, "feature/amdgpu-inference")
+	}
+	if inferenceConfig.Description != "AMDGPU inference pipeline" {
+		t.Errorf("Worktrees[amdgpu/inference].Description: got %q, want %q",
+			inferenceConfig.Description, "AMDGPU inference pipeline")
+	}
+}
+
+func TestProjectConfigNonGitRoundTrip(t *testing.T) {
+	original := ProjectConfig{
+		WorkspacePath: "lore",
+		Directories: map[string]DirectoryConfig{
+			"novel4": {Description: "Fourth novel workspace"},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "workspace_path", "lore")
+
+	// Git-specific fields should be omitted.
+	for _, field := range []string{"repository", "default_branch", "worktrees"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted for non-git projects", field)
+		}
+	}
+
+	directories, ok := raw["directories"].(map[string]any)
+	if !ok {
+		t.Fatal("directories field missing or wrong type")
+	}
+	novel4, ok := directories["novel4"].(map[string]any)
+	if !ok {
+		t.Fatal("directories[novel4] missing or wrong type")
+	}
+	assertField(t, novel4, "description", "Fourth novel workspace")
+
+	var decoded ProjectConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.WorkspacePath != "lore" {
+		t.Errorf("WorkspacePath: got %q, want %q", decoded.WorkspacePath, "lore")
+	}
+	if len(decoded.Directories) != 1 {
+		t.Fatalf("Directories count = %d, want 1", len(decoded.Directories))
+	}
+	if decoded.Directories["novel4"].Description != "Fourth novel workspace" {
+		t.Errorf("Directories[novel4].Description: got %q, want %q",
+			decoded.Directories["novel4"].Description, "Fourth novel workspace")
+	}
+}
+
+func TestProjectConfigOmitsEmptyFields(t *testing.T) {
+	// Minimal ProjectConfig with only required field.
+	config := ProjectConfig{
+		WorkspacePath: "scratch",
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	for _, field := range []string{"repository", "default_branch", "worktrees", "directories"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty", field)
+		}
+	}
+	assertField(t, raw, "workspace_path", "scratch")
+}
+
+func TestWorktreeConfigOmitsEmptyDescription(t *testing.T) {
+	config := WorktreeConfig{Branch: "main"}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "branch", "main")
+	if _, exists := raw["description"]; exists {
+		t.Error("description should be omitted when empty")
+	}
+}
+
+func TestStartConditionOnPrincipalAssignment(t *testing.T) {
+	original := PrincipalAssignment{
+		Localpart: "iree/amdgpu/pm",
+		Template:  "iree/templates:llm-agent",
+		AutoStart: true,
+		StartCondition: &StartCondition{
+			EventType: "m.bureau.workspace.ready",
+			StateKey:  "",
+			RoomAlias: "#iree/amdgpu/inference:bureau.local",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	startCondition, ok := raw["start_condition"].(map[string]any)
+	if !ok {
+		t.Fatal("start_condition field missing or wrong type")
+	}
+	assertField(t, startCondition, "event_type", "m.bureau.workspace.ready")
+	assertField(t, startCondition, "state_key", "")
+	assertField(t, startCondition, "room_alias", "#iree/amdgpu/inference:bureau.local")
+
+	var decoded PrincipalAssignment
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.StartCondition == nil {
+		t.Fatal("StartCondition should not be nil after round-trip")
+	}
+	if decoded.StartCondition.EventType != "m.bureau.workspace.ready" {
+		t.Errorf("StartCondition.EventType: got %q, want %q",
+			decoded.StartCondition.EventType, "m.bureau.workspace.ready")
+	}
+	if decoded.StartCondition.StateKey != "" {
+		t.Errorf("StartCondition.StateKey: got %q, want empty", decoded.StartCondition.StateKey)
+	}
+	if decoded.StartCondition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
+		t.Errorf("StartCondition.RoomAlias: got %q, want %q",
+			decoded.StartCondition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
+	}
+}
+
+func TestStartConditionOmittedWhenNil(t *testing.T) {
+	assignment := PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/templates:whisper-stt",
+		AutoStart: true,
+	}
+
+	data, err := json.Marshal(assignment)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["start_condition"]; exists {
+		t.Error("start_condition should be omitted when nil")
+	}
+}
+
+func TestStartConditionOmitsEmptyRoomAlias(t *testing.T) {
+	// When RoomAlias is empty (check principal's own config room),
+	// it should be omitted from the wire format.
+	condition := StartCondition{
+		EventType: "m.bureau.workspace.ready",
+		StateKey:  "",
+	}
+
+	data, err := json.Marshal(condition)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "event_type", "m.bureau.workspace.ready")
+	assertField(t, raw, "state_key", "")
+	if _, exists := raw["room_alias"]; exists {
+		t.Error("room_alias should be omitted when empty")
+	}
+}
+
+func TestWorkspaceReadyRoundTrip(t *testing.T) {
+	original := WorkspaceReady{
+		SetupPrincipal: "iree/setup",
+		CompletedAt:    "2026-02-10T12:00:00Z",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "setup_principal", "iree/setup")
+	assertField(t, raw, "completed_at", "2026-02-10T12:00:00Z")
+
+	var decoded WorkspaceReady
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestWorkspaceTeardownRoundTrip(t *testing.T) {
+	original := WorkspaceTeardown{
+		RequestedBy: "@bureau-admin:bureau.local",
+		RequestedAt: "2026-02-10T12:00:00Z",
+		Action:      "archive",
+		ArchivePath: "/var/bureau/archive/iree/amdgpu/inference/",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "requested_by", "@bureau-admin:bureau.local")
+	assertField(t, raw, "requested_at", "2026-02-10T12:00:00Z")
+	assertField(t, raw, "action", "archive")
+	assertField(t, raw, "archive_path", "/var/bureau/archive/iree/amdgpu/inference/")
+
+	var decoded WorkspaceTeardown
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestWorkspaceTeardownOmitsEmptyArchivePath(t *testing.T) {
+	teardown := WorkspaceTeardown{
+		RequestedBy: "@bureau-admin:bureau.local",
+		RequestedAt: "2026-02-10T12:00:00Z",
+		Action:      "delete",
+	}
+
+	data, err := json.Marshal(teardown)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "action", "delete")
+	if _, exists := raw["archive_path"]; exists {
+		t.Error("archive_path should be omitted when empty")
+	}
 }
 
 // assertField checks that a JSON object has a field with the expected value.

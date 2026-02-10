@@ -60,7 +60,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 
 func TestConfigRoomPowerLevels(t *testing.T) {
 	adminUserID := "@bureau-admin:bureau.local"
-	levels := schema.ConfigRoomPowerLevels(adminUserID)
+	machineUserID := "@machine/workstation:bureau.local"
+	levels := schema.ConfigRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.
 	users, ok := levels["users"].(map[string]any)
@@ -73,6 +74,15 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	}
 	if adminLevel != 100 {
 		t.Errorf("admin power level = %v, want 100", adminLevel)
+	}
+
+	// Machine should have power level 50 (invite capability, not config writes).
+	machineLevel, ok := users[machineUserID]
+	if !ok {
+		t.Fatalf("machine %q not in users map", machineUserID)
+	}
+	if machineLevel != 50 {
+		t.Errorf("machine power level = %v, want 50", machineLevel)
 	}
 
 	// Default user power level should be 0.
@@ -95,6 +105,11 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	// Default event power level should be 100 (admin-only room).
 	if levels["events_default"] != 100 {
 		t.Errorf("events_default = %v, want 100", levels["events_default"])
+	}
+
+	// Invite should require PL 50 (machine can invite during creation).
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
 	}
 }
 

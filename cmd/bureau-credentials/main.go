@@ -545,7 +545,7 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 		Preset:                    "private_chat",
 		Invite:                    []string{machineUserID},
 		Visibility:                "private",
-		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID),
+		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineUserID),
 	})
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeRoomInUse) {

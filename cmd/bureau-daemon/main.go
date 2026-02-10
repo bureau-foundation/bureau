@@ -495,15 +495,23 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 	aliasLocalpart := principal.RoomAliasLocalpart(alias)
 
 	adminUserID := principal.MatrixUserID(adminUser, serverName)
+	machineUserID := principal.MatrixUserID(machineName, serverName)
 
+	// Create without power_level_content_override. The private_chat preset
+	// gives the room creator PL 100, which is needed to send all the preset
+	// events (join_rules, history_visibility, etc.) during room creation.
+	// If we set the machine to PL 50 via override, the merged power levels
+	// take effect before the preset events — and the machine at PL 50 can't
+	// send m.room.join_rules (which requires PL 100 per state_default).
+	// Instead, we create with preset defaults, then apply restrictive power
+	// levels as a separate state event.
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:                      "Config: " + machineName,
-		Topic:                     "Machine configuration and credentials for " + machineName,
-		Alias:                     aliasLocalpart,
-		Preset:                    "private_chat",
-		Invite:                    []string{adminUserID},
-		Visibility:                "private",
-		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID),
+		Name:       "Config: " + machineName,
+		Topic:      "Machine configuration and credentials for " + machineName,
+		Alias:      aliasLocalpart,
+		Preset:     "private_chat",
+		Invite:     []string{adminUserID},
+		Visibility: "private",
 	})
 	if err != nil {
 		// If the room was created between our alias check and now, try to
@@ -519,6 +527,16 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 			return roomID, nil
 		}
 		return "", fmt.Errorf("creating config room: %w", err)
+	}
+
+	// Apply restrictive power levels now that the room exists. The machine
+	// (creator, PL 100 from preset) lowers itself to PL 50: sufficient to
+	// invite and write layouts, but insufficient to modify config or
+	// credentials (PL 100). The admin stays at PL 100.
+	_, err = session.SendStateEvent(ctx, response.RoomID, "m.room.power_levels", "",
+		schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
+	if err != nil {
+		return "", fmt.Errorf("setting config room power levels: %w", err)
 	}
 
 	logger.Info("created config room",

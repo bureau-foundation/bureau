@@ -528,7 +528,8 @@ func TestServiceOmitsOptionalFields(t *testing.T) {
 
 func TestConfigRoomPowerLevels(t *testing.T) {
 	adminUserID := "@bureau-admin:bureau.local"
-	levels := ConfigRoomPowerLevels(adminUserID)
+	machineUserID := "@machine/workstation:bureau.local"
+	levels := ConfigRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.
 	users, ok := levels["users"].(map[string]any)
@@ -543,9 +544,24 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("admin power level = %v, want 100", adminLevel)
 	}
 
-	// Default user power level should be 0 (machine is read-only).
+	// Machine should have power level 50 (sufficient for invite during
+	// room creation, but insufficient for config or credential writes).
+	machineLevel, ok := users[machineUserID]
+	if !ok {
+		t.Fatalf("machine %q not in users map", machineUserID)
+	}
+	if machineLevel != 50 {
+		t.Errorf("machine power level = %v, want 50", machineLevel)
+	}
+
+	// Default user power level should be 0 (other members are read-only).
 	if levels["users_default"] != 0 {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	// Invite should require PL 50 (machine can invite admin during creation).
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
 	}
 
 	// Bureau config and credentials events require power level 100.
@@ -571,8 +587,8 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("events_default = %v, want 100", levels["events_default"])
 	}
 
-	// All administrative actions require power level 100.
-	for _, field := range []string{"state_default", "ban", "kick", "invite", "redact"} {
+	// Administrative actions require power level 100.
+	for _, field := range []string{"state_default", "ban", "kick", "redact"} {
 		if levels[field] != 100 {
 			t.Errorf("%s = %v, want 100", field, levels[field])
 		}

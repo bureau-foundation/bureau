@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -509,4 +510,291 @@ func loadCredentials(t *testing.T) map[string]string {
 		t.Fatalf("read credential file: %v", err)
 	}
 	return credentials
+}
+
+// --- Machine Fleet Tests ---
+
+// TestMachineJoinsFleet verifies the complete machine bootstrap path:
+// launcher registers with the homeserver and publishes its key, daemon
+// starts, performs initial sync, creates the config room, and publishes
+// a MachineStatus heartbeat. This proves the full launcher→daemon→Matrix
+// lifecycle works end-to-end.
+func TestMachineJoinsFleet(t *testing.T) {
+	const machineName = "machine/test"
+	machineUserID := "@machine/test:" + testServerName
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	// Resolve global rooms so we can invite the machine.
+	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve machines room: %v", err)
+	}
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+
+	// Pre-invite the machine user to global rooms. These rooms use the
+	// private_chat preset (invite-only), so the machine needs an
+	// invitation before it can join. In production, the admin does this
+	// as part of fleet provisioning.
+	if err := admin.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to machines room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to services room: %v", err)
+	}
+
+	// Create isolated directories. socketDir uses /tmp for short paths
+	// (Unix socket limit is 108 bytes; Bazel's TEST_TMPDIR is too deep).
+	stateDir := t.TempDir()
+	socketDir := tempSocketDir(t)
+
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	observeSocket := filepath.Join(socketDir, "observe.sock")
+	relaySocket := filepath.Join(socketDir, "relay.sock")
+	principalSocketBase := filepath.Join(socketDir, "p") + "/"
+	adminSocketBase := filepath.Join(socketDir, "a") + "/"
+	os.MkdirAll(principalSocketBase, 0755)
+	os.MkdirAll(adminSocketBase, 0755)
+
+	// Write the registration token to a file for the launcher.
+	tokenFile := filepath.Join(stateDir, "reg-token")
+	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
+		t.Fatalf("write registration token: %v", err)
+	}
+
+	launcherWorkspaceRoot := filepath.Join(stateDir, "workspace")
+
+	// Start the launcher (first boot). It generates a keypair, registers
+	// a Matrix account, publishes the machine key, saves the session, and
+	// listens on the IPC socket.
+	startProcess(t, "launcher", launcherBinary,
+		"--homeserver", testHomeserverURL,
+		"--registration-token-file", tokenFile,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--tmux-socket", tmuxSocket,
+		"--socket-base-path", principalSocketBase,
+		"--admin-base-path", adminSocketBase,
+		"--workspace-root", launcherWorkspaceRoot,
+	)
+
+	// Wait for the launcher's IPC socket — its appearance signals that
+	// first-boot setup (registration, key publication) is complete and
+	// the launcher is listening for daemon requests.
+	waitForFile(t, launcherSocket, 15*time.Second)
+
+	// Verify the machine key was published to #bureau/machines.
+	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_key", machineName, 10*time.Second)
+
+	var machineKey struct {
+		Algorithm string `json:"algorithm"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
+		t.Fatalf("unmarshal machine key: %v", err)
+	}
+	if machineKey.Algorithm != "age-x25519" {
+		t.Errorf("machine key algorithm = %q, want age-x25519", machineKey.Algorithm)
+	}
+	if machineKey.PublicKey == "" {
+		t.Error("machine key has empty public key")
+	}
+
+	// Start the daemon. It loads the session saved by the launcher,
+	// ensures the per-machine config room, joins global rooms, does
+	// an initial Matrix sync, and publishes a MachineStatus heartbeat.
+	startProcess(t, "daemon", daemonBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--launcher-socket", launcherSocket,
+		"--observe-socket", observeSocket,
+		"--relay-socket", relaySocket,
+		"--tmux-socket", tmuxSocket,
+		"--admin-user", "bureau-admin",
+	)
+
+	// Wait for the MachineStatus heartbeat in #bureau/machines. The
+	// daemon publishes immediately on startup, so this also serves as
+	// a readiness signal.
+	statusJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_status", machineName, 15*time.Second)
+
+	var status struct {
+		Principal string `json:"principal"`
+		Sandboxes struct {
+			Running int `json:"running"`
+		} `json:"sandboxes"`
+		UptimeSeconds int64 `json:"uptime_seconds"`
+	}
+	if err := json.Unmarshal(statusJSON, &status); err != nil {
+		t.Fatalf("unmarshal machine status: %v", err)
+	}
+	if status.Principal != machineUserID {
+		t.Errorf("machine status principal = %q, want %q", status.Principal, machineUserID)
+	}
+	if status.Sandboxes.Running != 0 {
+		t.Errorf("expected 0 running sandboxes, got %d", status.Sandboxes.Running)
+	}
+	if status.UptimeSeconds == 0 {
+		t.Error("machine status has zero uptime")
+	}
+
+	// Verify the per-machine config room was created by the daemon.
+	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		t.Fatalf("config room %s not created: %v", configAlias, err)
+	}
+	if configRoomID == "" {
+		t.Fatal("config room resolved to empty room ID")
+	}
+
+	// Verify the admin was invited to the config room (the daemon's
+	// ensureConfigRoom invites the admin user so the admin can write
+	// MachineConfig and Credentials state events).
+	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("admin could not join config room: %v", err)
+	}
+
+	// Verify config room power levels: admin should have level 100.
+	powerLevelJSON, err := admin.GetStateEvent(ctx, configRoomID, "m.room.power_levels", "")
+	if err != nil {
+		t.Fatalf("get config room power levels: %v", err)
+	}
+	var powerLevels struct {
+		Users map[string]int `json:"users"`
+	}
+	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
+		t.Fatalf("unmarshal power levels: %v", err)
+	}
+	adminUserID := "@bureau-admin:" + testServerName
+	if level, ok := powerLevels.Users[adminUserID]; !ok || level != 100 {
+		t.Errorf("admin power level = %d (present=%v), want 100", level, ok)
+	}
+	if level, ok := powerLevels.Users[machineUserID]; !ok || level != 50 {
+		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
+	}
+}
+
+// --- Fleet Test Helpers ---
+
+// resolvedBinary resolves a binary path from a Bazel environment variable.
+// Skips the test if the binary is not available (allows running the Matrix
+// setup tests without the launcher/daemon binaries).
+func resolvedBinary(t *testing.T, envVar string) string {
+	t.Helper()
+
+	rlocationPath := os.Getenv(envVar)
+	if rlocationPath == "" {
+		t.Skipf("%s not set (run via Bazel to test machine lifecycle)", envVar)
+	}
+
+	runfilesDirectory := os.Getenv("RUNFILES_DIR")
+	if runfilesDirectory == "" {
+		t.Skipf("%s set but RUNFILES_DIR missing", envVar)
+	}
+
+	absolutePath := filepath.Join(runfilesDirectory, rlocationPath)
+	if _, err := os.Stat(absolutePath); err != nil {
+		t.Skipf("binary not found at %s: %v", absolutePath, err)
+	}
+	return absolutePath
+}
+
+// startProcess starts a binary as a subprocess, wiring its output to the
+// test log. Registers a cleanup function that sends SIGTERM and waits for
+// the process to exit (with a 5-second SIGKILL fallback). Cleanup runs in
+// LIFO order, so starting the daemon after the launcher ensures the daemon
+// is stopped first.
+func startProcess(t *testing.T, name, binary string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(binary, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %s: %v", name, err)
+	}
+
+	t.Logf("%s started (pid %d)", name, cmd.Process.Pid)
+
+	t.Cleanup(func() {
+		if cmd.Process == nil {
+			return
+		}
+		cmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+			t.Logf("%s stopped", name)
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+			<-done
+			t.Logf("%s killed after timeout", name)
+		}
+	})
+}
+
+// tempSocketDir creates a short-named temporary directory under /tmp for
+// Unix sockets. Bazel's TEST_TMPDIR paths are too deep for the 108-byte
+// Unix socket name limit.
+func tempSocketDir(t *testing.T) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("/tmp", "bureau-it-")
+	if err != nil {
+		t.Fatalf("create socket temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(directory) })
+	return directory
+}
+
+// waitForFile polls until a file exists on disk.
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for file: %s", timeout, path)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitForStateEvent polls a Matrix room for a state event until it appears
+// or the timeout expires. Returns the raw JSON content of the event.
+func waitForStateEvent(t *testing.T, session *messaging.Session, roomID, eventType, stateKey string, timeout time.Duration) json.RawMessage {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastError error
+	for {
+		content, err := session.GetStateEvent(t.Context(), roomID, eventType, stateKey)
+		if err == nil {
+			return content
+		}
+		lastError = err
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for state event %s/%s in room %s: %v",
+				timeout, eventType, stateKey, roomID, lastError)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

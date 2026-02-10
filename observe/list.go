@@ -16,6 +16,10 @@ import (
 //
 // The Action field distinguishes this from an ObserveRequest or
 // QueryLayoutRequest on the same socket.
+//
+// Authentication is mandatory: both Observer and Token must be present.
+// The daemon verifies the token and filters the returned list to only
+// principals the observer is authorized to see.
 type ListRequest struct {
 	// Action must be "list".
 	Action string `json:"action"`
@@ -24,6 +28,12 @@ type ListRequest struct {
 	// that can currently be observed (running locally, or running on
 	// a remote machine reachable via transport).
 	Observable bool `json:"observable,omitempty"`
+
+	// Observer is the Matrix user ID of the entity requesting the list.
+	Observer string `json:"observer"`
+
+	// Token is a Matrix access token that authenticates the Observer.
+	Token string `json:"token"`
 }
 
 // ListResponse is the daemon's response to a ListRequest.

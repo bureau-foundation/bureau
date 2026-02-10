@@ -141,13 +141,30 @@ func NewMetadataMessage(jsonPayload []byte) Message {
 // ObserveRequest is the initial JSON request sent by the client to the daemon
 // when establishing an observation session. Sent on the unix socket before
 // switching to the binary observation protocol.
+//
+// Authentication is mandatory: both Observer and Token must be present.
+// The daemon verifies the token against the homeserver and checks the
+// verified identity against the target principal's ObservePolicy.
 type ObserveRequest struct {
 	// Principal is the localpart of the target to observe
 	// (e.g., "iree/amdgpu/pm").
 	Principal string `json:"principal"`
 
-	// Mode is "readwrite" or "readonly".
+	// Mode is "readwrite" or "readonly". The daemon may downgrade
+	// readwrite to readonly based on the target's ObservePolicy —
+	// the granted mode is reported in the ObserveResponse.
 	Mode string `json:"mode"`
+
+	// Observer is the Matrix user ID of the entity requesting
+	// observation (e.g., "@bureau-admin:bureau.local"). This is the
+	// asserted identity — the Token field proves it.
+	Observer string `json:"observer"`
+
+	// Token is a Matrix access token that authenticates the Observer.
+	// The daemon verifies this against the homeserver before granting
+	// access. Clients load this from their session file (operators)
+	// or receive it from the proxy (agents).
+	Token string `json:"token"`
 }
 
 // ObserveResponse is the daemon's JSON response to an observation request.
@@ -164,6 +181,12 @@ type ObserveResponse struct {
 	// Machine is the machine identity hosting the principal
 	// (e.g., "machine/workstation"). Only set when OK is true.
 	Machine string `json:"machine,omitempty"`
+
+	// GrantedMode is the observation mode the daemon actually granted.
+	// May differ from the requested mode if the ObservePolicy allows
+	// the observer but only for readonly access. Clients should check
+	// this to know whether their input will be forwarded.
+	GrantedMode string `json:"granted_mode,omitempty"`
 
 	// Error describes why the request failed. Only set when OK is false.
 	Error string `json:"error,omitempty"`

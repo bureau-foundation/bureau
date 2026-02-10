@@ -35,10 +35,9 @@ import (
 	"github.com/bureau-foundation/bureau/observe"
 )
 
-// observeRequest mirrors observe.ObserveRequest. Defined locally to avoid
-// importing the observe package (which has in-progress compilation issues from
-// another agent) and to parallel the existing pattern with launcherIPCRequest.
-// The JSON wire format is the contract between client and daemon.
+// observeRequest mirrors observe.ObserveRequest. Defined locally to parallel
+// the existing pattern with launcherIPCRequest — the JSON wire format is the
+// contract between client and daemon.
 type observeRequest struct {
 	// Action selects the request type:
 	//   - "" or "observe": streaming observation session
@@ -61,10 +60,19 @@ type observeRequest struct {
 	// Observable, when true with Action "list", filters the response
 	// to only currently-observable targets.
 	Observable bool `json:"observable,omitempty"`
+
+	// Observer is the Matrix user ID of the entity making this request.
+	// Required for all actions — the daemon verifies this via Token.
+	Observer string `json:"observer,omitempty"`
+
+	// Token is a Matrix access token proving the Observer's identity.
+	// The daemon verifies this against the homeserver before processing
+	// any request.
+	Token string `json:"token,omitempty"`
 }
 
-// observeResponse mirrors observe.ObserveResponse. Defined locally for the
-// same reasons as observeRequest.
+// observeResponse mirrors observe.ObserveResponse. Defined locally to
+// parallel the existing pattern with launcherIPCResponse.
 type observeResponse struct {
 	// OK is true if the observation session was established.
 	OK bool `json:"ok"`
@@ -74,6 +82,11 @@ type observeResponse struct {
 
 	// Machine is the machine localpart hosting the principal.
 	Machine string `json:"machine,omitempty"`
+
+	// GrantedMode is the observation mode actually granted by the
+	// daemon. May be "readonly" even if "readwrite" was requested,
+	// when the ObservePolicy only grants the observer readonly access.
+	GrantedMode string `json:"granted_mode,omitempty"`
 
 	// Error describes why the request failed.
 	Error string `json:"error,omitempty"`

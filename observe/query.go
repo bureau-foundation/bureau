@@ -19,6 +19,8 @@ import (
 // The Action field distinguishes this from an ObserveRequest, which
 // establishes a streaming observation session. Both share the same
 // socket and initial JSON line protocol.
+//
+// Authentication is mandatory: both Observer and Token must be present.
 type QueryLayoutRequest struct {
 	// Action must be "query_layout".
 	Action string `json:"action"`
@@ -27,6 +29,12 @@ type QueryLayoutRequest struct {
 	// (e.g., "#iree/amdgpu/general:bureau.local"). The daemon
 	// resolves this to a room ID internally.
 	Channel string `json:"channel"`
+
+	// Observer is the Matrix user ID of the entity requesting the layout.
+	Observer string `json:"observer"`
+
+	// Token is a Matrix access token that authenticates the Observer.
+	Token string `json:"token"`
 }
 
 // QueryLayoutResponse is the daemon's response to a QueryLayoutRequest.

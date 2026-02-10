@@ -176,6 +176,169 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestObservePolicyRoundTrip(t *testing.T) {
+	original := ObservePolicy{
+		AllowedObservers:   []string{"bureau-admin", "iree/**"},
+		ReadWriteObservers: []string{"bureau-admin"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	allowedObservers, ok := raw["allowed_observers"].([]any)
+	if !ok {
+		t.Fatal("allowed_observers field missing or wrong type")
+	}
+	if len(allowedObservers) != 2 {
+		t.Fatalf("allowed_observers count = %d, want 2", len(allowedObservers))
+	}
+	if allowedObservers[0] != "bureau-admin" || allowedObservers[1] != "iree/**" {
+		t.Errorf("allowed_observers = %v, want [bureau-admin iree/**]", allowedObservers)
+	}
+
+	readWriteObservers, ok := raw["readwrite_observers"].([]any)
+	if !ok {
+		t.Fatal("readwrite_observers field missing or wrong type")
+	}
+	if len(readWriteObservers) != 1 || readWriteObservers[0] != "bureau-admin" {
+		t.Errorf("readwrite_observers = %v, want [bureau-admin]", readWriteObservers)
+	}
+
+	var decoded ObservePolicy
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(decoded.AllowedObservers) != 2 {
+		t.Fatalf("AllowedObservers count = %d, want 2", len(decoded.AllowedObservers))
+	}
+	if decoded.AllowedObservers[0] != "bureau-admin" || decoded.AllowedObservers[1] != "iree/**" {
+		t.Errorf("AllowedObservers = %v, want [bureau-admin iree/**]", decoded.AllowedObservers)
+	}
+	if len(decoded.ReadWriteObservers) != 1 || decoded.ReadWriteObservers[0] != "bureau-admin" {
+		t.Errorf("ReadWriteObservers = %v, want [bureau-admin]", decoded.ReadWriteObservers)
+	}
+}
+
+func TestObservePolicyOmitsEmptyFields(t *testing.T) {
+	policy := ObservePolicy{}
+	data, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	for _, field := range []string{"allowed_observers", "readwrite_observers"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty", field)
+		}
+	}
+}
+
+func TestObservePolicyDefaultDeny(t *testing.T) {
+	// A nil ObservePolicy and an empty ObservePolicy both mean
+	// "no observation allowed". Verify the zero value has no patterns.
+	var policy ObservePolicy
+	if len(policy.AllowedObservers) != 0 {
+		t.Errorf("zero-value AllowedObservers should be empty, got %v", policy.AllowedObservers)
+	}
+	if len(policy.ReadWriteObservers) != 0 {
+		t.Errorf("zero-value ReadWriteObservers should be empty, got %v", policy.ReadWriteObservers)
+	}
+}
+
+func TestMachineConfigWithObservePolicy(t *testing.T) {
+	// A MachineConfig with both DefaultObservePolicy and per-principal
+	// ObservePolicy should round-trip correctly.
+	config := MachineConfig{
+		Principals: []PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Template:  "llm-agent",
+				AutoStart: true,
+				ObservePolicy: &ObservePolicy{
+					AllowedObservers:   []string{"bureau-admin", "iree/**"},
+					ReadWriteObservers: []string{"bureau-admin"},
+				},
+			},
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "whisper-stt",
+				AutoStart: true,
+				// No per-principal policy — falls back to DefaultObservePolicy.
+			},
+		},
+		DefaultObservePolicy: &ObservePolicy{
+			AllowedObservers: []string{"bureau-admin"},
+		},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded MachineConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Check DefaultObservePolicy.
+	if decoded.DefaultObservePolicy == nil {
+		t.Fatal("DefaultObservePolicy should not be nil after round-trip")
+	}
+	if len(decoded.DefaultObservePolicy.AllowedObservers) != 1 ||
+		decoded.DefaultObservePolicy.AllowedObservers[0] != "bureau-admin" {
+		t.Errorf("DefaultObservePolicy.AllowedObservers = %v, want [bureau-admin]",
+			decoded.DefaultObservePolicy.AllowedObservers)
+	}
+
+	// Check first principal's per-principal policy.
+	if decoded.Principals[0].ObservePolicy == nil {
+		t.Fatal("Principals[0].ObservePolicy should not be nil after round-trip")
+	}
+	if len(decoded.Principals[0].ObservePolicy.AllowedObservers) != 2 {
+		t.Fatalf("Principals[0].ObservePolicy.AllowedObservers count = %d, want 2",
+			len(decoded.Principals[0].ObservePolicy.AllowedObservers))
+	}
+	if len(decoded.Principals[0].ObservePolicy.ReadWriteObservers) != 1 {
+		t.Fatalf("Principals[0].ObservePolicy.ReadWriteObservers count = %d, want 1",
+			len(decoded.Principals[0].ObservePolicy.ReadWriteObservers))
+	}
+
+	// Check second principal has no per-principal policy.
+	if decoded.Principals[1].ObservePolicy != nil {
+		t.Errorf("Principals[1].ObservePolicy should be nil, got %+v",
+			decoded.Principals[1].ObservePolicy)
+	}
+
+	// Verify the wire format has the right structure.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["default_observe_policy"]; !exists {
+		t.Error("default_observe_policy should be present in JSON")
+	}
+	principals := raw["principals"].([]any)
+	firstPrincipal := principals[0].(map[string]any)
+	if _, exists := firstPrincipal["observe_policy"]; !exists {
+		t.Error("first principal should have observe_policy in JSON")
+	}
+	secondPrincipal := principals[1].(map[string]any)
+	if _, exists := secondPrincipal["observe_policy"]; exists {
+		t.Error("second principal should not have observe_policy in JSON")
+	}
+}
+
 func TestCredentialsRoundTrip(t *testing.T) {
 	original := Credentials{
 		Version:   1,

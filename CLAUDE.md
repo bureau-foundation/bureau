@@ -28,6 +28,10 @@ lib/           Supporting packages:
   sealed/        age encryption/decryption for credential bundles
   version/       Build version info
 cmd/           Binary entry points:
+  bureau/              Unified CLI (observe, matrix, dashboard, list, version)
+    cli/               Shared CLI framework (command dispatch, help, typo suggestions)
+    matrix/            Matrix subcommands (setup, space, room, user, doctor)
+    observe/           Observation subcommands (observe, dashboard, list)
   bureau-launcher/     Privileged process: keypair, credential decryption, sandbox lifecycle
   bureau-daemon/       Unprivileged process: Matrix sync, config reconciliation, service routing
   bureau-proxy/        Per-sandbox credential injection proxy
@@ -35,7 +39,6 @@ cmd/           Binary entry points:
   bureau-sandbox/      Sandbox creation CLI
   bureau-credentials/  Credential provisioning and machine config CLI
   bureau-proxy-call/   One-shot HTTP request through a proxy socket
-  bureau-matrix-setup/ Homeserver bootstrap (admin account, spaces, rooms)
 deploy/        Deployment configurations (matrix/, etc.)
 ```
 

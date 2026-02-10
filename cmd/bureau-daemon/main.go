@@ -13,10 +13,11 @@
 // On startup:
 //  1. Loads the Matrix session written by the launcher during first-boot.
 //  2. Ensures the per-machine config room exists.
-//  3. Reads MachineConfig state to determine which principals to run.
-//  4. Reconciles: creates missing sandboxes, destroys extra ones.
-//  5. Enters a polling loop to watch for config changes.
-//  6. Periodically publishes MachineStatus heartbeats.
+//  3. Performs an initial Matrix /sync to establish a since token.
+//  4. Reads MachineConfig state to determine which principals to run.
+//  5. Reconciles: creates missing sandboxes, destroys extra ones.
+//  6. Enters a /sync long-poll loop to watch for state changes.
+//  7. Periodically publishes MachineStatus heartbeats.
 package main
 
 import (
@@ -60,7 +61,6 @@ func run() error {
 		observeSocket      string
 		tmuxSocket         string
 		observeRelayBinary string
-		pollInterval       time.Duration
 		statusInterval     time.Duration
 		showVersion        bool
 	)
@@ -75,7 +75,6 @@ func run() error {
 	flag.StringVar(&observeSocket, "observe-socket", "/run/bureau/observe.sock", "Unix socket for observation requests from clients")
 	flag.StringVar(&tmuxSocket, "tmux-socket", "/run/bureau/tmux.sock", "tmux server socket for Bureau-managed sessions")
 	flag.StringVar(&observeRelayBinary, "observe-relay-binary", "bureau-observe-relay", "path to the observation relay binary")
-	flag.DurationVar(&pollInterval, "poll-interval", 30*time.Second, "how often to poll for config changes")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
@@ -150,7 +149,6 @@ func run() error {
 		machinesRoomID:      machinesRoomID,
 		servicesRoomID:      servicesRoomID,
 		launcherSocket:      launcherSocket,
-		pollInterval:        pollInterval,
 		statusInterval:      statusInterval,
 		running:             make(map[string]bool),
 		services:            make(map[string]*schema.Service),
@@ -183,32 +181,17 @@ func run() error {
 	// principal. Ensure they all stop on shutdown.
 	defer daemon.stopAllLayoutWatchers()
 
-	// Initial reconciliation.
-	if err := daemon.reconcile(ctx); err != nil {
-		logger.Error("initial reconciliation failed", "error", err)
-		// Continue running — the next poll will retry.
+	// Perform the initial Matrix /sync to establish a since token and
+	// baseline state (reconcile, peer addresses, service directory).
+	sinceToken, err := daemon.initialSync(ctx)
+	if err != nil {
+		logger.Error("initial sync failed", "error", err)
+		// Continue — the sync loop will start from scratch with an empty
+		// token, which triggers a fresh initial sync.
 	}
 
-	// Sync peer transport addresses before the first service directory
-	// sync so we know how to reach remote machines.
-	if err := daemon.syncPeerAddresses(ctx); err != nil {
-		logger.Error("initial peer address sync failed", "error", err)
-	}
-
-	// Initial service directory sync.
-	if added, removed, updated, err := daemon.syncServiceDirectory(ctx); err != nil {
-		logger.Error("initial service directory sync failed", "error", err)
-	} else {
-		logger.Info("service directory synced",
-			"services", len(daemon.services),
-			"local", len(daemon.localServices()),
-			"remote", len(daemon.remoteServices()),
-		)
-		daemon.reconcileServices(ctx, added, removed, updated)
-	}
-
-	// Start the polling and status loops.
-	go daemon.pollLoop(ctx)
+	// Start the incremental sync loop and status heartbeat loop.
+	go daemon.syncLoop(ctx, sinceToken)
 	go daemon.statusLoop(ctx)
 
 	// Wait for shutdown.
@@ -244,7 +227,6 @@ type Daemon struct {
 	machinesRoomID string
 	servicesRoomID string
 	launcherSocket string
-	pollInterval   time.Duration
 	statusInterval time.Duration
 
 	// running tracks which principals we've asked the launcher to create.
@@ -342,36 +324,6 @@ type Daemon struct {
 	layoutWatchersMu sync.Mutex
 
 	logger *slog.Logger
-}
-
-// pollLoop periodically polls for config changes and syncs the service directory.
-func (d *Daemon) pollLoop(ctx context.Context) {
-	ticker := time.NewTicker(d.pollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := d.reconcile(ctx); err != nil {
-				d.logger.Error("reconciliation failed", "error", err)
-			}
-
-			// Sync peer transport addresses before the service
-			// directory so we have up-to-date routing information.
-			if err := d.syncPeerAddresses(ctx); err != nil {
-				d.logger.Error("peer address sync failed", "error", err)
-			}
-
-			added, removed, updated, err := d.syncServiceDirectory(ctx)
-			if err != nil {
-				d.logger.Error("service directory sync failed", "error", err)
-			} else {
-				d.reconcileServices(ctx, added, removed, updated)
-			}
-		}
-	}
 }
 
 // statusLoop periodically publishes MachineStatus heartbeats.

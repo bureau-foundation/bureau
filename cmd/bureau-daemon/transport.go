@@ -260,8 +260,9 @@ func (d *Daemon) handleTransportInbound(w http.ResponseWriter, r *http.Request) 
 }
 
 // syncPeerAddresses reads MachineStatus state events from the machines room
-// to discover transport addresses of peer daemons. Called on each poll cycle
-// so the relay handler has up-to-date routing information.
+// to discover transport addresses of peer daemons. Called on initial sync and
+// whenever the machines room has state changes, so the relay handler has
+// up-to-date routing information.
 func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 	events, err := d.session.GetRoomState(ctx, d.machinesRoomID)
 	if err != nil {

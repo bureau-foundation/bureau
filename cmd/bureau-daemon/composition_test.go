@@ -191,7 +191,6 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		machinesRoomID: machinesRoomID,
 		servicesRoomID: servicesRoomID,
 		launcherSocket: launcherSocket,
-		pollInterval:   time.Hour,
 		statusInterval: time.Hour,
 		running:        make(map[string]bool),
 		services:       make(map[string]*schema.Service),
@@ -452,6 +451,13 @@ type mockMatrixState struct {
 
 	// roomMembers maps room IDs to member lists for GetRoomMembers.
 	roomMembers map[string][]mockRoomMember
+
+	// syncBatch is a counter for generating unique next_batch tokens.
+	syncBatch int
+
+	// pendingSyncEvents holds events to include in the next incremental
+	// /sync response. Keyed by room ID. Cleared after each sync response.
+	pendingSyncEvents map[string][]mockRoomStateEvent
 }
 
 // mockRoomMember represents a member for the /members endpoint.
@@ -472,11 +478,21 @@ type mockRoomStateEvent struct {
 
 func newMockMatrixState() *mockMatrixState {
 	return &mockMatrixState{
-		stateEvents: make(map[string]json.RawMessage),
-		roomStates:  make(map[string][]mockRoomStateEvent),
-		roomAliases: make(map[string]string),
-		roomMembers: make(map[string][]mockRoomMember),
+		stateEvents:       make(map[string]json.RawMessage),
+		roomStates:        make(map[string][]mockRoomStateEvent),
+		roomAliases:       make(map[string]string),
+		roomMembers:       make(map[string][]mockRoomMember),
+		pendingSyncEvents: make(map[string][]mockRoomStateEvent),
 	}
+}
+
+// enqueueSyncEvent queues a state event to appear in the next incremental
+// /sync response for the given room. Used by tests to simulate state changes
+// arriving via /sync.
+func (m *mockMatrixState) enqueueSyncEvent(roomID string, event mockRoomStateEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pendingSyncEvents[roomID] = append(m.pendingSyncEvents[roomID], event)
 }
 
 func (m *mockMatrixState) setStateEvent(roomID, eventType, stateKey string, content any) {
@@ -507,7 +523,7 @@ func (m *mockMatrixState) setRoomMembers(roomID string, members []mockRoomMember
 
 // handler returns an http.Handler that implements the subset of the Matrix
 // client-server API used by the daemon: GetStateEvent, GetRoomState,
-// SendStateEvent, ResolveAlias, and GetRoomMembers.
+// SendStateEvent, ResolveAlias, GetRoomMembers, and Sync.
 //
 // URL path parsing handles percent-encoded room IDs and state keys (the
 // messaging library uses url.PathEscape which encodes /, :, ! etc.). The
@@ -520,6 +536,13 @@ func (m *mockMatrixState) handler() http.Handler {
 		rawPath := r.URL.RawPath
 		if rawPath == "" {
 			rawPath = r.URL.Path
+		}
+
+		// GET /_matrix/client/v3/sync — sync.
+		if rawPath == "/_matrix/client/v3/sync" && r.Method == "GET" {
+			since := r.URL.Query().Get("since")
+			m.handleSync(w, since)
+			return
 		}
 
 		// GET /_matrix/client/v3/directory/room/{alias} — resolve alias.
@@ -682,4 +705,69 @@ func (m *mockMatrixState) handleGetRoomMembers(w http.ResponseWriter, roomID str
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"chunk": chunk})
+}
+
+// handleSync returns a /sync response. On initial sync (empty since), it
+// returns all rooms that have roomStates configured as joined rooms with
+// their state events. On incremental sync (non-empty since), it returns
+// any pending events queued via enqueueSyncEvent.
+func (m *mockMatrixState) handleSync(w http.ResponseWriter, since string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.syncBatch++
+	nextBatch := fmt.Sprintf("batch_%d", m.syncBatch)
+
+	joinedRooms := make(map[string]any)
+
+	if since == "" {
+		// Initial sync: return all configured room state.
+		for roomID, events := range m.roomStates {
+			joinedRooms[roomID] = map[string]any{
+				"state": map[string]any{
+					"events": events,
+				},
+				"timeline": map[string]any{
+					"events":     []any{},
+					"prev_batch": "",
+					"limited":    false,
+				},
+			}
+		}
+	} else {
+		// Incremental sync: return pending events and clear the queue.
+		for roomID, events := range m.pendingSyncEvents {
+			// State events in incremental sync appear as timeline events
+			// with state_key set (matching real Matrix server behavior).
+			timelineEvents := make([]any, 0, len(events))
+			for _, event := range events {
+				timelineEvents = append(timelineEvents, map[string]any{
+					"type":      event.Type,
+					"state_key": event.StateKey,
+					"content":   event.Content,
+					"event_id":  fmt.Sprintf("$sync_%d", m.syncBatch),
+					"sender":    "@admin:bureau.local",
+				})
+			}
+			joinedRooms[roomID] = map[string]any{
+				"state": map[string]any{
+					"events": []any{},
+				},
+				"timeline": map[string]any{
+					"events":     timelineEvents,
+					"prev_batch": since,
+					"limited":    false,
+				},
+			}
+		}
+		m.pendingSyncEvents = make(map[string][]mockRoomStateEvent)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"next_batch": nextBatch,
+		"rooms": map[string]any{
+			"join": joinedRooms,
+		},
+	})
 }

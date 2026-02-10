@@ -160,14 +160,13 @@ func skip(name, message string) checkResult {
 
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
 type standardRoom struct {
-	alias                    string   // local alias (e.g., "bureau/agents")
+	alias                    string   // local alias (e.g., "bureau/machines")
 	name                     string   // human name for check output
-	credentialKey            string   // key in credential file (e.g., "MATRIX_AGENTS_ROOM")
+	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINES_ROOM")
 	memberSettableEventTypes []string // event types that members should be able to set
 }
 
 var standardRooms = []standardRoom{
-	{alias: "bureau/agents", name: "agents room", credentialKey: "MATRIX_AGENTS_ROOM"},
 	{alias: "bureau/system", name: "system room", credentialKey: "MATRIX_SYSTEM_ROOM"},
 	{alias: "bureau/machines", name: "machines room", credentialKey: "MATRIX_MACHINES_ROOM", memberSettableEventTypes: []string{"m.bureau.machine_key", "m.bureau.machine_status"}},
 	{alias: "bureau/services", name: "services room", credentialKey: "MATRIX_SERVICES_ROOM", memberSettableEventTypes: []string{"m.bureau.service"}},

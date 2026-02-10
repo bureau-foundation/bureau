@@ -50,7 +50,6 @@ The registration token is read from a file (or stdin with "-") to avoid
 exposing secrets in CLI arguments, process listings, or shell history.
 
 Standard rooms created:
-  bureau/agents      Agent registry and presence
   bureau/system      Operational messages
   bureau/machines    Machine keys and status
   bureau/services    Service directory`,
@@ -158,13 +157,6 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	logger.Info("bureau space ready", "room_id", spaceRoomID)
 
 	// Step 3: Create standard rooms.
-	agentsRoomID, err := ensureRoom(ctx, session, "bureau/agents", "Bureau Agents", "Agent registry and presence",
-		spaceRoomID, config.serverName, nil, logger)
-	if err != nil {
-		return fmt.Errorf("create agents room: %w", err)
-	}
-	logger.Info("agents room ready", "room_id", agentsRoomID)
-
 	systemRoomID, err := ensureRoom(ctx, session, "bureau/system", "Bureau System", "Operational messages",
 		spaceRoomID, config.serverName, nil, logger)
 	if err != nil {
@@ -195,7 +187,6 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			roomID string
 		}{
 			{"bureau (space)", spaceRoomID},
-			{"bureau/agents", agentsRoomID},
 			{"bureau/system", systemRoomID},
 			{"bureau/machines", machinesRoomID},
 			{"bureau/services", servicesRoomID},
@@ -223,7 +214,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, agentsRoomID, systemRoomID, machinesRoomID, servicesRoomID); err != nil {
+		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -231,7 +222,6 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	logger.Info("bureau matrix setup complete",
 		"admin_user", session.UserID(),
 		"space", spaceRoomID,
-		"agents_room", agentsRoomID,
 		"system_room", systemRoomID,
 		"machines_room", machinesRoomID,
 		"services_room", servicesRoomID,
@@ -329,7 +319,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, agentsRoomID, systemRoomID, machinesRoomID, servicesRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -339,7 +329,6 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_ADMIN_TOKEN=%s\n", session.AccessToken())
 	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken.String())
 	fmt.Fprintf(&builder, "MATRIX_SPACE_ROOM=%s\n", spaceRoomID)
-	fmt.Fprintf(&builder, "MATRIX_AGENTS_ROOM=%s\n", agentsRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
 	fmt.Fprintf(&builder, "MATRIX_MACHINES_ROOM=%s\n", machinesRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SERVICES_ROOM=%s\n", servicesRoomID)

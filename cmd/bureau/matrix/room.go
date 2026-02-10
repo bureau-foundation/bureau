@@ -27,7 +27,7 @@ Rooms are the primary communication channels in Bureau. Each room belongs
 to a space (via m.space.child state events). Bureau uses hierarchical room
 aliases that mirror the principal naming convention:
 
-  #bureau/agents:bureau.local     Agent registry and presence
+  #bureau/machines:bureau.local       Machine keys and status
   #iree/amdgpu/general:bureau.local  IREE project discussion`,
 		Subcommands: []*cli.Command{
 			roomCreateCommand(),
@@ -54,7 +54,7 @@ func roomCreateCommand() *cli.Command {
 		Description: `Create a new Matrix room and add it as a child of a space.
 
 The alias is required and follows Bureau's naming convention (e.g.,
-"bureau/agents", "iree/amdgpu/general"). The --space flag specifies
+"bureau/machines", "iree/amdgpu/general"). The --space flag specifies
 the parent space by alias or room ID.
 
 By default, only the admin can set state events. Use --member-state-event
@@ -351,7 +351,7 @@ Displays a table of user ID, display name, and membership state
 		Examples: []cli.Example{
 			{
 				Description: "List room members",
-				Command:     "bureau matrix room members '#bureau/agents:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix room members '#bureau/machines:bureau.local' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

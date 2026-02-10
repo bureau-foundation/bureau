@@ -21,7 +21,6 @@ func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
 	t.Helper()
 
 	emptyStateKey := ""
-	agentsID := "!agents:local"
 	systemID := "!system:local"
 	machinesID := "!machines:local"
 	servicesID := "!services:local"
@@ -54,7 +53,6 @@ func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
 		if strings.HasPrefix(path, aliasPrefix) {
 			aliasMap := map[string]string{
 				"#bureau:local":          spaceID,
-				"#bureau/agents:local":   agentsID,
 				"#bureau/system:local":   systemID,
 				"#bureau/machines:local": machinesID,
 				"#bureau/services:local": servicesID,
@@ -94,7 +92,6 @@ func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
 			if roomID == spaceID || strings.Contains(request.URL.RawPath, "%21space%3Alocal") {
 				events := []messaging.Event{
 					{Type: "m.room.create", StateKey: &emptyStateKey, Content: map[string]any{"type": "m.space"}},
-					{Type: "m.space.child", StateKey: &agentsID, Content: map[string]any{"via": []string{"local"}}},
 					{Type: "m.space.child", StateKey: &systemID, Content: map[string]any{"via": []string{"local"}}},
 					{Type: "m.space.child", StateKey: &machinesID, Content: map[string]any{"via": []string{"local"}}},
 					{Type: "m.space.child", StateKey: &servicesID, Content: map[string]any{"via": []string{"local"}}},
@@ -148,9 +145,6 @@ func extractRoomIDFromStatePath(path string) string {
 	if strings.Contains(path, "%21services%3Alocal") || strings.Contains(path, "!services:local") {
 		return "!services:local"
 	}
-	if strings.Contains(path, "%21agents%3Alocal") || strings.Contains(path, "!agents:local") {
-		return "!agents:local"
-	}
 	if strings.Contains(path, "%21system%3Alocal") || strings.Contains(path, "!system:local") {
 		return "!system:local"
 	}
@@ -201,18 +195,14 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"homeserver",
 		"authentication",
 		"bureau space",
-		"agents room",
 		"system room",
 		"machines room",
 		"services room",
-		"agents room in space",
 		"system room in space",
 		"machines room in space",
 		"services room in space",
 		"bureau space admin power",
 		"bureau space state_default",
-		"agents room admin power",
-		"agents room state_default",
 		"machines room admin power",
 		"machines room state_default",
 		"machines room m.bureau.machine_key",
@@ -246,7 +236,6 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	// Provide matching credentials.
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
-		"MATRIX_AGENTS_ROOM":   "!agents:local",
 		"MATRIX_SYSTEM_ROOM":   "!system:local",
 		"MATRIX_MACHINES_ROOM": "!machines:local",
 		"MATRIX_SERVICES_ROOM": "!services:local",
@@ -280,21 +269,20 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	// Provide mismatched credentials.
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
-		"MATRIX_AGENTS_ROOM":   "!wrong:local", // mismatch
-		"MATRIX_SYSTEM_ROOM":   "!system:local",
+		"MATRIX_SYSTEM_ROOM":   "!wrong:local", // mismatch
 		"MATRIX_MACHINES_ROOM": "!machines:local",
 		"MATRIX_SERVICES_ROOM": "!services:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials)
 
-	// The agents room credential check should fail.
+	// The system room credential check should fail.
 	found := false
 	for _, result := range results {
-		if result.Name == "agents room credential" {
+		if result.Name == "system room credential" {
 			found = true
 			if result.Status != statusFail {
-				t.Errorf("expected agents room credential to FAIL, got %s: %s", result.Status, result.Message)
+				t.Errorf("expected system room credential to FAIL, got %s: %s", result.Status, result.Message)
 			}
 			if !strings.Contains(result.Message, "stale") {
 				t.Errorf("expected 'stale' in message, got: %s", result.Message)
@@ -302,7 +290,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("agents room credential check not found")
+		t.Error("system room credential check not found")
 	}
 }
 
@@ -499,20 +487,20 @@ func TestCheckSpaceChild(t *testing.T) {
 
 func TestCheckCredentialMatch(t *testing.T) {
 	creds := map[string]string{
-		"MATRIX_AGENTS_ROOM": "!agents:local",
+		"MATRIX_SYSTEM_ROOM": "!system:local",
 	}
 
-	result := checkCredentialMatch("agents room", "MATRIX_AGENTS_ROOM", "!agents:local", creds)
+	result := checkCredentialMatch("system room", "MATRIX_SYSTEM_ROOM", "!system:local", creds)
 	if result.Status != statusPass {
 		t.Errorf("expected PASS for matching credential, got %s: %s", result.Status, result.Message)
 	}
 
-	result = checkCredentialMatch("agents room", "MATRIX_AGENTS_ROOM", "!different:local", creds)
+	result = checkCredentialMatch("system room", "MATRIX_SYSTEM_ROOM", "!different:local", creds)
 	if result.Status != statusFail {
 		t.Errorf("expected FAIL for mismatched credential, got %s: %s", result.Status, result.Message)
 	}
 
-	result = checkCredentialMatch("agents room", "MATRIX_MISSING_KEY", "!agents:local", creds)
+	result = checkCredentialMatch("system room", "MATRIX_MISSING_KEY", "!system:local", creds)
 	if result.Status != statusWarn {
 		t.Errorf("expected WARN for missing key, got %s: %s", result.Status, result.Message)
 	}

@@ -142,7 +142,7 @@ specific state key.`,
 			},
 			{
 				Description: "Set a Bureau machine config with a state key",
-				Command:     `bureau matrix state set --credential-file ./creds --key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config '{"agents":[]}'`,
+				Command:     `bureau matrix state set --credential-file ./creds --key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config '{"principals":[]}'`,
 			},
 			{
 				Description: "Set state from stdin",

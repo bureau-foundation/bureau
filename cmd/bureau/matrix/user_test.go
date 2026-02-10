@@ -120,16 +120,15 @@ func TestUserCreate_Operator_NewUser(t *testing.T) {
 	if !gotRegister {
 		t.Error("register endpoint was not called")
 	}
-	if len(invitedRoomIDs) != 5 {
-		t.Errorf("expected 5 room invites, got %d: %v", len(invitedRoomIDs), invitedRoomIDs)
+	if len(invitedRoomIDs) != 4 {
+		t.Errorf("expected 4 room invites, got %d: %v", len(invitedRoomIDs), invitedRoomIDs)
 	}
-	if len(joinedRoomIDs) != 5 {
-		t.Errorf("expected 5 room joins, got %d: %v", len(joinedRoomIDs), joinedRoomIDs)
+	if len(joinedRoomIDs) != 4 {
+		t.Errorf("expected 4 room joins, got %d: %v", len(joinedRoomIDs), joinedRoomIDs)
 	}
 
 	expectedRooms := map[string]bool{
 		"!space:bureau.local":    false,
-		"!agents:bureau.local":   false,
 		"!system:bureau.local":   false,
 		"!machines:bureau.local": false,
 		"!services:bureau.local": false,
@@ -216,11 +215,11 @@ func TestUserCreate_Operator_ExistingUser(t *testing.T) {
 	if !gotLogin {
 		t.Error("login was not called for existing account")
 	}
-	if inviteCount != 5 {
-		t.Errorf("expected 5 invites, got %d", inviteCount)
+	if inviteCount != 4 {
+		t.Errorf("expected 4 invites, got %d", inviteCount)
 	}
-	if joinCount != 5 {
-		t.Errorf("expected 5 joins, got %d", joinCount)
+	if joinCount != 4 {
+		t.Errorf("expected 4 joins, got %d", joinCount)
 	}
 }
 
@@ -417,11 +416,11 @@ func TestUserCreate_Operator_ExistingUser_PasswordVerified(t *testing.T) {
 	if !gotLogin {
 		t.Error("login endpoint was not called to verify password")
 	}
-	if inviteCount != 5 {
-		t.Errorf("expected 5 invites after password verification, got %d", inviteCount)
+	if inviteCount != 4 {
+		t.Errorf("expected 4 invites after password verification, got %d", inviteCount)
 	}
-	if joinCount != 5 {
-		t.Errorf("expected 5 joins after password verification, got %d", joinCount)
+	if joinCount != 4 {
+		t.Errorf("expected 4 joins after password verification, got %d", joinCount)
 	}
 }
 
@@ -492,7 +491,6 @@ func writeTestCredentials(t *testing.T, homeserverURL string) string {
 		"MATRIX_ADMIN_TOKEN=test-admin-token",
 		"MATRIX_REGISTRATION_TOKEN=test-registration-token",
 		"MATRIX_SPACE_ROOM=!space:bureau.local",
-		"MATRIX_AGENTS_ROOM=!agents:bureau.local",
 		"MATRIX_SYSTEM_ROOM=!system:bureau.local",
 		"MATRIX_MACHINES_ROOM=!machines:bureau.local",
 		"MATRIX_SERVICES_ROOM=!services:bureau.local",

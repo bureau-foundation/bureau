@@ -28,7 +28,7 @@ func SendCommand() *cli.Command {
 		Name:    "send",
 		Summary: "Send a message to a Matrix room",
 		Description: `Send a message to a Matrix room. The room can be specified as a room
-alias (#bureau/agents:bureau.local) or a room ID (!abc:bureau.local).
+alias (#bureau/system:bureau.local) or a room ID (!abc:bureau.local).
 Aliases are resolved automatically.
 
 By default, sends a plain text m.room.message. Use --thread to send a
@@ -39,7 +39,7 @@ Bureau protocol events).`,
 		Examples: []cli.Example{
 			{
 				Description: "Send a plain text message",
-				Command:     "bureau matrix send --credential-file ./creds '#bureau/agents:bureau.local' 'Hello, world!'",
+				Command:     "bureau matrix send --credential-file ./creds '#bureau/system:bureau.local' 'Hello, world!'",
 			},
 			{
 				Description: "Reply within a thread",

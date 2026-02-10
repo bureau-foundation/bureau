@@ -36,7 +36,7 @@ func TestRoomCreate_TooManyArgs(t *testing.T) {
 		"--token", "tok",
 		"--user-id", "@a:b",
 		"--space", "!space:local",
-		"bureau/agents", "extra",
+		"bureau/test", "extra",
 	})
 	if err == nil {
 		t.Fatal("expected error for extra argument")
@@ -49,7 +49,7 @@ func TestRoomCreate_MissingSpace(t *testing.T) {
 		"--homeserver", "http://localhost:6167",
 		"--token", "tok",
 		"--user-id", "@a:b",
-		"bureau/agents",
+		"bureau/test",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing --space")
@@ -76,13 +76,13 @@ func TestRoomCreate_Success(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode createRoom: %v", err)
 			}
-			if body["room_alias_name"] != "bureau/agents" {
+			if body["room_alias_name"] != "bureau/test" {
 				t.Errorf("unexpected alias: %v", body["room_alias_name"])
 			}
-			if body["name"] != "Bureau Agents" {
+			if body["name"] != "Bureau Test" {
 				t.Errorf("unexpected name: %v", body["name"])
 			}
-			if body["topic"] != "Agent registry" {
+			if body["topic"] != "Test room" {
 				t.Errorf("unexpected topic: %v", body["topic"])
 			}
 			if body["preset"] != "private_chat" {
@@ -124,10 +124,10 @@ func TestRoomCreate_Success(t *testing.T) {
 		"--token", "tok",
 		"--user-id", "@admin:local",
 		"--space", "!space:local",
-		"--name", "Bureau Agents",
-		"--topic", "Agent registry",
+		"--name", "Bureau Test",
+		"--topic", "Test room",
 		"--member-state-event", "m.bureau.machine_key",
-		"bureau/agents",
+		"bureau/test",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -325,8 +325,8 @@ func TestRoomList_AllRooms(t *testing.T) {
 			strings.Contains(request.URL.Path, "/rooms/!room1:local/state"):
 			events := []messaging.Event{
 				{Type: "m.room.create", StateKey: &emptyStateKey, Content: map[string]any{"room_version": "11"}},
-				{Type: "m.room.name", StateKey: &emptyStateKey, Content: map[string]any{"name": "Agents"}},
-				{Type: "m.room.canonical_alias", StateKey: &emptyStateKey, Content: map[string]any{"alias": "#agents:local"}},
+				{Type: "m.room.name", StateKey: &emptyStateKey, Content: map[string]any{"name": "General"}},
+				{Type: "m.room.canonical_alias", StateKey: &emptyStateKey, Content: map[string]any{"alias": "#general:local"}},
 			}
 			json.NewEncoder(writer).Encode(events)
 

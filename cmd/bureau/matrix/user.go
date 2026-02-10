@@ -43,8 +43,8 @@ via --credential-file or --homeserver/--token/--user-id.`,
 // needed), similar to how setup bootstraps the admin account.
 //
 // With --operator, also invites the user to all Bureau infrastructure rooms
-// (space, agents, system, machines, services). This is the primary onboarding
-// path for human operators after running "bureau matrix setup".
+// (space, system, machines, services). This is the primary onboarding path
+// for human operators after running "bureau matrix setup".
 func userCreateCommand() *cli.Command {
 	var (
 		credentialFile        string
@@ -70,8 +70,8 @@ login. For human accounts (e.g., to log in via Element), use --password-file
 to set a chosen password. Use --password-file - to be prompted interactively.
 
 With --operator, the user is also invited to all Bureau infrastructure rooms
-(the space plus agents, system, machines, and services). This is the
-recommended way to onboard a human operator after initial server setup.
+(the space plus system, machines, and services). This is the recommended
+way to onboard a human operator after initial server setup.
 The command is idempotent: if the account already exists, it skips creation
 and proceeds directly to ensuring room membership.`,
 		Usage: "bureau matrix user create <username> [flags]",
@@ -251,7 +251,6 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 		credentialKey string
 	}{
 		{"bureau (space)", "MATRIX_SPACE_ROOM"},
-		{"bureau/agents", "MATRIX_AGENTS_ROOM"},
 		{"bureau/system", "MATRIX_SYSTEM_ROOM"},
 		{"bureau/machines", "MATRIX_MACHINES_ROOM"},
 		{"bureau/services", "MATRIX_SERVICES_ROOM"},
@@ -377,7 +376,7 @@ authenticated user has joined.`,
 		Examples: []cli.Example{
 			{
 				Description: "List members of a specific room",
-				Command:     "bureau matrix user list --room '#bureau/agents:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user list --room '#bureau/machines:bureau.local' --credential-file ./creds",
 			},
 			{
 				Description: "List all known users across joined rooms",
@@ -488,12 +487,12 @@ func userInviteCommand() *cli.Command {
 		Name:    "invite",
 		Summary: "Invite a user to a room",
 		Description: `Invite a Matrix user to a room. The room can be specified by alias
-(e.g., "#bureau/agents:bureau.local") or by room ID.`,
+(e.g., "#bureau/machines:bureau.local") or by room ID.`,
 		Usage: "bureau matrix user invite <user-id> --room <room> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Invite a user to a room by alias",
-				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/agents:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/machines:bureau.local' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
@@ -555,11 +554,11 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Examples: []cli.Example{
 			{
 				Description: "Kick a user from a room",
-				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/agents:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machines:bureau.local' --credential-file ./creds",
 			},
 			{
 				Description: "Kick with a reason",
-				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/agents:bureau.local' --reason 'misbehaving agent' --credential-file ./creds",
+				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machines:bureau.local' --reason 'decommissioned' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

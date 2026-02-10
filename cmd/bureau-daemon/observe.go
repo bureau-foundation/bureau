@@ -176,6 +176,11 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 
 	observerUserID, err := d.authenticateObserver(ctx, request.Token)
 	if err != nil {
+		d.logger.Warn("observe authentication failed",
+			"asserted_observer", request.Observer,
+			"action", request.Action,
+			"remote_addr", clientConnection.RemoteAddr().String(),
+		)
 		d.sendObserveError(clientConnection, err.Error())
 		return
 	}
@@ -220,11 +225,13 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 	}
 
 	// Authorize the observer against the principal's ObservePolicy.
-	authz := d.authorizeObserve(request.Observer, request.Principal, request.Mode)
+	requestedMode := request.Mode
+	authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
 	if !authz.Allowed {
 		d.logger.Warn("observation denied",
 			"observer", request.Observer,
 			"principal", request.Principal,
+			"requested_mode", requestedMode,
 		)
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("not authorized to observe %q", request.Principal))
@@ -234,10 +241,19 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 	// Enforce the granted mode. The daemon decides the mode, not the client.
 	request.Mode = authz.GrantedMode
 
-	d.logger.Info("observation requested",
+	if requestedMode != authz.GrantedMode {
+		d.logger.Info("observation mode downgraded",
+			"observer", request.Observer,
+			"principal", request.Principal,
+			"requested_mode", requestedMode,
+			"granted_mode", authz.GrantedMode,
+		)
+	}
+
+	d.logger.Info("observation authorized",
 		"observer", request.Observer,
 		"principal", request.Principal,
-		"requested_mode", request.Mode,
+		"requested_mode", requestedMode,
 		"granted_mode", authz.GrantedMode,
 	)
 
@@ -520,6 +536,8 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 		return
 	}
 
+	startTime := time.Now()
+
 	d.logger.Info("observation started",
 		"observer", request.Observer,
 		"principal", request.Principal,
@@ -538,6 +556,7 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	d.logger.Info("observation ended",
 		"observer", request.Observer,
 		"principal", request.Principal,
+		"duration", time.Since(startTime).String(),
 	)
 }
 
@@ -619,10 +638,14 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 		return
 	}
 
+	startTime := time.Now()
+
 	d.logger.Info("remote observation established",
+		"observer", request.Observer,
 		"principal", request.Principal,
 		"session", peerResponse.Session,
 		"peer", peerAddress,
+		"mode", peerResponse.GrantedMode,
 	)
 
 	// Bridge client ↔ remote daemon. Use bufferedConn to include any bytes
@@ -630,7 +653,12 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 	peerConn := &bufferedConn{reader: bufferedReader, Conn: rawConnection}
 	bridgeConnections(clientConnection, peerConn)
 
-	d.logger.Info("remote observation ended", "principal", request.Principal)
+	d.logger.Info("remote observation ended",
+		"observer", request.Observer,
+		"principal", request.Principal,
+		"peer", peerAddress,
+		"duration", time.Since(startTime).String(),
+	)
 }
 
 // handleTransportObserve handles observation requests arriving from peer
@@ -689,11 +717,13 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check local authorization for the forwarded observer identity.
-	authz := d.authorizeObserve(request.Observer, request.Principal, request.Mode)
+	requestedMode := request.Mode
+	authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
 	if !authz.Allowed {
 		d.logger.Warn("transport observation denied",
 			"observer", request.Observer,
 			"principal", request.Principal,
+			"requested_mode", requestedMode,
 		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -701,6 +731,15 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 			Error: fmt.Sprintf("not authorized to observe %q", request.Principal),
 		})
 		return
+	}
+
+	if requestedMode != authz.GrantedMode {
+		d.logger.Info("transport observation mode downgraded",
+			"observer", request.Observer,
+			"principal", request.Principal,
+			"requested_mode", requestedMode,
+			"granted_mode", authz.GrantedMode,
+		)
 	}
 
 	if !d.running[request.Principal] {
@@ -763,6 +802,8 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	transportBuffer.Write(responseJSON)
 	transportBuffer.Flush()
 
+	startTime := time.Now()
+
 	d.logger.Info("transport observation started",
 		"observer", request.Observer,
 		"principal", request.Principal,
@@ -778,6 +819,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	d.logger.Info("transport observation ended",
 		"observer", request.Observer,
 		"principal", request.Principal,
+		"duration", time.Since(startTime).String(),
 	)
 }
 

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // observeProxy transparently forwards observation requests from sandboxed
@@ -143,6 +144,18 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 		proxy.sendError(agentConnection, "proxy has no Matrix credentials configured")
 		return
 	}
+
+	// Log if the agent tried to supply its own credentials. This is a
+	// security signal — the agent may be attempting to impersonate another
+	// identity. The proxy always overwrites with its own credentials
+	// regardless, but the attempt is worth recording.
+	if agentObserver, ok := request["observer"].(string); ok && agentObserver != "" {
+		proxy.logger.Warn("observe proxy: agent supplied credentials (overwritten)",
+			"agent_observer", agentObserver,
+			"proxy_observer", userIDBuffer.String(),
+		)
+	}
+
 	request["observer"] = userIDBuffer.String()
 	request["token"] = tokenBuffer.String()
 
@@ -190,6 +203,8 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 	}
 
 	principal, _ := request["principal"].(string)
+	startTime := time.Now()
+
 	proxy.logger.Info("observe proxy: bridging session",
 		"principal", principal,
 		"observer", userIDBuffer.String(),
@@ -203,6 +218,12 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 	// handshake. Use them as the read sources (not the raw connections)
 	// so those buffered bytes aren't lost.
 	bridgeReaders(agentConnection, agentReader, daemonConnection, daemonReader)
+
+	proxy.logger.Info("observe proxy: session ended",
+		"principal", principal,
+		"observer", userIDBuffer.String(),
+		"duration", time.Since(startTime).String(),
+	)
 }
 
 // sendError sends a JSON error response to the agent and logs the error.

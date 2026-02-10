@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "proxy",
+    srcs = [
+        "cli_service.go",
+        "config.go",
+        "credentials.go",
+        "filter.go",
+        "handler.go",
+        "http_service.go",
+        "observe.go",
+        "server.go",
+        "types.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/proxy",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/secret",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "proxy_test",
+    srcs = [
+        "credentials_test.go",
+        "filter_test.go",
+        "http_service_test.go",
+        "observe_test.go",
+        "server_test.go",
+        "testutil_test.go",
+    ],
+    embed = [":proxy"],
+    deps = [
+        "//lib/schema",
+        "//lib/secret",
+    ],
+)

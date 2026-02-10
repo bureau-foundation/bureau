@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -30,7 +31,7 @@ import (
 func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	t.Helper()
 
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	observeSocketPath := filepath.Join(socketDir, "observe.sock")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 

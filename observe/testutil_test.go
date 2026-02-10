@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // TmuxServer creates an isolated tmux server for testing. Returns the
@@ -21,11 +23,24 @@ import (
 // Killing the default server kills the agent.
 func TmuxServer(t *testing.T) string {
 	t.Helper()
-	socketPath := filepath.Join(t.TempDir(), "tmux.sock")
+
+	socketPath := filepath.Join(testutil.SocketDir(t), "tmux.sock")
+
+	// Create a guard session with -f /dev/null to prevent loading the
+	// user's ~/.tmux.conf. The server starts when the first session is
+	// created, and the config is only read at that point. Without this,
+	// tests inherit whatever settings the user has (base-index, prefix,
+	// etc.), making window indices and key bindings unpredictable.
+	//
+	// The guard session runs "sleep infinity" so it never exits, keeping
+	// the server alive until our cleanup kills it.
+	cmd := exec.Command("tmux", "-S", socketPath, "-f", "/dev/null",
+		"new-session", "-d", "-s", "_guard", "sleep", "infinity")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("start tmux test server: %v\n%s", err, output)
+	}
+
 	t.Cleanup(func() {
-		// Kill the test tmux server and all its sessions. Ignore errors
-		// because the server may not have been started (e.g., if the test
-		// failed before creating any sessions).
 		_ = exec.Command("tmux", "-S", socketPath, "kill-server").Run()
 	})
 	return socketPath

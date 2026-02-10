@@ -14,13 +14,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -34,136 +34,12 @@ const testObserverToken = "syt_test_observer_token"
 // handler when testObserverToken is presented.
 const testObserverUserID = "@ops/test-observer:bureau.local"
 
-// mockRelaySource is the Go source for a minimal observation relay binary used
-// in tests. It speaks the observation protocol on fd 3:
-//   - Sends a metadata message with session name from argv[1]
-//   - Sends an empty history message
-//   - Echoes data messages back, prefixed with "echo:" to verify round-trip
-//
-// The binary exits when fd 3 closes or when it receives an error reading.
-const mockRelaySource = `package main
-
-import (
-	"encoding/binary"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net"
-	"os"
-)
-
-const (
-	messageTypeData     byte = 0x01
-	messageTypeHistory  byte = 0x03
-	messageTypeMetadata byte = 0x04
-	headerLength             = 5
-)
-
-func writeMessage(w io.Writer, messageType byte, payload []byte) error {
-	var header [headerLength]byte
-	header[0] = messageType
-	binary.BigEndian.PutUint32(header[1:5], uint32(len(payload)))
-	if _, err := w.Write(header[:]); err != nil {
-		return err
-	}
-	if len(payload) > 0 {
-		if _, err := w.Write(payload); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func readMessage(r io.Reader) (byte, []byte, error) {
-	var header [headerLength]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return 0, nil, err
-	}
-	messageType := header[0]
-	payloadLength := binary.BigEndian.Uint32(header[1:5])
-	payload := make([]byte, payloadLength)
-	if payloadLength > 0 {
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return 0, nil, err
-		}
-	}
-	return messageType, payload, nil
-}
-
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mock-relay <session-name>")
-		os.Exit(1)
-	}
-	sessionName := os.Args[1]
-
-	socketFile := os.NewFile(uintptr(3), "daemon-socket")
-	if socketFile == nil {
-		fmt.Fprintln(os.Stderr, "fd 3 not available")
-		os.Exit(1)
-	}
-	connection, err := net.FileConn(socketFile)
-	socketFile.Close()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FileConn: %v\n", err)
-		os.Exit(1)
-	}
-	defer connection.Close()
-
-	// Send metadata message.
-	metadata := map[string]any{
-		"session":   sessionName,
-		"principal": "@test/echo:bureau.local",
-		"machine":   "@machine/test:bureau.local",
-		"panes":     []any{},
-	}
-	metadataJSON, _ := json.Marshal(metadata)
-	if err := writeMessage(connection, messageTypeMetadata, metadataJSON); err != nil {
-		fmt.Fprintf(os.Stderr, "write metadata: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Send empty history message.
-	if err := writeMessage(connection, messageTypeHistory, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "write history: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Echo loop: read data messages, write them back prefixed with "echo:".
-	for {
-		messageType, payload, readErr := readMessage(connection)
-		if readErr != nil {
-			return
-		}
-		if messageType == messageTypeData && len(payload) > 0 {
-			echoPayload := append([]byte("echo:"), payload...)
-			if writeErr := writeMessage(connection, messageTypeData, echoPayload); writeErr != nil {
-				return
-			}
-		}
-	}
-}
-`
-
-// buildMockRelay compiles the mock relay binary from source and returns the
-// path to the binary. The binary is placed in a test-scoped temp directory.
+// buildMockRelay returns the path to the pre-built mock observation relay
+// binary. The binary is provided as a Bazel data dependency via
+// BUREAU_MOCK_RELAY_BINARY.
 func buildMockRelay(t *testing.T) string {
 	t.Helper()
-
-	sourceDir := t.TempDir()
-	sourcePath := filepath.Join(sourceDir, "main.go")
-	if err := os.WriteFile(sourcePath, []byte(mockRelaySource), 0644); err != nil {
-		t.Fatalf("write mock relay source: %v", err)
-	}
-
-	outputDir := t.TempDir()
-	outputPath := filepath.Join(outputDir, "mock-relay")
-	cmd := exec.Command("go", "build", "-o", outputPath, sourcePath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build mock relay: %v\n%s", err, output)
-	}
-	return outputPath
+	return testutil.DataBinary(t, "BUREAU_MOCK_RELAY_BINARY")
 }
 
 // connectObserve connects to the daemon's observe socket and sends an
@@ -256,7 +132,7 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipals []string) *Daemon {
 	t.Helper()
 
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	observeSocketPath := filepath.Join(socketDir, "observe.sock")
 	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
 

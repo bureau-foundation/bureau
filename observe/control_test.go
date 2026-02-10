@@ -119,10 +119,20 @@ func TestControlClientWindowClose(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
+	// Find the index of the second window. We can't hardcode it because
+	// the starting index depends on base-index (0 by default).
+	windowList := mustTmuxTrimmed(t, serverSocket, "list-windows",
+		"-t", sessionName, "-F", "#{window_index}")
+	windowIndices := splitLines(windowList)
+	if len(windowIndices) < 2 {
+		t.Fatalf("expected 2 windows, got %d", len(windowIndices))
+	}
+	secondWindowIndex := windowIndices[len(windowIndices)-1]
+
 	// Close the second window. The control client is attached to the
 	// session; when we kill a non-current window, tmux sends
 	// %unlinked-window-close.
-	mustTmux(t, serverSocket, "kill-window", "-t", sessionName+":2")
+	mustTmux(t, serverSocket, "kill-window", "-t", sessionName+":"+secondWindowIndex)
 	receiveEvent(t, client, 3*time.Second)
 }
 

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-observe-relay_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-observe-relay",
+    visibility = ["//visibility:private"],
+    deps = ["//observe"],
+)
+
+go_binary(
+    name = "bureau-observe-relay",
+    embed = [":bureau-observe-relay_lib"],
+    visibility = ["//visibility:public"],
+)

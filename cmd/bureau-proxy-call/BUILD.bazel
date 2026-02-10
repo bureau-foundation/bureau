@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-proxy-call_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-proxy-call",
+    visibility = ["//visibility:private"],
+    deps = ["//lib/version"],
+)
+
+go_binary(
+    name = "bureau-proxy-call",
+    embed = [":bureau-proxy-call_lib"],
+    visibility = ["//visibility:public"],
+)

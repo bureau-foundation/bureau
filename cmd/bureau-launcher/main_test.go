@@ -13,13 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestDerivePassword(t *testing.T) {
@@ -496,7 +496,7 @@ func TestHandleConnection_FullCycle(t *testing.T) {
 	}
 
 	// Create a socket pair for testing.
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "test.sock")
 
 	listener, err := net.Listen("unix", socketPath)
@@ -566,7 +566,7 @@ func TestHandleConnection_FullCycle(t *testing.T) {
 }
 
 func TestListenSocket(t *testing.T) {
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "test.sock")
 
 	listener, err := listenSocket(socketPath)
@@ -596,7 +596,7 @@ func TestListenSocket(t *testing.T) {
 }
 
 func TestListenSocket_CreatesParentDirectory(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(tempDir, "nested", "dir", "test.sock")
 
 	listener, err := listenSocket(socketPath)
@@ -767,7 +767,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 
 func TestWaitForSocket(t *testing.T) {
 	t.Run("socket appears", func(t *testing.T) {
-		socketDir := t.TempDir()
+		socketDir := testutil.SocketDir(t)
 		socketPath := filepath.Join(socketDir, "test.sock")
 
 		processDone := make(chan struct{})
@@ -791,7 +791,7 @@ func TestWaitForSocket(t *testing.T) {
 	})
 
 	t.Run("process exits before socket", func(t *testing.T) {
-		socketDir := t.TempDir()
+		socketDir := testutil.SocketDir(t)
 		socketPath := filepath.Join(socketDir, "nonexistent.sock")
 
 		processDone := make(chan struct{})
@@ -807,7 +807,7 @@ func TestWaitForSocket(t *testing.T) {
 	})
 
 	t.Run("timeout", func(t *testing.T) {
-		socketDir := t.TempDir()
+		socketDir := testutil.SocketDir(t)
 		socketPath := filepath.Join(socketDir, "timeout.sock")
 
 		err := waitForSocket(socketPath, make(chan struct{}), 50*time.Millisecond)
@@ -820,39 +820,12 @@ func TestWaitForSocket(t *testing.T) {
 	})
 }
 
-// moduleRoot returns the path to the Go module root (the directory containing
-// go.mod). Derived from the test file's location on disk.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// This file is at cmd/bureau-launcher/main_test.go, so the module
-	// root is two directories up.
-	root := filepath.Join(filepath.Dir(filename), "..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected go.mod at %s: %v", root, err)
-	}
-	return root
-}
 
-// buildProxyBinary compiles the bureau-proxy binary into a temp directory
-// and returns the path. The binary is cached for the duration of the test.
+// buildProxyBinary returns the path to a pre-built bureau-proxy binary.
+// The binary is provided as a Bazel data dependency via BUREAU_PROXY_BINARY.
 func buildProxyBinary(t *testing.T) string {
 	t.Helper()
-
-	outputDir := t.TempDir()
-	outputPath := filepath.Join(outputDir, "bureau-proxy")
-
-	cmd := exec.Command("go", "build", "-o", outputPath, "./cmd/bureau-proxy")
-	cmd.Dir = moduleRoot(t)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("building bureau-proxy: %v\n%s", err, output)
-	}
-
-	return outputPath
+	return testutil.DataBinary(t, "BUREAU_PROXY_BINARY")
 }
 
 // newTestLauncher creates a Launcher with temp directories for sockets and
@@ -867,7 +840,7 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 	}
 	t.Cleanup(func() { keypair.Close() })
 
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	launcher := &Launcher{
 		keypair:         keypair,
@@ -1165,7 +1138,7 @@ func requireTmux(t *testing.T) {
 // via -S to avoid interfering with the user's or agent's tmux sessions.
 func newTestTmuxSocket(t *testing.T) string {
 	t.Helper()
-	socketPath := filepath.Join(t.TempDir(), "tmux.sock")
+	socketPath := filepath.Join(testutil.SocketDir(t), "tmux.sock")
 	t.Cleanup(func() {
 		exec.Command("tmux", "-S", socketPath, "kill-server").Run()
 	})

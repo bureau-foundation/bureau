@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "observe",
+    srcs = ["observe.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/observe",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/schema",
+        "//observe",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_golang_x_term//:term",
+    ],
+)

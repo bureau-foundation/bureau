@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "principal",
+    srcs = [
+        "match.go",
+        "principal.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/principal",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "principal_test",
+    srcs = [
+        "match_test.go",
+        "principal_test.go",
+    ],
+    embed = [":principal"],
+)

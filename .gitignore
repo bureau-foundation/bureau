@@ -54,11 +54,15 @@ secrets/
 .beads/
 .bv/
 
+# Bazel output symlinks
+/bazel-*
+
 # Local dev config
 .envrc
 .envrc.local
 .env
 .env-*
+.bazelrc.local
 *.local.yaml
 *.local.json
 *.code-workspace

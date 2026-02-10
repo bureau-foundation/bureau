@@ -13,11 +13,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestLauncherRequest(t *testing.T) {
 	// Set up a mock launcher server.
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "launcher.sock")
 
 	listener, err := net.Listen("unix", socketPath)
@@ -128,7 +130,7 @@ func TestLauncherRequest_ConnectionRefused(t *testing.T) {
 
 func TestLauncherRequest_Timeout(t *testing.T) {
 	// Set up a server that accepts but never responds.
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "slow-launcher.sock")
 
 	listener, err := net.Listen("unix", socketPath)

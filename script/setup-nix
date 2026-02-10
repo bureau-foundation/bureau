@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# Install Determinate Nix at the version pinned in this repository.
+#
+# Usage:
+#   script/setup-nix          Install or verify Nix
+#   script/setup-nix --check  Verify installed version only (no install)
+#   script/setup-nix --force  Reinstall even if already present
+#
+# This script installs Determinate Nix using the Determinate Systems
+# installer at a pinned version. The installer version is read from
+# script/nix-installer-version. The expected Nix version string
+# (output of `nix --version`) is in script/nix-expected-version.
+#
+# Determinate Nix is a downstream distribution of NixOS/nix that
+# includes flakes enabled by default, parallel evaluation, and
+# clean install/uninstall. See https://docs.determinate.systems/determinate-nix/
+#
+# Requires: curl, sudo (for multi-user daemon mode)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Read pinned versions from repo files.
+INSTALLER_VERSION_FILE="$SCRIPT_DIR/nix-installer-version"
+EXPECTED_VERSION_FILE="$SCRIPT_DIR/nix-expected-version"
+
+if [[ ! -f "$INSTALLER_VERSION_FILE" ]]; then
+    echo "ERROR: Missing $INSTALLER_VERSION_FILE"
+    echo "This file should contain the Determinate Nix installer version (e.g., v3.15.2)."
+    exit 1
+fi
+
+INSTALLER_VERSION="$(cat "$INSTALLER_VERSION_FILE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+# Validate installer version format.
+if [[ ! "$INSTALLER_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: Invalid installer version format: '$INSTALLER_VERSION'"
+    echo "Expected format: vX.Y.Z (e.g., v3.15.2)"
+    exit 1
+fi
+
+INSTALLER_URL="https://install.determinate.systems/nix/tag/${INSTALLER_VERSION}"
+
+check_only=false
+force_install=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --check)
+            check_only=true
+            ;;
+        --force)
+            force_install=true
+            ;;
+        --help|-h)
+            echo "Usage: script/setup-nix [--check] [--force]"
+            echo ""
+            echo "  --check   Verify installed version only (no install)"
+            echo "  --force   Reinstall even if already present"
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $arg"
+            echo "Usage: script/setup-nix [--check] [--force]"
+            exit 1
+            ;;
+    esac
+done
+
+# Check if Nix is already installed. Try PATH first, then the known
+# absolute path (profile may not be sourced in all shell contexts).
+nix_installed=false
+NIX_CHECK_BIN=""
+if command -v nix &>/dev/null; then
+    NIX_CHECK_BIN="nix"
+elif [[ -x /nix/var/nix/profiles/default/bin/nix ]]; then
+    NIX_CHECK_BIN="/nix/var/nix/profiles/default/bin/nix"
+fi
+
+if [[ -n "$NIX_CHECK_BIN" ]]; then
+    nix_installed=true
+    installed_version="$($NIX_CHECK_BIN --version 2>/dev/null || echo "unknown")"
+    echo "Nix is installed: $installed_version"
+
+    if [[ -f "$EXPECTED_VERSION_FILE" ]]; then
+        expected_version="$(cat "$EXPECTED_VERSION_FILE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [[ "$installed_version" == *"$expected_version"* ]]; then
+            echo "Version matches expected: $expected_version"
+            if [[ "$check_only" == true ]] || [[ "$force_install" == false ]]; then
+                echo "Nix is correctly installed."
+                exit 0
+            fi
+        else
+            echo "WARNING: Version mismatch."
+            echo "  Installed: $installed_version"
+            echo "  Expected:  $expected_version"
+            if [[ "$check_only" == true ]]; then
+                exit 1
+            fi
+            echo ""
+            echo "To update, run: script/setup-nix --force"
+            if [[ "$force_install" == false ]]; then
+                exit 1
+            fi
+        fi
+    else
+        echo "No expected version file found at $EXPECTED_VERSION_FILE."
+        echo "After installation, run 'nix --version' and write the output to that file."
+        if [[ "$check_only" == true ]]; then
+            exit 0
+        fi
+    fi
+else
+    echo "Nix is not installed."
+    if [[ "$check_only" == true ]]; then
+        echo "Run script/setup-nix to install."
+        exit 1
+    fi
+fi
+
+if [[ "$check_only" == true ]]; then
+    exit 0
+fi
+
+# Verify prerequisites.
+if ! command -v curl &>/dev/null; then
+    echo "ERROR: curl is required but not installed."
+    exit 1
+fi
+
+if [[ "$nix_installed" == true ]] && [[ "$force_install" == true ]]; then
+    echo ""
+    echo "Force-reinstalling Nix."
+    echo "Uninstalling current Nix installation first..."
+    echo ""
+    # The Determinate installer provides a clean uninstall mechanism.
+    if command -v /nix/nix-installer &>/dev/null; then
+        sudo /nix/nix-installer uninstall --no-confirm
+    else
+        echo "WARNING: /nix/nix-installer not found. Attempting to uninstall via downloaded installer."
+        curl -fsSL "$INSTALLER_URL" | sh -s -- uninstall --no-confirm
+    fi
+    echo ""
+fi
+
+echo "Installing Determinate Nix (installer $INSTALLER_VERSION)..."
+echo "URL: $INSTALLER_URL"
+echo ""
+echo "This will:"
+echo "  - Install the Nix daemon (multi-user mode)"
+echo "  - Create /nix/store"
+echo "  - Add Nix to your shell profile"
+echo "  - Enable flakes by default"
+echo ""
+
+# --no-confirm: non-interactive (the script itself serves as the
+# confirmation boundary — it already printed what will happen).
+curl -fsSL "$INSTALLER_URL" | sh -s -- install --no-confirm
+
+echo ""
+echo "Verifying installation..."
+
+# The Nix profile may not be on PATH yet in this shell session.
+# Try sourcing the profile, fall back to the known absolute path.
+NIX_BIN=""
+if [[ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]]; then
+    # shellcheck disable=SC1091
+    . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+fi
+
+if command -v nix &>/dev/null; then
+    NIX_BIN="nix"
+elif [[ -x /nix/var/nix/profiles/default/bin/nix ]]; then
+    NIX_BIN="/nix/var/nix/profiles/default/bin/nix"
+else
+    echo "ERROR: nix not found after installation."
+    echo "Checked PATH and /nix/var/nix/profiles/default/bin/nix."
+    echo "You may need to restart your shell."
+    exit 1
+fi
+
+installed_version="$($NIX_BIN --version)"
+echo "Installed: $installed_version"
+
+if [[ -f "$EXPECTED_VERSION_FILE" ]]; then
+    expected_version="$(cat "$EXPECTED_VERSION_FILE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ "$installed_version" == *"$expected_version"* ]]; then
+        echo "Version matches expected: $expected_version"
+    else
+        echo ""
+        echo "NOTE: Installed version differs from expected."
+        echo "  Installed: $installed_version"
+        echo "  Expected:  $expected_version"
+        echo ""
+        echo "If this is intentional (upgrading), update $EXPECTED_VERSION_FILE:"
+        echo "  echo '$installed_version' > $EXPECTED_VERSION_FILE"
+    fi
+else
+    echo ""
+    echo "No expected version file. Pin this version in the repo:"
+    echo "  echo '$installed_version' > $EXPECTED_VERSION_FILE"
+fi
+
+echo ""
+echo "Nix installation complete."
+echo ""
+echo "To use Nix in your current shell:"
+echo "  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh"
+echo ""
+echo "Or restart your shell."

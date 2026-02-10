@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-proxy_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-proxy",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/secret",
+        "//lib/version",
+        "//proxy",
+    ],
+)
+
+go_binary(
+    name = "bureau-proxy",
+    embed = [":bureau-proxy_lib"],
+    visibility = ["//visibility:public"],
+)

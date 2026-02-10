@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "transport",
+    srcs = [
+        "datachannel_conn.go",
+        "ice.go",
+        "signaler.go",
+        "signaler_matrix.go",
+        "signaler_memory.go",
+        "transport.go",
+        "webrtc.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/transport",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/schema",
+        "//messaging",
+        "@com_github_pion_webrtc_v4//:webrtc",
+    ],
+)
+
+go_test(
+    name = "transport_test",
+    srcs = [
+        "datachannel_conn_test.go",
+        "ice_test.go",
+        "signaler_matrix_test.go",
+        "webrtc_test.go",
+    ],
+    embed = [":transport"],
+    deps = [
+        "//lib/schema",
+        "//messaging",
+    ],
+)

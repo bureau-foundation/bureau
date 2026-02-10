@@ -6,10 +6,11 @@ infrastructure health including TURN/WebRTC.
 
 ## Prerequisites
 
+- Nix dev environment (run `script/setup-nix` from repo root, then `nix develop`)
 - Docker and Docker Compose
-- Go toolchain (for `bureau` binary)
 - `openssl` (for generating secrets)
-- `curl` and `jq` (for verification steps)
+
+The Nix dev shell provides Go, curl, jq, and all other tools.
 
 Build the CLI:
 

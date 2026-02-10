@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sealed",
+    srcs = ["sealed.go"],
+    importpath = "github.com/bureau-foundation/bureau/lib/sealed",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/secret",
+        "@io_filippo_age//:age",
+    ],
+)
+
+go_test(
+    name = "sealed_test",
+    srcs = ["sealed_test.go"],
+    embed = [":sealed"],
+    deps = ["//lib/secret"],
+)

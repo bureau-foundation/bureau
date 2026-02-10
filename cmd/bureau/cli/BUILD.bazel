@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cli",
+    srcs = [
+        "command.go",
+        "login.go",
+        "session.go",
+        "suggest.go",
+        "whoami.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cli",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/secret",
+        "//messaging",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_golang_x_term//:term",
+    ],
+)
+
+go_test(
+    name = "cli_test",
+    srcs = [
+        "command_test.go",
+        "session_test.go",
+        "suggest_test.go",
+    ],
+    embed = [":cli"],
+    deps = ["@com_github_spf13_pflag//:pflag"],
+)

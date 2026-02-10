@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sandbox",
+    srcs = [
+        "bwrap.go",
+        "capabilities.go",
+        "config.go",
+        "escape.go",
+        "overlay.go",
+        "profile.go",
+        "sandbox.go",
+        "systemd.go",
+        "validate.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/sandbox",
+    visibility = ["//visibility:public"],
+    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+)
+
+go_test(
+    name = "sandbox_test",
+    srcs = [
+        "bwrap_test.go",
+        "config_test.go",
+        "profile_test.go",
+        "sandbox_test.go",
+    ],
+    embed = [":sandbox"],
+)

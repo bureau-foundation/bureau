@@ -1,0 +1,68 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-daemon_lib",
+    srcs = [
+        "layout.go",
+        "main.go",
+        "observe.go",
+        "observe_auth.go",
+        "reconcile.go",
+        "services.go",
+        "sync.go",
+        "token_verifier.go",
+        "transport.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-daemon",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/version",
+        "//messaging",
+        "//observe",
+        "//transport",
+    ],
+)
+
+go_binary(
+    name = "bureau-daemon",
+    embed = [":bureau-daemon_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-daemon_test",
+    srcs = [
+        "composition_test.go",
+        "layout_watcher_test.go",
+        "main_test.go",
+        "observe_auth_test.go",
+        "observe_test.go",
+        "query_layout_test.go",
+        "reconcile_test.go",
+        "services_test.go",
+        "sync_test.go",
+        "token_verifier_test.go",
+        "transport_test.go",
+    ],
+    data = [
+        "//cmd/bureau-launcher:bureau-launcher",
+        "//cmd/bureau-proxy:bureau-proxy",
+        "//cmd/bureau-daemon/testdata/mock_relay",
+    ],
+    embed = [":bureau-daemon_lib"],
+    env = {
+        "BUREAU_LAUNCHER_BINARY": "$(rlocationpath //cmd/bureau-launcher:bureau-launcher)",
+        "BUREAU_MOCK_RELAY_BINARY": "$(rlocationpath //cmd/bureau-daemon/testdata/mock_relay)",
+        "BUREAU_PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
+    },
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/sealed",
+        "//lib/testutil",
+        "//messaging",
+        "//observe",
+    ],
+)

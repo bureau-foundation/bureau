@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // testTCPDialer implements transport.Dialer using plain TCP. This is used
@@ -180,7 +181,7 @@ func TestRelayHandler(t *testing.T) {
 	}
 
 	// Create a relay socket and serve the relay handler.
-	relaySocketPath := filepath.Join(t.TempDir(), "relay.sock")
+	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
 	relayListener, err := net.Listen("unix", relaySocketPath)
 	if err != nil {
 		t.Fatalf("Listen() error: %v", err)
@@ -237,7 +238,7 @@ func TestRelayHandler_UnknownService(t *testing.T) {
 		logger:        slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
-	relaySocketPath := filepath.Join(t.TempDir(), "relay.sock")
+	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
 	relayListener, err := net.Listen("unix", relaySocketPath)
 	if err != nil {
 		t.Fatalf("Listen() error: %v", err)
@@ -272,7 +273,7 @@ func TestRelayHandler_UnknownService(t *testing.T) {
 
 func TestTransportInboundHandler(t *testing.T) {
 	// Set up a mock "provider proxy" on a Unix socket.
-	providerSocketPath := filepath.Join(t.TempDir(), "provider.sock")
+	providerSocketPath := filepath.Join(testutil.SocketDir(t), "provider.sock")
 	providerListener, err := net.Listen("unix", providerSocketPath)
 	if err != nil {
 		t.Fatalf("Listen() error: %v", err)
@@ -355,7 +356,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// Machine B (provider side): transport listener + provider proxy
 
 	// 1. Start a backend HTTP server (the actual service).
-	backendSocketPath := filepath.Join(t.TempDir(), "backend.sock")
+	backendSocketPath := filepath.Join(testutil.SocketDir(t), "backend.sock")
 	backendListener, err := net.Listen("unix", backendSocketPath)
 	if err != nil {
 		t.Fatalf("backend Listen() error: %v", err)
@@ -375,7 +376,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// service registered and routes to the backend. For this test
 	// we use a simple HTTP server that simulates what HandleHTTPProxy
 	// does: strip /http/<service>/ and forward to the backend.
-	providerSocketPath := filepath.Join(t.TempDir(), "provider.sock")
+	providerSocketPath := filepath.Join(testutil.SocketDir(t), "provider.sock")
 	providerListener, err := net.Listen("unix", providerSocketPath)
 	if err != nil {
 		t.Fatalf("provider Listen() error: %v", err)
@@ -492,7 +493,7 @@ func TestCrossTransportRouting(t *testing.T) {
 		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
-	relaySocketPath := filepath.Join(t.TempDir(), "relay.sock")
+	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
 	relayListener, err := net.Listen("unix", relaySocketPath)
 	if err != nil {
 		t.Fatalf("relay Listen() error: %v", err)

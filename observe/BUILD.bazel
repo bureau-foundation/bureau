@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "observe",
+    srcs = [
+        "client.go",
+        "control.go",
+        "dashboard.go",
+        "expand.go",
+        "layout.go",
+        "list.go",
+        "protocol.go",
+        "query.go",
+        "relay.go",
+        "ringbuffer.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/observe",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/schema",
+        "@org_golang_x_sys//unix",
+    ],
+)
+
+go_test(
+    name = "observe_test",
+    srcs = [
+        "client_test.go",
+        "control_test.go",
+        "dashboard_test.go",
+        "expand_test.go",
+        "integration_test.go",
+        "layout_test.go",
+        "list_test.go",
+        "protocol_test.go",
+        "query_test.go",
+        "relay_test.go",
+        "ringbuffer_test.go",
+        "testutil_test.go",
+    ],
+    embed = [":observe"],
+    deps = [
+        "//lib/schema",
+        "//lib/testutil",
+    ],
+)

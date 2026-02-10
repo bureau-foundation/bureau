@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-credentials_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-credentials",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/sealed",
+        "//lib/version",
+        "//messaging",
+        "//proxy",
+    ],
+)
+
+go_binary(
+    name = "bureau-credentials",
+    embed = [":bureau-credentials_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-credentials_test",
+    srcs = ["main_test.go"],
+    embed = [":bureau-credentials_lib"],
+    deps = ["//lib/principal"],
+)

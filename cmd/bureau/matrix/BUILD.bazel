@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "matrix",
+    srcs = [
+        "doctor.go",
+        "matrix.go",
+        "room.go",
+        "send.go",
+        "session.go",
+        "setup.go",
+        "space.go",
+        "state.go",
+        "user.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/matrix",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/schema",
+        "//lib/secret",
+        "//messaging",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_golang_x_term//:term",
+    ],
+)
+
+go_test(
+    name = "matrix_test",
+    srcs = [
+        "doctor_test.go",
+        "room_test.go",
+        "send_test.go",
+        "space_test.go",
+        "state_test.go",
+        "user_test.go",
+    ],
+    embed = [":matrix"],
+    deps = ["//messaging"],
+)

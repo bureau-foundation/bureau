@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-bridge_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-bridge",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//bridge",
+        "//lib/version",
+    ],
+)
+
+go_binary(
+    name = "bureau-bridge",
+    embed = [":bureau-bridge_lib"],
+    visibility = ["//visibility:public"],
+)

@@ -40,20 +40,55 @@ cmd/           Binary entry points:
   bureau-credentials/  Credential provisioning and machine config CLI
   bureau-proxy-call/   One-shot HTTP request through a proxy socket
 deploy/        Deployment configurations (matrix/, etc.)
+script/        Dev environment setup (Nix installer, version pins)
 ```
 
 Top-level directories are primitives or first-class concepts. Supporting library
 code goes in `lib/`. No `internal/` or `pkg/` — this is an application, not a
 public Go library.
 
-## Build
+## Dev Environment Setup
+
+Nix provides the hermetic development environment. All tools (Go, Bazel, gazelle,
+buildifier, tmux, etc.) come from the Nix dev shell — no global installs.
 
 ```bash
-go build ./...
-go test ./...
+# Install Nix (Determinate Nix, pinned version). Requires sudo.
+script/setup-nix
+
+# Verify installation.
+script/setup-nix --check
+
+# Enter the dev shell (once flake.nix exists).
+nix develop
 ```
 
-No build system beyond `go build`. No Bazel. No Makefiles unless they add value.
+The pinned Nix version lives in `script/nix-installer-version` (installer release)
+and `script/nix-expected-version` (expected `nix --version` output). These are
+committed to the repo. Upgrading Nix means updating both files and re-running
+`script/setup-nix --force`.
+
+See `.notes/design/NIX.md` for the full build and distribution architecture.
+
+## Build
+
+Bazel is the build system. All builds and tests go through Bazel.
+
+```bash
+bazel build //...
+bazel test //...
+```
+
+Gazelle generates BUILD.bazel files from Go source. After adding/removing Go
+files or changing imports, run:
+
+```bash
+bazel run //:gazelle
+```
+
+Test binaries needed by integration tests are declared as `data` dependencies
+in BUILD.bazel and resolved at runtime via `testutil.DataBinary()` (which reads
+`RUNFILES_DIR` + `$(rlocationpath ...)` env vars). Tests do not call `go build`.
 
 ## Conventions
 
@@ -61,6 +96,8 @@ No build system beyond `go build`. No Bazel. No Makefiles unless they add value.
 - Pre-commit hooks enforce gofmt and go vet
 - SPDX license headers on all source files
 - Tests live next to the code they test (`foo_test.go` beside `foo.go`)
+- BUILD.bazel files are maintained by gazelle; manual edits go in `data`, `env`,
+  and `deps` sections that gazelle preserves
 
 <!-- br-agent-instructions-v1 -->
 

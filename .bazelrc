@@ -1,0 +1,30 @@
+# Bureau Bazel configuration.
+#
+# Remote execution settings will be added when Buildbarn is deployed.
+# Per-user overrides go in .bazelrc.local (gitignored).
+
+# Hermetic action environment: don't leak host env vars into build actions.
+build --incompatible_strict_action_env
+
+# Test output: only print on failure.
+test --test_output=errors
+
+# Tests that use tmux need:
+#   TERM — tmux refuses to attach if the terminal lacks basic capabilities
+#          ("terminal does not support clear")
+#   LANG — tmux replaces control characters (tabs) with underscores in
+#          format output under the C locale. A UTF-8 locale preserves them.
+# Both are fixed values for hermeticity (remote execution workers produce
+# identical results regardless of host locale or terminal).
+test --test_env=TERM=xterm
+test --test_env=LANG=C.UTF-8
+
+# Go: static linking (no CGO).
+build --@rules_go//go/config:pure
+
+# Stamp binaries with version info.
+build:release --stamp
+build:release --workspace_status_command=script/bazel-workspace-status
+
+# Import per-user local overrides if present.
+try-import %workspace%/.bazelrc.local

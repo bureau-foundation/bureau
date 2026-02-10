@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//cmd/bureau/matrix",
+        "//cmd/bureau/observe",
+        "//lib/version",
+    ],
+)
+
+go_binary(
+    name = "bureau",
+    embed = [":bureau_lib"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "messaging",
+    srcs = [
+        "client.go",
+        "errors.go",
+        "session.go",
+        "types.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/messaging",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/secret"],
+)
+
+go_test(
+    name = "messaging_test",
+    srcs = [
+        "client_test.go",
+        "session_test.go",
+    ],
+    embed = [":messaging"],
+)

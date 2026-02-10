@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Workspace status script for Bazel --stamp builds.
+# Produces key-value pairs consumed by x_defs in BUILD files.
+#
+# STABLE_ prefixed keys trigger rebuilds when values change.
+# Non-STABLE keys are volatile (timestamp, etc.) and do not.
+
+set -euo pipefail
+
+# Git commit (full SHA).
+echo "STABLE_GIT_COMMIT $(git rev-parse HEAD)"
+
+# Git tag (closest tag reachable from HEAD, or "unknown").
+echo "STABLE_GIT_TAG $(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+
+# Build timestamp (volatile — does not trigger rebuilds).
+echo "BUILD_TIMESTAMP $(date -u +%Y-%m-%dT%H:%M:%SZ)"

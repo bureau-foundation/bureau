@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestServiceChanged(t *testing.T) {
@@ -148,6 +149,7 @@ func TestLocalAndRemoteServices(t *testing.T) {
 }
 
 func TestReconcileServices_LocalAndRemote(t *testing.T) {
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID: "@machine/workstation:bureau.local",
 		machineName:   "machine/workstation",
@@ -167,7 +169,7 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 		running:     make(map[string]bool),
 		proxyRoutes: make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -198,13 +200,14 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 }
 
 func TestReconcileServices_NoChanges(t *testing.T) {
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID: "@machine/workstation:bureau.local",
 		services:      make(map[string]*schema.Service),
 		running:       make(map[string]bool),
 		proxyRoutes:   make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -218,6 +221,7 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 }
 
 func TestReconcileServices_Removal(t *testing.T) {
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID: "@machine/workstation:bureau.local",
 		services:      make(map[string]*schema.Service),
@@ -226,7 +230,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
 		},
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -245,6 +249,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 }
 
 func TestReconcileServices_ServiceMigration(t *testing.T) {
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -259,7 +264,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
 		},
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -280,7 +285,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 
 func TestProxyRouteRegistration(t *testing.T) {
 	// Set up a mock proxy admin server on a Unix socket.
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	// Track the requests the mock receives.
 	type adminCall struct {
@@ -430,7 +435,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 func TestConfigureConsumerProxy(t *testing.T) {
 	// Set up a mock admin server for a new consumer.
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	type adminCall struct {
 		method      string
@@ -502,8 +507,10 @@ func TestConfigureConsumerProxy(t *testing.T) {
 }
 
 func TestReconcileServices_RemoteWithRelay(t *testing.T) {
-	relaySocket := filepath.Join(t.TempDir(), "relay.sock")
+	socketDir := testutil.SocketDir(t)
+	relaySocket := filepath.Join(socketDir, "relay.sock")
 
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID:   "@machine/workstation:bureau.local",
 		machineName:     "machine/workstation",
@@ -524,7 +531,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 		running:     make(map[string]bool),
 		proxyRoutes: make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -627,7 +634,7 @@ func TestBuildServiceDirectory_Empty(t *testing.T) {
 
 func TestPushDirectoryToProxy(t *testing.T) {
 	// Set up a mock admin server that captures the PUT /v1/admin/directory request.
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	var receivedDirectory []adminDirectoryEntry
 	var callCount int
@@ -731,7 +738,7 @@ func TestPushDirectoryToProxy(t *testing.T) {
 
 func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 	// Verify pushServiceDirectory pushes to all running consumers.
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	var pushCounts sync.Map // map[string]int — consumer localpart → push count
 
@@ -820,7 +827,7 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 
 func TestPushVisibilityToProxy(t *testing.T) {
 	// Set up a mock admin server that captures the PUT /v1/admin/visibility request.
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	var receivedPatterns []string
 	var callCount int
@@ -892,7 +899,7 @@ func TestPushVisibilityToProxy(t *testing.T) {
 
 func TestPushVisibilityToProxy_EmptyPatterns(t *testing.T) {
 	// Pushing empty patterns should still work (resets to default-deny).
-	tempDir := t.TempDir()
+	tempDir := testutil.SocketDir(t)
 
 	var receivedPatterns []string
 	var callsMu sync.Mutex
@@ -952,8 +959,10 @@ func TestPushVisibilityToProxy_EmptyPatterns(t *testing.T) {
 
 func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	// A service migrates from remote to local while the relay is active.
-	relaySocket := filepath.Join(t.TempDir(), "relay.sock")
+	socketDir := testutil.SocketDir(t)
+	relaySocket := filepath.Join(socketDir, "relay.sock")
 
+	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
 		machineUserID:   "@machine/workstation:bureau.local",
 		relaySocketPath: relaySocket,
@@ -969,7 +978,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 			"service-stt-whisper": relaySocket, // was remote
 		},
 		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(t.TempDir(), localpart+".admin.sock")
+			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}

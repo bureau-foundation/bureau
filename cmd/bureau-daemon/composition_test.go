@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +25,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -67,8 +67,9 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		t.Fatalf("writing public key: %v", err)
 	}
 
-	// Socket paths — all under a test-specific temp directory.
-	socketDir := t.TempDir()
+	// Socket paths — all under a short temp directory to stay within the
+	// Unix domain socket 108-byte path limit.
+	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 	socketBase := filepath.Join(socketDir, "principal") + "/"
 	adminBase := filepath.Join(socketDir, "admin") + "/"
@@ -416,37 +417,21 @@ func TestDaemonJoinsGlobalRooms(t *testing.T) {
 
 // --- Helpers ---
 
-// moduleRoot finds the Go module root by walking up from this test file.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// This file is at cmd/bureau-daemon/composition_test.go — module root
-	// is two directories up.
-	root := filepath.Join(filepath.Dir(filename), "..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected go.mod at %s: %v", root, err)
-	}
-	return root
-}
 
-// buildBinary compiles a Go binary from the given package path and returns
-// the path to the compiled binary. The binary is built in a temp directory
-// that is cleaned up when the test finishes.
+// buildBinary returns the path to a pre-built binary for the given
+// package. Binaries are provided as Bazel data dependencies.
 func buildBinary(t *testing.T, pkg string) string {
 	t.Helper()
-	name := filepath.Base(pkg)
-	outputDir := t.TempDir()
-	outputPath := filepath.Join(outputDir, name)
-	cmd := exec.Command("go", "build", "-o", outputPath, pkg)
-	cmd.Dir = moduleRoot(t)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("building %s: %v\n%s", pkg, err, output)
+
+	envVars := map[string]string{
+		"./cmd/bureau-proxy":    "BUREAU_PROXY_BINARY",
+		"./cmd/bureau-launcher": "BUREAU_LAUNCHER_BINARY",
 	}
-	return outputPath
+	envName, ok := envVars[pkg]
+	if !ok {
+		t.Fatalf("no data dependency configured for package %q", pkg)
+	}
+	return testutil.DataBinary(t, envName)
 }
 
 // waitForFile polls until a file appears at the given path.

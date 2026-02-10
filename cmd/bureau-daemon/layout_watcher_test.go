@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -26,7 +27,7 @@ import (
 func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 	t.Helper()
 
-	socketDir := t.TempDir()
+	socketDir := testutil.SocketDir(t)
 	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
 
 	matrixState := newMockMatrixState()

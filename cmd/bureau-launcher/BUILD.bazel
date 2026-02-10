@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-launcher_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-launcher",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/sealed",
+        "//lib/secret",
+        "//lib/version",
+        "//messaging",
+    ],
+)
+
+go_binary(
+    name = "bureau-launcher",
+    embed = [":bureau-launcher_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-launcher_test",
+    srcs = ["main_test.go"],
+    data = ["//cmd/bureau-proxy:bureau-proxy"],
+    embed = [":bureau-launcher_lib"],
+    env = {"BUREAU_PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)"},
+    deps = [
+        "//lib/sealed",
+        "//lib/testutil",
+    ],
+)

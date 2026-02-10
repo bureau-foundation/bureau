@@ -405,9 +405,9 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 type managedSandbox struct {
 	principal string
 	process   *os.Process
-	configDir string       // temp directory containing proxy config
+	configDir string        // temp directory containing proxy config
 	done      chan struct{} // closed when process exits
-	exitError error        // set when process exits
+	exitError error         // set when process exits
 }
 
 // proxyCredentialPayload is the JSON structure piped to the proxy's stdin.

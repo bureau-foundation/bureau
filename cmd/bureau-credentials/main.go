@@ -539,12 +539,12 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:       "Config: " + machineName,
-		Topic:      "Machine configuration and credentials for " + machineName,
-		Alias:      aliasLocalpart,
-		Preset:     "private_chat",
-		Invite:     []string{machineUserID},
-		Visibility: "private",
+		Name:                      "Config: " + machineName,
+		Topic:                     "Machine configuration and credentials for " + machineName,
+		Alias:                     aliasLocalpart,
+		Preset:                    "private_chat",
+		Invite:                    []string{machineUserID},
+		Visibility:                "private",
 		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID),
 	})
 	if err != nil {
@@ -561,4 +561,3 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 
 	return response.RoomID, nil
 }
-

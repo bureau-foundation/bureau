@@ -417,7 +417,6 @@ func TestDaemonJoinsGlobalRooms(t *testing.T) {
 
 // --- Helpers ---
 
-
 // buildBinary returns the path to a pre-built binary for the given
 // package. Binaries are provided as Bazel data dependencies.
 func buildBinary(t *testing.T, pkg string) string {

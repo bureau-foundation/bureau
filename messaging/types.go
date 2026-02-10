@@ -19,15 +19,15 @@ type AuthResponse struct {
 
 // CreateRoomRequest holds parameters for creating a Matrix room.
 type CreateRoomRequest struct {
-	Name        string            `json:"name,omitempty"`
-	Topic       string            `json:"topic,omitempty"`
-	Alias       string            `json:"room_alias_name,omitempty"` // local alias without # or :server
-	RoomVersion string            `json:"room_version,omitempty"`    // e.g. "11"; empty uses server default
-	Visibility  string            `json:"visibility,omitempty"`      // "public" or "private"
-	Preset      string            `json:"preset,omitempty"`          // "private_chat", "public_chat", "trusted_private_chat"
-	Invite      []string          `json:"invite,omitempty"`
-	CreationContent        map[string]any `json:"creation_content,omitempty"`          // e.g. {"type": "m.space"} for spaces
-	InitialState           []StateEvent   `json:"initial_state,omitempty"`
+	Name                      string         `json:"name,omitempty"`
+	Topic                     string         `json:"topic,omitempty"`
+	Alias                     string         `json:"room_alias_name,omitempty"` // local alias without # or :server
+	RoomVersion               string         `json:"room_version,omitempty"`    // e.g. "11"; empty uses server default
+	Visibility                string         `json:"visibility,omitempty"`      // "public" or "private"
+	Preset                    string         `json:"preset,omitempty"`          // "private_chat", "public_chat", "trusted_private_chat"
+	Invite                    []string       `json:"invite,omitempty"`
+	CreationContent           map[string]any `json:"creation_content,omitempty"` // e.g. {"type": "m.space"} for spaces
+	InitialState              []StateEvent   `json:"initial_state,omitempty"`
 	PowerLevelContentOverride map[string]any `json:"power_level_content_override,omitempty"` // override default power levels
 }
 
@@ -104,8 +104,8 @@ type Event struct {
 
 // EventUnsigned holds optional unsigned data attached to events.
 type EventUnsigned struct {
-	Age             int64  `json:"age,omitempty"`
-	TransactionID   string `json:"transaction_id,omitempty"`
+	Age           int64  `json:"age,omitempty"`
+	TransactionID string `json:"transaction_id,omitempty"`
 }
 
 // RoomMessagesOptions controls pagination for room message fetching.
@@ -144,13 +144,13 @@ type SyncOptions struct {
 
 // SyncResponse is the top-level response from /sync.
 type SyncResponse struct {
-	NextBatch string        `json:"next_batch"`
-	Rooms     RoomsSection  `json:"rooms"`
+	NextBatch string       `json:"next_batch"`
+	Rooms     RoomsSection `json:"rooms"`
 }
 
 // RoomsSection contains per-room sync data grouped by membership state.
 type RoomsSection struct {
-	Join   map[string]JoinedRoom `json:"join,omitempty"`
+	Join   map[string]JoinedRoom  `json:"join,omitempty"`
 	Invite map[string]InvitedRoom `json:"invite,omitempty"`
 	Leave  map[string]LeftRoom    `json:"leave,omitempty"`
 }
@@ -231,10 +231,10 @@ type RoomMembersResponse struct {
 
 // RoomMemberEvent is a member state event from the /members endpoint.
 type RoomMemberEvent struct {
-	Type     string              `json:"type"`
-	StateKey string              `json:"state_key"`
-	Sender   string              `json:"sender"`
-	Content  RoomMemberContent   `json:"content"`
+	Type     string            `json:"type"`
+	StateKey string            `json:"state_key"`
+	Sender   string            `json:"sender"`
+	Content  RoomMemberContent `json:"content"`
 }
 
 // RoomMemberContent is the content of a m.room.member state event.
@@ -277,9 +277,9 @@ type TURNCredentialsResponse struct {
 
 // LoginRequest is the request body for password login.
 type LoginRequest struct {
-	Type     string `json:"type"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	DeviceID string `json:"device_id,omitempty"`
+	Type                     string `json:"type"`
+	User                     string `json:"user"`
+	Password                 string `json:"password"`
+	DeviceID                 string `json:"device_id,omitempty"`
 	InitialDeviceDisplayName string `json:"initial_device_display_name,omitempty"`
 }

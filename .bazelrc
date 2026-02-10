@@ -26,5 +26,10 @@ build --@rules_go//go/config:pure
 build:release --stamp
 build:release --workspace_status_command=script/bazel-workspace-status
 
+# CI: suppress color and cursor control for log readability.
+build:ci --color=no
+build:ci --curses=no
+test:ci --test_output=errors
+
 # Import per-user local overrides if present.
 try-import %workspace%/.bazelrc.local

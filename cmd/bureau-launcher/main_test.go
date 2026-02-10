@@ -149,7 +149,7 @@ func TestCredentialKeys(t *testing.T) {
 			credentials: map[string]string{
 				"OPENAI_API_KEY":    "sk-test",
 				"ANTHROPIC_API_KEY": "sk-ant-test",
-				"GITHUB_PAT":       "ghp_test",
+				"GITHUB_PAT":        "ghp_test",
 			},
 			expected: []string{"ANTHROPIC_API_KEY", "GITHUB_PAT", "OPENAI_API_KEY"},
 		},
@@ -685,10 +685,10 @@ func TestBuildCredentialPayload(t *testing.T) {
 	t.Run("full credentials", func(t *testing.T) {
 		credentials := map[string]string{
 			"MATRIX_HOMESERVER_URL": "http://custom:6167",
-			"MATRIX_TOKEN":         "syt_test_token",
-			"MATRIX_USER_ID":       "@test/echo:bureau.local",
-			"OPENAI_API_KEY":       "sk-test",
-			"GITHUB_PAT":           "ghp_test",
+			"MATRIX_TOKEN":          "syt_test_token",
+			"MATRIX_USER_ID":        "@test/echo:bureau.local",
+			"OPENAI_API_KEY":        "sk-test",
+			"GITHUB_PAT":            "ghp_test",
 		}
 
 		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
@@ -819,7 +819,6 @@ func TestWaitForSocket(t *testing.T) {
 		}
 	})
 }
-
 
 // buildProxyBinary returns the path to a pre-built bureau-proxy binary.
 // The binary is provided as a Bazel data dependency via BUREAU_PROXY_BINARY.

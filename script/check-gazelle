@@ -1,0 +1,33 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Run gazelle and fail if it modifies any BUILD files. Agents add imports or
+# new Go files without running gazelle; this catches the drift before it
+# reaches the build step.
+#
+# Compares BUILD file checksums before and after gazelle to detect changes,
+# rather than using git diff (which would false-positive on unstaged changes
+# from earlier hooks like license-header insertion).
+
+set -euo pipefail
+
+# Snapshot current BUILD file contents.
+before=$(find . -name 'BUILD.bazel' -o -name '*.bzl' | sort | xargs sha256sum 2>/dev/null || true)
+
+bazel run //:gazelle 2>&1
+
+after=$(find . -name 'BUILD.bazel' -o -name '*.bzl' | sort | xargs sha256sum 2>/dev/null || true)
+
+if [ "$before" != "$after" ]; then
+    echo ""
+    echo "ERROR: gazelle modified BUILD files. Your BUILD files are stale."
+    echo ""
+    # Show which files changed.
+    diff <(echo "$before") <(echo "$after") | grep -E '^[<>]' | sed 's/^< /  removed: /; s/^> /  changed: /' | awk '{print $NF}' | sort -u | while read -r file; do
+        echo "  $file"
+    done
+    echo ""
+    echo "Stage the changes and retry your commit."
+    exit 1
+fi

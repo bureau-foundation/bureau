@@ -768,8 +768,8 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 	t.Parallel()
 	content := schema.LayoutContent{
-		Prefix:        "C-b",
-		SourceMachine: "@machine/workstation:bureau.local",
+		Prefix:         "C-b",
+		SourceMachine:  "@machine/workstation:bureau.local",
 		SealedMetadata: "encrypted-blob",
 		Windows: []schema.LayoutWindow{
 			{
@@ -881,4 +881,3 @@ func TestLayoutToSchemaNilObserveMembers(t *testing.T) {
 		t.Error("nil ObserveMembers should stay nil after round-trip")
 	}
 }
-

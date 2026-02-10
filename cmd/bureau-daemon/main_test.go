@@ -163,9 +163,9 @@ func TestPublishStatus_SandboxCount(t *testing.T) {
 		machineName: "machine/test",
 		serverName:  "bureau.local",
 		running: map[string]bool{
-			"iree/amdgpu/pm":     true,
+			"iree/amdgpu/pm":      true,
 			"service/stt/whisper": true,
-			"service/tts/piper":  true,
+			"service/tts/piper":   true,
 		},
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}

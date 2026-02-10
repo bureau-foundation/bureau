@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Install Determinate Nix at the version pinned in this repository.
@@ -22,7 +23,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Read pinned versions from repo files.
 INSTALLER_VERSION_FILE="$SCRIPT_DIR/nix-installer-version"

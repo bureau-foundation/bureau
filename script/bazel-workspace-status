@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Workspace status script for Bazel --stamp builds.
 # Produces key-value pairs consumed by x_defs in BUILD files.
 #

@@ -1,30 +1,215 @@
-# Bureau pre-commit hooks
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pre-commit hooks for Bureau. Designed as hard gates for agent commits:
+# slow is fine, correctness is mandatory.
+#
 # Install: pre-commit install --install-hooks -t pre-commit
+
+exclude: '\.local\.'
+
 repos:
-  # Go formatting (gofmt)
+  # ===========================================================================
+  # Tier 1: Auto-fix formatting
+  # ===========================================================================
+
+  # Go formatting (gofmt).
   - repo: https://github.com/dnephin/pre-commit-golang
     rev: v0.5.1
     hooks:
       - id: go-fmt
-      - id: go-vet
 
-  # License headers
+  # Bazel file formatting.
+  - repo: https://github.com/keith/pre-commit-buildifier
+    rev: 8.2.1.1
+    hooks:
+      - id: buildifier
+
+  # License headers for all source file types.
   - repo: https://github.com/Lucas-C/pre-commit-hooks
-    rev: v1.5.5
+    rev: v1.5.6
     hooks:
       - id: insert-license
-        name: license-headers-go
+        name: license-go
         files: \.go$
         args:
-          - --license-filepath=.license-header.txt
-          - --comment-style=//
-          - --detect-license-in-X-top-lines=3
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - //
 
-  # General file hygiene
+      - id: insert-license
+        name: license-bazel
+        files: (BUILD\.bazel|\.bzl)$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+      - id: insert-license
+        name: license-shell
+        files: ^script/.*$
+        exclude: (\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version)
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+      - id: insert-license
+        name: license-nix
+        files: \.nix$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - "#"
+
+  # Whitespace and line ending hygiene.
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+
+  # ===========================================================================
+  # Tier 2: Static analysis
+  # ===========================================================================
+
+  # go vet on the whole module (not per-file like dnephin/pre-commit-golang).
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        files: \.go$
+
+  # Bazel lint checks.
+  # Uses the same repo as buildifier formatting above.
+  - repo: https://github.com/keith/pre-commit-buildifier
+    rev: 8.2.1.1
+    hooks:
+      - id: buildifier-lint
+
+  # Shell script analysis.
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck --severity=warning
+        language: system
+        types: [shell]
+
+  # Structural checks from pre-commit-hooks (same repo as Tier 1 whitespace).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
       - id: check-yaml
+        args: [--allow-multiple-documents]
       - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: detect-private-key
+
+  # ===========================================================================
+  # Tier 3: Build and test verification (Bazel)
+  # ===========================================================================
+
+  # Regenerate BUILD files and fail if they're stale. Agents add imports or
+  # files without running gazelle; this catches the drift.
+  - repo: local
+    hooks:
+      - id: gazelle
+        name: gazelle consistency
+        entry: script/check-gazelle
+        language: script
+        pass_filenames: false
+        files: (\.go|\.bazel|\.bzl|go\.mod|go\.sum)$
+
+  # Full build: does every target compile?
+  - repo: local
+    hooks:
+      - id: bazel-build
+        name: bazel build //...
+        entry: bazel build //...
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Full test suite: does every test pass?
+  - repo: local
+    hooks:
+      - id: bazel-test
+        name: bazel test //...
+        entry: bazel test //...
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # ===========================================================================
+  # Tier 4: Nix (dormant until .nix files exist)
+  # ===========================================================================
+  # These hooks use 'nix run' for portability. First run downloads tools
+  # (~100MB), subsequent runs are instant from the nix store.
+
+  - repo: local
+    hooks:
+      - id: nixfmt
+        name: nixfmt
+        description: Format nix files with nixfmt-rfc-style
+        entry: bash -c 'nix run nixpkgs#nixfmt-rfc-style -- "$@"' --
+        language: system
+        types: [file]
+        files: \.nix$
+
+      - id: statix
+        name: statix
+        description: Lint nix files with statix
+        entry: bash -c 'nix run nixpkgs#statix -- check .'
+        language: system
+        pass_filenames: false
+        files: \.nix$
+
+      - id: deadnix
+        name: deadnix
+        description: Find dead code in nix files
+        entry: bash -c 'nix run nixpkgs#deadnix -- --fail .'
+        language: system
+        pass_filenames: false
+        files: \.nix$
+
+      - id: nix-flake-check
+        name: nix flake check
+        description: Validate flake evaluates correctly
+        entry: bash -c 'nix flake check --no-build 2>&1 | head -50'
+        language: system
+        pass_filenames: false
+        files: \.nix$
+
+  # ===========================================================================
+  # Tier 5: Code quality
+  # ===========================================================================
+
+  # Reject bead IDs (bd-*) in source files.
+  - repo: local
+    hooks:
+      - id: no-bead-references
+        name: no bead references in code
+        entry: script/check-bead-references
+        language: script
+        pass_filenames: false
+        always_run: true
+
+  # Flush beads to JSONL before commit (graceful no-op if bd not installed).
+  - repo: local
+    hooks:
+      - id: bd-flush
+        name: bd flush
+        entry: bash -c 'command -v bd >/dev/null && bd sync --flush-only || true'
+        language: system
+        pass_filenames: false
+        always_run: true

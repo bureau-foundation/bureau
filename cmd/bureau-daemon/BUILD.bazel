@@ -1,3 +1,6 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
@@ -47,9 +50,9 @@ go_test(
         "transport_test.go",
     ],
     data = [
-        "//cmd/bureau-launcher:bureau-launcher",
-        "//cmd/bureau-proxy:bureau-proxy",
         "//cmd/bureau-daemon/testdata/mock_relay",
+        "//cmd/bureau-launcher",
+        "//cmd/bureau-proxy",
     ],
     embed = [":bureau-daemon_lib"],
     env = {

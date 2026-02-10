@@ -563,4 +563,3 @@ func TestInspectRoomState(t *testing.T) {
 		}
 	})
 }
-

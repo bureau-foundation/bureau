@@ -322,4 +322,3 @@ func initTmuxServerWithRemainOnExit(t *testing.T, serverSocket string) {
 	TmuxSession(t, serverSocket, "keepalive", "sleep 3600")
 	mustTmux(t, serverSocket, "set-option", "-g", "remain-on-exit", "on")
 }
-

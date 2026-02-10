@@ -112,10 +112,10 @@ func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
 func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID string) map[string]any {
 	events := map[string]any{
-		"m.room.name":        100,
-		"m.room.topic":       100,
+		"m.room.name":         100,
+		"m.room.topic":        100,
 		"m.room.power_levels": 100,
-		"m.space.child":      100,
+		"m.space.child":       100,
 	}
 
 	switch roomID {

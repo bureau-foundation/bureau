@@ -98,10 +98,10 @@ func TestMachineStatusRoundTrip(t *testing.T) {
 
 func TestMachineStatusOmitsZeroGPU(t *testing.T) {
 	status := MachineStatus{
-		Principal:    "@machine/pi-kitchen:bureau.local",
-		CPUPercent:   15.0,
-		MemoryUsedGB: 0.8,
-		Sandboxes:    SandboxCounts{Running: 1, Idle: 0},
+		Principal:     "@machine/pi-kitchen:bureau.local",
+		CPUPercent:    15.0,
+		MemoryUsedGB:  0.8,
+		Sandboxes:     SandboxCounts{Running: 1, Idle: 0},
 		UptimeSeconds: 3600,
 		// GPUUtilizationPercent deliberately zero.
 	}

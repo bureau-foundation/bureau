@@ -26,10 +26,10 @@ type DataChannelConn struct {
 
 	// Deadline state. Closing deadlineCloser terminates the rwc, unblocking
 	// any pending Read/Write. Once closed, the conn is permanently broken.
-	mu              sync.Mutex
-	readTimer       *time.Timer
-	writeTimer      *time.Timer
-	deadlineClosed  bool
+	mu             sync.Mutex
+	readTimer      *time.Timer
+	writeTimer     *time.Timer
+	deadlineClosed bool
 }
 
 // Compile-time interface check.

@@ -317,7 +317,7 @@ type pipeCredentialPayload struct {
 	MatrixHomeserverURL string               `json:"matrix_homeserver_url"`
 	MatrixToken         string               `json:"matrix_token"`
 	MatrixUserID        string               `json:"matrix_user_id"`
-	Credentials         map[string]string     `json:"credentials"`
+	Credentials         map[string]string    `json:"credentials"`
 	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 

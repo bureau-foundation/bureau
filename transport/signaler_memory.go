@@ -21,7 +21,7 @@ type MemorySignaler struct {
 	mu       sync.Mutex
 	offers   map[string]SignalMessage // key: "offerer|target"
 	answers  map[string]SignalMessage // key: "offerer|target"
-	lastSeen map[string]time.Time    // key: "offerer|target" — tracks per-consumer state
+	lastSeen map[string]time.Time     // key: "offerer|target" — tracks per-consumer state
 }
 
 // NewMemorySignaler creates a new in-process signaler.

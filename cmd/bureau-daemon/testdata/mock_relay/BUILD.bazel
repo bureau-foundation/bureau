@@ -1,7 +1,17 @@
-load("@rules_go//go:def.bzl", "go_binary")
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
 go_binary(
     name = "mock_relay",
-    srcs = ["main.go"],
+    embed = [":mock_relay_lib"],
     visibility = ["//cmd/bureau-daemon:__pkg__"],
+)
+
+go_library(
+    name = "mock_relay_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-daemon/testdata/mock_relay",
+    visibility = ["//visibility:private"],
 )

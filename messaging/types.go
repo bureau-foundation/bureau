@@ -211,6 +211,50 @@ type UploadResponse struct {
 	ContentURI string `json:"content_uri"`
 }
 
+// JoinedRoomsResponse is returned by JoinedRooms.
+type JoinedRoomsResponse struct {
+	JoinedRooms []string `json:"joined_rooms"`
+}
+
+// RoomMember represents a member of a Matrix room.
+type RoomMember struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Membership  string `json:"membership"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
+}
+
+// RoomMembersResponse is returned by the /members endpoint.
+type RoomMembersResponse struct {
+	Chunk []RoomMemberEvent `json:"chunk"`
+}
+
+// RoomMemberEvent is a member state event from the /members endpoint.
+type RoomMemberEvent struct {
+	Type     string              `json:"type"`
+	StateKey string              `json:"state_key"`
+	Sender   string              `json:"sender"`
+	Content  RoomMemberContent   `json:"content"`
+}
+
+// RoomMemberContent is the content of a m.room.member state event.
+type RoomMemberContent struct {
+	Membership  string `json:"membership"`
+	DisplayName string `json:"displayname,omitempty"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
+}
+
+// KickRequest is the request body for kicking a user from a room.
+type KickRequest struct {
+	UserID string `json:"user_id"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// DisplayNameResponse is returned by the /profile/{userId}/displayname endpoint.
+type DisplayNameResponse struct {
+	DisplayName string `json:"displayname"`
+}
+
 // LoginRequest is the request body for password login.
 type LoginRequest struct {
 	Type     string `json:"type"`

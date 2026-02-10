@@ -1,0 +1,119 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package matrix
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// SendCommand returns the "send" subcommand for sending messages to Matrix rooms.
+func SendCommand() *cli.Command {
+	var (
+		session   SessionConfig
+		threadID  string
+		eventType string
+	)
+
+	return &cli.Command{
+		Name:    "send",
+		Summary: "Send a message to a Matrix room",
+		Description: `Send a message to a Matrix room. The room can be specified as a room
+alias (#bureau/agents:bureau.local) or a room ID (!abc:bureau.local).
+Aliases are resolved automatically.
+
+By default, sends a plain text m.room.message. Use --thread to send a
+reply within an existing thread. Use --event-type to send a custom
+event type instead of m.room.message (for advanced use cases like
+Bureau protocol events).`,
+		Usage: "bureau matrix send [flags] <room> <message>",
+		Examples: []cli.Example{
+			{
+				Description: "Send a plain text message",
+				Command:     "bureau matrix send --credential-file ./creds '#bureau/agents:bureau.local' 'Hello, world!'",
+			},
+			{
+				Description: "Reply within a thread",
+				Command:     "bureau matrix send --credential-file ./creds --thread '$event_id' '!room:bureau.local' 'Thread reply'",
+			},
+			{
+				Description: "Send a custom event type",
+				Command:     "bureau matrix send --credential-file ./creds --event-type m.bureau.status '!room:bureau.local' '{\"status\":\"active\"}'",
+			},
+		},
+		Flags: func() *flag.FlagSet {
+			flagSet := flag.NewFlagSet("send", flag.ContinueOnError)
+			session.AddFlags(flagSet)
+			flagSet.StringVar(&threadID, "thread", "", "event ID of thread root to reply within")
+			flagSet.StringVar(&eventType, "event-type", "", "custom event type (default: m.room.message)")
+			return flagSet
+		},
+		Run: func(args []string) error {
+			if len(args) < 2 {
+				return fmt.Errorf("usage: bureau matrix send [flags] <room> <message>")
+			}
+			if len(args) > 2 {
+				return fmt.Errorf("unexpected argument: %s (room and message should each be a single argument)", args[2])
+			}
+
+			roomTarget := args[0]
+			messageBody := args[1]
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			matrixSession, err := session.Connect(ctx)
+			if err != nil {
+				return fmt.Errorf("connect: %w", err)
+			}
+
+			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
+			if err != nil {
+				return err
+			}
+
+			var eventID string
+			if eventType != "" {
+				// Custom event type: send raw content. The message body is
+				// expected to be JSON, but we send it as a text message
+				// content structure for consistency.
+				eventID, err = matrixSession.SendEvent(ctx, roomID, eventType, messaging.NewTextMessage(messageBody))
+			} else if threadID != "" {
+				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(threadID, messageBody))
+			} else {
+				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewTextMessage(messageBody))
+			}
+			if err != nil {
+				return fmt.Errorf("send message: %w", err)
+			}
+
+			fmt.Fprintln(os.Stdout, eventID)
+			return nil
+		},
+	}
+}
+
+// resolveRoom resolves a room target to a room ID. If the target looks like an
+// alias (starts with #), it is resolved via the homeserver. Otherwise it is
+// returned as-is (assumed to be a room ID starting with !).
+func resolveRoom(ctx context.Context, session *messaging.Session, target string) (string, error) {
+	if strings.HasPrefix(target, "#") {
+		roomID, err := session.ResolveAlias(ctx, target)
+		if err != nil {
+			return "", fmt.Errorf("resolve alias %q: %w", target, err)
+		}
+		return roomID, nil
+	}
+	if !strings.HasPrefix(target, "!") {
+		return "", fmt.Errorf("room must be an alias (#...) or room ID (!...): got %q", target)
+	}
+	return target, nil
+}

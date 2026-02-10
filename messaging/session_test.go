@@ -546,6 +546,215 @@ func TestUploadMedia(t *testing.T) {
 	}
 }
 
+func TestJoinedRooms(t *testing.T) {
+	_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assertAuth(t, request, "test-token")
+		if request.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", request.Method)
+		}
+		if request.URL.Path != "/_matrix/client/v3/joined_rooms" {
+			t.Errorf("unexpected path: %s", request.URL.Path)
+		}
+		writeJSON(writer, JoinedRoomsResponse{
+			JoinedRooms: []string{"!room1:local", "!room2:local", "!space1:local"},
+		})
+	}))
+
+	rooms, err := session.JoinedRooms(context.Background())
+	if err != nil {
+		t.Fatalf("JoinedRooms failed: %v", err)
+	}
+	if len(rooms) != 3 {
+		t.Fatalf("expected 3 rooms, got %d", len(rooms))
+	}
+	if rooms[0] != "!room1:local" {
+		t.Errorf("unexpected first room: %s", rooms[0])
+	}
+	if rooms[2] != "!space1:local" {
+		t.Errorf("unexpected third room: %s", rooms[2])
+	}
+}
+
+func TestLeaveRoom(t *testing.T) {
+	_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assertAuth(t, request, "test-token")
+		if request.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", request.Method)
+		}
+		if !strings.Contains(request.URL.Path, "/leave") {
+			t.Errorf("unexpected path: %s", request.URL.Path)
+		}
+		writeJSON(writer, map[string]any{})
+	}))
+
+	err := session.LeaveRoom(context.Background(), "!room1:local")
+	if err != nil {
+		t.Fatalf("LeaveRoom failed: %v", err)
+	}
+}
+
+func TestGetRoomMembers(t *testing.T) {
+	_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assertAuth(t, request, "test-token")
+		if request.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", request.Method)
+		}
+		if !strings.Contains(request.URL.Path, "/members") {
+			t.Errorf("unexpected path: %s", request.URL.Path)
+		}
+		writeJSON(writer, RoomMembersResponse{
+			Chunk: []RoomMemberEvent{
+				{
+					Type:     "m.room.member",
+					StateKey: "@alice:local",
+					Sender:   "@alice:local",
+					Content: RoomMemberContent{
+						Membership:  "join",
+						DisplayName: "Alice",
+					},
+				},
+				{
+					Type:     "m.room.member",
+					StateKey: "@bob:local",
+					Sender:   "@alice:local",
+					Content: RoomMemberContent{
+						Membership:  "invite",
+						DisplayName: "Bob",
+					},
+				},
+			},
+		})
+	}))
+
+	members, err := session.GetRoomMembers(context.Background(), "!room1:local")
+	if err != nil {
+		t.Fatalf("GetRoomMembers failed: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+	if members[0].UserID != "@alice:local" {
+		t.Errorf("unexpected first member user ID: %s", members[0].UserID)
+	}
+	if members[0].DisplayName != "Alice" {
+		t.Errorf("unexpected first member display name: %s", members[0].DisplayName)
+	}
+	if members[0].Membership != "join" {
+		t.Errorf("unexpected first member membership: %s", members[0].Membership)
+	}
+	if members[1].UserID != "@bob:local" {
+		t.Errorf("unexpected second member user ID: %s", members[1].UserID)
+	}
+	if members[1].Membership != "invite" {
+		t.Errorf("unexpected second member membership: %s", members[1].Membership)
+	}
+}
+
+func TestKickUser(t *testing.T) {
+	t.Run("with reason", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+			if request.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", request.Method)
+			}
+			if !strings.Contains(request.URL.Path, "/kick") {
+				t.Errorf("unexpected path: %s", request.URL.Path)
+			}
+
+			var body KickRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode kick request: %v", err)
+			}
+			if body.UserID != "@alice:local" {
+				t.Errorf("unexpected kick target: %s", body.UserID)
+			}
+			if body.Reason != "misbehaving" {
+				t.Errorf("unexpected reason: %s", body.Reason)
+			}
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.KickUser(context.Background(), "!room1:local", "@alice:local", "misbehaving")
+		if err != nil {
+			t.Fatalf("KickUser failed: %v", err)
+		}
+	})
+
+	t.Run("without reason", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			var body KickRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode kick request: %v", err)
+			}
+			if body.UserID != "@bob:local" {
+				t.Errorf("unexpected kick target: %s", body.UserID)
+			}
+			if body.Reason != "" {
+				t.Errorf("expected empty reason, got: %s", body.Reason)
+			}
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.KickUser(context.Background(), "!room1:local", "@bob:local", "")
+		if err != nil {
+			t.Fatalf("KickUser failed: %v", err)
+		}
+	})
+}
+
+func TestGetDisplayName(t *testing.T) {
+	t.Run("has display name", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+			if request.Method != http.MethodGet {
+				t.Errorf("expected GET, got %s", request.Method)
+			}
+			if !strings.Contains(request.URL.Path, "/profile/") || !strings.HasSuffix(request.URL.Path, "/displayname") {
+				t.Errorf("unexpected path: %s", request.URL.Path)
+			}
+			writeJSON(writer, DisplayNameResponse{DisplayName: "Alice Wonderland"})
+		}))
+
+		displayName, err := session.GetDisplayName(context.Background(), "@alice:local")
+		if err != nil {
+			t.Fatalf("GetDisplayName failed: %v", err)
+		}
+		if displayName != "Alice Wonderland" {
+			t.Errorf("unexpected display name: %s", displayName)
+		}
+	})
+
+	t.Run("no display name set", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writeJSON(writer, DisplayNameResponse{})
+		}))
+
+		displayName, err := session.GetDisplayName(context.Background(), "@bob:local")
+		if err != nil {
+			t.Fatalf("GetDisplayName failed: %v", err)
+		}
+		if displayName != "" {
+			t.Errorf("expected empty display name, got: %s", displayName)
+		}
+	})
+
+	t.Run("user not found", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeNotFound, Message: "User not found"})
+		}))
+
+		_, err := session.GetDisplayName(context.Background(), "@nonexistent:local")
+		if err == nil {
+			t.Fatal("expected error for unknown user")
+		}
+		if !IsMatrixError(err, ErrCodeNotFound) {
+			t.Errorf("expected M_NOT_FOUND, got: %v", err)
+		}
+	})
+}
+
 func TestTransactionIDUniqueness(t *testing.T) {
 	// Verify that consecutive sends produce different transaction IDs.
 	transactionIDs := make(map[string]bool)

@@ -310,6 +310,84 @@ func (s *Session) UploadMedia(ctx context.Context, contentType string, body io.R
 	return response.ContentURI, nil
 }
 
+// JoinedRooms returns the list of room IDs the user has joined.
+func (s *Session) JoinedRooms(ctx context.Context) ([]string, error) {
+	body, err := s.client.doRequest(ctx, http.MethodGet, "/_matrix/client/v3/joined_rooms", s.accessToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: joined rooms failed: %w", err)
+	}
+
+	var response JoinedRoomsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse joined rooms response: %w", err)
+	}
+	return response.JoinedRooms, nil
+}
+
+// LeaveRoom leaves a room by ID.
+func (s *Session) LeaveRoom(ctx context.Context, roomID string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/leave", url.PathEscape(roomID))
+	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, struct{}{})
+	if err != nil {
+		return fmt.Errorf("messaging: leave room %q failed: %w", roomID, err)
+	}
+	return nil
+}
+
+// GetRoomMembers returns the members of a room.
+func (s *Session) GetRoomMembers(ctx context.Context, roomID string) ([]RoomMember, error) {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", url.PathEscape(roomID))
+	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: get room members for %q failed: %w", roomID, err)
+	}
+
+	var response RoomMembersResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse room members response: %w", err)
+	}
+
+	members := make([]RoomMember, len(response.Chunk))
+	for index, event := range response.Chunk {
+		members[index] = RoomMember{
+			UserID:      event.StateKey,
+			DisplayName: event.Content.DisplayName,
+			Membership:  event.Content.Membership,
+			AvatarURL:   event.Content.AvatarURL,
+		}
+	}
+	return members, nil
+}
+
+// KickUser removes a user from a room with an optional reason.
+func (s *Session) KickUser(ctx context.Context, roomID, userID, reason string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/kick", url.PathEscape(roomID))
+	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, KickRequest{
+		UserID: userID,
+		Reason: reason,
+	})
+	if err != nil {
+		return fmt.Errorf("messaging: kick %q from %q failed: %w", userID, roomID, err)
+	}
+	return nil
+}
+
+// GetDisplayName fetches the display name for a Matrix user from their profile.
+// Returns an empty string (not an error) if the user has no display name set.
+func (s *Session) GetDisplayName(ctx context.Context, userID string) (string, error) {
+	path := "/_matrix/client/v3/profile/" + url.PathEscape(userID) + "/displayname"
+	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
+	if err != nil {
+		return "", fmt.Errorf("messaging: get display name for %q failed: %w", userID, err)
+	}
+
+	var response DisplayNameResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("messaging: failed to parse display name response: %w", err)
+	}
+	return response.DisplayName, nil
+}
+
 // nextTransactionID generates a unique transaction ID for idempotent event sending.
 // Format: "bureau-<timestamp_ms>-<counter>" to ensure uniqueness across restarts.
 func (s *Session) nextTransactionID() string {

@@ -2,10 +2,16 @@
 //
 // bb-storage configuration for Bureau's Buildbarn deployment.
 //
-// Single-node CAS (content-addressable storage) and AC (action cache).
-// Bazel connects with --remote_cache=grpc://host:8980.
+// This instance serves three roles:
+//   - CAS (content-addressable storage) with local block-device backend
+//   - AC (action cache) with local block-device backend
+//   - Execute frontend: forwards Execute RPCs to bb-scheduler
 //
-// Storage uses block-device-based files that are allocated as sparse files.
+// Bazel connects to a single endpoint (grpc://host:8980) for both
+// caching and remote execution. The schedulers field routes Execute
+// requests to the scheduler service within the docker-compose network.
+//
+// Storage uses block-device-based files allocated as sparse files.
 // The declared sizeBytes values do not consume disk until written. The
 // block rotation scheme (oldBlocks/currentBlocks/newBlocks) provides
 // self-cleaning without a separate garbage collection process.
@@ -106,4 +112,24 @@
     getAuthorizer: { allow: {} },
     putAuthorizer: { allow: {} },
   },
+
+  // Execute frontend: forward Execute/WaitExecution RPCs to bb-scheduler.
+  // The empty-string key matches all instance name prefixes.
+  // addMetadataJmespathExpression forwards Bazel's per-invocation request
+  // metadata so the scheduler can do fair queuing across concurrent builds.
+  schedulers: {
+    '': {
+      endpoint: {
+        address: 'scheduler:8982',
+        addMetadataJmespathExpression: {
+          expression: |||
+            {
+              "build.bazel.remote.execution.v2.requestmetadata-bin": incomingGRPCMetadata."build.bazel.remote.execution.v2.requestmetadata-bin"
+            }
+          |||,
+        },
+      },
+    },
+  },
+  executeAuthorizer: { allow: {} },
 }

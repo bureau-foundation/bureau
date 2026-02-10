@@ -29,6 +29,20 @@ services:
       - bb-storage-cas:/storage-cas
       - bb-storage-ac:/storage-ac
 
+  scheduler:
+    image: ghcr.io/buildbarn/bb-scheduler:20260130T092441Z-749fb40
+    container_name: bureau-bb-scheduler
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_started
+    command:
+      - /config/bb-scheduler.jsonnet
+    ports:
+      - "0.0.0.0:7982:7982"
+    volumes:
+      - ./bb-scheduler.jsonnet:/config/bb-scheduler.jsonnet:ro
+
 volumes:
   bb-storage-cas:
   bb-storage-ac:

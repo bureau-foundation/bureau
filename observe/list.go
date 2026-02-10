@@ -88,22 +88,22 @@ type ListMachine struct {
 }
 
 // ListTargets connects to the daemon's observe socket and requests a
-// list of known principals and machines. When observable is true, the
-// daemon filters to only currently-observable targets.
+// list of known principals and machines. The daemon verifies the
+// request's Observer/Token and filters the returned list to only
+// principals the observer is authorized to see.
 //
 // daemonSocket is the path to the daemon's observation unix socket
-// (typically DefaultDaemonSocket).
-func ListTargets(daemonSocket string, observable bool) (*ListResponse, error) {
+// (typically DefaultDaemonSocket). The caller must set Observer, Token,
+// and Observable on the request; the Action field is set automatically.
+func ListTargets(daemonSocket string, request ListRequest) (*ListResponse, error) {
 	connection, err := net.Dial("unix", daemonSocket)
 	if err != nil {
 		return nil, fmt.Errorf("dial daemon socket %s: %w", daemonSocket, err)
 	}
 	defer connection.Close()
 
-	if err := json.NewEncoder(connection).Encode(ListRequest{
-		Action:     "list",
-		Observable: observable,
-	}); err != nil {
+	request.Action = "list"
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return nil, fmt.Errorf("send list request: %w", err)
 	}
 

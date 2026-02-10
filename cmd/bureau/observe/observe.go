@@ -71,6 +71,11 @@ Use this for monitoring without risk of accidental input.`,
 			}
 			target := strings.TrimPrefix(args[0], "@")
 
+			operatorSession, err := cli.LoadSession()
+			if err != nil {
+				return err
+			}
+
 			mode := "readwrite"
 			if readonly {
 				mode = "readonly"
@@ -79,6 +84,8 @@ Use this for monitoring without risk of accidental input.`,
 			session, err := observe.Connect(socketPath, observe.ObserveRequest{
 				Principal: target,
 				Mode:      mode,
+				Observer:  operatorSession.UserID,
+				Token:     operatorSession.AccessToken,
 			})
 			if err != nil {
 				return fmt.Errorf("connect to %s: %w", target, err)
@@ -162,6 +169,17 @@ relay for the target principal. "command" panes run local commands.
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
 
+			// Load operator session for authentication. Required even
+			// for file-based layouts: the dashboard spawns bureau observe
+			// subprocesses that each authenticate independently via the
+			// session file. We verify the session exists up front to
+			// fail early with a clear error rather than after tmux
+			// session creation.
+			operatorSession, err := cli.LoadSession()
+			if err != nil {
+				return err
+			}
+
 			// --- Resolve layout from the specified source ---
 
 			var layout *observe.Layout
@@ -187,7 +205,11 @@ relay for the target principal. "command" panes run local commands.
 				// Strip surrounding quotes that shell quoting may leave.
 				channel = strings.Trim(channel, "'\"")
 				var err error
-				layout, err = observe.QueryLayout(socketPath, channel)
+				layout, err = observe.QueryLayout(socketPath, observe.QueryLayoutRequest{
+					Channel:  channel,
+					Observer: operatorSession.UserID,
+					Token:    operatorSession.AccessToken,
+				})
 				if err != nil {
 					return fmt.Errorf("query channel layout: %w", err)
 				}
@@ -324,7 +346,16 @@ the local machine and all known peers.`,
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
 
-			response, err := observe.ListTargets(socketPath, observable)
+			operatorSession, err := cli.LoadSession()
+			if err != nil {
+				return err
+			}
+
+			response, err := observe.ListTargets(socketPath, observe.ListRequest{
+				Observable: observable,
+				Observer:   operatorSession.UserID,
+				Token:      operatorSession.AccessToken,
+			})
 			if err != nil {
 				return err
 			}

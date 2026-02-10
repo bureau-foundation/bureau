@@ -63,11 +63,9 @@ type QueryLayoutResponse struct {
 // into concrete Observe panes.
 //
 // daemonSocket is the path to the daemon's observation unix socket
-// (typically DefaultDaemonSocket).
-//
-// channel is the full Matrix room alias
-// (e.g., "#iree/amdgpu/general:bureau.local").
-func QueryLayout(daemonSocket, channel string) (*Layout, error) {
+// (typically DefaultDaemonSocket). The caller must set Channel, Observer,
+// and Token on the request; the Action field is set automatically.
+func QueryLayout(daemonSocket string, request QueryLayoutRequest) (*Layout, error) {
 	connection, err := net.Dial("unix", daemonSocket)
 	if err != nil {
 		return nil, fmt.Errorf("dial daemon socket %s: %w", daemonSocket, err)
@@ -76,10 +74,8 @@ func QueryLayout(daemonSocket, channel string) (*Layout, error) {
 
 	// Send the query request as JSON + newline (same line protocol as
 	// ObserveRequest).
-	if err := json.NewEncoder(connection).Encode(QueryLayoutRequest{
-		Action:  "query_layout",
-		Channel: channel,
-	}); err != nil {
+	request.Action = "query_layout"
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return nil, fmt.Errorf("send query_layout request: %w", err)
 	}
 
@@ -97,11 +93,11 @@ func QueryLayout(daemonSocket, channel string) (*Layout, error) {
 	}
 
 	if !response.OK {
-		return nil, fmt.Errorf("query layout for %s: %s", channel, response.Error)
+		return nil, fmt.Errorf("query layout for %s: %s", request.Channel, response.Error)
 	}
 
 	if response.Layout == nil {
-		return nil, fmt.Errorf("daemon returned empty layout for %s", channel)
+		return nil, fmt.Errorf("daemon returned empty layout for %s", request.Channel)
 	}
 
 	return response.Layout, nil

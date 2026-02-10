@@ -69,7 +69,7 @@ func TestQueryLayoutSuccess(t *testing.T) {
 		Layout: expectedLayout,
 	})
 
-	layout, err := QueryLayout(socketPath, "#iree/amdgpu/general:bureau.local")
+	layout, err := QueryLayout(socketPath, QueryLayoutRequest{Channel: "#iree/amdgpu/general:bureau.local"})
 	if err != nil {
 		t.Fatalf("QueryLayout failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestQueryLayoutDaemonError(t *testing.T) {
 		Error: "channel not found",
 	})
 
-	_, err := QueryLayout(socketPath, "#nonexistent:bureau.local")
+	_, err := QueryLayout(socketPath, QueryLayoutRequest{Channel: "#nonexistent:bureau.local"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -116,7 +116,7 @@ func TestQueryLayoutEmptyLayout(t *testing.T) {
 		Layout: nil,
 	})
 
-	_, err := QueryLayout(socketPath, "#empty:bureau.local")
+	_, err := QueryLayout(socketPath, QueryLayoutRequest{Channel: "#empty:bureau.local"})
 	if err == nil {
 		t.Fatal("expected error for nil layout, got nil")
 	}
@@ -129,7 +129,7 @@ func TestQueryLayoutConnectionRefused(t *testing.T) {
 	t.Parallel()
 	socketPath := filepath.Join(t.TempDir(), "nonexistent.sock")
 
-	_, err := QueryLayout(socketPath, "#test:bureau.local")
+	_, err := QueryLayout(socketPath, QueryLayoutRequest{Channel: "#test:bureau.local"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent socket, got nil")
 	}
@@ -153,7 +153,7 @@ func TestQueryLayoutSocketClosed(t *testing.T) {
 		connection.Close()
 	}()
 
-	_, err = QueryLayout(socketPath, "#test:bureau.local")
+	_, err = QueryLayout(socketPath, QueryLayoutRequest{Channel: "#test:bureau.local"})
 	if err == nil {
 		t.Fatal("expected error for closed connection, got nil")
 	}
@@ -190,7 +190,11 @@ func TestQueryLayoutRequestFormat(t *testing.T) {
 		})
 	}()
 
-	_, err = QueryLayout(socketPath, "#iree/amdgpu/general:bureau.local")
+	_, err = QueryLayout(socketPath, QueryLayoutRequest{
+		Channel:  "#iree/amdgpu/general:bureau.local",
+		Observer: "@test:bureau.local",
+		Token:    "test-token",
+	})
 	if err != nil {
 		t.Fatalf("QueryLayout failed: %v", err)
 	}
@@ -202,5 +206,11 @@ func TestQueryLayoutRequestFormat(t *testing.T) {
 	if request.Channel != "#iree/amdgpu/general:bureau.local" {
 		t.Errorf("channel = %q, want %q",
 			request.Channel, "#iree/amdgpu/general:bureau.local")
+	}
+	if request.Observer != "@test:bureau.local" {
+		t.Errorf("observer = %q, want %q", request.Observer, "@test:bureau.local")
+	}
+	if request.Token != "test-token" {
+		t.Errorf("token = %q, want %q", request.Token, "test-token")
 	}
 }

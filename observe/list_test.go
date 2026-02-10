@@ -65,7 +65,7 @@ func TestListTargets(t *testing.T) {
 	}()
 
 	t.Run("list all", func(t *testing.T) {
-		response, err := ListTargets(socketPath, false)
+		response, err := ListTargets(socketPath, ListRequest{})
 		if err != nil {
 			t.Fatalf("ListTargets() error: %v", err)
 		}
@@ -112,7 +112,7 @@ func TestListTargets(t *testing.T) {
 	})
 
 	t.Run("observable filter", func(t *testing.T) {
-		response, err := ListTargets(socketPath, true)
+		response, err := ListTargets(socketPath, ListRequest{Observable: true})
 		if err != nil {
 			t.Fatalf("ListTargets() error: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestListTargets(t *testing.T) {
 	})
 
 	t.Run("connection refused", func(t *testing.T) {
-		_, err := ListTargets("/nonexistent/observe.sock", false)
+		_, err := ListTargets("/nonexistent/observe.sock", ListRequest{})
 		if err == nil {
 			t.Error("expected error for nonexistent socket")
 		}
@@ -154,7 +154,7 @@ func TestListTargets_ErrorResponse(t *testing.T) {
 		connection.Close()
 	}()
 
-	_, err = ListTargets(socketPath, false)
+	_, err = ListTargets(socketPath, ListRequest{})
 	if err == nil {
 		t.Fatal("expected error from daemon")
 	}
@@ -185,7 +185,7 @@ func TestListTargets_InvalidJSON(t *testing.T) {
 		connection.Close()
 	}()
 
-	_, err = ListTargets(socketPath, false)
+	_, err = ListTargets(socketPath, ListRequest{})
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}

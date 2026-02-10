@@ -17,6 +17,7 @@
 //	dashboard   Open a composite observation view (machine, channel, or file)
 //	observe     Attach to a single principal's terminal session
 //	matrix      Matrix homeserver operations
+//	template    Manage sandbox templates
 //	version     Print version information
 package main
 
@@ -27,6 +28,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
+	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
@@ -57,6 +59,7 @@ observation, and structured messaging via Matrix.`,
 			observecmd.DashboardCommand(),
 			observecmd.ListCommand(),
 			matrix.Command(),
+			templatecmd.Command(),
 			{
 				Name:    "version",
 				Summary: "Print version information",
@@ -86,6 +89,10 @@ observation, and structured messaging via Matrix.`,
 			{
 				Description: "Open a project channel dashboard",
 				Command:     "bureau dashboard '#iree/amdgpu/general'",
+			},
+			{
+				Description: "List available sandbox templates",
+				Command:     "bureau template list bureau/templates",
 			},
 			{
 				Description: "Bootstrap the Matrix homeserver",

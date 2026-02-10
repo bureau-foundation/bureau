@@ -6,6 +6,7 @@ require (
 	filippo.io/age v1.3.1
 	github.com/pion/webrtc/v4 v4.2.3
 	github.com/spf13/pflag v1.0.10
+	github.com/tidwall/jsonc v0.3.2
 	golang.org/x/sys v0.41.0
 	golang.org/x/term v0.40.0
 	gopkg.in/yaml.v3 v3.0.1

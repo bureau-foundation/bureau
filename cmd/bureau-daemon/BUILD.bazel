@@ -22,6 +22,7 @@ go_library(
     deps = [
         "//lib/principal",
         "//lib/schema",
+        "//lib/template",
         "//lib/version",
         "//messaging",
         "//observe",

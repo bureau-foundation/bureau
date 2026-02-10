@@ -12,6 +12,7 @@ go_library(
         "//cmd/bureau/cli",
         "//cmd/bureau/matrix",
         "//cmd/bureau/observe",
+        "//cmd/bureau/template",
         "//lib/version",
     ],
 )

@@ -1,0 +1,37 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "template",
+    srcs = [
+        "command.go",
+        "diff.go",
+        "list.go",
+        "push.go",
+        "show.go",
+        "validate.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/template",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/template",
+        "//messaging",
+        "@com_github_spf13_pflag//:pflag",
+        "@com_github_tidwall_jsonc//:jsonc",
+    ],
+)
+
+go_test(
+    name = "template_test",
+    srcs = [
+        "diff_test.go",
+        "validate_test.go",
+    ],
+    embed = [":template"],
+    deps = ["//lib/schema"],
+)

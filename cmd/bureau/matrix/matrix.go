@@ -27,6 +27,7 @@ existing deployment, routing through the agent's proxy socket.`,
 		Subcommands: []*cli.Command{
 			SetupCommand(),
 			SpaceCommand(),
+			RoomCommand(),
 			UserCommand(),
 			SendCommand(),
 			StateCommand(),

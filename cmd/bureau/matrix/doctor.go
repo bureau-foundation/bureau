@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -14,26 +15,32 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // DoctorCommand returns the "doctor" subcommand for checking Bureau Matrix
-// infrastructure health.
+// infrastructure health and optionally repairing fixable issues.
 func DoctorCommand() *cli.Command {
 	var (
 		session    SessionConfig
 		serverName string
 		jsonOutput bool
+		fix        bool
+		dryRun     bool
 	)
 
 	return &cli.Command{
 		Name:    "doctor",
 		Summary: "Check Bureau Matrix infrastructure health",
 		Description: `Validate the Bureau Matrix homeserver state: reachability, authentication,
-spaces, rooms, hierarchy, and power levels.
+spaces, rooms, hierarchy, power levels, join rules, and membership.
 
 Runs a series of checks against the expected state created by "bureau matrix setup"
 and reports pass/fail/warn for each. Exits with code 1 if any check fails.
+
+Use --fix to automatically repair fixable issues. Use --fix --dry-run to preview
+what would be repaired without making changes.
 
 Use --json for machine-readable output suitable for monitoring or CI.`,
 		Usage: "bureau matrix doctor [flags]",
@@ -43,8 +50,12 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				Command:     "bureau matrix doctor --credential-file ./creds",
 			},
 			{
-				Description: "Check with explicit flags",
-				Command:     "bureau matrix doctor --homeserver http://localhost:6167 --token syt_... --user-id @bureau-admin:bureau.local",
+				Description: "Check and repair fixable issues",
+				Command:     "bureau matrix doctor --credential-file ./creds --fix",
+			},
+			{
+				Description: "Preview repairs without executing",
+				Command:     "bureau matrix doctor --credential-file ./creds --fix --dry-run",
 			},
 			{
 				Description: "Machine-readable output",
@@ -56,25 +67,26 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing aliases")
 			flagSet.BoolVar(&jsonOutput, "json", false, "machine-readable JSON output")
+			flagSet.BoolVar(&fix, "fix", false, "automatically repair fixable issues")
+			flagSet.BoolVar(&dryRun, "dry-run", false, "preview repairs without executing (requires --fix)")
 			return flagSet
 		},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
+			if dryRun && !fix {
+				return fmt.Errorf("--dry-run requires --fix")
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			// Resolve homeserver URL from flags or credential file, before
-			// creating the session, so we can do an unauthenticated reachability
-			// check first.
 			homeserverURL, err := session.resolveHomeserverURL()
 			if err != nil {
 				return err
 			}
 
-			// Load credential file for cross-referencing room IDs.
 			var storedCredentials map[string]string
 			if session.CredentialFile != "" {
 				storedCredentials, err = readCredentialFile(session.CredentialFile)
@@ -95,12 +107,20 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				return fmt.Errorf("connect: %w", err)
 			}
 
-			results := runDoctor(ctx, client, sess, serverName, storedCredentials)
+			logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slog.LevelInfo,
+			}))
+
+			results := runDoctor(ctx, client, sess, serverName, storedCredentials, logger)
+
+			if fix {
+				executeFixes(ctx, sess, results, dryRun)
+			}
 
 			if jsonOutput {
-				return printDoctorJSON(results)
+				return printDoctorJSON(results, fix, dryRun)
 			}
-			return printChecklist(results)
+			return printChecklist(results, fix, dryRun)
 		},
 	}
 }
@@ -125,21 +145,28 @@ func (c *SessionConfig) resolveHomeserverURL() (string, error) {
 	return "", fmt.Errorf("--homeserver or --credential-file is required")
 }
 
+// fixAction is a function that repairs a failed check.
+type fixAction func(ctx context.Context, session *messaging.Session) error
+
 // checkStatus is the outcome of a single health check.
 type checkStatus string
 
 const (
-	statusPass checkStatus = "pass"
-	statusFail checkStatus = "fail"
-	statusWarn checkStatus = "warn"
-	statusSkip checkStatus = "skip"
+	statusPass  checkStatus = "pass"
+	statusFail  checkStatus = "fail"
+	statusWarn  checkStatus = "warn"
+	statusSkip  checkStatus = "skip"
+	statusFixed checkStatus = "fixed"
 )
 
-// checkResult holds the outcome of a single health check.
+// checkResult holds the outcome of a single health check. Fixable failures
+// carry a FixHint (human description) and an unexported fix function.
 type checkResult struct {
 	Name    string      `json:"name"`
 	Status  checkStatus `json:"status"`
 	Message string      `json:"message"`
+	FixHint string      `json:"fix_hint,omitempty"`
+	fix     fixAction
 }
 
 func pass(name, message string) checkResult {
@@ -148,6 +175,10 @@ func pass(name, message string) checkResult {
 
 func fail(name, message string) checkResult {
 	return checkResult{Name: name, Status: statusFail, Message: message}
+}
+
+func failWithFix(name, message, fixHint string, fix fixAction) checkResult {
+	return checkResult{Name: name, Status: statusFail, Message: message, FixHint: fixHint, fix: fix}
 }
 
 func warn(name, message string) checkResult {
@@ -161,19 +192,42 @@ func skip(name, message string) checkResult {
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
 type standardRoom struct {
 	alias                    string   // local alias (e.g., "bureau/machines")
+	displayName              string   // room name for CreateRoom (e.g., "Bureau Machines")
+	topic                    string   // room topic for CreateRoom
 	name                     string   // human name for check output
 	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINES_ROOM")
 	memberSettableEventTypes []string // event types that members should be able to set
 }
 
 var standardRooms = []standardRoom{
-	{alias: "bureau/system", name: "system room", credentialKey: "MATRIX_SYSTEM_ROOM"},
-	{alias: "bureau/machines", name: "machines room", credentialKey: "MATRIX_MACHINES_ROOM", memberSettableEventTypes: []string{"m.bureau.machine_key", "m.bureau.machine_status"}},
-	{alias: "bureau/services", name: "services room", credentialKey: "MATRIX_SERVICES_ROOM", memberSettableEventTypes: []string{"m.bureau.service"}},
+	{
+		alias:         "bureau/system",
+		displayName:   "Bureau System",
+		topic:         "Operational messages",
+		name:          "system room",
+		credentialKey: "MATRIX_SYSTEM_ROOM",
+	},
+	{
+		alias:                    "bureau/machines",
+		displayName:              "Bureau Machines",
+		topic:                    "Machine keys and status",
+		name:                     "machines room",
+		credentialKey:            "MATRIX_MACHINES_ROOM",
+		memberSettableEventTypes: []string{schema.EventTypeMachineKey, schema.EventTypeMachineStatus},
+	},
+	{
+		alias:                    "bureau/services",
+		displayName:              "Bureau Services",
+		topic:                    "Service directory",
+		name:                     "services room",
+		credentialKey:            "MATRIX_SERVICES_ROOM",
+		memberSettableEventTypes: []string{schema.EventTypeService},
+	},
 }
 
-// runDoctor executes all health checks and returns the results.
-func runDoctor(ctx context.Context, client *messaging.Client, session *messaging.Session, serverName string, storedCredentials map[string]string) []checkResult {
+// runDoctor executes all health checks and returns the results. Fixable
+// failures carry fix closures that executeFixes can invoke.
+func runDoctor(ctx context.Context, client *messaging.Client, session *messaging.Session, serverName string, storedCredentials map[string]string, logger *slog.Logger) []checkResult {
 	var results []checkResult
 
 	// Section 1: Connectivity and authentication.
@@ -203,12 +257,36 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	// Section 2: Space and rooms exist.
 	spaceAlias := fmt.Sprintf("#bureau:%s", serverName)
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
+	if spaceResult.Status == statusFail {
+		spaceResult.FixHint = "create Bureau space"
+		spaceResult.fix = func(ctx context.Context, session *messaging.Session) error {
+			id, err := ensureSpace(ctx, session, serverName, logger)
+			if err != nil {
+				return err
+			}
+			spaceRoomID = id
+			return nil
+		}
+	}
 	results = append(results, spaceResult)
 
 	roomIDs := make(map[string]string) // local alias → room ID
 	for _, room := range standardRooms {
+		room := room // capture for closure
 		fullAlias := fmt.Sprintf("#%s:%s", room.alias, serverName)
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
+		if result.Status == statusFail {
+			result.FixHint = fmt.Sprintf("create %s", room.name)
+			result.fix = func(ctx context.Context, session *messaging.Session) error {
+				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
+					spaceRoomID, serverName, room.memberSettableEventTypes, logger)
+				if err != nil {
+					return err
+				}
+				roomIDs[room.alias] = id
+				return nil
+			}
+		}
 		results = append(results, result)
 		if roomID != "" {
 			roomIDs[room.alias] = roomID
@@ -236,24 +314,51 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 			for _, room := range standardRooms {
 				roomID, ok := roomIDs[room.alias]
 				if !ok {
-					continue // room doesn't exist; already reported
+					continue
 				}
-				results = append(results, checkSpaceChild(room.name, roomID, spaceChildIDs))
+				result := checkSpaceChild(room.name, roomID, spaceChildIDs)
+				if result.Status == statusFail {
+					capturedRoomID := roomID
+					capturedName := room.name
+					result.FixHint = fmt.Sprintf("add %s as child of Bureau space", capturedName)
+					result.fix = func(ctx context.Context, session *messaging.Session) error {
+						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID,
+							map[string]any{"via": []string{serverName}})
+						return err
+					}
+				}
+				results = append(results, result)
 			}
 		}
 	}
 
 	// Section 5: Power levels.
+	adminUserID := session.UserID()
 	if spaceRoomID != "" {
-		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, session.UserID(), nil)...)
+		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID, nil)...)
 	}
 	for _, room := range standardRooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
 		}
-		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, session.UserID(), room.memberSettableEventTypes)...)
+		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserID, room.memberSettableEventTypes)...)
 	}
+
+	// Section 6: Join rules.
+	if spaceRoomID != "" {
+		results = append(results, checkJoinRules(ctx, session, "bureau space", spaceRoomID))
+	}
+	for _, room := range standardRooms {
+		roomID, ok := roomIDs[room.alias]
+		if !ok {
+			continue
+		}
+		results = append(results, checkJoinRules(ctx, session, room.name, roomID))
+	}
+
+	// Section 7: Machine account membership.
+	results = append(results, checkMachineMembership(ctx, session, roomIDs)...)
 
 	return results
 }
@@ -338,7 +443,9 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 
 // checkPowerLevels reads the m.room.power_levels state event from a room and
 // verifies: admin at 100, state_default at 100, and any expected member-settable
-// event types at power level 0.
+// event types at power level 0. The first failing sub-check gets a fix closure
+// that resets the entire power levels state to the standard Bureau configuration;
+// subsequent sub-checks share that single fix.
 func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string) []checkResult {
 	var results []checkResult
 
@@ -354,12 +461,30 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 		return results
 	}
 
+	// Build fix closure shared across all PL sub-checks for this room.
+	// Only attached to the first failure — a single PL write fixes all issues.
+	fixPowerLevels := func(ctx context.Context, session *messaging.Session) error {
+		_, err := session.SendStateEvent(ctx, roomID, "m.room.power_levels", "",
+			adminOnlyPowerLevels(adminUserID, memberSettableEventTypes))
+		return err
+	}
+	fixAttached := false
+	attachFix := func(result *checkResult) {
+		if result.Status == statusFail && !fixAttached {
+			result.FixHint = fmt.Sprintf("reset %s power levels", name)
+			result.fix = fixPowerLevels
+			fixAttached = true
+		}
+	}
+
 	// Check admin user power level.
 	adminLevel := getUserPowerLevel(powerLevels, adminUserID)
 	if adminLevel == 100 {
 		results = append(results, pass(name+" admin power", fmt.Sprintf("%s has power level 100", adminUserID)))
 	} else {
-		results = append(results, fail(name+" admin power", fmt.Sprintf("%s has power level %.0f, expected 100", adminUserID, adminLevel)))
+		result := fail(name+" admin power", fmt.Sprintf("%s has power level %.0f, expected 100", adminUserID, adminLevel))
+		attachFix(&result)
+		results = append(results, result)
 	}
 
 	// Check state_default (should be 100 — only admin can set arbitrary state).
@@ -367,7 +492,9 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 	if stateDefault == 100 {
 		results = append(results, pass(name+" state_default", "state_default is 100"))
 	} else {
-		results = append(results, fail(name+" state_default", fmt.Sprintf("state_default is %.0f, expected 100", stateDefault)))
+		result := fail(name+" state_default", fmt.Sprintf("state_default is %.0f, expected 100", stateDefault))
+		attachFix(&result)
+		results = append(results, result)
 	}
 
 	// Check that each member-settable event type is at power level 0.
@@ -376,7 +503,9 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 		if level == 0 {
 			results = append(results, pass(name+" "+eventType, fmt.Sprintf("members can set %s (level 0)", eventType)))
 		} else {
-			results = append(results, fail(name+" "+eventType, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level)))
+			result := fail(name+" "+eventType, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level))
+			attachFix(&result)
+			results = append(results, result)
 		}
 	}
 
@@ -427,30 +556,188 @@ func getNumericField(data map[string]any, key string) float64 {
 	return value
 }
 
+// checkJoinRules verifies that a room's join rules are set to "invite"
+// (the required configuration for Bureau rooms).
+func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomID string) checkResult {
+	content, err := session.GetStateEvent(ctx, roomID, "m.room.join_rules", "")
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			capturedRoomID := roomID
+			return failWithFix(
+				name+" join rules",
+				"join_rules state not found",
+				fmt.Sprintf("set %s join_rule to invite", name),
+				func(ctx context.Context, session *messaging.Session) error {
+					_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
+						map[string]any{"join_rule": "invite"})
+					return err
+				},
+			)
+		}
+		return fail(name+" join rules", fmt.Sprintf("cannot read join rules: %v", err))
+	}
+
+	var joinRules map[string]any
+	if err := json.Unmarshal(content, &joinRules); err != nil {
+		return fail(name+" join rules", fmt.Sprintf("invalid join rules JSON: %v", err))
+	}
+
+	joinRule, _ := joinRules["join_rule"].(string)
+	if joinRule == "invite" {
+		return pass(name+" join rules", "join_rule is invite")
+	}
+
+	capturedRoomID := roomID
+	return failWithFix(
+		name+" join rules",
+		fmt.Sprintf("join_rule is %q, expected invite", joinRule),
+		fmt.Sprintf("set %s join_rule to invite", name),
+		func(ctx context.Context, session *messaging.Session) error {
+			_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
+				map[string]any{"join_rule": "invite"})
+			return err
+		},
+	)
+}
+
+// checkMachineMembership verifies that machine accounts (those with
+// m.bureau.machine_key state in the machines room) are members of the
+// system and services rooms. Missing memberships are fixable via invite.
+func checkMachineMembership(ctx context.Context, session *messaging.Session, roomIDs map[string]string) []checkResult {
+	machinesRoomID, ok := roomIDs["bureau/machines"]
+	if !ok {
+		return nil
+	}
+
+	// Find machine users from m.bureau.machine_key state events.
+	events, err := session.GetRoomState(ctx, machinesRoomID)
+	if err != nil {
+		return []checkResult{fail("machine membership", fmt.Sprintf("cannot read machines room state: %v", err))}
+	}
+
+	var machineUsers []string
+	for _, event := range events {
+		if event.Type == schema.EventTypeMachineKey && event.StateKey != nil && *event.StateKey != "" {
+			machineUsers = append(machineUsers, *event.StateKey)
+		}
+	}
+
+	if len(machineUsers) == 0 {
+		return nil
+	}
+
+	var results []checkResult
+	checkRooms := []struct {
+		alias string
+		name  string
+	}{
+		{"bureau/system", "system room"},
+		{"bureau/services", "services room"},
+	}
+
+	for _, checkRoom := range checkRooms {
+		roomID, ok := roomIDs[checkRoom.alias]
+		if !ok {
+			continue
+		}
+
+		members, err := session.GetRoomMembers(ctx, roomID)
+		if err != nil {
+			results = append(results, fail(
+				checkRoom.name+" membership",
+				fmt.Sprintf("cannot read members: %v", err),
+			))
+			continue
+		}
+
+		memberSet := make(map[string]bool)
+		for _, member := range members {
+			if member.Membership == "join" {
+				memberSet[member.UserID] = true
+			}
+		}
+
+		for _, machineUser := range machineUsers {
+			checkName := fmt.Sprintf("%s in %s", machineUser, checkRoom.name)
+			if memberSet[machineUser] {
+				results = append(results, pass(checkName, "member"))
+			} else {
+				capturedRoomID := roomID
+				capturedUser := machineUser
+				capturedRoomName := checkRoom.name
+				results = append(results, failWithFix(
+					checkName,
+					fmt.Sprintf("not a member of %s", capturedRoomName),
+					fmt.Sprintf("invite %s to %s", capturedUser, capturedRoomName),
+					func(ctx context.Context, session *messaging.Session) error {
+						return session.InviteUser(ctx, capturedRoomID, capturedUser)
+					},
+				))
+			}
+		}
+	}
+
+	return results
+}
+
+// executeFixes runs the fix action for each fixable failure, updating
+// results in place. In dry-run mode, no fixes are executed.
+func executeFixes(ctx context.Context, session *messaging.Session, results []checkResult, dryRun bool) {
+	if dryRun {
+		return
+	}
+	for i := range results {
+		if results[i].Status != statusFail || results[i].fix == nil {
+			continue
+		}
+		if err := results[i].fix(ctx, session); err != nil {
+			results[i].Message = fmt.Sprintf("%s (fix failed: %v)", results[i].Message, err)
+		} else {
+			results[i].Status = statusFixed
+		}
+	}
+}
+
 // printChecklist prints check results as a human-readable checklist.
-func printChecklist(results []checkResult) error {
+func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 	anyFailed := false
+	fixableCount := 0
+	fixedCount := 0
 
 	for _, result := range results {
-		var prefix string
+		prefix := strings.ToUpper(string(result.Status))
+		fmt.Fprintf(os.Stdout, "[%-5s]  %-40s  %s\n", prefix, result.Name, result.Message)
+
 		switch result.Status {
-		case statusPass:
-			prefix = "PASS"
 		case statusFail:
-			prefix = "FAIL"
 			anyFailed = true
-		case statusWarn:
-			prefix = "WARN"
-		case statusSkip:
-			prefix = "SKIP"
+			if result.FixHint != "" {
+				fixableCount++
+				if dryRun {
+					fmt.Fprintf(os.Stdout, "         %-40s  would fix: %s\n", "", result.FixHint)
+				}
+			}
+		case statusFixed:
+			fixedCount++
 		}
-		fmt.Fprintf(os.Stdout, "[%s]  %-30s  %s\n", prefix, result.Name, result.Message)
 	}
 
 	fmt.Fprintln(os.Stdout)
+
 	if anyFailed {
-		fmt.Fprintln(os.Stdout, "Some checks failed. Run 'bureau matrix setup' to fix.")
+		if dryRun && fixableCount > 0 {
+			fmt.Fprintf(os.Stdout, "%d issue(s) would be repaired. Run without --dry-run to apply.\n", fixableCount)
+		} else if !fixMode && fixableCount > 0 {
+			fmt.Fprintf(os.Stdout, "Run with --fix to repair %d issue(s).\n", fixableCount)
+		} else {
+			fmt.Fprintln(os.Stdout, "Some checks failed.")
+		}
 		return &exitError{code: 1}
+	}
+
+	if fixedCount > 0 {
+		fmt.Fprintf(os.Stdout, "%d issue(s) repaired.\n", fixedCount)
+		return nil
 	}
 
 	fmt.Fprintln(os.Stdout, "All checks passed.")
@@ -459,7 +746,7 @@ func printChecklist(results []checkResult) error {
 
 // printDoctorJSON prints check results as JSON. Named differently from
 // printJSON in state.go to avoid a collision within the same package.
-func printDoctorJSON(results []checkResult) error {
+func printDoctorJSON(results []checkResult, fixMode, dryRun bool) error {
 	anyFailed := false
 	for _, result := range results {
 		if result.Status == statusFail {
@@ -471,9 +758,11 @@ func printDoctorJSON(results []checkResult) error {
 	output := struct {
 		Checks []checkResult `json:"checks"`
 		OK     bool          `json:"ok"`
+		DryRun bool          `json:"dry_run,omitempty"`
 	}{
 		Checks: results,
 		OK:     !anyFailed,
+		DryRun: dryRun,
 	}
 
 	data, err := json.MarshalIndent(output, "", "  ")

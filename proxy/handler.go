@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -47,6 +48,13 @@ type Handler struct {
 	// services are available. The daemon pushes updates via the admin
 	// socket whenever the directory changes.
 	serviceDirectory []ServiceDirectoryEntry
+
+	// serviceVisibility is a list of glob patterns that control which
+	// services this agent can discover. Patterns match against service
+	// localparts using Bureau's hierarchical glob syntax. An empty list
+	// means the agent sees no services (default-deny). Set by the
+	// daemon via the admin API when the sandbox starts.
+	serviceVisibility []string
 
 	mu     sync.RWMutex
 	logger *slog.Logger
@@ -627,18 +635,40 @@ func (h *Handler) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 // deployment. The daemon pushes the authoritative directory to each proxy;
 // the proxy serves it as a read-only catalog.
 //
-// Optional query parameters filter the results:
+// The directory is filtered in two stages:
+//  1. Visibility: only services matching the agent's ServiceVisibility
+//     patterns are included. An empty pattern list means nothing is visible.
+//  2. Query parameters: further filter by protocol and/or capability.
+//
+// Optional query parameters:
 //   - capability: only entries with this capability
 //   - protocol: only entries with this wire protocol
 func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request) {
 	h.mu.RLock()
 	directory := h.serviceDirectory
+	visibility := h.serviceVisibility
 	h.mu.RUnlock()
 
 	if directory == nil {
 		directory = []ServiceDirectoryEntry{}
 	}
 
+	// Stage 1: visibility filtering. If no patterns are configured,
+	// the agent sees nothing (default-deny).
+	if len(visibility) > 0 {
+		visible := make([]ServiceDirectoryEntry, 0, len(directory))
+		for _, entry := range directory {
+			if principal.MatchAnyPattern(visibility, entry.Localpart) {
+				visible = append(visible, entry)
+			}
+		}
+		directory = visible
+	} else if len(directory) > 0 {
+		// Empty visibility = default-deny: no services visible.
+		directory = []ServiceDirectoryEntry{}
+	}
+
+	// Stage 2: query parameter filtering.
 	capability := r.URL.Query().Get("capability")
 	protocol := r.URL.Query().Get("protocol")
 
@@ -676,5 +706,35 @@ func (h *Handler) HandleAdminSetDirectory(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":   "ok",
 		"services": len(entries),
+	})
+}
+
+// SetServiceVisibility configures which services this agent can discover.
+// Patterns use Bureau's hierarchical glob syntax (principal.MatchPattern):
+// "service/stt/*", "service/**", "**", etc. An empty list means the agent
+// cannot see any services. Called by the daemon via the admin API when the
+// sandbox starts or when the policy changes.
+func (h *Handler) SetServiceVisibility(patterns []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serviceVisibility = patterns
+	h.logger.Info("service visibility configured", "patterns", patterns)
+}
+
+// HandleAdminSetVisibility sets the service visibility patterns. The daemon
+// pushes these via PUT /v1/admin/visibility when configuring the proxy.
+func (h *Handler) HandleAdminSetVisibility(w http.ResponseWriter, r *http.Request) {
+	var patterns []string
+	if err := json.NewDecoder(r.Body).Decode(&patterns); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid visibility payload: %v", err)
+		return
+	}
+
+	h.SetServiceVisibility(patterns)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"patterns": len(patterns),
 	})
 }

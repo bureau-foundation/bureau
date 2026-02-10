@@ -206,6 +206,19 @@ type PrincipalAssignment struct {
 	// relay. Overrides MachineConfig.DefaultObservePolicy for this
 	// principal.
 	ObservePolicy *ObservePolicy `json:"observe_policy,omitempty"`
+
+	// ServiceVisibility is a list of glob patterns that control which
+	// services this principal can discover via GET /v1/services. Patterns
+	// match against service localparts using Bureau's hierarchical glob
+	// syntax (same as ObservePolicy patterns):
+	//   - "service/stt/*" — all STT services
+	//   - "service/**" — all services under service/
+	//   - "**" — all services (use with caution)
+	//
+	// An empty or nil list means the principal cannot see any services
+	// (default-deny). The daemon pushes these patterns to the principal's
+	// proxy, which filters the directory before returning results.
+	ServiceVisibility []string `json:"service_visibility,omitempty"`
 }
 
 // MatrixPolicy controls which self-service Matrix operations an agent can

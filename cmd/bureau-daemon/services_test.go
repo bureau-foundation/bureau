@@ -818,6 +818,138 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	daemon.pushServiceDirectory(context.Background())
 }
 
+func TestPushVisibilityToProxy(t *testing.T) {
+	// Set up a mock admin server that captures the PUT /v1/admin/visibility request.
+	tempDir := t.TempDir()
+
+	var receivedPatterns []string
+	var callCount int
+	var callsMu sync.Mutex
+
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		callCount++
+
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(bodyBytes, &receivedPatterns); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":   "ok",
+			"patterns": len(receivedPatterns),
+		})
+	})
+
+	consumerAdminDir := filepath.Join(tempDir, "agent")
+	os.MkdirAll(consumerAdminDir, 0755)
+	consumerAdminSocket := filepath.Join(consumerAdminDir, "alice.admin.sock")
+
+	listener, err := net.Listen("unix", consumerAdminSocket)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer listener.Close()
+
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(listener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		adminSocketPathFunc: func(localpart string) string {
+			return filepath.Join(tempDir, localpart+".admin.sock")
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	patterns := []string{"service/stt/*", "service/embedding/**"}
+	err = daemon.pushVisibilityToProxy(context.Background(), "agent/alice", patterns)
+	if err != nil {
+		t.Fatalf("pushVisibilityToProxy: %v", err)
+	}
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+
+	if callCount != 1 {
+		t.Errorf("expected 1 admin call, got %d", callCount)
+	}
+	if len(receivedPatterns) != 2 {
+		t.Fatalf("proxy received %d patterns, want 2", len(receivedPatterns))
+	}
+	if receivedPatterns[0] != "service/stt/*" {
+		t.Errorf("pattern[0] = %q, want service/stt/*", receivedPatterns[0])
+	}
+	if receivedPatterns[1] != "service/embedding/**" {
+		t.Errorf("pattern[1] = %q, want service/embedding/**", receivedPatterns[1])
+	}
+}
+
+func TestPushVisibilityToProxy_EmptyPatterns(t *testing.T) {
+	// Pushing empty patterns should still work (resets to default-deny).
+	tempDir := t.TempDir()
+
+	var receivedPatterns []string
+	var callsMu sync.Mutex
+
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+
+		bodyBytes, _ := io.ReadAll(r.Body)
+		json.Unmarshal(bodyBytes, &receivedPatterns)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":   "ok",
+			"patterns": len(receivedPatterns),
+		})
+	})
+
+	consumerAdminDir := filepath.Join(tempDir, "agent")
+	os.MkdirAll(consumerAdminDir, 0755)
+	consumerAdminSocket := filepath.Join(consumerAdminDir, "bob.admin.sock")
+
+	listener, err := net.Listen("unix", consumerAdminSocket)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer listener.Close()
+
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(listener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		adminSocketPathFunc: func(localpart string) string {
+			return filepath.Join(tempDir, localpart+".admin.sock")
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// Push nil patterns (default for a principal with no ServiceVisibility configured).
+	err = daemon.pushVisibilityToProxy(context.Background(), "agent/bob", nil)
+	if err != nil {
+		t.Fatalf("pushVisibilityToProxy: %v", err)
+	}
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+
+	// JSON-marshaling nil []string produces "null", which json.Unmarshal
+	// decodes as nil. The proxy's SetServiceVisibility handles nil correctly
+	// (it becomes an empty visibility list = default-deny).
+	if receivedPatterns != nil {
+		t.Errorf("expected nil patterns for nil input, got %v", receivedPatterns)
+	}
+}
+
 func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	// A service migrates from remote to local while the relay is active.
 	relaySocket := filepath.Join(t.TempDir(), "relay.sock")

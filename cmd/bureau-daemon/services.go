@@ -474,6 +474,42 @@ type adminDirectoryEntry struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
+// pushVisibilityToProxy pushes the service visibility patterns for a specific
+// consumer to its proxy via the admin API (PUT /v1/admin/visibility). Called
+// when a new sandbox starts so the proxy knows which services the agent is
+// allowed to discover.
+func (d *Daemon) pushVisibilityToProxy(ctx context.Context, consumerLocalpart string, patterns []string) error {
+	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+	client := proxyAdminClient(adminSocket)
+
+	body, err := json.Marshal(patterns)
+	if err != nil {
+		return fmt.Errorf("marshaling visibility patterns: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		"http://localhost/v1/admin/visibility",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("connecting to admin socket %s: %w", adminSocket, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		responseBody, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+	}
+
+	return nil
+}
+
 // unregisterProxyRoute removes a single service from a single consumer's proxy
 // via the admin API (DELETE /v1/admin/services/{name}).
 func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, serviceName string) error {

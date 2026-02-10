@@ -5,6 +5,7 @@ package schema
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -123,9 +124,10 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	original := MachineConfig{
 		Principals: []PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
-				Template:  "llm-agent",
-				AutoStart: true,
+				Localpart:         "iree/amdgpu/pm",
+				Template:          "llm-agent",
+				AutoStart:         true,
+				ServiceVisibility: []string{"service/stt/*", "service/embedding/**"},
 			},
 			{
 				Localpart: "service/stt/whisper",
@@ -162,6 +164,24 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	assertField(t, first, "template", "llm-agent")
 	assertField(t, first, "auto_start", true)
 
+	// Verify service_visibility appears in the wire format.
+	visibility, ok := first["service_visibility"].([]any)
+	if !ok {
+		t.Fatal("service_visibility field missing or wrong type")
+	}
+	if len(visibility) != 2 {
+		t.Fatalf("service_visibility count = %d, want 2", len(visibility))
+	}
+	if visibility[0] != "service/stt/*" || visibility[1] != "service/embedding/**" {
+		t.Errorf("service_visibility = %v, want [service/stt/* service/embedding/**]", visibility)
+	}
+
+	// Verify service_visibility is omitted when nil.
+	second := principals[1].(map[string]any)
+	if _, exists := second["service_visibility"]; exists {
+		t.Error("service_visibility should be omitted when nil")
+	}
+
 	var decoded MachineConfig
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -170,7 +190,7 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip principal count = %d, want %d", len(decoded.Principals), len(original.Principals))
 	}
 	for i := range original.Principals {
-		if decoded.Principals[i] != original.Principals[i] {
+		if !reflect.DeepEqual(decoded.Principals[i], original.Principals[i]) {
 			t.Errorf("principal[%d]: got %+v, want %+v", i, decoded.Principals[i], original.Principals[i])
 		}
 	}

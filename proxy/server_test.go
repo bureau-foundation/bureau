@@ -1530,6 +1530,10 @@ func TestServiceDirectory(t *testing.T) {
 		t.Fatalf("failed to create server: %v", err)
 	}
 
+	// Set wildcard visibility so the directory is fully visible. Tests
+	// specifically for visibility filtering are in TestServiceVisibility.
+	server.SetServiceVisibility([]string{"**"})
+
 	if err := server.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
 	}
@@ -1852,6 +1856,277 @@ func TestServiceDirectory(t *testing.T) {
 		}
 		if len(services) > 0 && services[0].Localpart != "service/test" {
 			t.Errorf("expected test service, got %q", services[0].Localpart)
+		}
+	})
+}
+
+func TestServiceVisibility(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	// Push a directory with services in different namespaces.
+	directory := []ServiceDirectoryEntry{
+		{
+			Localpart:    "service/stt/whisper",
+			Principal:    "@service/stt/whisper:bureau.local",
+			Machine:      "@machine/gpu-1:bureau.local",
+			Protocol:     "http",
+			Capabilities: []string{"streaming"},
+		},
+		{
+			Localpart: "service/stt/deepgram",
+			Principal: "@service/stt/deepgram:bureau.local",
+			Machine:   "@machine/gpu-1:bureau.local",
+			Protocol:  "http",
+		},
+		{
+			Localpart:    "service/tts/piper",
+			Principal:    "@service/tts/piper:bureau.local",
+			Machine:      "@machine/gpu-1:bureau.local",
+			Protocol:     "http",
+			Capabilities: []string{"streaming"},
+		},
+		{
+			Localpart: "service/embedding/e5",
+			Principal: "@service/embedding/e5:bureau.local",
+			Machine:   "@machine/cpu-1:bureau.local",
+			Protocol:  "grpc",
+		},
+	}
+
+	body, _ := json.Marshal(directory)
+	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatalf("push directory failed: %v", err)
+	}
+	resp.Body.Close()
+
+	getServices := func(t *testing.T, query string) []ServiceDirectoryEntry {
+		t.Helper()
+		url := "http://localhost/v1/services"
+		if query != "" {
+			url += "?" + query
+		}
+		resp, err := agentClient.Get(url)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		var services []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		return services
+	}
+
+	t.Run("default-deny: no visibility returns empty", func(t *testing.T) {
+		// No visibility patterns set — agent sees nothing.
+		services := getServices(t, "")
+		if len(services) != 0 {
+			t.Errorf("expected 0 services with no visibility, got %d", len(services))
+		}
+	})
+
+	t.Run("wildcard visibility shows all", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"**"})
+		services := getServices(t, "")
+		if len(services) != 4 {
+			t.Errorf("expected 4 services with ** visibility, got %d", len(services))
+		}
+	})
+
+	t.Run("namespace pattern filters to subtree", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"service/stt/*"})
+		services := getServices(t, "")
+		if len(services) != 2 {
+			t.Errorf("expected 2 STT services, got %d", len(services))
+		}
+		for _, service := range services {
+			if service.Localpart != "service/stt/whisper" && service.Localpart != "service/stt/deepgram" {
+				t.Errorf("unexpected service: %q", service.Localpart)
+			}
+		}
+	})
+
+	t.Run("multiple patterns are unioned", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"service/stt/*", "service/embedding/*"})
+		services := getServices(t, "")
+		if len(services) != 3 {
+			t.Errorf("expected 3 services (2 STT + 1 embedding), got %d", len(services))
+		}
+	})
+
+	t.Run("exact localpart match", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"service/tts/piper"})
+		services := getServices(t, "")
+		if len(services) != 1 {
+			t.Errorf("expected 1 service, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/tts/piper" {
+			t.Errorf("expected piper, got %q", services[0].Localpart)
+		}
+	})
+
+	t.Run("no matching patterns returns empty", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"service/llm/*"})
+		services := getServices(t, "")
+		if len(services) != 0 {
+			t.Errorf("expected 0 services for non-matching pattern, got %d", len(services))
+		}
+	})
+
+	t.Run("visibility combined with query param filtering", func(t *testing.T) {
+		// Can see all services, but filter by capability.
+		server.SetServiceVisibility([]string{"**"})
+		services := getServices(t, "capability=streaming")
+		if len(services) != 2 {
+			t.Errorf("expected 2 streaming services, got %d", len(services))
+		}
+	})
+
+	t.Run("visibility restricts before query param filtering", func(t *testing.T) {
+		// Can only see STT services; even though TTS/piper also has streaming,
+		// it should not appear because it's not visible.
+		server.SetServiceVisibility([]string{"service/stt/*"})
+		services := getServices(t, "capability=streaming")
+		if len(services) != 1 {
+			t.Errorf("expected 1 visible streaming service, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/stt/whisper" {
+			t.Errorf("expected whisper, got %q", services[0].Localpart)
+		}
+	})
+
+	t.Run("push visibility via admin API", func(t *testing.T) {
+		// Reset to default-deny first.
+		server.SetServiceVisibility(nil)
+
+		// Push patterns via admin API.
+		patterns, _ := json.Marshal([]string{"service/embedding/*"})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader(patterns))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("admin request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		if result["status"] != "ok" {
+			t.Errorf("expected status ok, got %v", result["status"])
+		}
+		if result["patterns"] != float64(1) {
+			t.Errorf("expected 1 pattern, got %v", result["patterns"])
+		}
+
+		// Verify the agent now sees only embedding services.
+		services := getServices(t, "")
+		if len(services) != 1 {
+			t.Errorf("expected 1 service after visibility push, got %d", len(services))
+		}
+		if len(services) > 0 && services[0].Localpart != "service/embedding/e5" {
+			t.Errorf("expected e5, got %q", services[0].Localpart)
+		}
+	})
+
+	t.Run("admin visibility not on agent socket", func(t *testing.T) {
+		patterns, _ := json.Marshal([]string{"**"})
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader(patterns))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := agentClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			t.Error("admin visibility endpoint should not be accessible on agent socket")
+		}
+	})
+
+	t.Run("push invalid visibility body", func(t *testing.T) {
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader([]byte("not json")))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("deep wildcard matches nested paths", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"service/**"})
+		services := getServices(t, "")
+		if len(services) != 4 {
+			t.Errorf("expected 4 services with service/** visibility, got %d", len(services))
+		}
+	})
+
+	t.Run("empty patterns resets to default-deny", func(t *testing.T) {
+		server.SetServiceVisibility([]string{"**"})
+		// Verify agent can see services.
+		services := getServices(t, "")
+		if len(services) != 4 {
+			t.Fatalf("expected 4 services with ** visibility, got %d", len(services))
+		}
+
+		// Reset to empty.
+		server.SetServiceVisibility([]string{})
+		services = getServices(t, "")
+		if len(services) != 0 {
+			t.Errorf("expected 0 services after clearing visibility, got %d", len(services))
 		}
 	})
 }

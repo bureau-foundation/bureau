@@ -90,6 +90,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// responds to create-sandbox.
 		d.configureConsumerProxy(ctx, localpart)
 
+		// Push service visibility patterns so the proxy knows which
+		// services this agent is allowed to discover. This must happen
+		// before the directory push, since the proxy filters the
+		// directory based on visibility patterns.
+		if err := d.pushVisibilityToProxy(ctx, localpart, assignment.ServiceVisibility); err != nil {
+			d.logger.Error("failed to push service visibility to new consumer proxy",
+				"consumer", localpart,
+				"error", err,
+			)
+		}
+
 		// Push the service directory so the new consumer's agent can
 		// discover services via GET /v1/services.
 		directory := d.buildServiceDirectory()

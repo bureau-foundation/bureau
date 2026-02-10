@@ -30,10 +30,11 @@ type mockDoctorServer struct {
 	adminUserID string
 
 	// Room IDs.
-	spaceID    string
-	systemID   string
-	machinesID string
-	servicesID string
+	spaceID     string
+	systemID    string
+	machinesID  string
+	servicesID  string
+	templatesID string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
@@ -61,6 +62,7 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		systemID:    "!system:local",
 		machinesID:  "!machines:local",
 		servicesID:  "!services:local",
+		templatesID: "!templates:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -115,10 +117,11 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 		const aliasPrefix = "/_matrix/client/v3/directory/room/"
 		if strings.HasPrefix(path, aliasPrefix) {
 			aliasMap := map[string]string{
-				"#bureau:local":          m.spaceID,
-				"#bureau/system:local":   m.systemID,
-				"#bureau/machines:local": m.machinesID,
-				"#bureau/services:local": m.servicesID,
+				"#bureau:local":           m.spaceID,
+				"#bureau/system:local":    m.systemID,
+				"#bureau/machines:local":  m.machinesID,
+				"#bureau/services:local":  m.servicesID,
+				"#bureau/templates:local": m.templatesID,
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -196,6 +199,28 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			return
 		}
 
+		// GET specific state event: m.bureau.template (templates room).
+		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.template") {
+			roomID := extractRoomIDFromStatePath(rawPath)
+			if roomID == m.templatesID {
+				// Extract the state key (template name) from the path.
+				idx := strings.Index(rawPath, "/state/m.bureau.template/")
+				if idx >= 0 {
+					stateKey := rawPath[idx+len("/state/m.bureau.template/"):]
+					stateKey, _ = url.PathUnescape(stateKey)
+					for _, template := range baseTemplates() {
+						if template.name == stateKey {
+							json.NewEncoder(writer).Encode(template.content)
+							return
+						}
+					}
+				}
+			}
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
+			return
+		}
+
 		// GET room members.
 		if method == http.MethodGet && strings.Contains(path, "/members") && !strings.Contains(path, "/state") {
 			roomID := extractRoomIDFromPath(rawPath)
@@ -231,9 +256,10 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				childIDs := m.spaceChildren
 				if childIDs == nil {
 					childIDs = map[string]bool{
-						m.systemID:   true,
-						m.machinesID: true,
-						m.servicesID: true,
+						m.systemID:    true,
+						m.machinesID:  true,
+						m.servicesID:  true,
+						m.templatesID: true,
 					}
 				}
 				for childID := range childIDs {
@@ -312,6 +338,9 @@ func extractRoomIDFromStatePath(path string) string {
 	if strings.Contains(path, "%21space%3Alocal") || strings.Contains(path, "!space:local") {
 		return "!space:local"
 	}
+	if strings.Contains(path, "%21templates%3Alocal") || strings.Contains(path, "!templates:local") {
+		return "!templates:local"
+	}
 	return ""
 }
 
@@ -366,9 +395,11 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"system room",
 		"machines room",
 		"services room",
+		"templates room",
 		"system room in space",
 		"machines room in space",
 		"services room in space",
+		"templates room in space",
 		"bureau space admin power",
 		"bureau space state_default",
 		"system room admin power",
@@ -380,10 +411,15 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"services room admin power",
 		"services room state_default",
 		"services room m.bureau.service",
+		"templates room admin power",
+		"templates room state_default",
 		"bureau space join rules",
 		"system room join rules",
 		"machines room join rules",
 		"services room join rules",
+		"templates room join rules",
+		`template "base"`,
+		`template "base-networked"`,
 	}
 	for _, expected := range expectedChecks {
 		if !names[expected] {
@@ -408,10 +444,11 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	defer session.Close()
 
 	credentials := map[string]string{
-		"MATRIX_SPACE_ROOM":    "!space:local",
-		"MATRIX_SYSTEM_ROOM":   "!system:local",
-		"MATRIX_MACHINES_ROOM": "!machines:local",
-		"MATRIX_SERVICES_ROOM": "!services:local",
+		"MATRIX_SPACE_ROOM":     "!space:local",
+		"MATRIX_SYSTEM_ROOM":    "!system:local",
+		"MATRIX_MACHINES_ROOM":  "!machines:local",
+		"MATRIX_SERVICES_ROOM":  "!services:local",
+		"MATRIX_TEMPLATES_ROOM": "!templates:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
@@ -439,10 +476,11 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	defer session.Close()
 
 	credentials := map[string]string{
-		"MATRIX_SPACE_ROOM":    "!space:local",
-		"MATRIX_SYSTEM_ROOM":   "!wrong:local",
-		"MATRIX_MACHINES_ROOM": "!machines:local",
-		"MATRIX_SERVICES_ROOM": "!services:local",
+		"MATRIX_SPACE_ROOM":     "!space:local",
+		"MATRIX_SYSTEM_ROOM":    "!wrong:local",
+		"MATRIX_MACHINES_ROOM":  "!machines:local",
+		"MATRIX_SERVICES_ROOM":  "!services:local",
+		"MATRIX_TEMPLATES_ROOM": "!templates:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
@@ -586,8 +624,8 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 			spaceChildCount++
 		}
 	}
-	if spaceChildCount != 3 {
-		t.Errorf("expected 3 m.space.child state events, got %d", spaceChildCount)
+	if spaceChildCount != 4 {
+		t.Errorf("expected 4 m.space.child state events, got %d", spaceChildCount)
 	}
 
 	// Verify results updated to fixed.

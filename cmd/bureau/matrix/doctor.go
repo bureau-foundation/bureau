@@ -223,6 +223,13 @@ var standardRooms = []standardRoom{
 		credentialKey:            "MATRIX_SERVICES_ROOM",
 		memberSettableEventTypes: []string{schema.EventTypeService},
 	},
+	{
+		alias:         "bureau/templates",
+		displayName:   "Bureau Templates",
+		topic:         "Sandbox templates",
+		name:          "templates room",
+		credentialKey: "MATRIX_TEMPLATES_ROOM",
+	},
 }
 
 // runDoctor executes all health checks and returns the results. Fixable
@@ -359,6 +366,11 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 
 	// Section 7: Machine account membership.
 	results = append(results, checkMachineMembership(ctx, session, roomIDs)...)
+
+	// Section 8: Base templates published.
+	if templatesRoomID, ok := roomIDs["bureau/templates"]; ok {
+		results = append(results, checkBaseTemplates(ctx, session, templatesRoomID)...)
+	}
 
 	return results
 }
@@ -675,6 +687,40 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, roo
 				))
 			}
 		}
+	}
+
+	return results
+}
+
+// checkBaseTemplates verifies that the standard Bureau templates ("base" and
+// "base-networked") are published as m.bureau.template state events in the
+// templates room. Missing templates are fixable by re-publishing them.
+func checkBaseTemplates(ctx context.Context, session *messaging.Session, templatesRoomID string) []checkResult {
+	var results []checkResult
+
+	for _, template := range baseTemplates() {
+		checkName := fmt.Sprintf("template %q", template.name)
+		_, err := session.GetStateEvent(ctx, templatesRoomID, schema.EventTypeTemplate, template.name)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				capturedTemplate := template
+				capturedRoomID := templatesRoomID
+				results = append(results, failWithFix(
+					checkName,
+					fmt.Sprintf("template %q not published", template.name),
+					fmt.Sprintf("publish template %q", template.name),
+					func(ctx context.Context, session *messaging.Session) error {
+						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeTemplate,
+							capturedTemplate.name, capturedTemplate.content)
+						return err
+					},
+				))
+				continue
+			}
+			results = append(results, fail(checkName, fmt.Sprintf("cannot read: %v", err)))
+			continue
+		}
+		results = append(results, pass(checkName, "published"))
 	}
 
 	return results

@@ -51,6 +51,7 @@ secrets/
 # Deploy secrets (written by bureau matrix setup / attic bootstrap)
 deploy/matrix/bureau-creds
 deploy/matrix/.env-attic-token
+deploy/test/bureau-creds
 
 # Beads (local workstream tracking)
 .beads/

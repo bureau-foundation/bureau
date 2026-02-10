@@ -1,0 +1,31 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_test")
+
+# Integration tests that exercise Bureau against real services (Docker).
+# Tagged "manual" so they don't run with bazel test //... — they require
+# Docker access and a free port (6168).
+#
+# Run explicitly:
+#   bazel test //integration:integration_test
+#
+# If Docker requires the docker group:
+#   sg docker -c "bazel test //integration:integration_test"
+go_test(
+    name = "integration_test",
+    size = "medium",
+    srcs = ["matrix_test.go"],
+    data = [
+        "//:MODULE.bazel",
+        "//cmd/bureau",
+    ],
+    env = {
+        "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
+    },
+    local = True,
+    tags = ["manual"],
+    deps = [
+        "//messaging",
+    ],
+)

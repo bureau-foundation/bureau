@@ -1,0 +1,7 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+exports_files([
+    "docker-compose.yaml",
+    "continuwuity.toml",
+])

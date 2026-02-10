@@ -6,6 +6,10 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:prefix github.com/bureau-foundation/bureau
 gazelle(name = "gazelle")
 
+# Exported for integration tests that need to resolve the workspace root
+# through Bazel's runfiles symlink tree.
+exports_files(["MODULE.bazel"])
+
 # Remote execution platform. The platform properties must match exactly what
 # bb-worker registers with the scheduler (see deploy/buildbarn/bb-worker.jsonnet).
 # The scheduler routes actions to workers whose platform property set is an

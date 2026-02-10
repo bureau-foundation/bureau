@@ -1,0 +1,19 @@
+# Continuwuity configuration for the Bureau integration test stack.
+#
+# Actual values for server_name and registration_token are injected
+# via environment variables in docker-compose.yaml. The values here
+# are defaults that get overridden.
+
+[global]
+server_name = "test.bureau.local"
+database_path = "/var/lib/continuwuity"
+port = [6167]
+address = "0.0.0.0"
+allow_registration = true
+allow_federation = false
+new_user_displayname_suffix = ""
+
+# No TURN server for integration tests — all containers are on the
+# same Docker network, so no NAT traversal is needed.
+turn_uris = []
+turn_secret = ""

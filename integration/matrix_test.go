@@ -1,0 +1,512 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package integration_test provides end-to-end integration tests that exercise
+// the full Bureau stack against real services. These tests require Docker and
+// are tagged "manual" in Bazel so they don't run with //... .
+//
+// The test lifecycle:
+//   - TestMain starts a Docker Compose stack (Continuwuity homeserver)
+//   - TestMain runs "bureau matrix setup" to bootstrap the server
+//   - Individual tests verify the resulting state via CLI and API
+//   - TestMain tears down the stack and removes volumes
+package integration_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+const (
+	testHomeserverURL     = "http://localhost:6168"
+	testServerName        = "test.bureau.local"
+	testRegistrationToken = "test-registration-token"
+	composeProjectName    = "bureau-test"
+)
+
+var (
+	// workspaceRoot is the real filesystem path to the Bureau source tree.
+	// Resolved in TestMain from Bazel runfiles or by walking up from CWD.
+	workspaceRoot string
+
+	// bureauBinary is the path to the compiled bureau CLI binary.
+	// Resolved from BUREAU_BINARY env var (Bazel data dep) or bazel-bin.
+	bureauBinary string
+
+	// credentialFile is the path where setup writes Bureau credentials.
+	credentialFile string
+)
+
+func TestMain(m *testing.M) {
+	var err error
+
+	workspaceRoot, err = findWorkspaceRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot find workspace root: %v\n", err)
+		os.Exit(1)
+	}
+
+	bureauBinary, err = findBureauBinary()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bureau binary not found: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Bazel: bazel test //integration:integration_test")
+		fmt.Fprintln(os.Stderr, "  Go:    BUREAU_BINARY=$(bazel info bazel-bin)/cmd/bureau/bureau_/bureau go test -v ./integration/")
+		os.Exit(1)
+	}
+
+	credentialFile = filepath.Join(workspaceRoot, "deploy", "test", "bureau-creds")
+
+	if err := checkDockerAccess(); err != nil {
+		fmt.Fprintf(os.Stderr, "Docker not available: %v\n", err)
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  The Bazel server inherits groups from its first invocation.")
+		fmt.Fprintln(os.Stderr, "  Restart the server under the docker group:")
+		fmt.Fprintln(os.Stderr, "    sg docker -c 'bazel shutdown; bazel test //integration:integration_test'")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  Or add your user to the docker group permanently:")
+		fmt.Fprintln(os.Stderr, "    sudo usermod -aG docker $USER && newgrp docker")
+		os.Exit(1)
+	}
+
+	// Clean up any leftover state from a previous interrupted run.
+	_ = dockerCompose("down", "-v")
+
+	if err := dockerCompose("up", "-d"); err != nil {
+		fmt.Fprintf(os.Stderr, "compose up failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := waitForHealthy(30 * time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "Continuwuity did not become healthy: %v\n", err)
+		_ = dockerCompose("logs")
+		_ = dockerCompose("down", "-v")
+		os.Exit(1)
+	}
+
+	if err := runBureauSetup(); err != nil {
+		fmt.Fprintf(os.Stderr, "bureau matrix setup failed: %v\n", err)
+		_ = dockerCompose("down", "-v")
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	_ = dockerCompose("down", "-v")
+	os.Exit(code)
+}
+
+// --- Tests ---
+
+func TestDoctorPassesAfterSetup(t *testing.T) {
+	output := runBureauOrFail(t, "matrix", "doctor",
+		"--credential-file", credentialFile,
+		"--server-name", testServerName,
+	)
+	if !strings.Contains(output, "All checks passed") {
+		t.Errorf("expected 'All checks passed' in doctor output:\n%s", output)
+	}
+}
+
+func TestSetupIsIdempotent(t *testing.T) {
+	// Run setup a second time — should succeed without errors.
+	if err := runBureauSetup(); err != nil {
+		t.Fatalf("setup re-run failed: %v", err)
+	}
+
+	// Doctor should still pass.
+	output := runBureauOrFail(t, "matrix", "doctor",
+		"--credential-file", credentialFile,
+		"--server-name", testServerName,
+	)
+	if !strings.Contains(output, "All checks passed") {
+		t.Errorf("expected 'All checks passed' after idempotent setup:\n%s", output)
+	}
+}
+
+func TestRoomsExistViaAPI(t *testing.T) {
+	session := adminSession(t)
+	defer session.Close()
+
+	expectedAliases := []string{
+		"#bureau:" + testServerName,
+		"#bureau/system:" + testServerName,
+		"#bureau/machines:" + testServerName,
+		"#bureau/services:" + testServerName,
+		"#bureau/templates:" + testServerName,
+	}
+
+	for _, alias := range expectedAliases {
+		roomID, err := session.ResolveAlias(t.Context(), alias)
+		if err != nil {
+			t.Errorf("alias %s: %v", alias, err)
+			continue
+		}
+		if roomID == "" {
+			t.Errorf("alias %s resolved to empty room ID", alias)
+		}
+	}
+}
+
+func TestSpaceHierarchy(t *testing.T) {
+	session := adminSession(t)
+	defer session.Close()
+
+	spaceRoomID, err := session.ResolveAlias(t.Context(), "#bureau:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve space alias: %v", err)
+	}
+
+	// Read space state to find m.space.child events.
+	events, err := session.GetRoomState(t.Context(), spaceRoomID)
+	if err != nil {
+		t.Fatalf("get space state: %v", err)
+	}
+
+	children := make(map[string]bool)
+	for _, event := range events {
+		if event.Type == "m.space.child" && event.StateKey != nil && *event.StateKey != "" {
+			children[*event.StateKey] = true
+		}
+	}
+
+	// Verify each standard room is a child of the space.
+	childRooms := []string{
+		"#bureau/system:" + testServerName,
+		"#bureau/machines:" + testServerName,
+		"#bureau/services:" + testServerName,
+		"#bureau/templates:" + testServerName,
+	}
+
+	for _, alias := range childRooms {
+		roomID, err := session.ResolveAlias(t.Context(), alias)
+		if err != nil {
+			t.Errorf("resolve %s: %v", alias, err)
+			continue
+		}
+		if !children[roomID] {
+			t.Errorf("room %s (%s) is not a child of the Bureau space", alias, roomID)
+		}
+	}
+}
+
+func TestTemplatesPublished(t *testing.T) {
+	session := adminSession(t)
+	defer session.Close()
+
+	templatesRoomID, err := session.ResolveAlias(t.Context(), "#bureau/templates:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve templates alias: %v", err)
+	}
+
+	// Read base template state event.
+	content, err := session.GetStateEvent(t.Context(), templatesRoomID, "m.bureau.template", "base")
+	if err != nil {
+		t.Fatalf("get base template: %v", err)
+	}
+
+	var template map[string]any
+	if err := json.Unmarshal(content, &template); err != nil {
+		t.Fatalf("unmarshal base template: %v", err)
+	}
+
+	description, ok := template["description"].(string)
+	if !ok || description == "" {
+		t.Errorf("base template missing description, got: %v", template)
+	}
+
+	// Verify base-networked template exists and inherits from base.
+	content, err = session.GetStateEvent(t.Context(), templatesRoomID, "m.bureau.template", "base-networked")
+	if err != nil {
+		t.Fatalf("get base-networked template: %v", err)
+	}
+
+	if err := json.Unmarshal(content, &template); err != nil {
+		t.Fatalf("unmarshal base-networked template: %v", err)
+	}
+
+	inherits, ok := template["inherits"].(string)
+	if !ok || inherits != "bureau/templates:base" {
+		t.Errorf("expected base-networked to inherit from bureau/templates:base, got %q", inherits)
+	}
+}
+
+func TestJoinRulesAreInviteOnly(t *testing.T) {
+	session := adminSession(t)
+	defer session.Close()
+
+	rooms := []string{
+		"#bureau:" + testServerName,
+		"#bureau/system:" + testServerName,
+		"#bureau/machines:" + testServerName,
+		"#bureau/services:" + testServerName,
+		"#bureau/templates:" + testServerName,
+	}
+
+	for _, alias := range rooms {
+		roomID, err := session.ResolveAlias(t.Context(), alias)
+		if err != nil {
+			t.Errorf("resolve %s: %v", alias, err)
+			continue
+		}
+
+		content, err := session.GetStateEvent(t.Context(), roomID, "m.room.join_rules", "")
+		if err != nil {
+			t.Errorf("get join rules for %s: %v", alias, err)
+			continue
+		}
+
+		var joinRules map[string]any
+		if err := json.Unmarshal(content, &joinRules); err != nil {
+			t.Errorf("unmarshal join rules for %s: %v", alias, err)
+			continue
+		}
+
+		if rule, _ := joinRules["join_rule"].(string); rule != "invite" {
+			t.Errorf("room %s: join_rule is %q, expected invite", alias, rule)
+		}
+	}
+}
+
+func TestDoctorJSONOutput(t *testing.T) {
+	output := runBureauOrFail(t, "matrix", "doctor",
+		"--credential-file", credentialFile,
+		"--server-name", testServerName,
+		"--json",
+	)
+
+	var result struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("cannot parse doctor JSON output: %v\noutput:\n%s", err, output)
+	}
+
+	if !result.OK {
+		t.Error("doctor JSON reports ok=false")
+		for _, check := range result.Checks {
+			if check.Status == "fail" {
+				t.Errorf("  [FAIL] %s", check.Name)
+			}
+		}
+	}
+
+	if len(result.Checks) == 0 {
+		t.Error("doctor JSON returned no checks")
+	}
+}
+
+// --- Helpers ---
+
+// findWorkspaceRoot returns the real filesystem path to the Bureau source tree.
+// In Bazel, this resolves through the runfiles symlink tree. Outside Bazel,
+// it walks up from the current directory looking for MODULE.bazel.
+func findWorkspaceRoot() (string, error) {
+	// Bazel: resolve through the MODULE.bazel file in runfiles.
+	if runfilesDirectory := os.Getenv("RUNFILES_DIR"); runfilesDirectory != "" {
+		moduleFile := filepath.Join(runfilesDirectory, "_main", "MODULE.bazel")
+		realPath, err := filepath.EvalSymlinks(moduleFile)
+		if err == nil {
+			return filepath.Dir(realPath), nil
+		}
+	}
+
+	// Outside Bazel: walk up from CWD.
+	directory, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(directory, "MODULE.bazel")); err == nil {
+			return directory, nil
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return "", fmt.Errorf("MODULE.bazel not found in any parent directory")
+		}
+		directory = parent
+	}
+}
+
+// findBureauBinary locates the compiled bureau CLI binary.
+// Checks BUREAU_BINARY env (Bazel data dep) first, then falls back to
+// a well-known bazel-bin path relative to the workspace root.
+func findBureauBinary() (string, error) {
+	// Bazel: resolve via data dependency environment variable.
+	if rlocationPath := os.Getenv("BUREAU_BINARY"); rlocationPath != "" {
+		runfilesDirectory := os.Getenv("RUNFILES_DIR")
+		if runfilesDirectory == "" {
+			return "", fmt.Errorf("BUREAU_BINARY set but RUNFILES_DIR missing")
+		}
+		absolutePath := filepath.Join(runfilesDirectory, rlocationPath)
+		if _, err := os.Stat(absolutePath); err != nil {
+			return "", fmt.Errorf("bureau binary not found at %s: %w", absolutePath, err)
+		}
+		return absolutePath, nil
+	}
+
+	// Outside Bazel: check well-known bazel-bin location.
+	candidate := filepath.Join(workspaceRoot, "bazel-bin", "cmd", "bureau", "bureau_", "bureau")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate, nil
+	}
+
+	return "", fmt.Errorf("not found (set BUREAU_BINARY or build with bazel build //cmd/bureau)")
+}
+
+// checkDockerAccess verifies that the Docker daemon is reachable.
+func checkDockerAccess() error {
+	cmd := exec.Command("docker", "compose", "version")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Run()
+}
+
+// dockerCompose runs docker compose with the test project configuration.
+func dockerCompose(args ...string) error {
+	composeFile := filepath.Join(workspaceRoot, "deploy", "test", "docker-compose.yaml")
+	fullArgs := []string{
+		"compose",
+		"-f", composeFile,
+		"-p", composeProjectName,
+	}
+	fullArgs = append(fullArgs, args...)
+
+	cmd := exec.Command("docker", fullArgs...)
+	cmd.Stdout = os.Stderr // test infrastructure output goes to stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// waitForHealthy polls the Continuwuity versions endpoint until it responds.
+func waitForHealthy(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout after %s waiting for %s", timeout, testHomeserverURL)
+		default:
+			response, err := http.Get(testHomeserverURL + "/_matrix/client/versions")
+			if err == nil {
+				response.Body.Close()
+				if response.StatusCode == http.StatusOK {
+					return nil
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+// runBureauSetup runs "bureau matrix setup" against the test homeserver.
+// The registration token is piped via stdin.
+func runBureauSetup() error {
+	cmd := exec.Command(bureauBinary, "matrix", "setup",
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+		"--registration-token-file", "-",
+		"--credential-file", credentialFile,
+	)
+	cmd.Stdin = strings.NewReader(testRegistrationToken)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// runBureau executes the bureau CLI with the given arguments and returns
+// its combined stdout output as a string.
+func runBureau(args ...string) (string, error) {
+	cmd := exec.Command(bureauBinary, args...)
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	return stdout.String(), err
+}
+
+// runBureauOrFail runs the bureau CLI and fails the test on error.
+func runBureauOrFail(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := runBureau(args...)
+	if err != nil {
+		t.Fatalf("bureau %s failed: %v\noutput:\n%s", strings.Join(args, " "), err, output)
+	}
+	return output
+}
+
+// adminSession creates an authenticated Matrix session using the credentials
+// written by setup. The caller must close the returned session.
+func adminSession(t *testing.T) *messaging.Session {
+	t.Helper()
+
+	credentials := loadCredentials(t)
+	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+	if homeserverURL == "" {
+		t.Fatal("MATRIX_HOMESERVER_URL missing from credential file")
+	}
+	token := credentials["MATRIX_ADMIN_TOKEN"]
+	if token == "" {
+		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
+	}
+	userID := credentials["MATRIX_ADMIN_USER"]
+	if userID == "" {
+		t.Fatal("MATRIX_ADMIN_USER missing from credential file")
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	session, err := client.SessionFromToken(userID, token)
+	if err != nil {
+		t.Fatalf("session from token: %v", err)
+	}
+	return session
+}
+
+// loadCredentials reads the key=value credential file written by setup.
+func loadCredentials(t *testing.T) map[string]string {
+	t.Helper()
+
+	file, err := os.Open(credentialFile)
+	if err != nil {
+		t.Fatalf("open credential file: %v", err)
+	}
+	defer file.Close()
+
+	credentials := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			credentials[key] = value
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read credential file: %v", err)
+	}
+	return credentials
+}

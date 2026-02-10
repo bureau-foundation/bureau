@@ -1,0 +1,44 @@
+# Integration test stack for Bureau.
+#
+# Provides an isolated Continuwuity homeserver for automated testing.
+# All values are hardcoded — no .env file needed. The server name
+# (test.bureau.local) and registration token are test-only constants
+# that must never be used in production.
+#
+# Usage:
+#   sg docker -c "docker compose up -d"
+#   bureau matrix setup \
+#     --homeserver http://localhost:6168 \
+#     --server-name test.bureau.local \
+#     --registration-token-file <(echo test-registration-token) \
+#     --credential-file ./bureau-creds
+#   bureau matrix doctor --credential-file ./bureau-creds --server-name test.bureau.local
+#   sg docker -c "docker compose down -v"
+#
+# Port 6168 avoids collision with the dev Continuwuity at 6167.
+
+services:
+  matrix:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    container_name: bureau-test-matrix
+    restart: "no"
+    ports:
+      - "127.0.0.1:6168:6167"
+    volumes:
+      - test-matrix-data:/var/lib/continuwuity
+      - ./continuwuity.toml:/etc/conduwuit/conduwuit.toml:ro
+    environment:
+      CONDUWUIT_CONFIG: "/etc/conduwuit/conduwuit.toml"
+      CONTINUWUITY_SERVER_NAME: "test.bureau.local"
+      CONTINUWUITY_REGISTRATION_TOKEN: "test-registration-token"
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6167/_matrix/client/versions || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  test-matrix-data:

@@ -1372,6 +1372,249 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandleUpdatePayload_Validation(t *testing.T) {
+	launcher := &Launcher{
+		sandboxes: make(map[string]*managedSandbox),
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	t.Run("missing principal", func(t *testing.T) {
+		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+			Action: "update-payload",
+		})
+		if response.OK {
+			t.Error("expected error for missing principal")
+		}
+		if !strings.Contains(response.Error, "principal is required") {
+			t.Errorf("error = %q, want substring 'principal is required'", response.Error)
+		}
+	})
+
+	t.Run("invalid principal", func(t *testing.T) {
+		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+			Action:    "update-payload",
+			Principal: "../escape",
+		})
+		if response.OK {
+			t.Error("expected error for invalid principal")
+		}
+		if !strings.Contains(response.Error, "invalid principal") {
+			t.Errorf("error = %q, want substring 'invalid principal'", response.Error)
+		}
+	})
+
+	t.Run("no sandbox running", func(t *testing.T) {
+		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+			Action:    "update-payload",
+			Principal: "test/missing",
+			Payload:   map[string]any{"key": "value"},
+		})
+		if response.OK {
+			t.Error("expected error for non-existent sandbox")
+		}
+		if !strings.Contains(response.Error, "no sandbox running") {
+			t.Errorf("error = %q, want substring 'no sandbox running'", response.Error)
+		}
+	})
+
+	t.Run("sandbox already exited", func(t *testing.T) {
+		done := make(chan struct{})
+		close(done) // simulate exited process
+		launcher.sandboxes["test/exited"] = &managedSandbox{
+			principal: "test/exited",
+			configDir: t.TempDir(),
+			done:      done,
+		}
+		defer delete(launcher.sandboxes, "test/exited")
+
+		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+			Action:    "update-payload",
+			Principal: "test/exited",
+			Payload:   map[string]any{"key": "value"},
+		})
+		if response.OK {
+			t.Error("expected error for exited sandbox")
+		}
+		if !strings.Contains(response.Error, "already exited") {
+			t.Errorf("error = %q, want substring 'already exited'", response.Error)
+		}
+	})
+
+	t.Run("nil payload", func(t *testing.T) {
+		done := make(chan struct{})
+		launcher.sandboxes["test/nopayload"] = &managedSandbox{
+			principal: "test/nopayload",
+			configDir: t.TempDir(),
+			done:      done,
+		}
+		defer func() {
+			delete(launcher.sandboxes, "test/nopayload")
+			close(done)
+		}()
+
+		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+			Action:    "update-payload",
+			Principal: "test/nopayload",
+		})
+		if response.OK {
+			t.Error("expected error for nil payload")
+		}
+		if !strings.Contains(response.Error, "payload is required") {
+			t.Errorf("error = %q, want substring 'payload is required'", response.Error)
+		}
+	})
+}
+
+func TestHandleUpdatePayload_AtomicWrite(t *testing.T) {
+	configDir := t.TempDir()
+
+	// Write an initial payload file so we can verify it gets replaced.
+	initialPayload := `{"initial":"data"}`
+	payloadPath := filepath.Join(configDir, "payload.json")
+	if err := os.WriteFile(payloadPath, []byte(initialPayload), 0644); err != nil {
+		t.Fatalf("writing initial payload: %v", err)
+	}
+
+	done := make(chan struct{})
+	launcher := &Launcher{
+		sandboxes: map[string]*managedSandbox{
+			"test/update": {
+				principal: "test/update",
+				configDir: configDir,
+				done:      done,
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	defer close(done)
+
+	newPayload := map[string]any{
+		"model":       "claude-4",
+		"temperature": 0.7,
+		"nested":      map[string]any{"key": "value"},
+	}
+
+	response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+		Action:    "update-payload",
+		Principal: "test/update",
+		Payload:   newPayload,
+	})
+	if !response.OK {
+		t.Fatalf("handleUpdatePayload failed: %s", response.Error)
+	}
+
+	// Verify the file was written with new content.
+	data, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatalf("reading updated payload: %v", err)
+	}
+
+	var written map[string]any
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("parsing updated payload: %v", err)
+	}
+
+	if written["model"] != "claude-4" {
+		t.Errorf("payload model = %v, want %q", written["model"], "claude-4")
+	}
+	if written["temperature"] != 0.7 {
+		t.Errorf("payload temperature = %v, want 0.7", written["temperature"])
+	}
+	nested, ok := written["nested"].(map[string]any)
+	if !ok {
+		t.Fatal("payload nested is not a map")
+	}
+	if nested["key"] != "value" {
+		t.Errorf("payload nested.key = %v, want %q", nested["key"], "value")
+	}
+
+	// Verify no temp file is left behind.
+	tempPath := payloadPath + ".tmp"
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Errorf("temp file should not exist after successful update, stat error: %v", err)
+	}
+}
+
+func TestHandleUpdatePayload_WithProxy(t *testing.T) {
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN":   "syt_fake_test_token",
+		"MATRIX_USER_ID": "@test/payload:bureau.local",
+	})
+
+	// Create a sandbox to get a real configDir and running process.
+	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/payload",
+		EncryptedCredentials: ciphertext,
+	})
+	if !createResponse.OK {
+		t.Fatalf("create-sandbox failed: %s", createResponse.Error)
+	}
+
+	// Update the payload.
+	updateResponse := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+		Action:    "update-payload",
+		Principal: "test/payload",
+		Payload: map[string]any{
+			"prompt":     "You are a helpful assistant.",
+			"max_tokens": 4096,
+		},
+	})
+	if !updateResponse.OK {
+		t.Fatalf("update-payload failed: %s", updateResponse.Error)
+	}
+
+	// Read back the payload file from the sandbox's configDir.
+	sandbox := launcher.sandboxes["test/payload"]
+	payloadPath := filepath.Join(sandbox.configDir, "payload.json")
+	data, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatalf("reading payload file: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("parsing payload: %v", err)
+	}
+
+	if payload["prompt"] != "You are a helpful assistant." {
+		t.Errorf("payload prompt = %v, want %q", payload["prompt"], "You are a helpful assistant.")
+	}
+	// JSON numbers are float64.
+	if payload["max_tokens"] != float64(4096) {
+		t.Errorf("payload max_tokens = %v, want 4096", payload["max_tokens"])
+	}
+
+	// Update again to verify overwrites work.
+	update2 := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
+		Action:    "update-payload",
+		Principal: "test/payload",
+		Payload:   map[string]any{"replaced": true},
+	})
+	if !update2.OK {
+		t.Fatalf("second update-payload failed: %s", update2.Error)
+	}
+
+	data2, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatalf("reading payload after second update: %v", err)
+	}
+	var payload2 map[string]any
+	if err := json.Unmarshal(data2, &payload2); err != nil {
+		t.Fatalf("parsing second payload: %v", err)
+	}
+	if payload2["replaced"] != true {
+		t.Errorf("second update payload = %v, want {replaced: true}", payload2)
+	}
+	// The old keys should be gone (full replacement, not merge).
+	if _, exists := payload2["prompt"]; exists {
+		t.Error("old payload key 'prompt' should not persist after full replacement")
+	}
+}
+
 func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 	requireTmux(t)
 

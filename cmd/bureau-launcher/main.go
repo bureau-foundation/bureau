@@ -481,6 +481,11 @@ type IPCRequest struct {
 	// environment. When nil (current behavior), the launcher spawns only
 	// the proxy process without a bwrap sandbox.
 	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
+
+	// Payload is the new payload data for update-payload requests. The
+	// launcher atomically rewrites the payload file that is bind-mounted
+	// into the sandbox at /run/bureau/payload.json.
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // IPCResponse is the JSON structure of a response to the daemon.
@@ -524,6 +529,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	case "destroy-sandbox":
 		response = l.handleDestroySandbox(ctx, &request)
+
+	case "update-payload":
+		response = l.handleUpdatePayload(ctx, &request)
 
 	default:
 		response = IPCResponse{OK: false, Error: fmt.Sprintf("unknown action: %q", request.Action)}
@@ -658,6 +666,62 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 	l.cleanupSandbox(request.Principal)
 
 	l.logger.Info("sandbox destroyed", "principal", request.Principal)
+	return IPCResponse{OK: true}
+}
+
+// handleUpdatePayload atomically rewrites the payload file for a running
+// sandbox. The payload file is bind-mounted into the sandbox at
+// /run/bureau/payload.json, so the update is immediately visible to the
+// agent process. The agent can detect the change via inotify or periodic
+// polling — Bureau does not send a signal to the process.
+func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest) IPCResponse {
+	if request.Principal == "" {
+		return IPCResponse{OK: false, Error: "principal is required"}
+	}
+
+	if err := principal.ValidateLocalpart(request.Principal); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}
+	}
+
+	sandbox, exists := l.sandboxes[request.Principal]
+	if !exists {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}
+	}
+
+	// Check if the process is still alive.
+	select {
+	case <-sandbox.done:
+		return IPCResponse{OK: false, Error: fmt.Sprintf("sandbox for %q has already exited", request.Principal)}
+	default:
+	}
+
+	if request.Payload == nil {
+		return IPCResponse{OK: false, Error: "payload is required for update-payload"}
+	}
+
+	// Write the payload atomically: write to a temp file in the same
+	// directory, then rename. This ensures the agent never sees a
+	// partially-written file.
+	payloadJSON, err := json.Marshal(request.Payload)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("marshaling payload: %v", err)}
+	}
+
+	payloadPath := filepath.Join(sandbox.configDir, "payload.json")
+	tempPath := payloadPath + ".tmp"
+	if err := os.WriteFile(tempPath, payloadJSON, 0644); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("writing temp payload: %v", err)}
+	}
+	if err := os.Rename(tempPath, payloadPath); err != nil {
+		os.Remove(tempPath)
+		return IPCResponse{OK: false, Error: fmt.Sprintf("renaming payload: %v", err)}
+	}
+
+	l.logger.Info("payload updated",
+		"principal", request.Principal,
+		"path", payloadPath,
+	)
+
 	return IPCResponse{OK: true}
 }
 

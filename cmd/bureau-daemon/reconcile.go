@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"reflect"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -38,6 +39,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if assignment.AutoStart {
 			desired[assignment.Localpart] = assignment
 		}
+	}
+
+	// Check for hot-reloadable changes on already-running principals.
+	for localpart, assignment := range desired {
+		if !d.running[localpart] {
+			continue
+		}
+		d.reconcileRunningPrincipal(ctx, localpart, assignment)
 	}
 
 	// Create sandboxes for principals that should be running but aren't.
@@ -95,6 +104,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.running[localpart] = true
+		if d.lastSpecs == nil {
+			d.lastSpecs = make(map[string]*schema.SandboxSpec)
+		}
+		d.lastSpecs[localpart] = sandboxSpec
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
@@ -158,11 +171,115 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		delete(d.running, localpart)
+		delete(d.lastSpecs, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal stopped", "principal", localpart)
 	}
 
 	return nil
+}
+
+// reconcileRunningPrincipal checks if a running principal's configuration has
+// changed and applies hot-reloadable updates. Currently handles:
+//   - Payload changes: rewrites the bind-mounted payload file without restart
+//
+// Structural changes (command, mounts, namespaces, resources, security,
+// environment) are logged as requiring a manual restart. Automatic restart
+// is not yet implemented to avoid disrupting running agent work.
+func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
+	// Can only detect changes for principals created from templates.
+	if assignment.Template == "" {
+		return
+	}
+
+	// Re-resolve the template to get the current desired spec.
+	template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
+	if err != nil {
+		d.logger.Error("re-resolving template for running principal",
+			"principal", localpart, "template", assignment.Template, "error", err)
+		return
+	}
+	newSpec := resolveInstanceConfig(template, &assignment)
+
+	// Compare with the previously deployed spec.
+	oldSpec := d.lastSpecs[localpart]
+	if oldSpec == nil {
+		// No previous spec stored (principal was created without one,
+		// or from a previous daemon instance). Store the current spec
+		// for future comparisons but don't trigger any changes.
+		if d.lastSpecs == nil {
+			d.lastSpecs = make(map[string]*schema.SandboxSpec)
+		}
+		d.lastSpecs[localpart] = newSpec
+		return
+	}
+
+	// Check if only the payload changed while the structural config
+	// (everything that affects the sandbox environment) is unchanged.
+	if payloadChanged(oldSpec, newSpec) {
+		if structurallyChanged(oldSpec, newSpec) {
+			d.logger.Warn("sandbox configuration changed for running principal (restart required)",
+				"principal", localpart,
+				"template", assignment.Template,
+			)
+			// Store the new spec so we don't warn on every reconcile.
+			d.lastSpecs[localpart] = newSpec
+			return
+		}
+
+		// Payload-only change: hot-reload by rewriting the payload file.
+		d.logger.Info("payload changed for running principal, hot-reloading",
+			"principal", localpart,
+		)
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:    "update-payload",
+			Principal: localpart,
+			Payload:   newSpec.Payload,
+		})
+		if err != nil {
+			d.logger.Error("update-payload IPC failed",
+				"principal", localpart, "error", err)
+			return
+		}
+		if !response.OK {
+			d.logger.Error("update-payload rejected",
+				"principal", localpart, "error", response.Error)
+			return
+		}
+		d.lastSpecs[localpart] = newSpec
+		d.lastActivityAt = time.Now()
+		d.logger.Info("payload hot-reloaded", "principal", localpart)
+	}
+}
+
+// payloadChanged returns true if the payloads of two SandboxSpecs differ.
+func payloadChanged(old, new *schema.SandboxSpec) bool {
+	return !reflect.DeepEqual(old.Payload, new.Payload)
+}
+
+// structurallyChanged returns true if any non-payload fields of two
+// SandboxSpecs differ. Structural changes require a sandbox restart
+// because they affect the sandbox environment (mounts, namespaces,
+// resources, security, command, environment variables, etc.).
+func structurallyChanged(old, new *schema.SandboxSpec) bool {
+	// Compare all fields except Payload by zeroing the payload and
+	// comparing the rest via JSON serialization. This is resilient to
+	// new fields being added to SandboxSpec — they'll be included in
+	// the comparison automatically.
+	oldCopy := *old
+	newCopy := *new
+	oldCopy.Payload = nil
+	newCopy.Payload = nil
+
+	oldJSON, err := json.Marshal(oldCopy)
+	if err != nil {
+		return true // Assume changed on marshal error.
+	}
+	newJSON, err := json.Marshal(newCopy)
+	if err != nil {
+		return true
+	}
+	return string(oldJSON) != string(newJSON)
 }
 
 // readMachineConfig reads the MachineConfig state event from the config room.
@@ -208,6 +325,11 @@ type launcherIPCRequest struct {
 	// environment. When nil (current behavior), the launcher spawns only
 	// the proxy process without a bwrap sandbox.
 	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
+
+	// Payload is the new payload data for update-payload requests. The
+	// launcher atomically rewrites the payload file that is bind-mounted
+	// into the sandbox at /run/bureau/payload.json.
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.

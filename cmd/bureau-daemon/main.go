@@ -167,6 +167,7 @@ func run() error {
 		launcherSocket:      launcherSocket,
 		statusInterval:      statusInterval,
 		running:             make(map[string]bool),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		peerAddresses:       make(map[string]string),
@@ -248,6 +249,12 @@ type Daemon struct {
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.
 	running map[string]bool
+
+	// lastSpecs stores the SandboxSpec sent to the launcher for each
+	// running principal. Used to detect payload-only changes that can
+	// be hot-reloaded without restarting the sandbox. Nil entries mean
+	// the principal was created without a SandboxSpec (no template).
+	lastSpecs map[string]*schema.SandboxSpec
 
 	// services is the cached service directory, built from m.bureau.service
 	// state events in #bureau/services. Keyed by service localpart (the

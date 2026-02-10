@@ -379,6 +379,86 @@ func TestMachineConfigWithObservePolicy(t *testing.T) {
 	}
 }
 
+func TestBureauVersionOnMachineConfig(t *testing.T) {
+	config := MachineConfig{
+		Principals: []PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/templates:whisper-stt",
+				AutoStart: true,
+			},
+		},
+		BureauVersion: &BureauVersion{
+			DaemonStorePath:   "/nix/store/abc123-bureau-daemon/bin/bureau-daemon",
+			LauncherStorePath: "/nix/store/def456-bureau-launcher/bin/bureau-launcher",
+			ProxyStorePath:    "/nix/store/ghi789-bureau-proxy/bin/bureau-proxy",
+		},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	bureauVersion, ok := raw["bureau_version"].(map[string]any)
+	if !ok {
+		t.Fatal("bureau_version field missing or wrong type")
+	}
+	assertField(t, bureauVersion, "daemon_store_path", "/nix/store/abc123-bureau-daemon/bin/bureau-daemon")
+	assertField(t, bureauVersion, "launcher_store_path", "/nix/store/def456-bureau-launcher/bin/bureau-launcher")
+	assertField(t, bureauVersion, "proxy_store_path", "/nix/store/ghi789-bureau-proxy/bin/bureau-proxy")
+
+	var decoded MachineConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.BureauVersion == nil {
+		t.Fatal("BureauVersion should not be nil after round-trip")
+	}
+	if decoded.BureauVersion.DaemonStorePath != config.BureauVersion.DaemonStorePath {
+		t.Errorf("DaemonStorePath: got %q, want %q",
+			decoded.BureauVersion.DaemonStorePath, config.BureauVersion.DaemonStorePath)
+	}
+	if decoded.BureauVersion.LauncherStorePath != config.BureauVersion.LauncherStorePath {
+		t.Errorf("LauncherStorePath: got %q, want %q",
+			decoded.BureauVersion.LauncherStorePath, config.BureauVersion.LauncherStorePath)
+	}
+	if decoded.BureauVersion.ProxyStorePath != config.BureauVersion.ProxyStorePath {
+		t.Errorf("ProxyStorePath: got %q, want %q",
+			decoded.BureauVersion.ProxyStorePath, config.BureauVersion.ProxyStorePath)
+	}
+}
+
+func TestBureauVersionOmittedWhenNil(t *testing.T) {
+	config := MachineConfig{
+		Principals: []PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/templates:whisper-stt",
+				AutoStart: true,
+			},
+		},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["bureau_version"]; exists {
+		t.Error("bureau_version should be omitted when nil")
+	}
+}
+
 func TestCredentialsRoundTrip(t *testing.T) {
 	original := Credentials{
 		Version:   1,
@@ -1125,6 +1205,7 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 		"description", "inherits", "environment", "environment_variables",
 		"filesystem", "namespaces", "resources", "security",
 		"create_dirs", "roles", "required_credentials", "default_payload",
+		"health_check",
 	}
 	for _, field := range omittedFields {
 		if _, exists := raw[field]; exists {
@@ -1135,6 +1216,111 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 	// Command should be present.
 	if _, exists := raw["command"]; !exists {
 		t.Error("command should be present")
+	}
+}
+
+func TestHealthCheckOnTemplateContent(t *testing.T) {
+	original := TemplateContent{
+		Command:     []string{"/usr/local/bin/gmail-watcher"},
+		Environment: "/nix/store/abc123-gmail-watcher-env",
+		HealthCheck: &HealthCheck{
+			Endpoint:           "/health",
+			IntervalSeconds:    30,
+			TimeoutSeconds:     5,
+			FailureThreshold:   3,
+			GracePeriodSeconds: 60,
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	healthCheck, ok := raw["health_check"].(map[string]any)
+	if !ok {
+		t.Fatal("health_check field missing or wrong type")
+	}
+	assertField(t, healthCheck, "endpoint", "/health")
+	assertField(t, healthCheck, "interval_seconds", float64(30))
+	assertField(t, healthCheck, "timeout_seconds", float64(5))
+	assertField(t, healthCheck, "failure_threshold", float64(3))
+	assertField(t, healthCheck, "grace_period_seconds", float64(60))
+
+	var decoded TemplateContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.HealthCheck == nil {
+		t.Fatal("HealthCheck should not be nil after round-trip")
+	}
+	if decoded.HealthCheck.Endpoint != "/health" {
+		t.Errorf("Endpoint: got %q, want %q", decoded.HealthCheck.Endpoint, "/health")
+	}
+	if decoded.HealthCheck.IntervalSeconds != 30 {
+		t.Errorf("IntervalSeconds: got %d, want 30", decoded.HealthCheck.IntervalSeconds)
+	}
+	if decoded.HealthCheck.TimeoutSeconds != 5 {
+		t.Errorf("TimeoutSeconds: got %d, want 5", decoded.HealthCheck.TimeoutSeconds)
+	}
+	if decoded.HealthCheck.FailureThreshold != 3 {
+		t.Errorf("FailureThreshold: got %d, want 3", decoded.HealthCheck.FailureThreshold)
+	}
+	if decoded.HealthCheck.GracePeriodSeconds != 60 {
+		t.Errorf("GracePeriodSeconds: got %d, want 60", decoded.HealthCheck.GracePeriodSeconds)
+	}
+}
+
+func TestHealthCheckOmitsZeroOptionalFields(t *testing.T) {
+	// A HealthCheck with only required fields should omit the optional
+	// fields (timeout, failure threshold, grace period) from the wire
+	// format — they default at runtime.
+	healthCheck := HealthCheck{
+		Endpoint:        "/healthz",
+		IntervalSeconds: 15,
+	}
+
+	data, err := json.Marshal(healthCheck)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "endpoint", "/healthz")
+	assertField(t, raw, "interval_seconds", float64(15))
+
+	for _, field := range []string{"timeout_seconds", "failure_threshold", "grace_period_seconds"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when zero (runtime default)", field)
+		}
+	}
+}
+
+func TestHealthCheckOmittedWhenNilOnTemplate(t *testing.T) {
+	// Templates without health monitoring should not include health_check.
+	template := TemplateContent{
+		Command: []string{"/usr/local/bin/claude", "--agent"},
+	}
+
+	data, err := json.Marshal(template)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["health_check"]; exists {
+		t.Error("health_check should be omitted when nil")
 	}
 }
 

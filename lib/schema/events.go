@@ -225,6 +225,52 @@ type MachineConfig struct {
 	// This provides a convenient machine-wide default while allowing
 	// per-principal overrides.
 	DefaultObservePolicy *ObservePolicy `json:"default_observe_policy,omitempty"`
+
+	// BureauVersion specifies the desired versions of Bureau core
+	// binaries (daemon, launcher, proxy) on this machine. When the
+	// daemon detects a change (via binary content hash comparison, not
+	// store path), it orchestrates the update: prefetching from attic,
+	// exec()'ing itself for daemon updates, signaling the launcher for
+	// launcher updates, and passing the new proxy path to the launcher
+	// for future sandbox creation.
+	//
+	// When nil, no version management is performed — the machine runs
+	// whatever binaries were installed at bootstrap time.
+	BureauVersion *BureauVersion `json:"bureau_version,omitempty"`
+}
+
+// BureauVersion identifies the desired versions of Bureau core binaries
+// on a machine. The daemon compares binary content hashes (SHA256 of the
+// actual file, not the Nix store path) against the currently running
+// versions to determine what needs restarting. This avoids unnecessary
+// restarts when an unrelated dependency change produces a new store path
+// but a byte-identical binary.
+//
+// Only the three persistent/recurring process types are tracked here:
+// daemon (runs continuously), launcher (runs continuously), and proxy
+// (spawned per-sandbox by the launcher). Other Bureau binaries (bridge,
+// sandbox, credentials, proxy-call, observe-relay) are short-lived
+// utilities resolved from PATH or the Nix environment at invocation time.
+type BureauVersion struct {
+	// DaemonStorePath is the Nix store path containing the bureau-daemon
+	// binary (e.g., "/nix/store/abc123-bureau-daemon/bin/bureau-daemon").
+	// The daemon prefetches this path from attic, hashes the binary,
+	// compares against its own running binary, and exec()'s the new
+	// version if the hashes differ.
+	DaemonStorePath string `json:"daemon_store_path"`
+
+	// LauncherStorePath is the Nix store path containing the
+	// bureau-launcher binary. The daemon prefetches this path, hashes
+	// the binary, compares against the launcher's reported hash (via
+	// the "status" IPC action), and signals the launcher to exec() the
+	// new version if the hashes differ.
+	LauncherStorePath string `json:"launcher_store_path"`
+
+	// ProxyStorePath is the Nix store path containing the bureau-proxy
+	// binary. The launcher uses this path when spawning new proxy
+	// processes for sandbox creation. Existing proxies continue running
+	// their current binary until their sandbox is recycled.
+	ProxyStorePath string `json:"proxy_store_path"`
 }
 
 // PrincipalAssignment defines a single principal that should run on a machine.
@@ -512,6 +558,52 @@ type TemplateContent struct {
 	// sandbox. Use this for template-level defaults that individual
 	// instances can override.
 	DefaultPayload map[string]any `json:"default_payload,omitempty"`
+
+	// HealthCheck configures automated health monitoring for principals
+	// created from this template. When set, the daemon polls the
+	// configured HTTP endpoint through the proxy admin socket and
+	// triggers rollback on sustained failure. During template
+	// inheritance, child HealthCheck replaces parent HealthCheck
+	// entirely (no field-level merge — the parameters form a coherent
+	// unit). When nil, no health monitoring is performed.
+	HealthCheck *HealthCheck `json:"health_check,omitempty"`
+}
+
+// HealthCheck configures automated health monitoring for principals
+// created from a template. The daemon polls the health endpoint through
+// the principal's proxy admin socket. If consecutive failures exceed the
+// threshold, the daemon triggers a rollback to the previously working
+// sandbox configuration.
+//
+// Health checks are optional. Templates for services (databases, API
+// servers, webhook relays) should define health checks; templates for
+// interactive agents typically should not.
+type HealthCheck struct {
+	// Endpoint is the HTTP path to poll (e.g., "/health", "/healthz",
+	// "/api/v1/status"). The daemon sends HTTP GET requests to this
+	// path through the proxy admin socket.
+	Endpoint string `json:"endpoint"`
+
+	// IntervalSeconds is the polling interval in seconds. The daemon
+	// sends one health check request per interval. Must be positive.
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// TimeoutSeconds is the per-request timeout in seconds. A request
+	// that does not receive HTTP 200 within this duration counts as a
+	// failure. Zero defaults to 5 seconds at runtime.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+
+	// FailureThreshold is the number of consecutive failures before
+	// the daemon considers the principal unhealthy and triggers a
+	// rollback to the previous working sandbox configuration. Zero
+	// defaults to 3 at runtime.
+	FailureThreshold int `json:"failure_threshold,omitempty"`
+
+	// GracePeriodSeconds is the delay after sandbox creation before
+	// the first health check. Gives the service time to initialize
+	// (load models, warm caches, bind ports). Zero defaults to 30
+	// seconds at runtime.
+	GracePeriodSeconds int `json:"grace_period_seconds,omitempty"`
 }
 
 // TemplateMount describes a filesystem mount point in a template. This is

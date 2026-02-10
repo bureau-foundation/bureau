@@ -40,9 +40,10 @@ import (
 // another agent) and to parallel the existing pattern with launcherIPCRequest.
 // The JSON wire format is the contract between client and daemon.
 type observeRequest struct {
-	// Action selects the request type. Empty or "observe" starts a
-	// streaming observation session. "query_layout" fetches and expands
-	// a channel's layout (pure request/response, no streaming).
+	// Action selects the request type:
+	//   - "" or "observe": streaming observation session
+	//   - "query_layout": fetch and expand a channel's layout
+	//   - "list": list known principals and machines
 	Action string `json:"action,omitempty"`
 
 	// Principal is the localpart of the target (e.g., "iree/amdgpu/pm").
@@ -56,6 +57,10 @@ type observeRequest struct {
 	// Channel is the Matrix room alias (e.g., "#iree/amdgpu/general:bureau.local").
 	// Used when Action is "query_layout".
 	Channel string `json:"channel,omitempty"`
+
+	// Observable, when true with Action "list", filters the response
+	// to only currently-observable targets.
+	Observable bool `json:"observable,omitempty"`
 }
 
 // observeResponse mirrors observe.ObserveResponse. Defined locally for the
@@ -153,6 +158,8 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		d.handleObserveSession(clientConnection, request)
 	case "query_layout":
 		d.handleQueryLayout(clientConnection, request)
+	case "list":
+		d.handleList(clientConnection, request)
 	default:
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("unknown action %q", request.Action))
@@ -288,6 +295,109 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		Layout: expanded,
 	}
 	json.NewEncoder(clientConnection).Encode(response)
+}
+
+// handleList handles a "list" request: enumerates all known principals and
+// machines, returning each with observability and location metadata.
+//
+// Principals come from two sources:
+//   - d.running: principals with active sandboxes on this machine (always observable)
+//   - d.services: service directory entries across all machines (observable when
+//     local, or remote with a reachable transport address)
+//
+// Machines come from d.peerAddresses plus the local machine.
+func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
+	d.logger.Info("list requested", "observable", request.Observable)
+
+	// Collect principals. Use a map to deduplicate between d.running and
+	// d.services (a locally running service appears in both).
+	seen := make(map[string]bool)
+	var principals []observe.ListPrincipal
+
+	// Locally running principals.
+	for localpart := range d.running {
+		seen[localpart] = true
+		principals = append(principals, observe.ListPrincipal{
+			Localpart:  localpart,
+			Machine:    d.machineName,
+			Observable: true,
+			Local:      true,
+		})
+	}
+
+	// Service directory entries (may include remote services and local
+	// services not yet in the seen set — though in practice, a local
+	// service that's in d.services should also be in d.running).
+	for localpart, service := range d.services {
+		if seen[localpart] {
+			continue
+		}
+		seen[localpart] = true
+
+		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
+		if err != nil {
+			machineLocalpart = service.Machine
+		}
+
+		isLocal := service.Machine == d.machineUserID
+		observable := isLocal && d.running[localpart]
+		if !isLocal {
+			// Remote principal is observable if we have a transport
+			// dialer and the peer machine has a known address.
+			_, peerReachable := d.peerAddresses[service.Machine]
+			observable = d.transportDialer != nil && peerReachable
+		}
+
+		principals = append(principals, observe.ListPrincipal{
+			Localpart:  localpart,
+			Machine:    machineLocalpart,
+			Observable: observable,
+			Local:      isLocal,
+		})
+	}
+
+	// Filter to observable if requested.
+	if request.Observable {
+		filtered := principals[:0]
+		for _, principal := range principals {
+			if principal.Observable {
+				filtered = append(filtered, principal)
+			}
+		}
+		principals = filtered
+	}
+
+	// Collect machines.
+	var machines []observe.ListMachine
+	machines = append(machines, observe.ListMachine{
+		Name:      d.machineName,
+		UserID:    d.machineUserID,
+		Self:      true,
+		Reachable: true,
+	})
+	for machineUserID, address := range d.peerAddresses {
+		machineLocalpart, err := principal.LocalpartFromMatrixID(machineUserID)
+		if err != nil {
+			machineLocalpart = machineUserID
+		}
+		machines = append(machines, observe.ListMachine{
+			Name:      machineLocalpart,
+			UserID:    machineUserID,
+			Self:      false,
+			Reachable: address != "",
+		})
+	}
+
+	d.logger.Info("list completed",
+		"principals", len(principals),
+		"machines", len(machines),
+	)
+
+	json.NewEncoder(clientConnection).Encode(observe.ListResponse{
+		OK:         true,
+		Principals: principals,
+		Machines:   machines,
+	})
 }
 
 // handleLocalObserve handles observation of a principal running on this machine.

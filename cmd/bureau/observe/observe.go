@@ -284,15 +284,19 @@ func defaultTmuxSocket() string {
 func ListCommand() *cli.Command {
 	var observable bool
 	var socketPath string
+	var outputJSON bool
 
 	return &cli.Command{
 		Name:    "list",
 		Summary: "List observable targets",
-		Description: `List principals, channels, and machines known to the daemon.
+		Description: `List principals and machines known to the daemon.
 
 With --observable, only targets that can currently be observed (have
-an active tmux session) are shown. Output is grouped by machine or
-namespace.`,
+an active tmux session or are reachable via transport) are shown.
+
+Principals come from two sources: locally running sandboxes and the
+service directory (which includes remote services). Machines include
+the local machine and all known peers.`,
 		Usage: "bureau list [flags]",
 		Examples: []cli.Example{
 			{
@@ -303,11 +307,16 @@ namespace.`,
 				Description: "List only observable targets",
 				Command:     "bureau list --observable",
 			},
+			{
+				Description: "Output as JSON for scripting",
+				Command:     "bureau list --json",
+			},
 		},
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
 			flagSet.BoolVar(&observable, "observable", false, "show only targets that can be observed")
-			flagSet.StringVar(&socketPath, "socket", "/run/bureau/observe.sock", "daemon observation socket path")
+			flagSet.BoolVar(&outputJSON, "json", false, "output as JSON")
+			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
 			return flagSet
 		},
 		Run: func(args []string) error {
@@ -315,12 +324,56 @@ namespace.`,
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
 
-			if observable {
-				fmt.Fprintf(os.Stderr, "bureau list: listing observable targets (socket=%s)\n", socketPath)
-			} else {
-				fmt.Fprintf(os.Stderr, "bureau list: listing all targets (socket=%s)\n", socketPath)
+			response, err := observe.ListTargets(socketPath, observable)
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("list not yet wired (waiting for observe client library)")
+
+			if outputJSON {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(response)
+			}
+
+			return formatListOutput(response)
 		},
 	}
+}
+
+// formatListOutput writes a human-readable table of principals and machines.
+func formatListOutput(response *observe.ListResponse) error {
+	if len(response.Principals) > 0 {
+		fmt.Println("PRINCIPALS")
+		fmt.Printf("  %-30s %-25s %s\n", "NAME", "MACHINE", "STATUS")
+		for _, principal := range response.Principals {
+			status := "known"
+			if principal.Local && principal.Observable {
+				status = "running"
+			} else if !principal.Local && principal.Observable {
+				status = "remote"
+			} else if !principal.Local && !principal.Observable {
+				status = "unreachable"
+			}
+			fmt.Printf("  %-30s %-25s %s\n", principal.Localpart, principal.Machine, status)
+		}
+	} else {
+		fmt.Println("No principals found.")
+	}
+
+	if len(response.Machines) > 0 {
+		fmt.Println()
+		fmt.Println("MACHINES")
+		fmt.Printf("  %-30s %s\n", "NAME", "STATUS")
+		for _, machine := range response.Machines {
+			status := "peer"
+			if machine.Self {
+				status = "self"
+			} else if !machine.Reachable {
+				status = "unreachable"
+			}
+			fmt.Printf("  %-30s %s\n", machine.Name, status)
+		}
+	}
+
+	return nil
 }

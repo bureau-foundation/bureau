@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/observe"
 )
 
 // mockRelaySource is the Go source for a minimal observation relay binary used
@@ -270,6 +271,187 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	t.Cleanup(daemon.stopObserveListener)
 
 	return daemon
+}
+
+// connectList connects to the daemon's observe socket and sends a list
+// request. Returns the decoded ListResponse.
+func connectList(t *testing.T, socketPath string, observable bool) observe.ListResponse {
+	t.Helper()
+
+	connection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial observe socket: %v", err)
+	}
+	defer connection.Close()
+
+	connection.SetDeadline(time.Now().Add(5 * time.Second))
+
+	request := observeRequest{Action: "list", Observable: observable}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		t.Fatalf("send list request: %v", err)
+	}
+
+	reader := bufio.NewReader(connection)
+	responseLine, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read list response: %v", err)
+	}
+
+	var response observe.ListResponse
+	if err := json.Unmarshal(responseLine, &response); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	return response
+}
+
+func TestListLocalPrincipals(t *testing.T) {
+	daemon := newTestDaemonWithObserve(t, "/nonexistent/relay",
+		[]string{"iree/amdgpu/pm", "service/stt/whisper"})
+
+	response := connectList(t, daemon.observeSocketPath, false)
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+
+	if len(response.Principals) != 2 {
+		t.Fatalf("got %d principals, want 2", len(response.Principals))
+	}
+
+	// Verify both are local, observable, on the test machine.
+	foundPrincipals := make(map[string]observe.ListPrincipal)
+	for _, principal := range response.Principals {
+		foundPrincipals[principal.Localpart] = principal
+	}
+
+	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper"} {
+		principal, ok := foundPrincipals[localpart]
+		if !ok {
+			t.Errorf("missing principal %s", localpart)
+			continue
+		}
+		if !principal.Observable {
+			t.Errorf("%s should be observable", localpart)
+		}
+		if !principal.Local {
+			t.Errorf("%s should be local", localpart)
+		}
+		if principal.Machine != "machine/test" {
+			t.Errorf("%s machine = %q, want machine/test", localpart, principal.Machine)
+		}
+	}
+
+	// Self machine should always appear.
+	if len(response.Machines) != 1 {
+		t.Fatalf("got %d machines, want 1", len(response.Machines))
+	}
+	if !response.Machines[0].Self {
+		t.Error("expected self machine")
+	}
+	if response.Machines[0].Name != "machine/test" {
+		t.Errorf("machine name = %q, want machine/test", response.Machines[0].Name)
+	}
+}
+
+func TestListWithRemoteServices(t *testing.T) {
+	daemon := newTestDaemonWithObserve(t, "/nonexistent/relay",
+		[]string{"agent/alice"})
+
+	// Add a remote service to the daemon's service directory.
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
+	}
+	// Add the peer address so the remote service is reachable.
+	daemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = "192.168.1.100:9090"
+	daemon.transportDialer = &testTCPDialer{}
+
+	response := connectList(t, daemon.observeSocketPath, false)
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+
+	if len(response.Principals) != 2 {
+		t.Fatalf("got %d principals, want 2", len(response.Principals))
+	}
+
+	foundPrincipals := make(map[string]observe.ListPrincipal)
+	for _, principal := range response.Principals {
+		foundPrincipals[principal.Localpart] = principal
+	}
+
+	// Local agent should be observable and local.
+	alice := foundPrincipals["agent/alice"]
+	if !alice.Observable || !alice.Local {
+		t.Errorf("agent/alice: observable=%v local=%v, want true/true", alice.Observable, alice.Local)
+	}
+
+	// Remote service should be observable (peer is reachable) but not local.
+	piper := foundPrincipals["service/tts/piper"]
+	if !piper.Observable {
+		t.Error("service/tts/piper should be observable (peer reachable)")
+	}
+	if piper.Local {
+		t.Error("service/tts/piper should not be local")
+	}
+	if piper.Machine != "machine/cloud-gpu" {
+		t.Errorf("service/tts/piper machine = %q, want machine/cloud-gpu", piper.Machine)
+	}
+
+	// Should see two machines: self + peer.
+	if len(response.Machines) != 2 {
+		t.Fatalf("got %d machines, want 2", len(response.Machines))
+	}
+}
+
+func TestListObservableFilter(t *testing.T) {
+	daemon := newTestDaemonWithObserve(t, "/nonexistent/relay",
+		[]string{"agent/alice"})
+
+	// Add a remote service with NO reachable peer (unreachable).
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
+	}
+	// No peer address and no transport dialer → not observable.
+
+	// Without filter: both principals appear.
+	allResponse := connectList(t, daemon.observeSocketPath, false)
+	if !allResponse.OK {
+		t.Fatalf("expected OK, got error: %s", allResponse.Error)
+	}
+	if len(allResponse.Principals) != 2 {
+		t.Fatalf("unfiltered: got %d principals, want 2", len(allResponse.Principals))
+	}
+
+	// With observable filter: only the local running principal appears.
+	filteredResponse := connectList(t, daemon.observeSocketPath, true)
+	if !filteredResponse.OK {
+		t.Fatalf("expected OK, got error: %s", filteredResponse.Error)
+	}
+	if len(filteredResponse.Principals) != 1 {
+		t.Fatalf("filtered: got %d principals, want 1", len(filteredResponse.Principals))
+	}
+	if filteredResponse.Principals[0].Localpart != "agent/alice" {
+		t.Errorf("filtered principal = %q, want agent/alice", filteredResponse.Principals[0].Localpart)
+	}
+}
+
+func TestListNoPrincipals(t *testing.T) {
+	daemon := newTestDaemonWithObserve(t, "/nonexistent/relay", nil)
+
+	response := connectList(t, daemon.observeSocketPath, false)
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+	if len(response.Principals) != 0 {
+		t.Errorf("got %d principals, want 0", len(response.Principals))
+	}
+	// Self machine should still appear.
+	if len(response.Machines) != 1 {
+		t.Errorf("got %d machines, want 1", len(response.Machines))
+	}
 }
 
 func TestObserveErrorUnknownPrincipal(t *testing.T) {

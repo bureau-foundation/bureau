@@ -275,6 +275,11 @@ type Daemon struct {
 	// override this to use temp directories.
 	adminSocketPathFunc func(localpart string) string
 
+	// prefetchFunc fetches a Nix store path and its closure from
+	// configured substituters. Defaults to prefetchNixStore. Tests
+	// override this to avoid requiring a real Nix installation.
+	prefetchFunc func(ctx context.Context, storePath string) error
+
 	// Transport: daemon-to-daemon communication for cross-machine routing.
 	// These fields are nil/empty when --transport-listen is not set
 	// (local-only mode).

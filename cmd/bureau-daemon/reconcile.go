@@ -84,6 +84,25 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				"template", assignment.Template,
 				"command", sandboxSpec.Command,
 			)
+
+			// Ensure the Nix environment's store path (and its full
+			// transitive closure) exists locally before handing the
+			// spec to the launcher. On failure, skip this principal
+			// — the reconcile loop retries on the next sync cycle.
+			if sandboxSpec.EnvironmentPath != "" {
+				if err := d.prefetchEnvironment(ctx, sandboxSpec.EnvironmentPath); err != nil {
+					d.logger.Error("prefetching nix environment",
+						"principal", localpart,
+						"store_path", sandboxSpec.EnvironmentPath,
+						"error", err,
+					)
+					d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+						fmt.Sprintf("Failed to prefetch Nix environment for %s: %v (will retry on next reconcile cycle)",
+							localpart, err),
+					))
+					continue
+				}
+			}
 		}
 
 		// Send create-sandbox to the launcher.

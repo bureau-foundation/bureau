@@ -12,7 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-func TestSpaceCreate_MissingName(t *testing.T) {
+func TestSpaceCreate_MissingAlias(t *testing.T) {
 	command := spaceCreateCommand()
 	err := command.Execute([]string{
 		"--homeserver", "http://localhost:6167",
@@ -20,7 +20,7 @@ func TestSpaceCreate_MissingName(t *testing.T) {
 		"--user-id", "@a:b",
 	})
 	if err == nil {
-		t.Fatal("expected error for missing space name")
+		t.Fatal("expected error for missing space alias")
 	}
 }
 
@@ -30,7 +30,7 @@ func TestSpaceCreate_TooManyArgs(t *testing.T) {
 		"--homeserver", "http://localhost:6167",
 		"--token", "tok",
 		"--user-id", "@a:b",
-		"Space One", "extra",
+		"my-project", "extra",
 	})
 	if err == nil {
 		t.Fatal("expected error for extra argument")
@@ -70,7 +70,41 @@ func TestSpaceCreate_Success(t *testing.T) {
 		"--homeserver", server.URL,
 		"--token", "tok",
 		"--user-id", "@admin:local",
-		"My Project",
+		"--name", "My Project",
+		"my-project",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSpaceCreate_NameDefaultsToAlias(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/_matrix/client/v3/createRoom" {
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request: %v", err)
+			}
+			if body["name"] != "iree" {
+				t.Errorf("expected name to default to alias 'iree', got %v", body["name"])
+			}
+			if body["room_alias_name"] != "iree" {
+				t.Errorf("unexpected alias: %v", body["room_alias_name"])
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!space2:local"})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
+	}))
+	defer server.Close()
+
+	command := spaceCreateCommand()
+	err := command.Execute([]string{
+		"--homeserver", server.URL,
+		"--token", "tok",
+		"--user-id", "@admin:local",
+		"iree",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -111,29 +145,6 @@ func TestSpaceMembers_MissingTarget(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing target")
-	}
-}
-
-func TestDefaultAlias(t *testing.T) {
-	tests := []struct {
-		name     string
-		expected string
-	}{
-		{"My Project", "my-project"},
-		{"IREE AMDGPU", "iree-amdgpu"},
-		{"simple", "simple"},
-		{"  leading spaces  ", "leading-spaces"},
-		{"a_b_c", "a-b-c"},
-		{"Hello World 123", "hello-world-123"},
-		{"special!@#chars", "specialchars"},
-		{"multi   space", "multi-space"},
-	}
-
-	for _, test := range tests {
-		result := defaultAlias(test.name)
-		if result != test.expected {
-			t.Errorf("defaultAlias(%q) = %q, want %q", test.name, result, test.expected)
-		}
 	}
 }
 

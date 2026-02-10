@@ -37,7 +37,10 @@ state key defaults to "" (empty string) when not specified.`,
 
 // stateGetCommand returns the "get" subcommand under "state".
 func stateGetCommand() *cli.Command {
-	var session SessionConfig
+	var (
+		session  SessionConfig
+		stateKey string
+	)
 
 	return &cli.Command{
 		Name:    "get",
@@ -49,7 +52,7 @@ state events in the room.
 The state key defaults to "" (empty string). Many state events use the
 empty state key; Bureau protocol events typically use a principal name
 or machine ID as the state key.`,
-		Usage: "bureau matrix state get [flags] <room> [<event-type> [<state-key>]]",
+		Usage: "bureau matrix state get [flags] <room> [<event-type>]",
 		Examples: []cli.Example{
 			{
 				Description: "Get all state events in a room",
@@ -61,20 +64,21 @@ or machine ID as the state key.`,
 			},
 			{
 				Description: "Get a state event with a non-empty state key",
-				Command:     "bureau matrix state get --credential-file ./creds '!room:bureau.local' m.bureau.machine_config '@machine/work:bureau.local'",
+				Command:     "bureau matrix state get --credential-file ./creds --key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("get", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
+			flagSet.StringVar(&stateKey, "key", "", "state key for the event (default: empty string)")
 			return flagSet
 		},
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("usage: bureau matrix state get [flags] <room> [<event-type> [<state-key>]]")
+				return fmt.Errorf("usage: bureau matrix state get [flags] <room> [<event-type>]")
 			}
-			if len(args) > 3 {
-				return fmt.Errorf("unexpected argument: %s", args[3])
+			if len(args) > 2 {
+				return fmt.Errorf("unexpected argument: %s", args[2])
 			}
 
 			roomTarget := args[0]
@@ -101,12 +105,8 @@ or machine ID as the state key.`,
 				return printJSON(events)
 			}
 
-			// Specific event type, optional state key.
+			// Specific event type with optional --key.
 			eventType := args[1]
-			stateKey := ""
-			if len(args) == 3 {
-				stateKey = args[2]
-			}
 
 			content, err := matrixSession.GetStateEvent(ctx, roomID, eventType, stateKey)
 			if err != nil {
@@ -142,7 +142,7 @@ specific state key.`,
 			},
 			{
 				Description: "Set a Bureau machine config with a state key",
-				Command:     `bureau matrix state set --credential-file ./creds --state-key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config '{"agents":[]}'`,
+				Command:     `bureau matrix state set --credential-file ./creds --key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config '{"agents":[]}'`,
 			},
 			{
 				Description: "Set state from stdin",
@@ -152,7 +152,7 @@ specific state key.`,
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("set", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
-			flagSet.StringVar(&stateKey, "state-key", "", "state key for the event (default: empty string)")
+			flagSet.StringVar(&stateKey, "key", "", "state key for the event (default: empty string)")
 			flagSet.BoolVar(&useStdin, "stdin", false, "read JSON body from stdin instead of positional argument")
 			return flagSet
 		},

@@ -22,7 +22,7 @@ func TestStateGetCommand_TooManyArgs(t *testing.T) {
 	command := StateCommand()
 	err := command.Execute([]string{
 		"get", "--homeserver", "http://localhost:6167", "--token", "tok", "--user-id", "@a:b",
-		"!room:local", "m.room.topic", "statekey", "extra",
+		"!room:local", "m.room.topic", "extra",
 	})
 	if err == nil {
 		t.Fatal("expected error for too many args")

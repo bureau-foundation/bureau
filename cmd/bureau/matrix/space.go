@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -39,7 +38,7 @@ workspaces, project channels, and service directories.`,
 func spaceCreateCommand() *cli.Command {
 	var (
 		session SessionConfig
-		alias   string
+		name    string
 		topic   string
 	)
 
@@ -49,38 +48,38 @@ func spaceCreateCommand() *cli.Command {
 		Description: `Create a new Matrix space. Spaces are rooms with type "m.space" that
 act as containers for organizing related rooms.
 
-The name is required. An alias is optional and defaults to the name
-(lowercased, spaces replaced with hyphens). The alias is the local
-part only — the server name is appended automatically.`,
-		Usage: "bureau matrix space create <name> [flags]",
+The alias is the local part of the space's Matrix alias (e.g., "iree"
+becomes "#iree:bureau.local"). The display name defaults to the alias
+if not specified.`,
+		Usage: "bureau matrix space create <alias> [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Create a space with a custom alias",
-				Command:     "bureau matrix space create 'My Project' --alias my-project --credential-file ./creds",
+				Description: "Create a space with a display name",
+				Command:     "bureau matrix space create iree --name IREE --credential-file ./creds",
 			},
 			{
 				Description: "Create a space with a topic",
-				Command:     "bureau matrix space create 'Research' --topic 'Research coordination' --credential-file ./creds",
+				Command:     "bureau matrix space create research --topic 'Research coordination' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("space create", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
-			flagSet.StringVar(&alias, "alias", "", "local alias for the space (defaults to lowercased name with hyphens)")
+			flagSet.StringVar(&name, "name", "", "space display name (defaults to alias)")
 			flagSet.StringVar(&topic, "topic", "", "space topic")
 			return flagSet
 		},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("space name is required\n\nUsage: bureau matrix space create <name> [flags]")
+				return fmt.Errorf("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
 			}
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			name := args[0]
+			alias := args[0]
 
-			if alias == "" {
-				alias = defaultAlias(name)
+			if name == "" {
+				name = alias
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -317,27 +316,4 @@ func inspectSpaceState(ctx context.Context, session *messaging.Session, roomID s
 	}
 
 	return isSpace, name, canonicalAlias
-}
-
-// defaultAlias derives a room alias from a human-readable name by lowercasing,
-// replacing whitespace runs with hyphens, and stripping non-alphanumeric
-// characters except hyphens.
-func defaultAlias(name string) string {
-	lower := strings.ToLower(name)
-	var builder strings.Builder
-	previousHyphen := false
-	for _, character := range lower {
-		switch {
-		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
-			builder.WriteRune(character)
-			previousHyphen = false
-		case character == ' ' || character == '_' || character == '-':
-			if !previousHyphen && builder.Len() > 0 {
-				builder.WriteRune('-')
-				previousHyphen = true
-			}
-		}
-	}
-	result := builder.String()
-	return strings.TrimRight(result, "-")
 }

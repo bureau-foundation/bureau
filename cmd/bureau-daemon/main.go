@@ -57,6 +57,7 @@ func run() error {
 		stateDir           string
 		launcherSocket     string
 		adminUser          string
+		adminBasePath      string
 		relaySocket        string
 		observeSocket      string
 		tmuxSocket         string
@@ -71,6 +72,7 @@ func run() error {
 	flag.StringVar(&stateDir, "state-dir", "/var/lib/bureau", "directory containing session.json from the launcher")
 	flag.StringVar(&launcherSocket, "launcher-socket", "/run/bureau/launcher.sock", "path to the launcher IPC socket")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
+	flag.StringVar(&adminBasePath, "admin-base-path", principal.AdminSocketBasePath, "base directory for proxy admin sockets (daemon connects here to configure service routing)")
 	flag.StringVar(&relaySocket, "relay-socket", "/run/bureau/relay.sock", "Unix socket path for the transport relay (consumer proxies connect here for remote services)")
 	flag.StringVar(&observeSocket, "observe-socket", "/run/bureau/observe.sock", "Unix socket for observation requests from clients")
 	flag.StringVar(&tmuxSocket, "tmux-socket", "/run/bureau/tmux.sock", "tmux server socket for Bureau-managed sessions")
@@ -95,6 +97,18 @@ func run() error {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	// Compute the daemon's binary hash for BureauVersion comparison.
+	// Done early since it's pure filesystem I/O with no dependencies.
+	// The hash is stable for the lifetime of this process — the binary
+	// doesn't change while it's running (exec() creates a new process).
+	daemonBinaryHash := ""
+	if selfHash, hashErr := computeSelfHash(); hashErr == nil {
+		daemonBinaryHash = selfHash
+		logger.Info("daemon binary hash computed", "hash", daemonBinaryHash)
+	} else {
+		logger.Warn("failed to compute daemon binary hash", "error", hashErr)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -155,29 +169,32 @@ func run() error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 
 	daemon := &Daemon{
-		session:             session,
-		client:              client,
-		tokenVerifier:       newTokenVerifier(client, 5*time.Minute, logger),
-		machineName:         machineName,
-		machineUserID:       machineUserID,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		machinesRoomID:      machinesRoomID,
-		servicesRoomID:      servicesRoomID,
-		launcherSocket:      launcherSocket,
-		statusInterval:      statusInterval,
-		running:             make(map[string]bool),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		peerAddresses:       make(map[string]string),
-		peerTransports:      make(map[string]http.RoundTripper),
-		adminSocketPathFunc: principal.AdminSocketPath,
-		observeSocketPath:   observeSocket,
-		tmuxServerSocket:    tmuxSocket,
-		observeRelayBinary:  observeRelayBinary,
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              logger,
+		session:          session,
+		client:           client,
+		tokenVerifier:    newTokenVerifier(client, 5*time.Minute, logger),
+		machineName:      machineName,
+		machineUserID:    machineUserID,
+		serverName:       serverName,
+		configRoomID:     configRoomID,
+		machinesRoomID:   machinesRoomID,
+		servicesRoomID:   servicesRoomID,
+		launcherSocket:   launcherSocket,
+		statusInterval:   statusInterval,
+		daemonBinaryHash: daemonBinaryHash,
+		running:          make(map[string]bool),
+		lastSpecs:        make(map[string]*schema.SandboxSpec),
+		services:         make(map[string]*schema.Service),
+		proxyRoutes:      make(map[string]string),
+		peerAddresses:    make(map[string]string),
+		peerTransports:   make(map[string]http.RoundTripper),
+		adminSocketPathFunc: func(localpart string) string {
+			return adminBasePath + localpart + principal.SocketSuffix
+		},
+		observeSocketPath:  observeSocket,
+		tmuxServerSocket:   tmuxSocket,
+		observeRelayBinary: observeRelayBinary,
+		layoutWatchers:     make(map[string]*layoutWatcher),
+		logger:             logger,
 	}
 
 	// Start WebRTC transport and relay socket.
@@ -245,6 +262,13 @@ type Daemon struct {
 	servicesRoomID string
 	launcherSocket string
 	statusInterval time.Duration
+
+	// daemonBinaryHash is the SHA256 hex digest of the currently running
+	// daemon binary, computed once at startup via os.Executable(). Used
+	// by BureauVersion comparison to determine whether a config update
+	// requires a daemon restart (via exec()). Empty if the hash could
+	// not be computed (treated as always-changed by CompareBureauVersion).
+	daemonBinaryHash string
 
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.

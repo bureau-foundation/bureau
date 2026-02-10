@@ -12,6 +12,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-launcher",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/binhash",
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",

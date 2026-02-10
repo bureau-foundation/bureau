@@ -420,9 +420,11 @@ type launcherIPCRequest struct {
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.
 type launcherIPCResponse struct {
-	OK       bool   `json:"ok"`
-	Error    string `json:"error,omitempty"`
-	ProxyPID int    `json:"proxy_pid,omitempty"`
+	OK              bool   `json:"ok"`
+	Error           string `json:"error,omitempty"`
+	ProxyPID        int    `json:"proxy_pid,omitempty"`
+	BinaryHash      string `json:"binary_hash,omitempty"`
+	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
 }
 
 // launcherRequest sends a request to the launcher and reads the response.

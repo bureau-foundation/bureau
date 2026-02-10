@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 go_library(
     name = "bureau-daemon_lib",
     srcs = [
+        "bureau_version.go",
         "layout.go",
         "main.go",
         "observe.go",
@@ -21,6 +22,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-daemon",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/binhash",
         "//lib/principal",
         "//lib/schema",
         "//lib/template",
@@ -40,6 +42,7 @@ go_binary(
 go_test(
     name = "bureau-daemon_test",
     srcs = [
+        "bureau_version_test.go",
         "composition_test.go",
         "layout_watcher_test.go",
         "machine_layout_test.go",
@@ -68,6 +71,7 @@ go_test(
         "BUREAU_PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
     },
     deps = [
+        "//lib/binhash",
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",

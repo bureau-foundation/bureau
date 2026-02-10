@@ -35,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -160,6 +161,20 @@ func run() error {
 		workspaceRoot:    workspaceRoot,
 		sandboxes:        make(map[string]*managedSandbox),
 		logger:           logger,
+	}
+
+	// Compute the launcher's own binary hash for version comparison.
+	// The daemon queries this via "status" IPC to determine whether
+	// the launcher binary needs updating.
+	if executablePath, execErr := os.Executable(); execErr == nil {
+		if digest, hashErr := binhash.HashFile(executablePath); hashErr == nil {
+			launcher.binaryHash = binhash.FormatDigest(digest)
+			logger.Info("launcher binary hash computed", "hash", launcher.binaryHash)
+		} else {
+			logger.Warn("failed to hash launcher binary", "error", hashErr)
+		}
+	} else {
+		logger.Warn("failed to resolve launcher executable path", "error", execErr)
 	}
 
 	listener, err := listenSocket(socketPath)
@@ -450,6 +465,7 @@ type Launcher struct {
 	adminBasePath    string // base directory for admin sockets (e.g., /run/bureau/admin/)
 	tmuxServerSocket string // path to Bureau's dedicated tmux server socket (e.g., /run/bureau/tmux.sock)
 	workspaceRoot    string // root directory for project workspaces (e.g., /var/bureau/workspace/)
+	binaryHash       string // SHA256 hex digest of the launcher binary, computed at startup
 	sandboxes        map[string]*managedSandbox
 	logger           *slog.Logger
 }
@@ -513,6 +529,17 @@ type IPCResponse struct {
 
 	// ProxyPID is the PID of the spawned proxy process (for create-sandbox).
 	ProxyPID int `json:"proxy_pid,omitempty"`
+
+	// BinaryHash is the SHA256 hex digest of the launcher's own binary.
+	// Returned by the "status" action so the daemon can compare against
+	// the desired BureauVersion without restarting the launcher.
+	BinaryHash string `json:"binary_hash,omitempty"`
+
+	// ProxyBinaryPath is the filesystem path of the proxy binary the
+	// launcher is currently using for new sandbox creation. Returned by
+	// the "status" action so the daemon can hash-compare the current
+	// proxy against the desired version.
+	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
 }
 
 // handleConnection processes a single IPC request/response cycle.
@@ -537,7 +564,11 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	var response IPCResponse
 	switch request.Action {
 	case "status":
-		response = IPCResponse{OK: true}
+		response = IPCResponse{
+			OK:              true,
+			BinaryHash:      l.binaryHash,
+			ProxyBinaryPath: l.proxyBinaryPath,
+		}
 
 	case "create-sandbox":
 		response = l.handleCreateSandbox(ctx, &request)

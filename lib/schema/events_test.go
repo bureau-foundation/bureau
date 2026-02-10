@@ -357,6 +357,12 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 100", EventTypeCredentials, events[EventTypeCredentials])
 	}
 
+	// Layout events are writable by the daemon (power level 0) so it can
+	// publish layout state without admin privileges.
+	if events[EventTypeLayout] != 0 {
+		t.Errorf("%s power level = %v, want 0", EventTypeLayout, events[EventTypeLayout])
+	}
+
 	// Default event power level should be 100 (admin-only room).
 	if levels["events_default"] != 100 {
 		t.Errorf("events_default = %v, want 100", levels["events_default"])
@@ -579,6 +585,71 @@ func TestLayoutContentObserveMembers(t *testing.T) {
 	}
 	if decodedPane.ObserveMembers.Role != "agent" {
 		t.Errorf("ObserveMembers.Role: got %q, want %q", decodedPane.ObserveMembers.Role, "agent")
+	}
+}
+
+func TestLayoutContentSourceMachineRoundTrip(t *testing.T) {
+	// SourceMachine and SealedMetadata are set by the daemon before
+	// publishing; verify they survive JSON serialization.
+	original := LayoutContent{
+		SourceMachine:  "@machine/workstation:bureau.local",
+		SealedMetadata: "age-encrypted-blob-base64",
+		Windows: []LayoutWindow{
+			{
+				Name: "main",
+				Panes: []LayoutPane{
+					{Role: "agent"},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "source_machine", "@machine/workstation:bureau.local")
+	assertField(t, raw, "sealed_metadata", "age-encrypted-blob-base64")
+
+	var decoded LayoutContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.SourceMachine != original.SourceMachine {
+		t.Errorf("SourceMachine: got %q, want %q", decoded.SourceMachine, original.SourceMachine)
+	}
+	if decoded.SealedMetadata != original.SealedMetadata {
+		t.Errorf("SealedMetadata: got %q, want %q", decoded.SealedMetadata, original.SealedMetadata)
+	}
+}
+
+func TestLayoutContentOmitsEmptySourceMachine(t *testing.T) {
+	// When SourceMachine and SealedMetadata are empty, they should be
+	// omitted from the JSON to keep the wire format clean.
+	layout := LayoutContent{
+		Windows: []LayoutWindow{
+			{Name: "main", Panes: []LayoutPane{{Role: "agent"}}},
+		},
+	}
+
+	data, err := json.Marshal(layout)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	for _, field := range []string{"source_machine", "sealed_metadata", "prefix"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty", field)
+		}
 	}
 }
 

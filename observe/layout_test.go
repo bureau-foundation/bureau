@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestReadTmuxLayoutSinglePane(t *testing.T) {
@@ -502,6 +504,351 @@ func TestInferPaneSplitsVertical(t *testing.T) {
 	// 24 / (23+24+1) = 50%
 	if result[1].Size != 50 {
 		t.Errorf("size = %d, want 50", result[1].Size)
+	}
+}
+
+// --- LayoutEqual tests ---
+
+func TestLayoutEqualBothNil(t *testing.T) {
+	if !LayoutEqual(nil, nil) {
+		t.Error("LayoutEqual(nil, nil) = false, want true")
+	}
+}
+
+func TestLayoutEqualOneNil(t *testing.T) {
+	layout := &Layout{Prefix: "C-a", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
+	if LayoutEqual(layout, nil) {
+		t.Error("LayoutEqual(layout, nil) = true, want false")
+	}
+	if LayoutEqual(nil, layout) {
+		t.Error("LayoutEqual(nil, layout) = true, want false")
+	}
+}
+
+func TestLayoutEqualIdentical(t *testing.T) {
+	a := &Layout{
+		Prefix: "C-a",
+		Windows: []Window{
+			{
+				Name: "agents",
+				Panes: []Pane{
+					{Observe: "iree/amdgpu/pm"},
+					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+				},
+			},
+			{
+				Name: "tools",
+				Panes: []Pane{
+					{Command: "beads-tui", Split: "horizontal", Size: 30},
+					{Role: "shell", Split: "vertical", Size: 70},
+				},
+			},
+		},
+	}
+	b := &Layout{
+		Prefix: "C-a",
+		Windows: []Window{
+			{
+				Name: "agents",
+				Panes: []Pane{
+					{Observe: "iree/amdgpu/pm"},
+					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+				},
+			},
+			{
+				Name: "tools",
+				Panes: []Pane{
+					{Command: "beads-tui", Split: "horizontal", Size: 30},
+					{Role: "shell", Split: "vertical", Size: 70},
+				},
+			},
+		},
+	}
+	if !LayoutEqual(a, b) {
+		t.Error("identical layouts should be equal")
+	}
+}
+
+func TestLayoutEqualDifferentPrefix(t *testing.T) {
+	a := &Layout{Prefix: "C-a", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
+	b := &Layout{Prefix: "C-b", Windows: []Window{{Name: "main", Panes: []Pane{{Command: "zsh"}}}}}
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different prefixes should not be equal")
+	}
+}
+
+func TestLayoutEqualDifferentWindowCount(t *testing.T) {
+	a := &Layout{Windows: []Window{
+		{Name: "one", Panes: []Pane{{Command: "zsh"}}},
+	}}
+	b := &Layout{Windows: []Window{
+		{Name: "one", Panes: []Pane{{Command: "zsh"}}},
+		{Name: "two", Panes: []Pane{{Command: "zsh"}}},
+	}}
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different window counts should not be equal")
+	}
+}
+
+func TestLayoutEqualDifferentWindowName(t *testing.T) {
+	a := &Layout{Windows: []Window{{Name: "agents", Panes: []Pane{{Command: "zsh"}}}}}
+	b := &Layout{Windows: []Window{{Name: "tools", Panes: []Pane{{Command: "zsh"}}}}}
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different window names should not be equal")
+	}
+}
+
+func TestLayoutEqualDifferentPaneFields(t *testing.T) {
+	base := func() *Layout {
+		return &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
+			{Command: "sleep", Split: "horizontal", Size: 50},
+		}}}}
+	}
+
+	// Different command.
+	a := base()
+	b := base()
+	b.Windows[0].Panes[0].Command = "watch"
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different pane commands should not be equal")
+	}
+
+	// Different split.
+	a = base()
+	b = base()
+	b.Windows[0].Panes[0].Split = "vertical"
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different pane splits should not be equal")
+	}
+
+	// Different size.
+	a = base()
+	b = base()
+	b.Windows[0].Panes[0].Size = 60
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different pane sizes should not be equal")
+	}
+
+	// Different observe.
+	a = &Layout{Windows: []Window{{Name: "main", Panes: []Pane{{Observe: "foo"}}}}}
+	b = &Layout{Windows: []Window{{Name: "main", Panes: []Pane{{Observe: "bar"}}}}}
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different pane observe targets should not be equal")
+	}
+
+	// Different role.
+	a = &Layout{Windows: []Window{{Name: "main", Panes: []Pane{{Role: "agent"}}}}}
+	b = &Layout{Windows: []Window{{Name: "main", Panes: []Pane{{Role: "shell"}}}}}
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different pane roles should not be equal")
+	}
+}
+
+func TestLayoutEqualObserveMembers(t *testing.T) {
+	// Both have ObserveMembers with same role — equal.
+	a := &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
+		{ObserveMembers: &MemberFilter{Role: "agent"}},
+	}}}}
+	b := &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
+		{ObserveMembers: &MemberFilter{Role: "agent"}},
+	}}}}
+	if !LayoutEqual(a, b) {
+		t.Error("layouts with identical ObserveMembers should be equal")
+	}
+
+	// Different ObserveMembers role — not equal.
+	b.Windows[0].Panes[0].ObserveMembers.Role = "service"
+	if LayoutEqual(a, b) {
+		t.Error("layouts with different ObserveMembers roles should not be equal")
+	}
+
+	// One nil, one non-nil — not equal.
+	a.Windows[0].Panes[0].ObserveMembers = nil
+	if LayoutEqual(a, b) {
+		t.Error("layout with nil ObserveMembers should not equal one with non-nil")
+	}
+}
+
+// --- LayoutToSchema / SchemaToLayout conversion tests ---
+
+func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
+	layout := &Layout{
+		Prefix: "C-a",
+		Windows: []Window{
+			{
+				Name: "mixed",
+				Panes: []Pane{
+					{Observe: "iree/amdgpu/pm"},
+					{Command: "beads-tui", Split: "horizontal", Size: 40},
+					{Role: "agent", Split: "vertical", Size: 60},
+					{ObserveMembers: &MemberFilter{Role: "agent"}, Split: "horizontal"},
+				},
+			},
+		},
+	}
+
+	content := LayoutToSchema(layout)
+
+	if content.Prefix != "C-a" {
+		t.Errorf("Prefix = %q, want %q", content.Prefix, "C-a")
+	}
+	if content.SourceMachine != "" {
+		t.Error("SourceMachine should be empty (caller stamps it)")
+	}
+	if len(content.Windows) != 1 {
+		t.Fatalf("window count = %d, want 1", len(content.Windows))
+	}
+
+	window := content.Windows[0]
+	if window.Name != "mixed" {
+		t.Errorf("window name = %q, want %q", window.Name, "mixed")
+	}
+	if len(window.Panes) != 4 {
+		t.Fatalf("pane count = %d, want 4", len(window.Panes))
+	}
+
+	// Observe pane.
+	if window.Panes[0].Observe != "iree/amdgpu/pm" {
+		t.Errorf("pane[0].Observe = %q, want %q", window.Panes[0].Observe, "iree/amdgpu/pm")
+	}
+
+	// Command pane.
+	if window.Panes[1].Command != "beads-tui" {
+		t.Errorf("pane[1].Command = %q, want %q", window.Panes[1].Command, "beads-tui")
+	}
+	if window.Panes[1].Split != "horizontal" {
+		t.Errorf("pane[1].Split = %q, want %q", window.Panes[1].Split, "horizontal")
+	}
+	if window.Panes[1].Size != 40 {
+		t.Errorf("pane[1].Size = %d, want 40", window.Panes[1].Size)
+	}
+
+	// Role pane.
+	if window.Panes[2].Role != "agent" {
+		t.Errorf("pane[2].Role = %q, want %q", window.Panes[2].Role, "agent")
+	}
+
+	// ObserveMembers pane.
+	if window.Panes[3].ObserveMembers == nil {
+		t.Fatal("pane[3].ObserveMembers should not be nil")
+	}
+	if window.Panes[3].ObserveMembers.Role != "agent" {
+		t.Errorf("pane[3].ObserveMembers.Role = %q, want %q",
+			window.Panes[3].ObserveMembers.Role, "agent")
+	}
+}
+
+func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
+	content := schema.LayoutContent{
+		Prefix:        "C-b",
+		SourceMachine: "@machine/workstation:bureau.local",
+		SealedMetadata: "encrypted-blob",
+		Windows: []schema.LayoutWindow{
+			{
+				Name: "mixed",
+				Panes: []schema.LayoutPane{
+					{Observe: "iree/amdgpu/pm"},
+					{Command: "htop", Split: "horizontal", Size: 30},
+					{Role: "shell", Split: "vertical", Size: 50},
+					{ObserveMembers: &schema.LayoutMemberFilter{Role: "service"}},
+				},
+			},
+		},
+	}
+
+	layout := SchemaToLayout(content)
+
+	if layout.Prefix != "C-b" {
+		t.Errorf("Prefix = %q, want %q", layout.Prefix, "C-b")
+	}
+	if len(layout.Windows) != 1 {
+		t.Fatalf("window count = %d, want 1", len(layout.Windows))
+	}
+
+	window := layout.Windows[0]
+	if window.Name != "mixed" {
+		t.Errorf("window name = %q, want %q", window.Name, "mixed")
+	}
+	if len(window.Panes) != 4 {
+		t.Fatalf("pane count = %d, want 4", len(window.Panes))
+	}
+
+	if window.Panes[0].Observe != "iree/amdgpu/pm" {
+		t.Errorf("pane[0].Observe = %q, want %q", window.Panes[0].Observe, "iree/amdgpu/pm")
+	}
+	if window.Panes[1].Command != "htop" {
+		t.Errorf("pane[1].Command = %q, want %q", window.Panes[1].Command, "htop")
+	}
+	if window.Panes[1].Split != "horizontal" || window.Panes[1].Size != 30 {
+		t.Errorf("pane[1] Split=%q Size=%d, want horizontal/30",
+			window.Panes[1].Split, window.Panes[1].Size)
+	}
+	if window.Panes[2].Role != "shell" {
+		t.Errorf("pane[2].Role = %q, want %q", window.Panes[2].Role, "shell")
+	}
+	if window.Panes[3].ObserveMembers == nil {
+		t.Fatal("pane[3].ObserveMembers should not be nil")
+	}
+	if window.Panes[3].ObserveMembers.Role != "service" {
+		t.Errorf("pane[3].ObserveMembers.Role = %q, want %q",
+			window.Panes[3].ObserveMembers.Role, "service")
+	}
+}
+
+func TestLayoutSchemaRoundTrip(t *testing.T) {
+	// Convert Layout → Schema → Layout and verify equality via LayoutEqual.
+	original := &Layout{
+		Prefix: "C-a",
+		Windows: []Window{
+			{
+				Name: "agents",
+				Panes: []Pane{
+					{Observe: "iree/amdgpu/pm"},
+					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+				},
+			},
+			{
+				Name: "tools",
+				Panes: []Pane{
+					{Command: "beads-tui", Split: "horizontal", Size: 30},
+					{Role: "shell", Split: "vertical", Size: 70},
+				},
+			},
+			{
+				Name: "dynamic",
+				Panes: []Pane{
+					{ObserveMembers: &MemberFilter{Role: "agent"}},
+				},
+			},
+		},
+	}
+
+	content := LayoutToSchema(original)
+	roundTripped := SchemaToLayout(content)
+
+	if !LayoutEqual(original, roundTripped) {
+		t.Errorf("round-trip produced different layout:\n  original:     %+v\n  round-tripped: %+v",
+			original, roundTripped)
+	}
+}
+
+func TestLayoutToSchemaNilObserveMembers(t *testing.T) {
+	// Verify nil ObserveMembers doesn't become a non-nil pointer after conversion.
+	layout := &Layout{
+		Windows: []Window{{
+			Name:  "main",
+			Panes: []Pane{{Command: "zsh"}},
+		}},
+	}
+
+	content := LayoutToSchema(layout)
+	if content.Windows[0].Panes[0].ObserveMembers != nil {
+		t.Error("nil ObserveMembers should stay nil in schema conversion")
+	}
+
+	roundTripped := SchemaToLayout(content)
+	if roundTripped.Windows[0].Panes[0].ObserveMembers != nil {
+		t.Error("nil ObserveMembers should stay nil after round-trip")
 	}
 }
 

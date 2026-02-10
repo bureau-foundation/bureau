@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // Layout describes the tmux session structure for an observation target.
@@ -384,6 +386,133 @@ func tmuxCommand(serverSocket string, args ...string) (string, error) {
 			strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+// LayoutEqual reports whether two layouts are structurally identical.
+// Used by the daemon to skip publishing unchanged layouts to Matrix.
+func LayoutEqual(a, b *Layout) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Prefix != b.Prefix {
+		return false
+	}
+	if len(a.Windows) != len(b.Windows) {
+		return false
+	}
+	for windowIndex := range a.Windows {
+		if !windowEqual(&a.Windows[windowIndex], &b.Windows[windowIndex]) {
+			return false
+		}
+	}
+	return true
+}
+
+func windowEqual(a, b *Window) bool {
+	if a.Name != b.Name {
+		return false
+	}
+	if len(a.Panes) != len(b.Panes) {
+		return false
+	}
+	for paneIndex := range a.Panes {
+		if !paneEqual(&a.Panes[paneIndex], &b.Panes[paneIndex]) {
+			return false
+		}
+	}
+	return true
+}
+
+func paneEqual(a, b *Pane) bool {
+	if a.Observe != b.Observe {
+		return false
+	}
+	if a.Command != b.Command {
+		return false
+	}
+	if a.Role != b.Role {
+		return false
+	}
+	if a.Split != b.Split {
+		return false
+	}
+	if a.Size != b.Size {
+		return false
+	}
+	// Compare ObserveMembers pointers: both nil, or both non-nil and equal.
+	if (a.ObserveMembers == nil) != (b.ObserveMembers == nil) {
+		return false
+	}
+	if a.ObserveMembers != nil && a.ObserveMembers.Role != b.ObserveMembers.Role {
+		return false
+	}
+	return true
+}
+
+// LayoutToSchema converts a runtime Layout to its Matrix wire-format
+// representation. The SourceMachine field is not set here — the caller
+// (the daemon) stamps it before publishing.
+func LayoutToSchema(layout *Layout) schema.LayoutContent {
+	content := schema.LayoutContent{
+		Prefix: layout.Prefix,
+	}
+	for _, window := range layout.Windows {
+		schemaWindow := schema.LayoutWindow{
+			Name: window.Name,
+		}
+		for _, pane := range window.Panes {
+			schemaPane := schema.LayoutPane{
+				Observe: pane.Observe,
+				Command: pane.Command,
+				Role:    pane.Role,
+				Split:   pane.Split,
+				Size:    pane.Size,
+			}
+			if pane.ObserveMembers != nil {
+				schemaPane.ObserveMembers = &schema.LayoutMemberFilter{
+					Role: pane.ObserveMembers.Role,
+				}
+			}
+			schemaWindow.Panes = append(schemaWindow.Panes, schemaPane)
+		}
+		content.Windows = append(content.Windows, schemaWindow)
+	}
+	return content
+}
+
+// SchemaToLayout converts a Matrix wire-format layout to the runtime
+// Layout type. The SourceMachine and SealedMetadata fields from the
+// schema are not carried into the runtime type — they're consumed
+// by the daemon directly.
+func SchemaToLayout(content schema.LayoutContent) *Layout {
+	layout := &Layout{
+		Prefix: content.Prefix,
+	}
+	for _, schemaWindow := range content.Windows {
+		window := Window{
+			Name: schemaWindow.Name,
+		}
+		for _, schemaPane := range schemaWindow.Panes {
+			pane := Pane{
+				Observe: schemaPane.Observe,
+				Command: schemaPane.Command,
+				Role:    schemaPane.Role,
+				Split:   schemaPane.Split,
+				Size:    schemaPane.Size,
+			}
+			if schemaPane.ObserveMembers != nil {
+				pane.ObserveMembers = &MemberFilter{
+					Role: schemaPane.ObserveMembers.Role,
+				}
+			}
+			window.Panes = append(window.Panes, pane)
+		}
+		layout.Windows = append(layout.Windows, window)
+	}
+	return layout
 }
 
 // splitLines splits output into non-empty lines, trimming whitespace.

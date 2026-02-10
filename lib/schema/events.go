@@ -286,6 +286,20 @@ type LayoutContent struct {
 
 	// Windows is the ordered list of tmux windows in the session.
 	Windows []LayoutWindow `json:"windows"`
+
+	// SourceMachine is the full Matrix user ID of the machine that
+	// published this layout event (e.g., "@machine/workstation:bureau.local").
+	// Used for loop prevention: when a daemon receives a layout event
+	// that it published itself, it skips applying it to avoid an
+	// infinite sync loop.
+	SourceMachine string `json:"source_machine,omitempty"`
+
+	// SealedMetadata is reserved for future use. When populated, it
+	// will contain an age-encrypted blob with sensitive runtime state
+	// (environment variables, checkpoint references, etc.) that should
+	// not be stored in plaintext. The structural layout above remains
+	// in plaintext for routing and display.
+	SealedMetadata string `json:"sealed_metadata,omitempty"`
 }
 
 // LayoutWindow describes a single tmux window containing one or more panes.
@@ -354,6 +368,7 @@ func ConfigRoomPowerLevels(adminUserID string) map[string]any {
 		"events": map[string]any{
 			EventTypeMachineConfig: 100,
 			EventTypeCredentials:   100,
+			EventTypeLayout:        0, // daemon publishes layout state
 			"m.room.name":              100,
 			"m.room.topic":             100,
 			"m.room.avatar":            100,

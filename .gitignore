@@ -3,7 +3,19 @@
 # Agent tooling
 /.claude
 
-# Go
+# Build system: Bazel (all builds and tests go through bazel build/test)
+/bazel-*
+
+# Nix build output symlinks
+/result
+/result-*
+
+# Nix runner environment (symlink to /nix/store, machine-local)
+deploy/buildbarn/runner-env
+
+# Build artifacts (safety net for accidental go build at repo root)
+/bureau
+/bureau-*
 *.exe
 *.dll
 *.so
@@ -14,52 +26,35 @@
 *.cover
 coverage.txt
 coverage.html
+
+# Go workspace files (not committed; use Bazel for builds)
 go.work
 go.work.sum
-/bureau
-/bureau-*
 
-# Python (if/when needed)
+# Python virtual environments
 .venv/
 venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
 
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Bureau
+# Bureau local state
 /.notes/
-/bin/
 *.log
 logs/
 tmp/
+
+# Secrets
 secrets/
 .secrets/
 *.key
 *.pem
 *.crt
-!*.example.key
+
+# Deploy secrets (written by bureau matrix setup / attic bootstrap)
+deploy/matrix/bureau-creds
+deploy/matrix/.env-attic-token
 
 # Beads (local workstream tracking)
 .beads/
 .bv/
-
-# Bazel output symlinks
-/bazel-*
-
-# Nix build output symlinks
-/result
-/result-*
 
 # Local dev config
 .envrc
@@ -73,9 +68,13 @@ secrets/
 history
 .history/
 
-# Deploy secrets (written by bureau matrix setup / attic bootstrap, not committed)
-deploy/matrix/bureau-creds
-deploy/matrix/.env-attic-token
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Nix runner environment (symlink to /nix/store, machine-local)
-deploy/buildbarn/runner-env
+# OS
+.DS_Store
+Thumbs.db

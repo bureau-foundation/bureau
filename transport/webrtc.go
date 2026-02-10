@@ -609,9 +609,12 @@ func (wt *WebRTCTransport) newPeerConnection() (*webrtc.PeerConnection, error) {
 	wt.configMu.RUnlock()
 
 	// Use a SettingEngine to enable data channel detach (required for
-	// stream-oriented ReadWriteCloser access).
+	// stream-oriented ReadWriteCloser access) and loopback ICE candidates
+	// (required for same-machine transport and test environments where
+	// loopback is the only available interface).
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.DetachDataChannels()
+	settingEngine.SetIncludeLoopbackCandidate(true)
 
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 	return api.NewPeerConnection(config)

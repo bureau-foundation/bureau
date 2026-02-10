@@ -49,6 +49,7 @@ func run() error {
 Manage sandboxed agent processes with credential isolation, live
 observation, and structured messaging via Matrix.`,
 		Subcommands: []*cli.Command{
+			cli.LoginCommand(),
 			observecmd.ObserveCommand(),
 			observecmd.DashboardCommand(),
 			observecmd.ListCommand(),
@@ -63,6 +64,10 @@ observation, and structured messaging via Matrix.`,
 			},
 		},
 		Examples: []cli.Example{
+			{
+				Description: "Authenticate as an operator (saves session locally)",
+				Command:     "bureau login ben",
+			},
 			{
 				Description: "Observe an agent's terminal",
 				Command:     "bureau observe iree/amdgpu/pm",

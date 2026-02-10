@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pre-commit hook wrapper for Nix tools. Locates the nix binary
+# (which may not be in PATH outside of nix-shell) and dispatches
+# to the requested tool via `nix run`.
+
+set -euo pipefail
+
+# Find nix: try PATH first, then common install locations.
+if command -v nix >/dev/null 2>&1; then
+    NIX=nix
+elif [ -x /nix/var/nix/profiles/default/bin/nix ]; then
+    NIX=/nix/var/nix/profiles/default/bin/nix
+elif [ -x "$HOME/.nix-profile/bin/nix" ]; then
+    NIX="$HOME/.nix-profile/bin/nix"
+else
+    echo "nix not found — skipping nix hook" >&2
+    exit 0
+fi
+
+command="$1"
+shift
+
+case "$command" in
+    nixfmt)
+        exec "$NIX" run nixpkgs#nixfmt -- "$@"
+        ;;
+    statix)
+        exec "$NIX" run nixpkgs#statix -- check .
+        ;;
+    deadnix)
+        exec "$NIX" run nixpkgs#deadnix -- --fail .
+        ;;
+    flake-check)
+        exec "$NIX" flake check --no-build
+        ;;
+    *)
+        echo "unknown nix hook command: $command" >&2
+        exit 1
+        ;;
+esac

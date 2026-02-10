@@ -57,6 +57,10 @@ secrets/
 # Bazel output symlinks
 /bazel-*
 
+# Nix build output symlinks
+/result
+/result-*
+
 # Local dev config
 .envrc
 .envrc.local

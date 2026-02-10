@@ -161,32 +161,32 @@ repos:
       - id: nixfmt
         name: nixfmt
         description: Format nix files with nixfmt-rfc-style
-        entry: bash -c 'nix run nixpkgs#nixfmt-rfc-style -- "$@"' --
-        language: system
+        entry: script/nix-hook nixfmt
+        language: script
         types: [file]
         files: \.nix$
 
       - id: statix
         name: statix
         description: Lint nix files with statix
-        entry: bash -c 'nix run nixpkgs#statix -- check .'
-        language: system
+        entry: script/nix-hook statix
+        language: script
         pass_filenames: false
         files: \.nix$
 
       - id: deadnix
         name: deadnix
         description: Find dead code in nix files
-        entry: bash -c 'nix run nixpkgs#deadnix -- --fail .'
-        language: system
+        entry: script/nix-hook deadnix
+        language: script
         pass_filenames: false
         files: \.nix$
 
       - id: nix-flake-check
         name: nix flake check
         description: Validate flake evaluates correctly
-        entry: bash -c 'nix flake check --no-build 2>&1 | head -50'
-        language: system
+        entry: script/nix-hook flake-check
+        language: script
         pass_filenames: false
         files: \.nix$
 

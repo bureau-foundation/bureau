@@ -16,6 +16,11 @@
 //
 //   - #bureau/machines:<server>  — MachineKey, MachineStatus events for all machines
 //   - #bureau/services:<server>  — Service registration events
+//   - #bureau/templates:<server> — Built-in sandbox templates (base, base-networked)
+//
+// Per-project/org template rooms:
+//
+//   - #iree/templates:<server>   — Project-specific templates
 //
 // Per-machine rooms (created by the launcher at registration):
 //
@@ -23,6 +28,7 @@
 //
 // The per-machine config room ensures that credential ciphertext is only
 // visible to the machine that can decrypt it (plus the admin account).
+// Template rooms use standard Matrix power levels for edit control.
 package schema
 
 // Matrix state event type constants. These are the "type" field in Matrix
@@ -99,6 +105,20 @@ const (
 	// Changes to the live tmux session are synced back as state event
 	// updates. See OBSERVATION.md for the full bidirectional sync design.
 	EventTypeLayout = "m.bureau.layout"
+
+	// EventTypeTemplate defines a sandbox template — the complete
+	// specification for how to create a sandboxed environment. Templates
+	// are stored as state events in template rooms (e.g.,
+	// #bureau/templates for built-ins, #iree/templates for project
+	// templates). Room power levels control who can edit templates.
+	//
+	// State key: template name (e.g., "base", "llm-agent", "amdgpu-developer")
+	// Room: template room (e.g., #bureau/templates:<server>, #iree/templates:<server>)
+	//
+	// Templates can inherit from other templates across rooms. The daemon
+	// resolves the full inheritance chain and merges fields before sending
+	// a fully-resolved SandboxSpec to the launcher via IPC.
+	EventTypeTemplate = "m.bureau.template"
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -180,9 +200,24 @@ type PrincipalAssignment struct {
 	// Must pass principal.ValidateLocalpart.
 	Localpart string `json:"localpart"`
 
-	// Template is the name of the template to instantiate (e.g., "llm-agent",
-	// "whisper-stt"). Templates are defined as state events in
-	// #bureau/templates or as checked-in YAML files.
+	// Template is a template reference identifying which template to
+	// instantiate for this principal. The format is:
+	//
+	//   <room-alias-localpart>:<template-name>
+	//
+	// Examples:
+	//   - "bureau/templates:base" — built-in base template
+	//   - "bureau/templates:llm-agent" — built-in agent template
+	//   - "iree/templates:amdgpu-developer" — project-specific template
+	//
+	// For federated deployments, an optional @server suffix on the room
+	// reference specifies the homeserver:
+	//
+	//   "iree/templates@other.example:amdgpu-developer"
+	//
+	// The daemon resolves this reference to a room alias and state event,
+	// walks the inheritance chain, and produces a fully-resolved SandboxSpec.
+	// See ParseTemplateRef for parsing semantics.
 	Template string `json:"template"`
 
 	// AutoStart controls whether the daemon should start this principal's
@@ -232,6 +267,37 @@ type PrincipalAssignment struct {
 	// (default-deny). The daemon pushes these patterns to the principal's
 	// proxy, which filters the directory before returning results.
 	ServiceVisibility []string `json:"service_visibility,omitempty"`
+
+	// CommandOverride replaces the template's Command for this specific
+	// principal instance. Use this when the same template should run a
+	// different entrypoint on different machines or for different
+	// principals (e.g., a template defines the environment but each
+	// principal runs a different model). When nil, the template's Command
+	// is used unchanged.
+	CommandOverride []string `json:"command_override,omitempty"`
+
+	// EnvironmentOverride replaces the template's Environment (Nix store
+	// path) for this principal. When empty, the template's Environment is
+	// used. This enables pinning a specific principal to a different Nix
+	// closure than the template default — useful for canary deployments
+	// or per-principal version pinning.
+	EnvironmentOverride string `json:"environment_override,omitempty"`
+
+	// ExtraEnvironmentVariables are merged into the template's
+	// EnvironmentVariables map for this principal instance. These are
+	// applied after template inheritance resolution, so they override
+	// any variable set by the template or its parents. Use this for
+	// per-instance configuration that doesn't warrant a separate
+	// template (e.g., MODEL_NAME, BATCH_SIZE).
+	ExtraEnvironmentVariables map[string]string `json:"extra_environment_variables,omitempty"`
+
+	// Payload is instance-specific data passed to the agent at startup
+	// and available for hot-reload via SIGHUP. The daemon merges this
+	// over the template's DefaultPayload (Payload values win on
+	// conflict) and writes the result to /run/bureau/payload.json
+	// inside the sandbox. Use this for per-instance agent configuration:
+	// project context, task assignments, model parameters, etc.
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // MatrixPolicy controls which self-service Matrix operations an agent can
@@ -290,6 +356,182 @@ type ObservePolicy struct {
 	// attaches to tmux with the -r flag and does not forward input to
 	// the PTY.
 	ReadWriteObservers []string `json:"readwrite_observers,omitempty"`
+}
+
+// TemplateContent is the content of an EventTypeTemplate state event. It
+// defines the complete sandbox specification for a class of principals:
+// filesystem mounts, namespace isolation, resource limits, security settings,
+// entrypoint command, environment variables, and agent roles.
+//
+// This is the Matrix wire-format representation. The sandbox package defines
+// parallel runtime types (sandbox.Profile, sandbox.Mount, etc.) with YAML
+// tags for local file authoring. The daemon converts between the two when
+// resolving templates. The same pattern is used for LayoutContent vs
+// observe.Layout.
+//
+// Templates can inherit from other templates via the Inherits field. The
+// daemon walks the inheritance chain, merging fields at each step:
+// base template -> parent (via Inherits) -> child -> instance overrides.
+// Slices (Filesystem, CreateDirs) are appended; maps (EnvironmentVariables,
+// Roles, DefaultPayload) are merged with child values winning; scalars
+// (Command, Environment) are replaced if non-zero in the child.
+type TemplateContent struct {
+	// Description is a human-readable summary of what this template
+	// provides (e.g., "GPU-accelerated LLM agent with IREE runtime").
+	Description string `json:"description,omitempty"`
+
+	// Inherits is a template reference identifying the parent template.
+	// The daemon resolves the full inheritance chain before producing a
+	// SandboxSpec. Cycles are detected and rejected. Format is the same
+	// as PrincipalAssignment.Template: "room-alias-localpart:template-name".
+	// Empty means no inheritance (this template is self-contained).
+	Inherits string `json:"inherits,omitempty"`
+
+	// Command is the entrypoint command and arguments to run inside the
+	// sandbox. The first element is the executable path; subsequent
+	// elements are arguments. Empty inherits from the parent template.
+	Command []string `json:"command,omitempty"`
+
+	// Environment is the Nix store path providing the sandbox's /usr/local
+	// toolchain (e.g., "/nix/store/abc123-bureau-agent-env"). Resolved at
+	// template publish time, not at runtime. The daemon prefetches missing
+	// store paths from the Attic binary cache before creating the sandbox.
+	// Empty means no Nix environment (use host /usr/bin via bind mounts).
+	Environment string `json:"environment,omitempty"`
+
+	// EnvironmentVariables are environment variables set inside the sandbox.
+	// During inheritance, child values override parent values for the same
+	// key. Values may contain ${VARIABLE} references expanded at sandbox
+	// creation time (e.g., "${WORKTREE}" for the host worktree path).
+	EnvironmentVariables map[string]string `json:"environment_variables,omitempty"`
+
+	// Filesystem is the list of mount points for the sandbox. During
+	// inheritance, child mounts are appended after parent mounts.
+	// The sandbox package's MergeProfiles handles deduplication by Dest.
+	Filesystem []TemplateMount `json:"filesystem,omitempty"`
+
+	// Namespaces controls which Linux namespaces are unshared for the
+	// sandbox. When nil, inherits from the parent template.
+	Namespaces *TemplateNamespaces `json:"namespaces,omitempty"`
+
+	// Resources sets resource limits (cgroup constraints) for the sandbox.
+	// When nil, inherits from the parent template.
+	Resources *TemplateResources `json:"resources,omitempty"`
+
+	// Security configures sandbox security options (setsid, PR_SET_NO_NEW_PRIVS,
+	// etc.). When nil, inherits from the parent template.
+	Security *TemplateSecurity `json:"security,omitempty"`
+
+	// CreateDirs lists directories to create inside the sandbox before
+	// starting the command. During inheritance, child dirs are appended
+	// after parent dirs (duplicates are removed).
+	CreateDirs []string `json:"create_dirs,omitempty"`
+
+	// Roles maps role names to their commands. The observation layout
+	// system uses roles to determine what each pane shows (e.g., "agent"
+	// runs the main agent process, "shell" runs a debug shell). Each
+	// role's value is a command array (same format as Command).
+	Roles map[string][]string `json:"roles,omitempty"`
+
+	// RequiredCredentials lists the credential names that must be present
+	// in the principal's encrypted credential bundle before the sandbox
+	// can start. The daemon checks this against the Credentials state
+	// event and refuses to start the sandbox if any are missing.
+	RequiredCredentials []string `json:"required_credentials,omitempty"`
+
+	// DefaultPayload is the default agent payload merged under
+	// PrincipalAssignment.Payload at resolution time (instance values
+	// win on conflict). Written to /run/bureau/payload.json inside the
+	// sandbox. Use this for template-level defaults that individual
+	// instances can override.
+	DefaultPayload map[string]any `json:"default_payload,omitempty"`
+}
+
+// TemplateMount describes a filesystem mount point in a template. This is
+// the JSON wire-format counterpart to sandbox.Mount (which uses YAML tags).
+// The daemon converts between the two during template resolution.
+type TemplateMount struct {
+	// Source is the host path to mount. Supports ${VARIABLE} expansion
+	// (e.g., "${WORKTREE}" for the principal's worktree directory).
+	// Empty when Type is "tmpfs" or other virtual filesystem.
+	Source string `json:"source,omitempty"`
+
+	// Dest is the mount destination path inside the sandbox. Required.
+	Dest string `json:"dest"`
+
+	// Type is the filesystem type. Empty means bind mount (the common
+	// case). Other values: "tmpfs" for a temporary filesystem.
+	Type string `json:"type,omitempty"`
+
+	// Mode is the access mode: "ro" for read-only, "rw" for read-write.
+	// Empty defaults to "ro" in the sandbox package.
+	Mode string `json:"mode,omitempty"`
+
+	// Options are mount-specific options (e.g., "size=64M" for tmpfs).
+	Options string `json:"options,omitempty"`
+
+	// Optional marks this mount as non-fatal if the source does not
+	// exist. When true, the sandbox skips this mount silently rather
+	// than failing. Use for paths that exist on some machines but not
+	// others (e.g., /lib64 on non-multilib systems, /nix on non-Nix
+	// machines).
+	Optional bool `json:"optional,omitempty"`
+}
+
+// TemplateNamespaces controls which Linux namespaces are unshared for the
+// sandbox. Each field corresponds to a bwrap --unshare-* flag.
+type TemplateNamespaces struct {
+	// PID unshares the PID namespace (--unshare-pid). Processes inside
+	// the sandbox see their own PID 1.
+	PID bool `json:"pid,omitempty"`
+
+	// Net unshares the network namespace (--unshare-net). The sandbox
+	// gets an isolated network stack with only loopback. External
+	// network access goes through the bridge/proxy.
+	Net bool `json:"net,omitempty"`
+
+	// IPC unshares the IPC namespace (--unshare-ipc). Isolates System V
+	// IPC and POSIX message queues.
+	IPC bool `json:"ipc,omitempty"`
+
+	// UTS unshares the UTS namespace (--unshare-uts). The sandbox gets
+	// its own hostname.
+	UTS bool `json:"uts,omitempty"`
+}
+
+// TemplateResources defines resource limits for the sandbox, enforced via
+// cgroup constraints when systemd user scopes are available.
+type TemplateResources struct {
+	// CPUShares is the relative CPU weight (cgroup cpu.shares). Higher
+	// values get proportionally more CPU time under contention. Zero
+	// means no limit (use cgroup default).
+	CPUShares int `json:"cpu_shares,omitempty"`
+
+	// MemoryLimitMB is the maximum memory in megabytes (cgroup
+	// memory.max). Zero means no limit.
+	MemoryLimitMB int `json:"memory_limit_mb,omitempty"`
+
+	// PidsLimit is the maximum number of processes (cgroup pids.max).
+	// Zero means no limit.
+	PidsLimit int `json:"pids_limit,omitempty"`
+}
+
+// TemplateSecurity configures sandbox security options passed to bwrap.
+type TemplateSecurity struct {
+	// NewSession calls setsid(2) to create a new session for the sandbox
+	// process, detaching it from the controlling terminal. This prevents
+	// the sandboxed process from sending signals to the parent process
+	// group.
+	NewSession bool `json:"new_session,omitempty"`
+
+	// DieWithParent sets PR_SET_PDEATHSIG so the sandbox process receives
+	// SIGKILL when its parent dies. Prevents orphaned sandbox processes.
+	DieWithParent bool `json:"die_with_parent,omitempty"`
+
+	// NoNewPrivs sets PR_SET_NO_NEW_PRIVS, preventing the sandbox process
+	// (and its children) from gaining privileges through execve of setuid
+	// binaries.
+	NoNewPrivs bool `json:"no_new_privs,omitempty"`
 }
 
 // Credentials is the content of an EventTypeCredentials state event.

@@ -1,0 +1,114 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package schema
+
+import (
+	"fmt"
+	"strings"
+)
+
+// TemplateRef is a parsed template reference identifying a specific template
+// in a specific room. The wire format is:
+//
+//	<room-alias-localpart>[@<server>]:<template-name>
+//
+// Examples:
+//
+//	bureau/templates:base
+//	iree/templates:amdgpu-developer
+//	iree/templates@other.example:foo
+//	iree/templates@other.example:8448:versioned-agent
+//
+// The last colon is the separator between the room reference and the template
+// name. This handles server addresses that include port numbers (e.g.,
+// "other.example:8448"). Matrix localparts cannot contain colons, and
+// template names cannot contain colons, so the last colon is always
+// unambiguous.
+type TemplateRef struct {
+	// Room is the room alias localpart (e.g., "bureau/templates",
+	// "iree/templates"). This maps to the Matrix room alias
+	// #<Room>:<server>.
+	Room string
+
+	// Template is the template name, used as the state key for the
+	// m.bureau.template event (e.g., "base", "llm-agent").
+	Template string
+
+	// Server is the optional homeserver for federated deployments
+	// (e.g., "other.example", "other.example:8448"). Empty means
+	// use the local homeserver.
+	Server string
+}
+
+// ParseTemplateRef parses a template reference string into its components.
+// The format is "<room-alias-localpart>[@<server>]:<template-name>". The
+// last colon separates the room reference from the template name, which
+// allows server addresses with port numbers.
+//
+// Returns an error if the reference is empty, contains no colon, or has
+// an empty room or template component.
+func ParseTemplateRef(reference string) (TemplateRef, error) {
+	if reference == "" {
+		return TemplateRef{}, fmt.Errorf("empty template reference")
+	}
+
+	// The last colon separates room reference from template name.
+	// This handles server:port in federated references.
+	lastColon := strings.LastIndex(reference, ":")
+	if lastColon < 0 {
+		return TemplateRef{}, fmt.Errorf("template reference %q missing colon separator", reference)
+	}
+
+	roomReference := reference[:lastColon]
+	templateName := reference[lastColon+1:]
+
+	if roomReference == "" {
+		return TemplateRef{}, fmt.Errorf("template reference %q has empty room", reference)
+	}
+	if templateName == "" {
+		return TemplateRef{}, fmt.Errorf("template reference %q has empty template name", reference)
+	}
+
+	// Split room reference into localpart and optional @server.
+	var room, server string
+	if atIndex := strings.Index(roomReference, "@"); atIndex >= 0 {
+		room = roomReference[:atIndex]
+		server = roomReference[atIndex+1:]
+		if room == "" {
+			return TemplateRef{}, fmt.Errorf("template reference %q has empty room localpart", reference)
+		}
+		if server == "" {
+			return TemplateRef{}, fmt.Errorf("template reference %q has empty server after @", reference)
+		}
+	} else {
+		room = roomReference
+	}
+
+	return TemplateRef{
+		Room:     room,
+		Template: templateName,
+		Server:   server,
+	}, nil
+}
+
+// String returns the canonical wire-format representation of the template
+// reference. Round-trips through ParseTemplateRef: for any valid ref,
+// ParseTemplateRef(ref.String()) returns an equivalent TemplateRef.
+func (ref TemplateRef) String() string {
+	if ref.Server != "" {
+		return ref.Room + "@" + ref.Server + ":" + ref.Template
+	}
+	return ref.Room + ":" + ref.Template
+}
+
+// RoomAlias returns the full Matrix room alias for this template reference,
+// using defaultServer when the reference doesn't specify a server. The
+// returned alias has the format "#<room>:<server>".
+func (ref TemplateRef) RoomAlias(defaultServer string) string {
+	server := ref.Server
+	if server == "" {
+		server = defaultServer
+	}
+	return "#" + ref.Room + ":" + server
+}

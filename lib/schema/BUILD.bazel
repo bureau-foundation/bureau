@@ -5,13 +5,19 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "schema",
-    srcs = ["events.go"],
+    srcs = [
+        "events.go",
+        "template_ref.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema",
     visibility = ["//visibility:public"],
 )
 
 go_test(
     name = "schema_test",
-    srcs = ["events_test.go"],
+    srcs = [
+        "events_test.go",
+        "template_ref_test.go",
+    ],
     embed = [":schema"],
 )

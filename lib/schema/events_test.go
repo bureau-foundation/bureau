@@ -24,6 +24,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"credentials", EventTypeCredentials, "m.bureau.credentials"},
 		{"service", EventTypeService, "m.bureau.service"},
 		{"layout", EventTypeLayout, "m.bureau.layout"},
+		{"template", EventTypeTemplate, "m.bureau.template"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -892,6 +893,366 @@ func TestLayoutContentOmitsEmptyFields(t *testing.T) {
 			t.Errorf("%s should be omitted when zero-value", field)
 		}
 	}
+}
+
+func TestTemplateContentRoundTrip(t *testing.T) {
+	original := TemplateContent{
+		Description: "GPU-accelerated LLM agent with IREE runtime",
+		Inherits:    "bureau/templates:base",
+		Command:     []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
+		Environment: "/nix/store/abc123-bureau-agent-env",
+		EnvironmentVariables: map[string]string{
+			"PATH":           "/workspace/bin:/usr/local/bin:/usr/bin:/bin",
+			"HOME":           "/workspace",
+			"BUREAU_SANDBOX": "1",
+		},
+		Filesystem: []TemplateMount{
+			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
+			{Source: "/nix", Dest: "/nix", Mode: "ro", Optional: true},
+		},
+		Namespaces: &TemplateNamespaces{
+			PID: true,
+			Net: true,
+			IPC: true,
+			UTS: true,
+		},
+		Resources: &TemplateResources{
+			CPUShares:     1024,
+			MemoryLimitMB: 8192,
+			PidsLimit:     512,
+		},
+		Security: &TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		CreateDirs:          []string{"/tmp", "/var/tmp", "/run/bureau"},
+		Roles:               map[string][]string{"agent": {"/usr/local/bin/claude", "--agent"}, "shell": {"/bin/bash"}},
+		RequiredCredentials: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+		DefaultPayload: map[string]any{
+			"model":      "claude-sonnet-4-5-20250929",
+			"max_tokens": float64(4096),
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON field names match the wire format.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "description", "GPU-accelerated LLM agent with IREE runtime")
+	assertField(t, raw, "inherits", "bureau/templates:base")
+	assertField(t, raw, "environment", "/nix/store/abc123-bureau-agent-env")
+
+	// Verify command is an array.
+	command, ok := raw["command"].([]any)
+	if !ok {
+		t.Fatal("command field missing or wrong type")
+	}
+	if len(command) != 3 || command[0] != "/usr/local/bin/claude" {
+		t.Errorf("command = %v, want [/usr/local/bin/claude --agent --no-tty]", command)
+	}
+
+	// Verify filesystem is an array with correct structure.
+	filesystem, ok := raw["filesystem"].([]any)
+	if !ok {
+		t.Fatal("filesystem field missing or wrong type")
+	}
+	if len(filesystem) != 3 {
+		t.Fatalf("filesystem count = %d, want 3", len(filesystem))
+	}
+	firstMount := filesystem[0].(map[string]any)
+	assertField(t, firstMount, "source", "${WORKTREE}")
+	assertField(t, firstMount, "dest", "/workspace")
+	assertField(t, firstMount, "mode", "rw")
+
+	// Verify tmpfs mount has type but no source.
+	tmpfsMount := filesystem[1].(map[string]any)
+	assertField(t, tmpfsMount, "type", "tmpfs")
+	assertField(t, tmpfsMount, "dest", "/tmp")
+	if _, exists := tmpfsMount["source"]; exists {
+		t.Error("tmpfs mount should not have source")
+	}
+
+	// Verify optional mount.
+	nixMount := filesystem[2].(map[string]any)
+	assertField(t, nixMount, "optional", true)
+
+	// Verify namespaces.
+	namespaces, ok := raw["namespaces"].(map[string]any)
+	if !ok {
+		t.Fatal("namespaces field missing or wrong type")
+	}
+	assertField(t, namespaces, "pid", true)
+	assertField(t, namespaces, "net", true)
+
+	// Verify resources.
+	resources, ok := raw["resources"].(map[string]any)
+	if !ok {
+		t.Fatal("resources field missing or wrong type")
+	}
+	assertField(t, resources, "cpu_shares", float64(1024))
+	assertField(t, resources, "memory_limit_mb", float64(8192))
+
+	// Verify security.
+	security, ok := raw["security"].(map[string]any)
+	if !ok {
+		t.Fatal("security field missing or wrong type")
+	}
+	assertField(t, security, "new_session", true)
+	assertField(t, security, "no_new_privs", true)
+
+	// Verify roles.
+	roles, ok := raw["roles"].(map[string]any)
+	if !ok {
+		t.Fatal("roles field missing or wrong type")
+	}
+	agentRole, ok := roles["agent"].([]any)
+	if !ok {
+		t.Fatal("roles.agent missing or wrong type")
+	}
+	if len(agentRole) != 2 || agentRole[0] != "/usr/local/bin/claude" {
+		t.Errorf("roles.agent = %v, want [/usr/local/bin/claude --agent]", agentRole)
+	}
+
+	// Verify required_credentials.
+	requiredCredentials, ok := raw["required_credentials"].([]any)
+	if !ok {
+		t.Fatal("required_credentials field missing or wrong type")
+	}
+	if len(requiredCredentials) != 2 {
+		t.Fatalf("required_credentials count = %d, want 2", len(requiredCredentials))
+	}
+
+	// Verify default_payload.
+	defaultPayload, ok := raw["default_payload"].(map[string]any)
+	if !ok {
+		t.Fatal("default_payload field missing or wrong type")
+	}
+	assertField(t, defaultPayload, "model", "claude-sonnet-4-5-20250929")
+	assertField(t, defaultPayload, "max_tokens", float64(4096))
+
+	// Round-trip back to struct.
+	var decoded TemplateContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Description != original.Description {
+		t.Errorf("Description: got %q, want %q", decoded.Description, original.Description)
+	}
+	if decoded.Inherits != original.Inherits {
+		t.Errorf("Inherits: got %q, want %q", decoded.Inherits, original.Inherits)
+	}
+	if decoded.Environment != original.Environment {
+		t.Errorf("Environment: got %q, want %q", decoded.Environment, original.Environment)
+	}
+	if len(decoded.Command) != 3 {
+		t.Fatalf("Command count = %d, want 3", len(decoded.Command))
+	}
+	if decoded.Command[0] != "/usr/local/bin/claude" {
+		t.Errorf("Command[0]: got %q, want %q", decoded.Command[0], "/usr/local/bin/claude")
+	}
+	if len(decoded.Filesystem) != 3 {
+		t.Fatalf("Filesystem count = %d, want 3", len(decoded.Filesystem))
+	}
+	if decoded.Filesystem[0].Source != "${WORKTREE}" || decoded.Filesystem[0].Dest != "/workspace" {
+		t.Errorf("Filesystem[0]: got source=%q dest=%q, want source=${WORKTREE} dest=/workspace",
+			decoded.Filesystem[0].Source, decoded.Filesystem[0].Dest)
+	}
+	if decoded.Filesystem[2].Optional != true {
+		t.Error("Filesystem[2].Optional should be true")
+	}
+	if decoded.Namespaces == nil || !decoded.Namespaces.PID || !decoded.Namespaces.Net {
+		t.Error("Namespaces should have PID and Net set")
+	}
+	if decoded.Resources == nil || decoded.Resources.CPUShares != 1024 {
+		t.Error("Resources.CPUShares should be 1024")
+	}
+	if decoded.Security == nil || !decoded.Security.NoNewPrivs {
+		t.Error("Security.NoNewPrivs should be true")
+	}
+	if len(decoded.Roles) != 2 {
+		t.Fatalf("Roles count = %d, want 2", len(decoded.Roles))
+	}
+	if len(decoded.Roles["agent"]) != 2 || decoded.Roles["agent"][0] != "/usr/local/bin/claude" {
+		t.Errorf("Roles[agent] = %v, want [/usr/local/bin/claude --agent]", decoded.Roles["agent"])
+	}
+}
+
+func TestTemplateContentOmitsEmptyFields(t *testing.T) {
+	// A minimal template with only required structure should omit all
+	// optional fields from the JSON wire format.
+	template := TemplateContent{
+		Command: []string{"/bin/bash"},
+	}
+
+	data, err := json.Marshal(template)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	omittedFields := []string{
+		"description", "inherits", "environment", "environment_variables",
+		"filesystem", "namespaces", "resources", "security",
+		"create_dirs", "roles", "required_credentials", "default_payload",
+	}
+	for _, field := range omittedFields {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty/nil", field)
+		}
+	}
+
+	// Command should be present.
+	if _, exists := raw["command"]; !exists {
+		t.Error("command should be present")
+	}
+}
+
+func TestTemplateMountOmitsEmptyFields(t *testing.T) {
+	// A bind mount with only dest and mode should omit type, options,
+	// source (if empty), and optional.
+	mount := TemplateMount{
+		Dest: "/workspace",
+		Mode: "rw",
+	}
+
+	data, err := json.Marshal(mount)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	for _, field := range []string{"source", "type", "options", "optional"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty/zero", field)
+		}
+	}
+	assertField(t, raw, "dest", "/workspace")
+	assertField(t, raw, "mode", "rw")
+}
+
+func TestPrincipalAssignmentOverrides(t *testing.T) {
+	// A PrincipalAssignment with all override fields set should
+	// round-trip correctly through JSON.
+	original := PrincipalAssignment{
+		Localpart:           "iree/amdgpu/pm",
+		Template:            "iree/templates:amdgpu-developer",
+		AutoStart:           true,
+		CommandOverride:     []string{"/usr/local/bin/custom-agent", "--mode=gpu"},
+		EnvironmentOverride: "/nix/store/xyz789-custom-env",
+		ExtraEnvironmentVariables: map[string]string{
+			"MODEL_NAME": "claude-opus-4-6",
+			"BATCH_SIZE": "32",
+		},
+		Payload: map[string]any{
+			"project":    "iree/amdgpu",
+			"max_tokens": float64(8192),
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Verify override wire format field names.
+	commandOverride, ok := raw["command_override"].([]any)
+	if !ok {
+		t.Fatal("command_override field missing or wrong type")
+	}
+	if len(commandOverride) != 2 || commandOverride[0] != "/usr/local/bin/custom-agent" {
+		t.Errorf("command_override = %v, want [/usr/local/bin/custom-agent --mode=gpu]", commandOverride)
+	}
+
+	assertField(t, raw, "environment_override", "/nix/store/xyz789-custom-env")
+
+	extraEnvVars, ok := raw["extra_environment_variables"].(map[string]any)
+	if !ok {
+		t.Fatal("extra_environment_variables field missing or wrong type")
+	}
+	assertField(t, extraEnvVars, "MODEL_NAME", "claude-opus-4-6")
+	assertField(t, extraEnvVars, "BATCH_SIZE", "32")
+
+	payload, ok := raw["payload"].(map[string]any)
+	if !ok {
+		t.Fatal("payload field missing or wrong type")
+	}
+	assertField(t, payload, "project", "iree/amdgpu")
+	assertField(t, payload, "max_tokens", float64(8192))
+
+	// Round-trip.
+	var decoded PrincipalAssignment
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Template != "iree/templates:amdgpu-developer" {
+		t.Errorf("Template: got %q, want %q", decoded.Template, "iree/templates:amdgpu-developer")
+	}
+	if len(decoded.CommandOverride) != 2 || decoded.CommandOverride[0] != "/usr/local/bin/custom-agent" {
+		t.Errorf("CommandOverride: got %v, want [/usr/local/bin/custom-agent --mode=gpu]", decoded.CommandOverride)
+	}
+	if decoded.EnvironmentOverride != "/nix/store/xyz789-custom-env" {
+		t.Errorf("EnvironmentOverride: got %q, want %q", decoded.EnvironmentOverride, "/nix/store/xyz789-custom-env")
+	}
+	if decoded.ExtraEnvironmentVariables["MODEL_NAME"] != "claude-opus-4-6" {
+		t.Errorf("ExtraEnvironmentVariables[MODEL_NAME]: got %q, want %q",
+			decoded.ExtraEnvironmentVariables["MODEL_NAME"], "claude-opus-4-6")
+	}
+}
+
+func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
+	// A PrincipalAssignment without override fields should not include
+	// them in the wire format (backward compatibility).
+	assignment := PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/templates:whisper-stt",
+		AutoStart: true,
+	}
+
+	data, err := json.Marshal(assignment)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	overrideFields := []string{
+		"command_override", "environment_override",
+		"extra_environment_variables", "payload",
+	}
+	for _, field := range overrideFields {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty/nil", field)
+		}
+	}
+
+	// Existing fields should still be present.
+	assertField(t, raw, "localpart", "service/stt/whisper")
+	assertField(t, raw, "template", "bureau/templates:whisper-stt")
+	assertField(t, raw, "auto_start", true)
 }
 
 // assertField checks that a JSON object has a field with the expected value.

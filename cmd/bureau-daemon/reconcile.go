@@ -59,12 +59,31 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
+		// Resolve the template and build the sandbox spec when the
+		// assignment references a template. When Template is empty, the
+		// launcher creates only a proxy process (no bwrap sandbox).
+		var sandboxSpec *schema.SandboxSpec
+		if assignment.Template != "" {
+			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
+			if err != nil {
+				d.logger.Error("resolving template", "principal", localpart, "template", assignment.Template, "error", err)
+				continue
+			}
+			sandboxSpec = resolveInstanceConfig(template, &assignment)
+			d.logger.Info("resolved sandbox spec from template",
+				"principal", localpart,
+				"template", assignment.Template,
+				"command", sandboxSpec.Command,
+			)
+		}
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
 			Principal:            localpart,
 			EncryptedCredentials: credentials.Ciphertext,
 			MatrixPolicy:         assignment.MatrixPolicy,
+			SandboxSpec:          sandboxSpec,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)

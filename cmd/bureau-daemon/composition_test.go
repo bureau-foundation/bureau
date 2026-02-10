@@ -88,11 +88,20 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	)
 
 	// Configure mock Matrix: assign one principal with AutoStart.
+	// The template reference "templates:echo" maps to room alias
+	// #templates:bureau.local, template state key "echo". This exercises
+	// the full template resolution pipeline during reconcile.
+	const templateRoomID = "!templates:test"
 	principalLocalpart := "test/echo"
+	matrixState.setRoomAlias("#templates:bureau.local", templateRoomID)
+	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "echo", schema.TemplateContent{
+		Description: "Echo test template",
+		Command:     []string{"/bin/echo", "hello"},
+	})
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: principalLocalpart,
-			Template:  "echo-test",
+			Template:  "templates:echo",
 			AutoStart: true,
 		}},
 	})
@@ -291,7 +300,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: principalLocalpart,
-			Template:  "echo-test",
+			Template:  "templates:echo",
 			AutoStart: true,
 		}},
 	})

@@ -92,7 +92,6 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
-			Template:  "test",
 			AutoStart: true,
 		}},
 	})
@@ -423,7 +422,6 @@ func TestInitialSync(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
-			Template:  "test",
 			AutoStart: true,
 		}},
 	})

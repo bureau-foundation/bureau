@@ -196,7 +196,8 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		adminSocketPathFunc: func(localpart string) string {
 			return adminBase + localpart + principal.SocketSuffix
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		layoutWatchers: make(map[string]*layoutWatcher),
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	ctx := context.Background()
@@ -340,6 +341,7 @@ func TestReconcileNoConfig(t *testing.T) {
 		proxyRoutes:    make(map[string]string),
 		peerAddresses:  make(map[string]string),
 		peerTransports: make(map[string]http.RoundTripper),
+		layoutWatchers: make(map[string]*layoutWatcher),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 

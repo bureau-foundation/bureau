@@ -1669,6 +1669,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		observeSocketPath:  observeSocketPath,
 		tmuxServerSocket:   tmuxSocket,
 		observeRelayBinary: relayBinary,
+		layoutWatchers:     make(map[string]*layoutWatcher),
 		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 

@@ -24,7 +24,10 @@
     # per-system wrapper. Callers pass their own pkgs to get the right
     # system's packages.
     {
-      lib.baseRunnerPackages = pkgs: [ pkgs.tmux ];
+      lib.baseRunnerPackages = pkgs: [
+        pkgs.bubblewrap
+        pkgs.tmux
+      ];
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -106,10 +109,10 @@
 
             # Minimal environment for Bureau's own CI and local development.
             # Contains only what Bureau's tests need (see lib.baseRunnerPackages).
-            # Production and multi-project environments are defined in the
-            # bureau-foundation/environment repo, which composes on top of
-            # this base. Build with:
-            #   nix build .#runner-env --out-link deploy/buildbarn/runner-env
+            # Production environments are defined in the environment repo
+            # (bureau-foundation/environment), which composes on top of this
+            # base. For Buildbarn runners, prefer:
+            #   bureau environment build workstation --out-link deploy/buildbarn/runner-env
             runner-env = pkgs.buildEnv {
               name = "bureau-runner-env";
               paths = self.lib.baseRunnerPackages pkgs;

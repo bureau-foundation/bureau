@@ -44,6 +44,9 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds binaries and manages subprocesses")
 	}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap not available (sandbox creation requires namespace support)")
+	}
 
 	// Build both binaries.
 	proxyBinary := buildBinary(t, "./cmd/bureau-proxy")

@@ -6,6 +6,8 @@ execution cluster. The stack runs entirely in Docker Compose.
 ## Prerequisites
 
 - Docker and Docker Compose
+- Nix (for building the runner environment)
+- `bureau` CLI or raw `nix` commands (for environment profile builds)
 - `curl` (for verification steps)
 - A Bazel workspace to test against (the Bureau repo works)
 
@@ -75,12 +77,26 @@ container restarts.
 
 The runner container bind-mounts `/nix/store` from the host and exposes
 Nix-provided tools at `/usr/local/bin`. This is how remote build actions
-get access to tools like tmux, and eventually clang, Vulkan SDKs, etc.
+get access to tools like tmux, clang, Vulkan SDKs, and anything else
+that tests or build actions need at runtime.
 
-Build the runner environment derivation:
+Environment profiles are defined in the
+[bureau-foundation/environment](https://github.com/bureau-foundation/environment)
+repo. Each profile describes a complete execution environment for a class
+of machine (workstation, EC2 instance, etc.). Bureau's own `flake.nix`
+exports `lib.baseRunnerPackages` — the minimum set of tools Bureau's
+tests need — and the environment repo composes on top of that.
+
+Build the runner environment for this machine's profile:
 
 ```bash
-nix build .#runner-env --out-link deploy/buildbarn/runner-env
+bureau environment build workstation --out-link deploy/buildbarn/runner-env
+```
+
+Or equivalently with raw Nix:
+
+```bash
+nix build github:bureau-foundation/environment#workstation --out-link deploy/buildbarn/runner-env
 ```
 
 This creates a symlink at `deploy/buildbarn/runner-env` pointing into
@@ -88,22 +104,31 @@ This creates a symlink at `deploy/buildbarn/runner-env` pointing into
 Compose resolves it at container start, mounting the derivation's `bin/`
 directory at `/usr/local/bin` inside the runner.
 
-Re-run this command after:
-- `nix flake update` (dependency versions changed)
-- Adding packages to `runner-env` in `flake.nix`
+**Quick-start alternative:** If you don't have the environment repo set
+up yet, Bureau's own flake provides a minimal runner-env containing only
+the base packages (currently just tmux):
 
-To add a tool to the runner, add it to the `paths` list in the
-`runner-env` package definition in `flake.nix`:
+```bash
+nix build .#runner-env --out-link deploy/buildbarn/runner-env
+```
+
+Re-run the build command after:
+- The environment repo updates its `flake.lock` (dependency versions changed)
+- Adding packages to a profile in the environment repo
+
+To add a tool to this machine's profile, edit the profile file in the
+environment repo (e.g., `local/workstation.nix`):
 
 ```nix
-runner-env = pkgs.buildEnv {
-  name = "bureau-runner-env";
-  paths = [ pkgs.tmux pkgs.clang /* add packages here */ ];
-};
+pkgs.buildEnv {
+  name = "bureau-env-workstation";
+  paths = basePackages ++ [ pkgs.clang_18 pkgs.vulkan-tools ];
+}
 ```
 
 Each package brings its full transitive closure into `/nix/store`
-automatically. The runner sees all of them via the bind-mount.
+automatically. The runner sees all of them via the bind-mount. All
+machines evaluating the same `flake.lock` get byte-identical binaries.
 
 ## 2. Start the Stack
 
@@ -370,5 +395,6 @@ becomes a candidate for a tracked issue.
 | bb-worker config | `actionCache` and `contentAddressableStorage` are top-level in bb-storage but nested under `blobstore` in bb-worker. The proto field names differ between components. | med |
 | runner binary | `bb-runner-installer` image ships `bb_runner` but not `tini`. Use Docker Compose `init: true` instead. | low |
 | @platforms dep | `platform()` rule needs `bazel_dep(name = "platforms")` in MODULE.bazel — not implicitly visible to user BUILD files under bzlmod. | med |
-| tmux tests | `//observe:observe_test` and `//cmd/bureau-daemon:bureau-daemon_test` fail remotely (no tmux in runner). Need Nix bind-mount or local execution tag. | high |
-| WebRTC tests | `//transport:transport_test` fails remotely (runner has `network_mode: none`, WebRTC needs loopback). Needs local execution tag. | high |
+| tmux tests | `//observe:observe_test` and `//cmd/bureau-daemon:bureau-daemon_test` fail remotely (no tmux in runner). Need Nix bind-mount or local execution tag. **Resolved:** tmux added to `baseRunnerPackages`, bind-mounted via runner-env. | high |
+| bwrap in runner | `TestDaemonLauncherIntegration` needs bwrap for sandbox creation. bwrap is in runner-env but namespace creation fails inside Docker (`network_mode: none`, no `CAP_SYS_ADMIN`). Test skips when bwrap can't create namespaces. | med |
+| WebRTC tests | `//transport:transport_test` fails remotely (runner has `network_mode: none`, WebRTC ICE needs at least loopback). Needs loopback-only network or local execution tag. | high |

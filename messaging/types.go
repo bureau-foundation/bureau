@@ -255,6 +255,12 @@ type DisplayNameResponse struct {
 	DisplayName string `json:"displayname"`
 }
 
+// ServerVersionsResponse is returned by Client.ServerVersions.
+type ServerVersionsResponse struct {
+	Versions         []string        `json:"versions"`
+	UnstableFeatures map[string]bool `json:"unstable_features,omitempty"`
+}
+
 // LoginRequest is the request body for password login.
 type LoginRequest struct {
 	Type     string `json:"type"`

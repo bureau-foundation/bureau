@@ -26,6 +26,7 @@ account, spaces, and rooms). All other subcommands operate on an
 existing deployment, routing through the agent's proxy socket.`,
 		Subcommands: []*cli.Command{
 			SetupCommand(),
+			DoctorCommand(),
 			SpaceCommand(),
 			RoomCommand(),
 			UserCommand(),

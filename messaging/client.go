@@ -75,6 +75,22 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}, nil
 }
 
+// ServerVersions returns the Matrix protocol versions and unstable features
+// supported by the homeserver. This is an unauthenticated endpoint — useful
+// for checking whether the homeserver is reachable and what it supports.
+func (c *Client) ServerVersions(ctx context.Context) (*ServerVersionsResponse, error) {
+	body, err := c.doRequest(ctx, http.MethodGet, "/_matrix/client/versions", "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: server versions failed: %w", err)
+	}
+
+	var response ServerVersionsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse versions response: %w", err)
+	}
+	return &response, nil
+}
+
 // Register creates a new account using token-authenticated registration (MSC3231).
 // Returns a Session for the newly created account.
 //

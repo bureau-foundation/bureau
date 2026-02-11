@@ -93,6 +93,68 @@ type observeResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// activeObserveSession tracks a single in-flight observation connection.
+// The daemon maintains a registry of these so it can enforce ObservePolicy
+// changes: when a policy tightens, sessions that no longer pass
+// authorization are terminated by closing their client connection.
+type activeObserveSession struct {
+	principal   string
+	observer    string
+	grantedMode string
+	clientConn  net.Conn
+}
+
+// registerObserveSession adds a session to the daemon's active session
+// registry. Called after the handshake succeeds, before bridgeConnections.
+func (d *Daemon) registerObserveSession(session *activeObserveSession) {
+	d.observeSessionsMu.Lock()
+	defer d.observeSessionsMu.Unlock()
+	d.observeSessions = append(d.observeSessions, session)
+}
+
+// unregisterObserveSession removes a session from the registry. Called
+// when bridgeConnections returns (one side disconnected or was closed).
+func (d *Daemon) unregisterObserveSession(session *activeObserveSession) {
+	d.observeSessionsMu.Lock()
+	defer d.observeSessionsMu.Unlock()
+	for i, candidate := range d.observeSessions {
+		if candidate == session {
+			d.observeSessions = append(d.observeSessions[:i], d.observeSessions[i+1:]...)
+			return
+		}
+	}
+}
+
+// enforceObservePolicyChange re-evaluates all active observation sessions
+// for a principal against the current policy (in d.lastConfig). Sessions
+// that no longer pass authorization are terminated by closing the client
+// connection, which unblocks bridgeConnections and triggers relay cleanup.
+func (d *Daemon) enforceObservePolicyChange(principalLocalpart string) {
+	d.observeSessionsMu.Lock()
+	defer d.observeSessionsMu.Unlock()
+
+	for _, session := range d.observeSessions {
+		if session.principal != principalLocalpart {
+			continue
+		}
+
+		authz := d.authorizeObserve(session.observer, session.principal, session.grantedMode)
+		if authz.Allowed && authz.GrantedMode == session.grantedMode {
+			continue
+		}
+
+		// Policy no longer allows this session at its current mode.
+		// Close the client connection to terminate the relay bridge.
+		d.logger.Info("terminating observation session: policy changed",
+			"observer", session.observer,
+			"principal", session.principal,
+			"mode", session.grantedMode,
+			"still_allowed", authz.Allowed,
+		)
+		session.clientConn.Close()
+	}
+}
+
 // startObserveListener creates the observation Unix socket and starts
 // accepting client connections in a goroutine.
 func (d *Daemon) startObserveListener(ctx context.Context) error {
@@ -592,6 +654,17 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	}
 
 	startTime := time.Now()
+
+	// Register the session so enforceObservePolicyChange can terminate
+	// it if the ObservePolicy tightens while the session is active.
+	observeSession := &activeObserveSession{
+		principal:   request.Principal,
+		observer:    request.Observer,
+		grantedMode: grantedMode,
+		clientConn:  clientConnection,
+	}
+	d.registerObserveSession(observeSession)
+	defer d.unregisterObserveSession(observeSession)
 
 	d.logger.Info("observation started",
 		"observer", request.Observer,

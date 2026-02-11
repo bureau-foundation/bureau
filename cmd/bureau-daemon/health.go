@@ -237,6 +237,9 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart, "error", err)
 		// Clean up state even on IPC failure — the sandbox may be gone.
 		delete(d.running, localpart)
+		delete(d.lastCredentials, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -246,6 +249,9 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		d.logger.Error("health rollback: destroy-sandbox rejected",
 			"principal", localpart, "error", response.Error)
 		delete(d.running, localpart)
+		delete(d.lastCredentials, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -253,6 +259,9 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	}
 
 	delete(d.running, localpart)
+	delete(d.lastCredentials, localpart)
+	delete(d.lastVisibility, localpart)
+	delete(d.lastObservePolicy, localpart)
 	delete(d.lastSpecs, localpart)
 	d.lastActivityAt = time.Now()
 

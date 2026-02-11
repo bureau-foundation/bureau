@@ -183,8 +183,10 @@ func TestPublishStatus_SandboxCount(t *testing.T) {
 			"service/stt/whisper": true,
 			"service/tts/piper":   true,
 		},
-		lastCredentials: make(map[string]string),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
+		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Count running principals the same way publishStatus does.

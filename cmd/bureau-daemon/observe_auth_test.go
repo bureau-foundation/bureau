@@ -4,7 +4,12 @@
 package main
 
 import (
+	"log/slog"
+	"net"
+	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -301,4 +306,231 @@ func TestFindObservePolicyFallback(t *testing.T) {
 	if result != defaultPolicy {
 		t.Error("expected default policy for unknown principal")
 	}
+}
+
+// mockConn is a minimal net.Conn that tracks whether Close was called.
+// Used to verify that enforceObservePolicyChange terminates sessions
+// by closing the client connection.
+type mockConn struct {
+	net.Conn // embed to satisfy interface; unused methods will panic
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *mockConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *mockConn) wasClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// Satisfy the net.Conn interface methods that bridgeConnections or
+// other callers might touch. These are never called in the unit tests
+// below (enforceObservePolicyChange only calls Close), but providing
+// them avoids nil-pointer panics if the test setup changes.
+func (c *mockConn) LocalAddr() net.Addr              { return &net.UnixAddr{Name: "mock"} }
+func (c *mockConn) RemoteAddr() net.Addr             { return &net.UnixAddr{Name: "mock"} }
+func (c *mockConn) SetDeadline(time.Time) error      { return nil }
+func (c *mockConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *mockConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *mockConn) Read([]byte) (int, error)         { return 0, nil }
+func (c *mockConn) Write(b []byte) (int, error)      { return len(b), nil }
+
+func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
+	t.Parallel()
+
+	connection := &mockConn{}
+
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+		// Policy initially allowed ops/** to observe, but has now been
+		// changed to only allow ops/alice. The session below is for
+		// ops/bob, who is no longer in AllowedObservers.
+		lastConfig: &schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: "iree/amdgpu/pm",
+					AutoStart: true,
+					ObservePolicy: &schema.ObservePolicy{
+						AllowedObservers: []string{"ops/alice"},
+					},
+				},
+			},
+		},
+		observeSessions: []*activeObserveSession{
+			{
+				principal:   "iree/amdgpu/pm",
+				observer:    "@ops/bob:bureau.local",
+				grantedMode: "readonly",
+				clientConn:  connection,
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+
+	if !connection.wasClosed() {
+		t.Error("expected connection to be closed: ops/bob is no longer in AllowedObservers")
+	}
+}
+
+func TestEnforceObservePolicyChangeRetain(t *testing.T) {
+	t.Parallel()
+
+	connection := &mockConn{}
+
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+		// Policy allows ops/** — ops/bob is still authorized.
+		lastConfig: &schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: "iree/amdgpu/pm",
+					AutoStart: true,
+					ObservePolicy: &schema.ObservePolicy{
+						AllowedObservers: []string{"ops/**"},
+					},
+				},
+			},
+		},
+		observeSessions: []*activeObserveSession{
+			{
+				principal:   "iree/amdgpu/pm",
+				observer:    "@ops/bob:bureau.local",
+				grantedMode: "readonly",
+				clientConn:  connection,
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+
+	if connection.wasClosed() {
+		t.Error("expected connection to remain open: ops/bob is still in AllowedObservers")
+	}
+}
+
+func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
+	t.Parallel()
+
+	connection := &mockConn{}
+
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+		// Policy still allows ops/** to observe, but ReadWriteObservers
+		// has been narrowed to only ops/alice. The session below was
+		// granted readwrite for ops/bob, who now would only get readonly.
+		lastConfig: &schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: "iree/amdgpu/pm",
+					AutoStart: true,
+					ObservePolicy: &schema.ObservePolicy{
+						AllowedObservers:   []string{"ops/**"},
+						ReadWriteObservers: []string{"ops/alice"},
+					},
+				},
+			},
+		},
+		observeSessions: []*activeObserveSession{
+			{
+				principal:   "iree/amdgpu/pm",
+				observer:    "@ops/bob:bureau.local",
+				grantedMode: "readwrite",
+				clientConn:  connection,
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+
+	if !connection.wasClosed() {
+		t.Error("expected connection to be closed: ops/bob's readwrite session would now be downgraded to readonly")
+	}
+}
+
+func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
+	t.Parallel()
+
+	targetConnection := &mockConn{}
+	otherConnection := &mockConn{}
+
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+		lastConfig: &schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: "iree/amdgpu/pm",
+					AutoStart: true,
+					ObservePolicy: &schema.ObservePolicy{
+						// Nobody allowed — revokes all sessions.
+						AllowedObservers: []string{},
+					},
+				},
+				{
+					Localpart: "iree/amdgpu/builder",
+					AutoStart: true,
+					ObservePolicy: &schema.ObservePolicy{
+						AllowedObservers: []string{"ops/**"},
+					},
+				},
+			},
+		},
+		observeSessions: []*activeObserveSession{
+			{
+				principal:   "iree/amdgpu/pm",
+				observer:    "@ops/bob:bureau.local",
+				grantedMode: "readonly",
+				clientConn:  targetConnection,
+			},
+			{
+				principal:   "iree/amdgpu/builder",
+				observer:    "@ops/bob:bureau.local",
+				grantedMode: "readonly",
+				clientConn:  otherConnection,
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// Only enforce on pm — builder's session should be untouched.
+	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+
+	if !targetConnection.wasClosed() {
+		t.Error("expected pm connection to be closed")
+	}
+	if otherConnection.wasClosed() {
+		t.Error("expected builder connection to remain open (different principal)")
+	}
+}
+
+func TestEnforceObservePolicyChangeNoSessions(t *testing.T) {
+	t.Parallel()
+
+	// Verify no panic when there are no sessions.
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+		lastConfig: &schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: "iree/amdgpu/pm",
+					AutoStart: true,
+				},
+			},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	// Should not panic with nil observeSessions.
+	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
 }

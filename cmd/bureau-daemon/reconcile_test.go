@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -478,6 +479,8 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
+		lastVisibility:      make(map[string][]string),
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -611,6 +614,8 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		daemonBinaryHash:    daemonHash,
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
+		lastVisibility:      make(map[string][]string),
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -734,14 +739,16 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
-		runDir:          principal.DefaultRunDir,
-		session:         session,
-		machineName:     machineName,
-		serverName:      serverName,
-		configRoomID:    configRoomID,
-		launcherSocket:  launcherSocket,
-		running:         map[string]bool{"agent/test": true},
-		lastCredentials: make(map[string]string),
+		runDir:            principal.DefaultRunDir,
+		session:           session,
+		machineName:       machineName,
+		serverName:        serverName,
+		configRoomID:      configRoomID,
+		launcherSocket:    launcherSocket,
+		running:           map[string]bool{"agent/test": true},
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},
@@ -879,14 +886,16 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	// Payload is nil in both old and new spec — only command differs.
 	daemon := &Daemon{
-		runDir:          principal.DefaultRunDir,
-		session:         session,
-		machineName:     machineName,
-		serverName:      serverName,
-		configRoomID:    configRoomID,
-		launcherSocket:  launcherSocket,
-		running:         map[string]bool{"agent/test": true},
-		lastCredentials: make(map[string]string),
+		runDir:            principal.DefaultRunDir,
+		session:           session,
+		machineName:       machineName,
+		serverName:        serverName,
+		configRoomID:      configRoomID,
+		launcherSocket:    launcherSocket,
+		running:           map[string]bool{"agent/test": true},
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},
@@ -986,14 +995,16 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	// Old spec has same command but different payload.
 	daemon := &Daemon{
-		runDir:          principal.DefaultRunDir,
-		session:         session,
-		machineName:     machineName,
-		serverName:      serverName,
-		configRoomID:    configRoomID,
-		launcherSocket:  launcherSocket,
-		running:         map[string]bool{"agent/test": true},
-		lastCredentials: make(map[string]string),
+		runDir:            principal.DefaultRunDir,
+		session:           session,
+		machineName:       machineName,
+		serverName:        serverName,
+		configRoomID:      configRoomID,
+		launcherSocket:    launcherSocket,
+		running:           map[string]bool{"agent/test": true},
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},
@@ -1083,5 +1094,251 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 	case conn := <-accepted:
 		conn.Close()
 	case <-time.After(time.Second):
+	}
+}
+
+// TestReconcileVisibilityHotReload verifies that reconcile() detects when a
+// running principal's ServiceVisibility patterns change in the MachineConfig
+// and pushes the updated patterns to the proxy's admin socket. This tests
+// the hot-reload path for proxy-only principals (no template) which
+// reconcileRunningPrincipal() would skip.
+func TestReconcileVisibilityHotReload(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+	)
+
+	// MachineConfig with updated ServiceVisibility patterns.
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart:         "agent/test",
+				AutoStart:         true,
+				ServiceVisibility: []string{"service/stt/*", "service/embedding/**"},
+			},
+		},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	matrixServer := httptest.NewServer(state.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		return launcherIPCResponse{OK: true}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	// Mock admin server that captures PUT /v1/admin/visibility calls.
+	var (
+		visibilityMu        sync.Mutex
+		receivedPatterns    []string
+		visibilityCallCount int
+	)
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
+		visibilityMu.Lock()
+		defer visibilityMu.Unlock()
+		visibilityCallCount++
+
+		bodyBytes, _ := io.ReadAll(r.Body)
+		json.Unmarshal(bodyBytes, &receivedPatterns)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	})
+
+	adminSocketPath := filepath.Join(socketDir, "agent/test.admin.sock")
+	os.MkdirAll(filepath.Dir(adminSocketPath), 0755)
+	adminListener, err := net.Listen("unix", adminSocketPath)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer adminListener.Close()
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(adminListener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{"agent/test": true},
+		lastCredentials: map[string]string{
+			"agent/test": "encrypted-test-credentials",
+		},
+		// Old patterns differ from what the config now says.
+		lastVisibility: map[string][]string{
+			"agent/test": {"service/old/*"},
+		},
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	visibilityMu.Lock()
+	defer visibilityMu.Unlock()
+
+	if visibilityCallCount != 1 {
+		t.Errorf("expected 1 visibility push, got %d", visibilityCallCount)
+	}
+	if len(receivedPatterns) != 2 ||
+		receivedPatterns[0] != "service/stt/*" ||
+		receivedPatterns[1] != "service/embedding/**" {
+		t.Errorf("proxy received patterns %v, want [service/stt/* service/embedding/**]", receivedPatterns)
+	}
+
+	// lastVisibility should be updated to the new patterns.
+	stored := daemon.lastVisibility["agent/test"]
+	if len(stored) != 2 || stored[0] != "service/stt/*" || stored[1] != "service/embedding/**" {
+		t.Errorf("lastVisibility = %v, want [service/stt/* service/embedding/**]", stored)
+	}
+}
+
+// TestReconcileVisibilityUnchanged verifies that reconcile() does NOT push
+// visibility when the patterns haven't changed, avoiding unnecessary admin
+// socket calls on every reconcile cycle.
+func TestReconcileVisibilityUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+	)
+
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart:         "agent/test",
+				AutoStart:         true,
+				ServiceVisibility: []string{"service/stt/*"},
+			},
+		},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	matrixServer := httptest.NewServer(state.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		return launcherIPCResponse{OK: true}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	// Mock admin server that tracks calls — should NOT be called.
+	var (
+		visibilityMu        sync.Mutex
+		visibilityCallCount int
+	)
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
+		visibilityMu.Lock()
+		defer visibilityMu.Unlock()
+		visibilityCallCount++
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	})
+
+	adminSocketPath := filepath.Join(socketDir, "agent/test.admin.sock")
+	os.MkdirAll(filepath.Dir(adminSocketPath), 0755)
+	adminListener, err := net.Listen("unix", adminSocketPath)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer adminListener.Close()
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(adminListener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{"agent/test": true},
+		lastCredentials: map[string]string{
+			"agent/test": "encrypted-test-credentials",
+		},
+		// Stored patterns MATCH the config — no hot-reload needed.
+		lastVisibility: map[string][]string{
+			"agent/test": {"service/stt/*"},
+		},
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	visibilityMu.Lock()
+	defer visibilityMu.Unlock()
+
+	if visibilityCallCount != 0 {
+		t.Errorf("expected 0 visibility pushes (patterns unchanged), got %d", visibilityCallCount)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,6 +110,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", localpart)
@@ -116,6 +119,54 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("Restarting %s: credentials updated", localpart),
 		))
+	}
+
+	// Hot-reload ServiceVisibility patterns when they change. This runs
+	// in reconcile() (not reconcileRunningPrincipal) because it applies
+	// to all principals including proxy-only ones without templates.
+	// The proxy already has PUT /v1/admin/visibility — we just need to
+	// call it when the PrincipalAssignment's patterns diverge from what
+	// we last pushed.
+	for localpart, assignment := range desired {
+		if !d.running[localpart] {
+			continue
+		}
+		oldVisibility := d.lastVisibility[localpart]
+		newVisibility := assignment.ServiceVisibility
+		if !slices.Equal(oldVisibility, newVisibility) {
+			d.logger.Info("service visibility changed, updating proxy",
+				"principal", localpart)
+			if err := d.pushVisibilityToProxy(ctx, localpart, newVisibility); err != nil {
+				d.logger.Error("push visibility failed during hot-reload",
+					"principal", localpart, "error", err)
+				continue
+			}
+			d.lastVisibility[localpart] = newVisibility
+		}
+	}
+
+	// Enforce ObservePolicy changes on active observation sessions.
+	// When a principal's policy tightens (fewer allowed observers, or
+	// readwrite downgraded to readonly), in-flight sessions that no
+	// longer pass authorization are terminated by closing their client
+	// connection. This uses separate tracking maps from lastConfig —
+	// lastConfig is updated above (so authorizeObserve uses the new
+	// policy), while these maps detect which principals changed.
+	defaultPolicyChanged := !reflect.DeepEqual(
+		d.lastDefaultObservePolicy, config.DefaultObservePolicy)
+	if defaultPolicyChanged {
+		d.lastDefaultObservePolicy = config.DefaultObservePolicy
+	}
+	for localpart, assignment := range desired {
+		if !d.running[localpart] {
+			continue
+		}
+		oldPolicy := d.lastObservePolicy[localpart]
+		newPolicy := assignment.ObservePolicy
+		if defaultPolicyChanged || !reflect.DeepEqual(oldPolicy, newPolicy) {
+			d.lastObservePolicy[localpart] = newPolicy
+			d.enforceObservePolicyChange(localpart)
+		}
 	}
 
 	// Check for hot-reloadable changes on already-running principals.
@@ -210,6 +261,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.running[localpart] = true
 		d.lastCredentials[localpart] = credentials.Ciphertext
+		d.lastVisibility[localpart] = assignment.ServiceVisibility
+		d.lastObservePolicy[localpart] = assignment.ObservePolicy
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastActivityAt = time.Now()
@@ -284,6 +337,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		delete(d.running, localpart)
 		delete(d.lastCredentials, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -365,6 +420,8 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 
 		delete(d.running, localpart)
 		delete(d.lastSpecs, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
 			"principal", localpart)

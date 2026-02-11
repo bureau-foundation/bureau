@@ -172,32 +172,34 @@ func run() error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 
 	daemon := &Daemon{
-		session:          session,
-		client:           client,
-		tokenVerifier:    newTokenVerifier(client, 5*time.Minute, logger),
-		machineName:      machineName,
-		machineUserID:    machineUserID,
-		serverName:       serverName,
-		configRoomID:     configRoomID,
-		machinesRoomID:   machinesRoomID,
-		servicesRoomID:   servicesRoomID,
-		runDir:           runDir,
-		launcherSocket:   principal.LauncherSocketPath(runDir),
-		statusInterval:   statusInterval,
-		daemonBinaryHash: daemonBinaryHash,
-		daemonBinaryPath: daemonBinaryPath,
-		stateDir:         stateDir,
-		failedExecPaths:  make(map[string]bool),
-		running:          make(map[string]bool),
-		lastCredentials:  make(map[string]string),
-		lastSpecs:        make(map[string]*schema.SandboxSpec),
-		previousSpecs:    make(map[string]*schema.SandboxSpec),
-		lastTemplates:    make(map[string]*schema.TemplateContent),
-		healthMonitors:   make(map[string]*healthMonitor),
-		services:         make(map[string]*schema.Service),
-		proxyRoutes:      make(map[string]string),
-		peerAddresses:    make(map[string]string),
-		peerTransports:   make(map[string]http.RoundTripper),
+		session:           session,
+		client:            client,
+		tokenVerifier:     newTokenVerifier(client, 5*time.Minute, logger),
+		machineName:       machineName,
+		machineUserID:     machineUserID,
+		serverName:        serverName,
+		configRoomID:      configRoomID,
+		machinesRoomID:    machinesRoomID,
+		servicesRoomID:    servicesRoomID,
+		runDir:            runDir,
+		launcherSocket:    principal.LauncherSocketPath(runDir),
+		statusInterval:    statusInterval,
+		daemonBinaryHash:  daemonBinaryHash,
+		daemonBinaryPath:  daemonBinaryPath,
+		stateDir:          stateDir,
+		failedExecPaths:   make(map[string]bool),
+		running:           make(map[string]bool),
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
+		lastSpecs:         make(map[string]*schema.SandboxSpec),
+		previousSpecs:     make(map[string]*schema.SandboxSpec),
+		lastTemplates:     make(map[string]*schema.TemplateContent),
+		healthMonitors:    make(map[string]*healthMonitor),
+		services:          make(map[string]*schema.Service),
+		proxyRoutes:       make(map[string]string),
+		peerAddresses:     make(map[string]string),
+		peerTransports:    make(map[string]http.RoundTripper),
 		adminSocketPathFunc: func(localpart string) string {
 			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
@@ -329,6 +331,27 @@ type Daemon struct {
 	// triggers a destroy+create cycle to rotate the proxy's credentials.
 	lastCredentials map[string]string
 
+	// lastVisibility stores the ServiceVisibility patterns most
+	// recently pushed to each running principal's proxy. On each
+	// reconcile cycle, the daemon compares the current patterns from
+	// the PrincipalAssignment against this stored value — a mismatch
+	// triggers a PUT /v1/admin/visibility call to hot-reload the
+	// proxy's service filtering without restarting the sandbox.
+	lastVisibility map[string][]string
+
+	// lastObservePolicy stores the per-principal ObservePolicy from
+	// the most recent reconcile cycle. Used purely for change detection:
+	// when a principal's ObservePolicy differs from the stored value,
+	// the daemon re-evaluates active observation sessions against the
+	// new policy and terminates any that no longer pass authorization.
+	lastObservePolicy map[string]*schema.ObservePolicy
+
+	// lastDefaultObservePolicy stores the machine-level DefaultObservePolicy
+	// from the most recent reconcile cycle. A change to the default
+	// triggers re-evaluation of all active observation sessions, since
+	// principals without a per-principal override inherit the default.
+	lastDefaultObservePolicy *schema.ObservePolicy
+
 	// lastSpecs stores the SandboxSpec sent to the launcher for each
 	// running principal. Used to detect payload-only changes that can
 	// be hot-reloaded without restarting the sandbox. Nil entries mean
@@ -440,6 +463,13 @@ type Daemon struct {
 	// The daemon forks this for each observation session. Defaults to
 	// "bureau-observe-relay" (found via PATH).
 	observeRelayBinary string
+
+	// observeSessions tracks active observation connections. The daemon
+	// maintains this registry so that enforceObservePolicyChange can
+	// terminate sessions whose observers no longer pass authorization
+	// after a policy tightening.
+	observeSessions   []*activeObserveSession
+	observeSessionsMu sync.Mutex
 
 	// Layout sync: each running principal has a layout watcher goroutine
 	// that monitors its tmux session for changes and publishes them to

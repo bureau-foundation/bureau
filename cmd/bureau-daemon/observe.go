@@ -916,6 +916,13 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Clear any read/write deadlines set by http.Server during Hijack.
+	// The server calls SetReadDeadline(aLongTimeAgo) to abort its internal
+	// background reader before returning the raw connection. Without
+	// clearing this, subsequent reads return os.ErrDeadlineExceeded
+	// immediately and the bridge dies in microseconds.
+	transportConnection.SetDeadline(time.Time{})
+
 	// Write the HTTP response manually on the hijacked connection.
 	responseJSON, _ := json.Marshal(observeResponse{
 		OK:          true,
@@ -942,12 +949,17 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	// Bridge the hijacked connection to the relay.
 	bridgeConnections(transportConnection, relayConnection)
 
-	cleanupRelayProcess(relayCommand)
+	// Clean up the relay process and log its exit status. If the bridge
+	// returned very quickly, the relay likely failed during initialization
+	// (PTY allocation, tmux attach, metadata query).
+	bridgeDuration := time.Since(startTime)
+	relayExitError := cleanupRelayProcess(relayCommand)
 
 	d.logger.Info("transport observation ended",
 		"observer", request.Observer,
 		"principal", request.Principal,
-		"duration", time.Since(startTime).String(),
+		"duration", bridgeDuration.String(),
+		"relay_exit", relayExitError,
 	)
 }
 
@@ -1062,15 +1074,17 @@ func bridgeConnections(a, b net.Conn) {
 
 // cleanupRelayProcess sends SIGTERM and waits for the relay to exit.
 // If the relay doesn't exit within 5 seconds, it is killed with SIGKILL.
-func cleanupRelayProcess(command *exec.Cmd) {
+// Returns the relay's exit error (nil if it exited cleanly).
+func cleanupRelayProcess(command *exec.Cmd) error {
 	command.Process.Signal(syscall.SIGTERM)
 	exitChannel := make(chan error, 1)
 	go func() { exitChannel <- command.Wait() }()
 	select {
-	case <-exitChannel:
+	case err := <-exitChannel:
+		return err
 	case <-time.After(5 * time.Second):
 		command.Process.Kill()
-		<-exitChannel
+		return <-exitChannel
 	}
 }
 

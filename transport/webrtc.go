@@ -500,7 +500,30 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 // handleInboundDataChannel wraps an incoming data channel as a net.Conn
 // and pushes it to the inbound connection channel for the HTTP handler.
 func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peerLocalpart string) {
+	// The "init" data channel is a trigger used by establishOutbound to
+	// force pion to include a data channel section in the SDP offer.
+	// Neither side sends data on it. Accepting it into the http.Server
+	// would waste a goroutine (blocked reading forever until ReadTimeout)
+	// and — more critically — pion's SCTP implementation can exhibit
+	// internal lock contention when multiple streams on the same
+	// association have concurrent blocked reads. Discarding the init
+	// channel avoids this.
+	if dc.Label() == "init" {
+		dc.OnOpen(func() {
+			dc.Close()
+		})
+		return
+	}
+
+	wt.logger.Debug("inbound data channel received",
+		"peer", peerLocalpart,
+		"label", dc.Label(),
+	)
 	dc.OnOpen(func() {
+		wt.logger.Debug("inbound data channel opened",
+			"peer", peerLocalpart,
+			"label", dc.Label(),
+		)
 		rawChannel, err := dc.Detach()
 		if err != nil {
 			wt.logger.Error("detaching inbound data channel failed",
@@ -528,7 +551,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 // handleICEStateChange monitors PeerConnection state and manages the
 // established signal.
 func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peerState, state webrtc.ICEConnectionState) {
-	wt.logger.Debug("ICE state change",
+	wt.logger.Info("ICE state change",
 		"peer", peerLocalpart,
 		"state", state.String(),
 	)
@@ -565,6 +588,11 @@ func (wt *WebRTCTransport) openDataChannel(peer *peerState) (net.Conn, error) {
 	counter := wt.channelCounter.Add(1)
 	label := fmt.Sprintf("http-%d", counter)
 
+	wt.logger.Debug("opening data channel",
+		"label", label,
+		"peer", peer.localpart,
+	)
+
 	ordered := true
 	dc, err := peer.connection.CreateDataChannel(label, &webrtc.DataChannelInit{
 		Ordered: &ordered,
@@ -576,12 +604,14 @@ func (wt *WebRTCTransport) openDataChannel(peer *peerState) (net.Conn, error) {
 	// Wait for the data channel to open.
 	openChan := make(chan struct{})
 	dc.OnOpen(func() {
+		wt.logger.Debug("data channel opened", "label", label, "peer", peer.localpart)
 		close(openChan)
 	})
 
 	select {
 	case <-openChan:
 	case <-time.After(10 * time.Second):
+		wt.logger.Warn("data channel open timed out", "label", label, "peer", peer.localpart)
 		dc.Close()
 		return nil, fmt.Errorf("data channel %s did not open within 10s", label)
 	case <-wt.closed:

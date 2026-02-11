@@ -446,6 +446,214 @@ func TestCredentialRotation(t *testing.T) {
 	}
 }
 
+// TestCrossMachineObservation verifies the full cross-machine observation
+// pipeline over WebRTC transport. Two machines boot with their own launcher
+// and daemon. A principal is deployed on machine A (provider). Machine B
+// (consumer) discovers the principal via the service directory, discovers
+// machine A's transport address via MachineStatus, and uses the WebRTC
+// transport to forward an observation request to machine A.
+//
+// This exercises the production path end-to-end:
+//   - MatrixSignaler SDP exchange through Matrix state events
+//   - pion/webrtc PeerConnection establishment over loopback
+//   - Data channel multiplexing (SCTP)
+//   - HTTP observation protocol forwarding through the data channel
+//   - Relay fork on the provider machine
+//   - Bidirectional byte bridge through the consumer daemon
+//   - Dual authorization: consumer checks its DefaultObservePolicy,
+//     provider checks the principal's ObservePolicy
+func TestCrossMachineObservation(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	ctx := t.Context()
+
+	// Boot two machines. The provider hosts the principal and needs the
+	// proxy binary (to create a sandbox) and the observe relay binary
+	// (to fork a relay for the observation session). The consumer just
+	// needs a daemon — it routes observation requests but doesn't host
+	// any principals.
+	provider := newTestMachine(t, "machine/xm-prov")
+	consumer := newTestMachine(t, "machine/xm-cons")
+
+	startMachine(t, admin, provider, machineOptions{
+		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:        resolvedBinary(t, "PROXY_BINARY"),
+		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
+	})
+	startMachine(t, admin, consumer, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+	})
+
+	// Deploy a principal on the provider with an observe policy that
+	// allows the admin to observe in readwrite mode.
+	observed := registerPrincipal(t, "test/xm-obs", "xm-observe-password")
+	deployPrincipals(t, admin, provider, deploymentConfig{
+		Principals: []principalSpec{{Account: observed}},
+		DefaultObservePolicy: map[string]any{
+			"allowed_observers":   []string{"**"},
+			"readwrite_observers": []string{"bureau-admin"},
+		},
+	})
+
+	// Push a MachineConfig on the consumer with a DefaultObservePolicy.
+	// The consumer doesn't host any principals, but it needs a policy so
+	// authorizeObserve succeeds when the operator requests observation of
+	// a remote principal (the consumer authorizes the proxy role before
+	// forwarding to the provider).
+	pushMachineConfig(t, admin, consumer, deploymentConfig{
+		DefaultObservePolicy: map[string]any{
+			"allowed_observers":   []string{"**"},
+			"readwrite_observers": []string{"bureau-admin"},
+		},
+	})
+
+	// Publish a service entry in #bureau/services so the consumer daemon
+	// can discover the principal on the provider machine. In production,
+	// services are registered by the daemon or admin; here we simulate
+	// that by pushing the state event directly.
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+	_, err = admin.SendStateEvent(ctx, servicesRoomID, "m.bureau.service",
+		observed.Localpart, map[string]any{
+			"principal":   observed.UserID,
+			"machine":     provider.UserID,
+			"protocol":    "bureau-observe",
+			"description": "test principal for cross-machine observation",
+		})
+	if err != nil {
+		t.Fatalf("publish service event: %v", err)
+	}
+
+	// Wait for the observe socket on the consumer machine.
+	waitForFile(t, consumer.ObserveSocket, 5*time.Second)
+
+	// Get admin credentials for observe socket authentication.
+	credentials := loadCredentials(t)
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminToken == "" {
+		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
+	}
+	adminUserID := "@bureau-admin:" + testServerName
+
+	// --- Sub-test: list targets from consumer shows remote principal ---
+	t.Run("ListRemoteTargets", func(t *testing.T) {
+		// Poll until the remote principal appears as observable. This is
+		// the convergence point that proves three independent subsystems
+		// have synced:
+		//   (a) Service directory: consumer synced m.bureau.service events
+		//   (b) Peer discovery: consumer read provider's MachineStatus
+		//       and extracted its transport address
+		//   (c) Auth policy: consumer reconciled its MachineConfig and
+		//       has a DefaultObservePolicy loaded
+		var response *observe.ListResponse
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			var listError error
+			response, listError = observe.ListTargets(consumer.ObserveSocket, observe.ListRequest{
+				Observer: adminUserID,
+				Token:    adminToken,
+			})
+			if listError != nil {
+				t.Fatalf("ListTargets: %v", listError)
+			}
+
+			for _, entry := range response.Principals {
+				if entry.Localpart == observed.Localpart && entry.Observable {
+					t.Logf("remote principal %q discovered (machine=%s, observable=%v)",
+						entry.Localpart, entry.Machine, entry.Observable)
+					goto discovered
+				}
+			}
+
+			if time.Now().After(deadline) {
+				t.Logf("last list response: %d principals, %d machines",
+					len(response.Principals), len(response.Machines))
+				for _, principal := range response.Principals {
+					t.Logf("  principal: %s (machine=%s local=%v observable=%v)",
+						principal.Localpart, principal.Machine, principal.Local, principal.Observable)
+				}
+				for _, machine := range response.Machines {
+					t.Logf("  machine: %s (self=%v reachable=%v)",
+						machine.Name, machine.Self, machine.Reachable)
+				}
+				t.Fatal("timed out waiting for remote principal to appear as observable")
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	discovered:
+
+		// Verify the principal is remote and observable.
+		for _, entry := range response.Principals {
+			if entry.Localpart == observed.Localpart {
+				if entry.Local {
+					t.Error("expected principal to be remote, not local")
+				}
+				if !entry.Observable {
+					t.Error("expected principal to be observable")
+				}
+				if entry.Machine != provider.Name {
+					t.Errorf("principal machine = %q, want %q", entry.Machine, provider.Name)
+				}
+				break
+			}
+		}
+
+		// Verify the provider machine appears as a reachable peer.
+		var foundPeer bool
+		for _, machineEntry := range response.Machines {
+			if machineEntry.Name == provider.Name {
+				foundPeer = true
+				if machineEntry.Self {
+					t.Error("provider should not be marked as self on consumer's list")
+				}
+				if !machineEntry.Reachable {
+					t.Error("provider should be reachable")
+				}
+				break
+			}
+		}
+		if !foundPeer {
+			t.Errorf("provider machine %q not found in list response", provider.Name)
+		}
+	})
+
+	// --- Sub-test: observe handshake through WebRTC transport ---
+	t.Run("RemoteObserveHandshake", func(t *testing.T) {
+		// This is the big one: the operator connects to the consumer's
+		// observe socket, the consumer dials the provider via WebRTC,
+		// the provider forks a relay, and the observation stream flows
+		// back through the data channel to the operator.
+		session, err := observe.Connect(consumer.ObserveSocket, observe.ObserveRequest{
+			Principal: observed.Localpart,
+			Mode:      "readwrite",
+			Observer:  adminUserID,
+			Token:     adminToken,
+		})
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		defer session.Close()
+
+		// The metadata comes from the relay on the provider machine,
+		// bridged through the WebRTC data channel and the consumer daemon.
+		if session.Metadata.Principal != observed.Localpart {
+			t.Errorf("metadata principal = %q, want %q",
+				session.Metadata.Principal, observed.Localpart)
+		}
+		if session.Metadata.Machine != provider.Name {
+			t.Errorf("metadata machine = %q, want %q (should be the provider)",
+				session.Metadata.Machine, provider.Name)
+		}
+	})
+}
+
 // TestConfigReconciliation verifies the daemon's core reconciliation loop:
 // detecting MachineConfig changes via /sync, creating and destroying
 // sandboxes through launcher IPC, and correctly tracking running state.

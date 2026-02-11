@@ -62,23 +62,24 @@ jobs:
           "SKIP=bazel-build,bazel-test pre-commit run
           --show-diff-on-failure --color=always --all-files"
 
-      # Push any Nix store paths this job built (primarily the dev
-      # shell closure) so the build job and local dev can reuse them.
-      - name: Push to Nix binary cache
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: |
-          echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
-          trap 'rm -f /tmp/nix-signing-key' EXIT
-
-          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
-
-          nix build --no-link .#devShells.x86_64-linux.default
-          nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
-          nix copy --to "$CACHE" .#devShells.x86_64-linux.default
+      # TODO(#15): Uncomment once Determinate Nix ships >= 2.33.2.
+      # Nix 2.33.1 signs accept-encoding in S3 V4 headers; Cloudflare
+      # strips it before R2 sees the request, breaking the signature.
+      # - name: Push to Nix binary cache
+      #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      #   continue-on-error: true
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      #   run: |
+      #     echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
+      #     trap 'rm -f /tmp/nix-signing-key' EXIT
+      #
+      #     CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
+      #
+      #     nix build --no-link .#devShells.x86_64-linux.default
+      #     nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
+      #     nix copy --to "$CACHE" .#devShells.x86_64-linux.default
 
       - name: Prune Bazel cache
         if: always()
@@ -125,25 +126,25 @@ jobs:
       - name: Build Nix packages
         run: nix build
 
-      # Push the dev shell closure and release binary closure to R2.
-      - name: Push to Nix binary cache
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: |
-          echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
-          trap 'rm -f /tmp/nix-signing-key' EXIT
-
-          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
-
-          nix build --no-link .#devShells.x86_64-linux.default
-          nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
-          nix copy --to "$CACHE" .#devShells.x86_64-linux.default
-
-          nix store sign --key-file /tmp/nix-signing-key -r .#default
-          nix copy --to "$CACHE" .#default
+      # TODO(#15): Uncomment once Determinate Nix ships >= 2.33.2.
+      # - name: Push to Nix binary cache
+      #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      #   continue-on-error: true
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      #   run: |
+      #     echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
+      #     trap 'rm -f /tmp/nix-signing-key' EXIT
+      #
+      #     CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
+      #
+      #     nix build --no-link .#devShells.x86_64-linux.default
+      #     nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
+      #     nix copy --to "$CACHE" .#devShells.x86_64-linux.default
+      #
+      #     nix store sign --key-file /tmp/nix-signing-key -r .#default
+      #     nix copy --to "$CACHE" .#default
 
       - name: Prune Bazel cache
         if: always()

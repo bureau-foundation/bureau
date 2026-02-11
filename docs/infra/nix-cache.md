@@ -44,12 +44,11 @@ In CI, the substituter and public key are written to `/etc/nix/nix.custom.conf`
 After a successful build on main, the CI workflow:
 
 - Writes the signing secret key to a temporary file (cleaned up via `trap`)
-- Configures AWS credentials for a named profile (`bureau`) using `aws configure set`
-  via `nix shell nixpkgs#awscli2` (credentials cleaned up via `trap`)
+- Sets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` env vars for R2
 - Builds the dev shell derivation (`nix build --no-link` — necessary because
   `nix develop` fetches dependencies but doesn't realize the mkShell output)
 - Signs the dev shell closure and the release binary closure
-- Pushes both to R2 via Nix's S3 store backend
+- Pushes both to R2 via `nix copy --to 's3://bureau-cache?endpoint=...&region=auto'`
 
 Both the lint and build jobs push to the cache — any job that builds Nix
 derivations should push, so parallel jobs can share store paths.
@@ -57,6 +56,14 @@ derivations should push, so parallel jobs can share store paths.
 The push step uses `continue-on-error: true` so cache failures never block
 CI. Only pushes on main trigger the upload (fork PRs don't receive secrets;
 same-repo PRs do, but the `event_name == 'push'` guard prevents execution).
+
+**Current status**: Cache writes are commented out pending Determinate Nix
+shipping Nix >= 2.33.2 (see [#15](https://github.com/bureau-foundation/bureau/issues/15)).
+Nix 2.33.0–2.33.1 has a bug where curl's `--aws-sigv4` signs the
+`accept-encoding` header; Cloudflare's edge modifies it before R2 sees the
+request, causing 403 on every S3 operation
+([NixOS/nix#15019](https://github.com/NixOS/nix/issues/15019), fixed in
+2.33.2). The dev shell closure was manually uploaded and reads work.
 
 ## Signing
 

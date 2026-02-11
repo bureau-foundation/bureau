@@ -83,6 +83,8 @@ type WebRTCTransport struct {
 }
 
 // peerState tracks the WebRTC PeerConnection to a single remote daemon.
+// Protected by WebRTCTransport.mu — callers must hold the lock when
+// accessing the peers map and when reading or modifying peerState fields.
 type peerState struct {
 	connection  *webrtc.PeerConnection
 	localpart   string

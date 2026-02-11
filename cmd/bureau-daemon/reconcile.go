@@ -145,9 +145,6 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.running[localpart] = true
-		if d.lastSpecs == nil {
-			d.lastSpecs = make(map[string]*schema.SandboxSpec)
-		}
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastActivityAt = time.Now()
@@ -260,9 +257,6 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		// or from a previous daemon instance). Store the current spec
 		// and template for future comparisons but don't trigger any
 		// changes.
-		if d.lastSpecs == nil {
-			d.lastSpecs = make(map[string]*schema.SandboxSpec)
-		}
 		d.lastSpecs[localpart] = newSpec
 		d.lastTemplates[localpart] = template
 		return

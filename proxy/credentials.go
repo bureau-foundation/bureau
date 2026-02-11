@@ -84,20 +84,22 @@ func (s *EnvCredentialSource) Close() error {
 //	GITHUB_PAT=ghp_...
 //
 // Lines starting with # are comments. Empty lines are ignored.
+//
+// Thread safety: Get is safe for concurrent use. The file is loaded
+// lazily on first Get via sync.Once. Close must not be called
+// concurrently with Get (the caller must ensure no reads are in flight).
 type FileCredentialSource struct {
 	// Path is the path to the credentials file.
 	Path string
 
-	// credentials is the parsed credential map, loaded lazily.
+	// credentials is the parsed credential map, loaded lazily via once.
+	once        sync.Once
 	credentials map[string]*secret.Buffer
-	loaded      bool
 }
 
 // Get retrieves a credential from the file.
 func (s *FileCredentialSource) Get(name string) *secret.Buffer {
-	if !s.loaded {
-		s.load()
-	}
+	s.once.Do(s.load)
 	// Convert credential name to file key format: github-pat -> GITHUB_PAT
 	key := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	return s.credentials[key]
@@ -112,9 +114,8 @@ func (s *FileCredentialSource) Close() error {
 	return nil
 }
 
-// load parses the credentials file.
+// load parses the credentials file. Called via sync.Once from Get.
 func (s *FileCredentialSource) load() {
-	s.loaded = true
 	s.credentials = make(map[string]*secret.Buffer)
 
 	if s.Path == "" {
@@ -219,6 +220,10 @@ func (s *SystemdCredentialSource) Close() error {
 
 // MapCredentialSource provides credentials from mmap-backed buffers.
 // Use NewMapCredentialSource to construct from a string map.
+//
+// Thread safety: the credentials map is immutable after construction.
+// Get is safe for concurrent use. Close must not be called concurrently
+// with Get (the caller must ensure no reads are in flight).
 type MapCredentialSource struct {
 	credentials map[string]*secret.Buffer
 }
@@ -261,6 +266,10 @@ func (s *MapCredentialSource) Close() error {
 
 // ChainCredentialSource tries multiple credential sources in order.
 // Returns the first non-nil value found.
+//
+// Thread safety: the Sources slice is immutable after construction.
+// Get is safe for concurrent use if all child sources are safe for
+// concurrent use. Close must not be called concurrently with Get.
 type ChainCredentialSource struct {
 	Sources []CredentialSource
 }
@@ -307,6 +316,10 @@ func (s *ChainCredentialSource) Close() error {
 // token for Authorization header injection), MATRIX_USER_ID, and whatever
 // keys appear in the credentials object (stored verbatim). Lookup is
 // exact-match (no normalization).
+//
+// Thread safety: the credentials map is immutable after construction.
+// Get and MatrixPolicy are safe for concurrent use. Close must not be
+// called concurrently with Get.
 type PipeCredentialSource struct {
 	credentials  map[string]*secret.Buffer
 	matrixPolicy *schema.MatrixPolicy

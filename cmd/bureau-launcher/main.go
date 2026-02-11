@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -624,21 +625,32 @@ type proxyCredentialPayload struct {
 	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 }
 
-// Launcher handles IPC requests from the daemon.
+// Launcher handles IPC requests from the daemon. The serve loop accepts
+// connections concurrently (each handleConnection runs in its own goroutine),
+// so all mutable state is protected by mu. Immutable-after-startup fields
+// (session, keypair, machineName, serverName, homeserverURL, runDir, stateDir,
+// workspaceRoot, binaryHash, binaryPath) are set before the listener starts
+// and are safe to read without the lock.
 type Launcher struct {
-	session         *messaging.Session
-	keypair         *sealed.Keypair
-	machineName     string
-	serverName      string
-	homeserverURL   string
-	runDir          string // runtime directory for sockets (e.g., /run/bureau)
-	stateDir        string // persistent state directory (e.g., /var/lib/bureau)
+	session       *messaging.Session
+	keypair       *sealed.Keypair
+	machineName   string
+	serverName    string
+	homeserverURL string
+	runDir        string // runtime directory for sockets (e.g., /run/bureau)
+	stateDir      string // persistent state directory (e.g., /var/lib/bureau)
+	workspaceRoot string // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
+	binaryHash    string // SHA256 hex digest of the launcher binary, computed at startup
+	binaryPath    string // absolute filesystem path of the running binary (for watchdog PreviousBinary)
+	logger        *slog.Logger
+
+	// mu serializes access to mutable state: sandboxes, failedExecPaths,
+	// and proxyBinaryPath. Acquired at the top of handleConnection (after
+	// decoding the request) so all IPC handler methods run under the lock.
+	// Also acquired by shutdownAllSandboxes during graceful shutdown.
+	mu              sync.Mutex
 	proxyBinaryPath string
-	workspaceRoot   string // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
-	binaryHash      string // SHA256 hex digest of the launcher binary, computed at startup
-	binaryPath      string // absolute filesystem path of the running binary (for watchdog PreviousBinary)
 	sandboxes       map[string]*managedSandbox
-	logger          *slog.Logger
 
 	// failedExecPaths tracks binary paths where exec() has been attempted
 	// and failed during this process lifetime. Prevents retry loops where
@@ -748,6 +760,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	l.logger.Info("IPC request", "action", request.Action, "principal", request.Principal)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	var response IPCResponse
 	switch request.Action {
@@ -1453,8 +1468,12 @@ func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 }
 
 // shutdownAllSandboxes terminates all running proxy processes and their
-// associated tmux sessions. Called during launcher shutdown.
+// associated tmux sessions. Called during launcher shutdown. Acquires mu
+// to serialize with any in-flight IPC handlers.
 func (l *Launcher) shutdownAllSandboxes() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	for principalLocalpart, sandbox := range l.sandboxes {
 		l.logger.Info("shutting down sandbox", "principal", principalLocalpart, "pid", sandbox.process.Pid)
 

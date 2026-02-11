@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # Magic Nix Cache uses GitHub Actions OIDC for storage.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,6 +25,26 @@ jobs:
 
       - uses: DeterminateSystems/determinate-nix-action@v3
       - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
+
+      # Gazelle (check-gazelle) runs `bazel run //:gazelle` to verify
+      # BUILD files are current. It detects CI=true and passes --config=ci
+      # for disk cache and output formatting.
+      #
+      # Cache keys are per-job so the lint and build jobs don't race to
+      # save the same entry (GitHub Actions cache is immutable). Restore
+      # keys fall back to the build job's cache, which is a superset.
+      - name: Mount Bazel cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel-disk-cache
+          key: bazel-lint-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-lint-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
+            bazel-build-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
+            bazel-lint-${{ runner.os }}-
+            bazel-build-${{ runner.os }}-
 
       # Pre-commit manages its own Python virtualenvs for hooks like
       # trailing-whitespace and insert-license. These live outside the
@@ -47,6 +66,12 @@ jobs:
           "SKIP=bazel-build,bazel-test pre-commit run
           --show-diff-on-failure --color=always --all-files"
 
+      - name: Prune Bazel cache
+        if: always()
+        run: |
+          find ~/.cache/bazel-disk-cache -type f -atime +7 -delete 2>/dev/null || true
+          du -sh ~/.cache/bazel-disk-cache 2>/dev/null || echo "Cache empty"
+
   build:
     name: Build and test
     runs-on: ubuntu-latest
@@ -55,6 +80,8 @@ jobs:
 
       - uses: DeterminateSystems/determinate-nix-action@v3
       - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
 
       # Bazel's disk cache is separate from the Nix store. The --disk_cache
       # flag is set in .bazelrc under the "ci" config.
@@ -62,10 +89,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/bazel-disk-cache
-          key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-${{ github.sha }}
+          key: bazel-build-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-${{ github.sha }}
           restore-keys: |
-            bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
-            bazel-${{ runner.os }}-
+            bazel-build-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
+            bazel-build-${{ runner.os }}-
 
       - name: Build
         run: nix develop --command bazel build --config=ci //...

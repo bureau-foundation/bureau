@@ -12,10 +12,16 @@
 
 set -euo pipefail
 
+# In CI, pass --config=ci for disk cache and output formatting.
+bazel_flags=()
+if [ "${CI:-}" = "true" ]; then
+    bazel_flags+=(--config=ci)
+fi
+
 # Snapshot current BUILD file contents.
 before=$(find . -name 'BUILD.bazel' -o -name '*.bzl' | sort | xargs sha256sum 2>/dev/null || true)
 
-bazel run //:gazelle 2>&1
+bazel run "${bazel_flags[@]}" //:gazelle 2>&1
 
 after=$(find . -name 'BUILD.bazel' -o -name '*.bzl' | sort | xargs sha256sum 2>/dev/null || true)
 

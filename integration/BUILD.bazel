@@ -15,7 +15,12 @@ load("@rules_go//go:def.bzl", "go_test")
 go_test(
     name = "integration_test",
     size = "medium",
-    srcs = ["matrix_test.go"],
+    srcs = [
+        "fleet_test.go",
+        "helpers_test.go",
+        "messaging_test.go",
+        "setup_test.go",
+    ],
     data = [
         "//:MODULE.bazel",
         "//cmd/bureau",

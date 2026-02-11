@@ -1,0 +1,778 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package integration_test
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/messaging"
+	"github.com/bureau-foundation/bureau/observe"
+)
+
+// TestMachineJoinsFleet verifies the complete machine bootstrap path:
+// launcher registers with the homeserver and publishes its key, daemon
+// starts, performs initial sync, creates the config room, and publishes
+// a MachineStatus heartbeat. This proves the full launcher→daemon→Matrix
+// lifecycle works end-to-end.
+func TestMachineJoinsFleet(t *testing.T) {
+	const machineName = "machine/test"
+	machineUserID := "@machine/test:" + testServerName
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	// Resolve global rooms so we can invite the machine.
+	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve machines room: %v", err)
+	}
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+
+	// Pre-invite the machine user to global rooms. These rooms use the
+	// private_chat preset (invite-only), so the machine needs an
+	// invitation before it can join. In production, the admin does this
+	// as part of fleet provisioning.
+	if err := admin.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to machines room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to services room: %v", err)
+	}
+
+	// Create isolated directories. socketDir uses /tmp for short paths
+	// (Unix socket limit is 108 bytes; Bazel's TEST_TMPDIR is too deep).
+	stateDir := t.TempDir()
+	socketDir := tempSocketDir(t)
+
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	observeSocket := filepath.Join(socketDir, "observe.sock")
+	relaySocket := filepath.Join(socketDir, "relay.sock")
+	principalSocketBase := filepath.Join(socketDir, "p") + "/"
+	adminSocketBase := filepath.Join(socketDir, "a") + "/"
+	os.MkdirAll(principalSocketBase, 0755)
+	os.MkdirAll(adminSocketBase, 0755)
+
+	// Write the registration token to a file for the launcher.
+	tokenFile := filepath.Join(stateDir, "reg-token")
+	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
+		t.Fatalf("write registration token: %v", err)
+	}
+
+	launcherWorkspaceRoot := filepath.Join(stateDir, "workspace")
+
+	// Start the launcher (first boot). It generates a keypair, registers
+	// a Matrix account, publishes the machine key, saves the session, and
+	// listens on the IPC socket.
+	startProcess(t, "launcher", launcherBinary,
+		"--homeserver", testHomeserverURL,
+		"--registration-token-file", tokenFile,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--tmux-socket", tmuxSocket,
+		"--socket-base-path", principalSocketBase,
+		"--admin-base-path", adminSocketBase,
+		"--workspace-root", launcherWorkspaceRoot,
+	)
+
+	// Wait for the launcher's IPC socket — its appearance signals that
+	// first-boot setup (registration, key publication) is complete and
+	// the launcher is listening for daemon requests.
+	waitForFile(t, launcherSocket, 15*time.Second)
+
+	// Verify the machine key was published to #bureau/machines.
+	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_key", machineName, 10*time.Second)
+
+	var machineKey struct {
+		Algorithm string `json:"algorithm"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
+		t.Fatalf("unmarshal machine key: %v", err)
+	}
+	if machineKey.Algorithm != "age-x25519" {
+		t.Errorf("machine key algorithm = %q, want age-x25519", machineKey.Algorithm)
+	}
+	if machineKey.PublicKey == "" {
+		t.Error("machine key has empty public key")
+	}
+
+	// Start the daemon. It loads the session saved by the launcher,
+	// ensures the per-machine config room, joins global rooms, does
+	// an initial Matrix sync, and publishes a MachineStatus heartbeat.
+	startProcess(t, "daemon", daemonBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--launcher-socket", launcherSocket,
+		"--observe-socket", observeSocket,
+		"--relay-socket", relaySocket,
+		"--tmux-socket", tmuxSocket,
+		"--admin-user", "bureau-admin",
+		"--admin-base-path", adminSocketBase,
+	)
+
+	// Wait for the MachineStatus heartbeat in #bureau/machines. The
+	// daemon publishes immediately on startup, so this also serves as
+	// a readiness signal.
+	statusJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_status", machineName, 15*time.Second)
+
+	var status struct {
+		Principal string `json:"principal"`
+		Sandboxes struct {
+			Running int `json:"running"`
+		} `json:"sandboxes"`
+		UptimeSeconds int64 `json:"uptime_seconds"`
+	}
+	if err := json.Unmarshal(statusJSON, &status); err != nil {
+		t.Fatalf("unmarshal machine status: %v", err)
+	}
+	if status.Principal != machineUserID {
+		t.Errorf("machine status principal = %q, want %q", status.Principal, machineUserID)
+	}
+	if status.Sandboxes.Running != 0 {
+		t.Errorf("expected 0 running sandboxes, got %d", status.Sandboxes.Running)
+	}
+	if status.UptimeSeconds == 0 {
+		t.Error("machine status has zero uptime")
+	}
+
+	// Verify the per-machine config room was created by the daemon.
+	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		t.Fatalf("config room %s not created: %v", configAlias, err)
+	}
+	if configRoomID == "" {
+		t.Fatal("config room resolved to empty room ID")
+	}
+
+	// Verify the admin was invited to the config room (the daemon's
+	// ensureConfigRoom invites the admin user so the admin can write
+	// MachineConfig and Credentials state events).
+	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("admin could not join config room: %v", err)
+	}
+
+	// Verify config room power levels: admin should have level 100.
+	powerLevelJSON, err := admin.GetStateEvent(ctx, configRoomID, "m.room.power_levels", "")
+	if err != nil {
+		t.Fatalf("get config room power levels: %v", err)
+	}
+	var powerLevels struct {
+		Users map[string]int `json:"users"`
+	}
+	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
+		t.Fatalf("unmarshal power levels: %v", err)
+	}
+	adminUserID := "@bureau-admin:" + testServerName
+	if level, ok := powerLevels.Users[adminUserID]; !ok || level != 100 {
+		t.Errorf("admin power level = %d (present=%v), want 100", level, ok)
+	}
+	if level, ok := powerLevels.Users[machineUserID]; !ok || level != 50 {
+		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
+	}
+}
+
+// TestPrincipalAssignment verifies the full sandbox lifecycle: admin writes
+// a MachineConfig assigning a principal, the daemon reconciles, the launcher
+// creates a proxy, and the proxy correctly serves the principal's Matrix
+// identity. This proves credential encryption, IPC, proxy spawning, and
+// reconciliation work end-to-end.
+func TestPrincipalAssignment(t *testing.T) {
+	const machineName = "machine/sandbox"
+	const principalLocalpart = "test/agent"
+	machineUserID := "@machine/sandbox:" + testServerName
+	principalUserID := "@test/agent:" + testServerName
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	// Resolve global rooms and invite the machine.
+	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve machines room: %v", err)
+	}
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+
+	if err := admin.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to machines room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to services room: %v", err)
+	}
+
+	// Create isolated directories.
+	stateDir := t.TempDir()
+	socketDir := tempSocketDir(t)
+
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	observeSocket := filepath.Join(socketDir, "observe.sock")
+	relaySocket := filepath.Join(socketDir, "relay.sock")
+	principalSocketBase := filepath.Join(socketDir, "p") + "/"
+	adminSocketBase := filepath.Join(socketDir, "a") + "/"
+	os.MkdirAll(principalSocketBase, 0755)
+	os.MkdirAll(adminSocketBase, 0755)
+
+	tokenFile := filepath.Join(stateDir, "reg-token")
+	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
+		t.Fatalf("write registration token: %v", err)
+	}
+
+	launcherWorkspaceRoot := filepath.Join(stateDir, "workspace")
+
+	// Start the launcher with --proxy-binary so it can spawn proxies.
+	startProcess(t, "launcher", launcherBinary,
+		"--homeserver", testHomeserverURL,
+		"--registration-token-file", tokenFile,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--tmux-socket", tmuxSocket,
+		"--socket-base-path", principalSocketBase,
+		"--admin-base-path", adminSocketBase,
+		"--workspace-root", launcherWorkspaceRoot,
+		"--proxy-binary", proxyBinary,
+	)
+
+	waitForFile(t, launcherSocket, 15*time.Second)
+
+	// Get the machine's public key (needed to encrypt credentials).
+	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_key", machineName, 10*time.Second)
+	var machineKey struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
+		t.Fatalf("unmarshal machine key: %v", err)
+	}
+	if machineKey.PublicKey == "" {
+		t.Fatal("machine key has empty public key")
+	}
+
+	// Start the daemon.
+	startProcess(t, "daemon", daemonBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--launcher-socket", launcherSocket,
+		"--observe-socket", observeSocket,
+		"--relay-socket", relaySocket,
+		"--tmux-socket", tmuxSocket,
+		"--admin-user", "bureau-admin",
+		"--admin-base-path", adminSocketBase,
+		"--status-interval", "2s",
+	)
+
+	// Wait for daemon readiness (MachineStatus heartbeat).
+	waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_status", machineName, 15*time.Second)
+
+	// Resolve the config room created by the daemon.
+	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		t.Fatalf("config room %s not created: %v", configAlias, err)
+	}
+
+	// Admin joins the config room so it can write state events.
+	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("admin join config room: %v", err)
+	}
+
+	// --- Register the principal's Matrix account ---
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal registration: %v", err)
+	}
+
+	principalSession, err := client.Register(ctx, messaging.RegisterRequest{
+		Username:          principalLocalpart,
+		Password:          "test-principal-password",
+		RegistrationToken: testRegistrationToken,
+	})
+	if err != nil {
+		t.Fatalf("register principal %q: %v", principalLocalpart, err)
+	}
+	principalToken := principalSession.AccessToken()
+	principalSession.Close()
+
+	// --- Encrypt credentials for the principal ---
+	credentialBundle := map[string]string{
+		"MATRIX_TOKEN":          principalToken,
+		"MATRIX_USER_ID":        principalUserID,
+		"MATRIX_HOMESERVER_URL": testHomeserverURL,
+	}
+	credentialJSON, err := json.Marshal(credentialBundle)
+	if err != nil {
+		t.Fatalf("marshal credentials: %v", err)
+	}
+
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machineKey.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypt credentials: %v", err)
+	}
+
+	// --- Push Credentials state event ---
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials", principalLocalpart, map[string]any{
+		"version":        1,
+		"principal":      principalUserID,
+		"encrypted_for":  []string{machineUserID},
+		"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
+		"ciphertext":     ciphertext,
+		"provisioned_by": "@bureau-admin:" + testServerName,
+		"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("push credentials: %v", err)
+	}
+
+	// --- Push MachineConfig state event ---
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config", machineName, map[string]any{
+		"principals": []map[string]any{
+			{
+				"localpart":  principalLocalpart,
+				"template":   "",
+				"auto_start": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("push machine config: %v", err)
+	}
+
+	// --- Wait for the proxy socket to appear ---
+	// The daemon's sync loop picks up the config change, reconciles, and
+	// sends create-sandbox IPC to the launcher. The launcher decrypts the
+	// credentials, spawns the proxy, and creates a tmux session. The proxy
+	// socket appearance signals that the full lifecycle completed.
+	proxySocket := principalSocketBase + principalLocalpart + ".sock"
+	waitForFile(t, proxySocket, 15*time.Second)
+
+	// --- Verify the proxy serves the principal's identity ---
+	proxyClient := proxyHTTPClient(proxySocket)
+	whoamiUserID := proxyWhoami(t, proxyClient)
+	if whoamiUserID != principalUserID {
+		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, principalUserID)
+	}
+
+	// --- Verify MachineStatus reflects the running sandbox ---
+	// Poll for updated MachineStatus showing 1 running sandbox. The daemon
+	// publishes a new heartbeat on each status tick after reconciliation.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		statusJSON, err := admin.GetStateEvent(ctx, machinesRoomID,
+			"m.bureau.machine_status", machineName)
+		if err == nil {
+			var status struct {
+				Sandboxes struct {
+					Running int `json:"running"`
+				} `json:"sandboxes"`
+			}
+			if err := json.Unmarshal(statusJSON, &status); err == nil && status.Sandboxes.Running > 0 {
+				t.Logf("machine status shows %d running sandbox(es)", status.Sandboxes.Running)
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for MachineStatus to show running sandboxes")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// TestOperatorFlow verifies the operator-facing observation pipeline:
+// list targets, observe a principal's terminal, and confirm authorization
+// enforcement. This builds a full stack (launcher + daemon + principal with
+// ObservePolicy), then exercises the daemon's observe socket as both a Go
+// library client and through the bureau CLI binary.
+func TestOperatorFlow(t *testing.T) {
+	const machineName = "machine/observe"
+	const principalLocalpart = "test/observed"
+	machineUserID := "@machine/observe:" + testServerName
+	principalUserID := "@test/observed:" + testServerName
+	adminUserID := "@bureau-admin:" + testServerName
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	observeRelayBinary := resolvedBinary(t, "OBSERVE_RELAY_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	// Resolve global rooms and invite the machine.
+	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve machines room: %v", err)
+	}
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+
+	if err := admin.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to machines room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to services room: %v", err)
+	}
+
+	// Create isolated directories.
+	stateDir := t.TempDir()
+	socketDir := tempSocketDir(t)
+
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	observeSocket := filepath.Join(socketDir, "observe.sock")
+	relaySocket := filepath.Join(socketDir, "relay.sock")
+	principalSocketBase := filepath.Join(socketDir, "p") + "/"
+	adminSocketBase := filepath.Join(socketDir, "a") + "/"
+	os.MkdirAll(principalSocketBase, 0755)
+	os.MkdirAll(adminSocketBase, 0755)
+
+	tokenFile := filepath.Join(stateDir, "reg-token")
+	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
+		t.Fatalf("write registration token: %v", err)
+	}
+
+	launcherWorkspaceRoot := filepath.Join(stateDir, "workspace")
+
+	// Start the launcher with proxy and observe-relay binaries.
+	startProcess(t, "launcher", launcherBinary,
+		"--homeserver", testHomeserverURL,
+		"--registration-token-file", tokenFile,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--tmux-socket", tmuxSocket,
+		"--socket-base-path", principalSocketBase,
+		"--admin-base-path", adminSocketBase,
+		"--workspace-root", launcherWorkspaceRoot,
+		"--proxy-binary", proxyBinary,
+	)
+
+	waitForFile(t, launcherSocket, 15*time.Second)
+
+	// Get the machine's public key for credential encryption.
+	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_key", machineName, 10*time.Second)
+	var machineKey struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
+		t.Fatalf("unmarshal machine key: %v", err)
+	}
+
+	// Start the daemon with observe socket and relay binary.
+	startProcess(t, "daemon", daemonBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--launcher-socket", launcherSocket,
+		"--observe-socket", observeSocket,
+		"--relay-socket", relaySocket,
+		"--tmux-socket", tmuxSocket,
+		"--admin-user", "bureau-admin",
+		"--admin-base-path", adminSocketBase,
+		"--status-interval", "2s",
+		"--observe-relay-binary", observeRelayBinary,
+	)
+
+	// Wait for daemon readiness.
+	waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_status", machineName, 15*time.Second)
+
+	// Resolve the config room.
+	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		t.Fatalf("config room not created: %v", err)
+	}
+	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("admin join config room: %v", err)
+	}
+
+	// Register the principal and encrypt credentials.
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	principalSession, err := client.Register(ctx, messaging.RegisterRequest{
+		Username:          principalLocalpart,
+		Password:          "test-observe-password",
+		RegistrationToken: testRegistrationToken,
+	})
+	if err != nil {
+		t.Fatalf("register principal: %v", err)
+	}
+	principalToken := principalSession.AccessToken()
+	principalSession.Close()
+
+	credentialBundle := map[string]string{
+		"MATRIX_TOKEN":          principalToken,
+		"MATRIX_USER_ID":        principalUserID,
+		"MATRIX_HOMESERVER_URL": testHomeserverURL,
+	}
+	credentialJSON, err := json.Marshal(credentialBundle)
+	if err != nil {
+		t.Fatalf("marshal credentials: %v", err)
+	}
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machineKey.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypt credentials: %v", err)
+	}
+
+	// Push Credentials.
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials", principalLocalpart, map[string]any{
+		"version":        1,
+		"principal":      principalUserID,
+		"encrypted_for":  []string{machineUserID},
+		"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
+		"ciphertext":     ciphertext,
+		"provisioned_by": adminUserID,
+		"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("push credentials: %v", err)
+	}
+
+	// Push MachineConfig WITH DefaultObservePolicy allowing the admin to
+	// observe all principals. This is the key difference from
+	// TestPrincipalAssignment — without the policy, list and observe would
+	// both return empty/denied.
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config", machineName, map[string]any{
+		"principals": []map[string]any{
+			{
+				"localpart":  principalLocalpart,
+				"template":   "",
+				"auto_start": true,
+			},
+		},
+		"default_observe_policy": map[string]any{
+			"allowed_observers":   []string{"**"},
+			"readwrite_observers": []string{"bureau-admin"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("push machine config: %v", err)
+	}
+
+	// Wait for the proxy socket — signals that the sandbox lifecycle completed.
+	proxySocket := principalSocketBase + principalLocalpart + ".sock"
+	waitForFile(t, proxySocket, 15*time.Second)
+
+	// Wait for the observe socket to be ready.
+	waitForFile(t, observeSocket, 5*time.Second)
+
+	// Get the admin's access token for observe socket authentication.
+	credentials := loadCredentials(t)
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminToken == "" {
+		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
+	}
+
+	// --- Sub-test: list targets via Go library ---
+	t.Run("ListTargets", func(t *testing.T) {
+		// Poll until the principal appears in the list. The proxy socket
+		// exists on disk before the launcher responds to the daemon's IPC
+		// call, so there's a brief window where the socket is ready but
+		// the daemon's d.running map hasn't been updated yet.
+		var response *observe.ListResponse
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var err error
+			response, err = observe.ListTargets(observeSocket, observe.ListRequest{
+				Observer: adminUserID,
+				Token:    adminToken,
+			})
+			if err != nil {
+				t.Fatalf("ListTargets: %v", err)
+			}
+			if len(response.Principals) > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for principal to appear in list")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Verify the running principal appears in the list.
+		var foundPrincipal bool
+		for _, entry := range response.Principals {
+			if entry.Localpart == principalLocalpart {
+				foundPrincipal = true
+				if !entry.Local {
+					t.Error("expected principal to be local")
+				}
+				if !entry.Observable {
+					t.Error("expected principal to be observable")
+				}
+				if entry.Machine != machineName {
+					t.Errorf("principal machine = %q, want %q", entry.Machine, machineName)
+				}
+				break
+			}
+		}
+		if !foundPrincipal {
+			t.Errorf("principal %q not found in list response (got %d principals)",
+				principalLocalpart, len(response.Principals))
+		}
+
+		// Verify the local machine appears.
+		var foundMachine bool
+		for _, machine := range response.Machines {
+			if machine.Name == machineName {
+				foundMachine = true
+				if !machine.Self {
+					t.Error("expected machine to be self")
+				}
+				if !machine.Reachable {
+					t.Error("expected machine to be reachable")
+				}
+				break
+			}
+		}
+		if !foundMachine {
+			t.Errorf("machine %q not found in list response (got %d machines)",
+				machineName, len(response.Machines))
+		}
+	})
+
+	// --- Sub-test: list targets via CLI binary ---
+	t.Run("ListCLI", func(t *testing.T) {
+		// Write an operator session file so the CLI can authenticate.
+		// The CLI reads from XDG_CONFIG_HOME/bureau/session.json.
+		configHome := t.TempDir()
+		sessionDir := filepath.Join(configHome, "bureau")
+		os.MkdirAll(sessionDir, 0755)
+		sessionFile := filepath.Join(sessionDir, "session.json")
+		sessionJSON, _ := json.Marshal(map[string]string{
+			"user_id":      adminUserID,
+			"access_token": adminToken,
+			"homeserver":   testHomeserverURL,
+		})
+		if err := os.WriteFile(sessionFile, sessionJSON, 0600); err != nil {
+			t.Fatalf("write session file: %v", err)
+		}
+
+		cmd := exec.Command(bureauBinary, "list", "--json", "--socket", observeSocket)
+		cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+configHome)
+		output, err := cmd.Output()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				t.Fatalf("bureau list --json failed: %v\nstderr: %s", err, exitErr.Stderr)
+			}
+			t.Fatalf("bureau list --json failed: %v", err)
+		}
+
+		var listResponse observe.ListResponse
+		if err := json.Unmarshal(output, &listResponse); err != nil {
+			t.Fatalf("parse list JSON: %v\noutput: %s", err, output)
+		}
+
+		var foundPrincipal bool
+		for _, entry := range listResponse.Principals {
+			if entry.Localpart == principalLocalpart {
+				foundPrincipal = true
+				break
+			}
+		}
+		if !foundPrincipal {
+			t.Errorf("CLI: principal %q not found in list output", principalLocalpart)
+		}
+	})
+
+	// --- Sub-test: observe handshake via Go library ---
+	t.Run("ObserveHandshake", func(t *testing.T) {
+		session, err := observe.Connect(observeSocket, observe.ObserveRequest{
+			Principal: principalLocalpart,
+			Mode:      "readwrite",
+			Observer:  adminUserID,
+			Token:     adminToken,
+		})
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		defer session.Close()
+
+		// Verify the metadata from the handshake.
+		if session.Metadata.Principal != principalLocalpart {
+			t.Errorf("metadata principal = %q, want %q",
+				session.Metadata.Principal, principalLocalpart)
+		}
+		if session.Metadata.Machine != machineName {
+			t.Errorf("metadata machine = %q, want %q",
+				session.Metadata.Machine, machineName)
+		}
+
+		// We don't call session.Run() — that would block waiting for
+		// terminal I/O. The successful Connect + metadata verification
+		// proves: token verification, ObservePolicy authorization,
+		// relay fork, binary protocol handshake (metadata message).
+	})
+
+	// --- Sub-test: observe denied without authorization ---
+	t.Run("ObserveDeniedUnauthorized", func(t *testing.T) {
+		// Register a second operator account that is NOT in the
+		// AllowedObservers list. The DefaultObservePolicy has "**"
+		// which matches everyone, so we need to test with an invalid
+		// token instead.
+		//
+		// Actually, with "**" as allowed_observers, any authenticated
+		// user can observe. Test with a bad token to verify that
+		// authentication is enforced (not just authorization).
+		_, err := observe.Connect(observeSocket, observe.ObserveRequest{
+			Principal: principalLocalpart,
+			Mode:      "readwrite",
+			Observer:  "@nobody:" + testServerName,
+			Token:     "invalid-token-that-should-be-rejected",
+		})
+		if err == nil {
+			t.Fatal("expected observe to be denied with invalid token")
+		}
+		if !strings.Contains(err.Error(), "denied") && !strings.Contains(err.Error(), "authentication") {
+			t.Logf("observe error (expected auth failure): %v", err)
+		}
+	})
+}

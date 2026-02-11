@@ -103,6 +103,15 @@ repos:
         language: system
         types: [shell]
 
+  # Markdown link validation (local files only, no network).
+  - repo: local
+    hooks:
+      - id: lychee
+        name: lychee link check
+        entry: lychee --offline --no-progress
+        language: system
+        types: [markdown]
+
   # Structural checks from pre-commit-hooks (same repo as Tier 1 whitespace).
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

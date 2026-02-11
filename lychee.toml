@@ -1,0 +1,16 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lychee link checker configuration.
+# Validates local file references in markdown. External URLs are skipped
+# (--offline in pre-commit). URL reachability is a CI concern, not a
+# commit gate.
+
+# Bazel output symlinks contain external dependency markdown with their
+# own broken relative links. These are not our files.
+exclude_path = [
+  "bazel-.*",
+  ".notes",
+  ".beads",
+  ".git",
+]

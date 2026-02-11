@@ -143,6 +143,7 @@
             # Code quality.
             pkgs.pre-commit
             pkgs.shellcheck
+            pkgs.lychee
 
             # Version control.
             pkgs.git

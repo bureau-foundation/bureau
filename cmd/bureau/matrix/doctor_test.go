@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -1048,8 +1049,8 @@ func TestDoctorCommand_DryRunRequiresFix(t *testing.T) {
 
 func TestResolveHomeserverURL(t *testing.T) {
 	t.Run("from flag", func(t *testing.T) {
-		config := SessionConfig{HomeserverURL: "http://localhost:6167"}
-		resolvedURL, err := config.resolveHomeserverURL()
+		config := cli.SessionConfig{HomeserverURL: "http://localhost:6167"}
+		resolvedURL, err := config.ResolveHomeserverURL()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1059,8 +1060,8 @@ func TestResolveHomeserverURL(t *testing.T) {
 	})
 
 	t.Run("missing both", func(t *testing.T) {
-		config := SessionConfig{}
-		_, err := config.resolveHomeserverURL()
+		config := cli.SessionConfig{}
+		_, err := config.ResolveHomeserverURL()
 		if err == nil {
 			t.Fatal("expected error for missing homeserver and credential file")
 		}

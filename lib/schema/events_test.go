@@ -675,6 +675,106 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRoomPowerLevels(t *testing.T) {
+	adminUserID := "@bureau-admin:bureau.local"
+	machineUserID := "@machine/workstation:bureau.local"
+	levels := WorkspaceRoomPowerLevels(adminUserID, machineUserID)
+
+	// Admin should have power level 100.
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	}
+
+	// Machine should have power level 50 (can publish workspace.ready and
+	// invite, but cannot change project config or initiate teardown).
+	if users[machineUserID] != 50 {
+		t.Errorf("machine power level = %v, want 50", users[machineUserID])
+	}
+
+	// Default user power level should be 0.
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	// Workspace rooms are collaboration spaces: events_default should be 0
+	// (agents can send messages freely), unlike config rooms where
+	// events_default is 100 (admin-only).
+	if levels["events_default"] != 0 {
+		t.Errorf("events_default = %v, want 0", levels["events_default"])
+	}
+
+	// Event-specific power levels.
+	events, ok := levels["events"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Admin-only events (PL 100).
+	for _, eventType := range []string{EventTypeProject, EventTypeWorkspaceTeardown} {
+		if events[eventType] != 100 {
+			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
+		}
+	}
+
+	// Machine-level events (PL 50).
+	if events[EventTypeWorkspaceReady] != 50 {
+		t.Errorf("%s power level = %v, want 50", EventTypeWorkspaceReady, events[EventTypeWorkspaceReady])
+	}
+
+	// Default-level events (PL 0).
+	if events[EventTypeLayout] != 0 {
+		t.Errorf("%s power level = %v, want 0", EventTypeLayout, events[EventTypeLayout])
+	}
+
+	// Administrative actions require power level 100.
+	for _, field := range []string{"state_default", "ban", "kick", "redact"} {
+		if levels[field] != 100 {
+			t.Errorf("%s = %v, want 100", field, levels[field])
+		}
+	}
+
+	// Invite should require PL 50 (machine can invite principals).
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
+	}
+}
+
+func TestWorkspaceRoomPowerLevelsSameUser(t *testing.T) {
+	// When admin and machine are the same user, the users map should
+	// have exactly one entry (no duplicate).
+	adminUserID := "@bureau-admin:bureau.local"
+	levels := WorkspaceRoomPowerLevels(adminUserID, adminUserID)
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if len(users) != 1 {
+		t.Errorf("expected 1 user entry for same user, got %d", len(users))
+	}
+	if users[adminUserID] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	}
+}
+
+func TestWorkspaceRoomPowerLevelsEmptyMachine(t *testing.T) {
+	// When machine user ID is empty, the users map should have only the admin.
+	adminUserID := "@bureau-admin:bureau.local"
+	levels := WorkspaceRoomPowerLevels(adminUserID, "")
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if len(users) != 1 {
+		t.Errorf("expected 1 user entry for empty machine, got %d", len(users))
+	}
+}
+
 func TestLayoutContentRoundTrip(t *testing.T) {
 	// A channel layout with two windows: agents (two observe panes) and
 	// tools (a command pane and an observe pane). Exercises all pane modes

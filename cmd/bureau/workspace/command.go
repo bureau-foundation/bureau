@@ -93,29 +93,6 @@ firewalls.`,
 	}
 }
 
-func createCommand() *cli.Command {
-	return &cli.Command{
-		Name:    "create",
-		Summary: "Create a new workspace",
-		Description: `Create a new workspace by setting up the Matrix room and publishing
-state events. The target machine's daemon picks up the configuration
-via /sync and spawns a setup principal to clone the repo, create
-worktrees, and prepare the workspace.
-
-The alias becomes the room alias and filesystem path:
-
-  bureau workspace create iree/amdgpu/inference
-
-creates room #iree/amdgpu/inference and workspace at
-/var/bureau/workspace/iree/amdgpu/inference/ on the target machine.
-
-Without --machine, targets the local machine.`,
-		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace create")
-		},
-	}
-}
-
 func destroyCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "destroy",

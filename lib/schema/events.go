@@ -986,6 +986,54 @@ type LayoutMemberFilter struct {
 // When the admin creates the room (bureau-credentials), the admin gets PL 100
 // in the override, which satisfies all event PL requirements — so using this
 // as PowerLevelContentOverride is safe in that path.
+// WorkspaceRoomPowerLevels returns the power level structure for workspace
+// collaboration rooms. Unlike config rooms (events_default: 100, admin-only),
+// workspace rooms are collaboration spaces where agents send messages freely.
+//
+// Three tiers:
+//   - Admin (100): project config, teardown, room metadata, power levels
+//   - Machine/daemon (50): workspace.ready, layout, invite
+//   - Default (0): messages, read state
+//
+// The admin creates workspace rooms via "bureau workspace create", so using
+// this as PowerLevelContentOverride in CreateRoom is safe (the creator
+// already has PL 100 from the preset).
+func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
+	users := map[string]any{
+		adminUserID: 100,
+	}
+	if machineUserID != "" && machineUserID != adminUserID {
+		users[machineUserID] = 50
+	}
+
+	return map[string]any{
+		"users":         users,
+		"users_default": 0,
+		"events": map[string]any{
+			EventTypeProject:            100,
+			EventTypeWorkspaceTeardown:  100,
+			EventTypeWorkspaceReady:     50,
+			EventTypeLayout:             0,
+			"m.room.name":               100,
+			"m.room.topic":              100,
+			"m.room.avatar":             100,
+			"m.room.canonical_alias":    100,
+			"m.room.history_visibility": 100,
+			"m.room.power_levels":       100,
+			"m.room.join_rules":         100,
+		},
+		"events_default": 0,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         50,
+		"redact":         100,
+		"notifications": map[string]any{
+			"room": 100,
+		},
+	}
+}
+
 func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 	users := map[string]any{
 		adminUserID: 100,

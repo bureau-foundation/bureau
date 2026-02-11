@@ -23,7 +23,7 @@ import (
 // infrastructure health and optionally repairing fixable issues.
 func DoctorCommand() *cli.Command {
 	var (
-		session    SessionConfig
+		session    cli.SessionConfig
 		serverName string
 		jsonOutput bool
 		fix        bool
@@ -82,14 +82,14 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			homeserverURL, err := session.resolveHomeserverURL()
+			homeserverURL, err := session.ResolveHomeserverURL()
 			if err != nil {
 				return err
 			}
 
 			var storedCredentials map[string]string
 			if session.CredentialFile != "" {
-				storedCredentials, err = readCredentialFile(session.CredentialFile)
+				storedCredentials, err = cli.ReadCredentialFile(session.CredentialFile)
 				if err != nil {
 					return fmt.Errorf("read credential file: %w", err)
 				}
@@ -123,26 +123,6 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			return printChecklist(results, fix, dryRun)
 		},
 	}
-}
-
-// resolveHomeserverURL extracts the homeserver URL from flags or credential file
-// without creating a full session. Used by doctor to perform an unauthenticated
-// reachability check before attempting authentication.
-func (c *SessionConfig) resolveHomeserverURL() (string, error) {
-	if c.HomeserverURL != "" {
-		return c.HomeserverURL, nil
-	}
-	if c.CredentialFile != "" {
-		creds, err := readCredentialFile(c.CredentialFile)
-		if err != nil {
-			return "", fmt.Errorf("read credential file: %w", err)
-		}
-		if url, ok := creds["MATRIX_HOMESERVER_URL"]; ok && url != "" {
-			return url, nil
-		}
-		return "", fmt.Errorf("credential file missing MATRIX_HOMESERVER_URL")
-	}
-	return "", fmt.Errorf("--homeserver or --credential-file is required")
 }
 
 // fixAction is a function that repairs a failed check.

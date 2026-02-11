@@ -116,7 +116,7 @@ and proceeds directly to ensuring room membership.`,
 			var credentials map[string]string
 			if credentialFile != "" {
 				var err error
-				credentials, err = readCredentialFile(credentialFile)
+				credentials, err = cli.ReadCredentialFile(credentialFile)
 				if err != nil {
 					return fmt.Errorf("read credential file: %w", err)
 				}
@@ -360,7 +360,7 @@ func zeroBytes(data []byte) {
 // unique members across all joined rooms.
 func userListCommand() *cli.Command {
 	var (
-		session  SessionConfig
+		session  cli.SessionConfig
 		roomFlag string
 	)
 
@@ -479,7 +479,7 @@ func listAllMembers(ctx context.Context, session *messaging.Session) error {
 // userInviteCommand returns the "user invite" subcommand.
 func userInviteCommand() *cli.Command {
 	var (
-		session  SessionConfig
+		session  cli.SessionConfig
 		roomFlag string
 	)
 
@@ -540,7 +540,7 @@ func userInviteCommand() *cli.Command {
 // userKickCommand returns the "user kick" subcommand.
 func userKickCommand() *cli.Command {
 	var (
-		session  SessionConfig
+		session  cli.SessionConfig
 		roomFlag string
 		reason   string
 	)
@@ -606,7 +606,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 
 // userWhoAmICommand returns the "user whoami" subcommand.
 func userWhoAmICommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "whoami",

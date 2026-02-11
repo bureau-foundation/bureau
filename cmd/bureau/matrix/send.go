@@ -19,7 +19,7 @@ import (
 // SendCommand returns the "send" subcommand for sending messages to Matrix rooms.
 func SendCommand() *cli.Command {
 	var (
-		session   SessionConfig
+		session   cli.SessionConfig
 		threadID  string
 		eventType string
 	)

@@ -38,7 +38,7 @@ state key defaults to "" (empty string) when not specified.`,
 // stateGetCommand returns the "get" subcommand under "state".
 func stateGetCommand() *cli.Command {
 	var (
-		session  SessionConfig
+		session  cli.SessionConfig
 		stateKey string
 	)
 
@@ -120,7 +120,7 @@ or machine ID as the state key.`,
 // stateSetCommand returns the "set" subcommand under "state".
 func stateSetCommand() *cli.Command {
 	var (
-		session  SessionConfig
+		session  cli.SessionConfig
 		stateKey string
 		useStdin bool
 	)

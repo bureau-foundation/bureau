@@ -40,7 +40,7 @@ aliases that mirror the principal naming convention:
 
 func roomCreateCommand() *cli.Command {
 	var (
-		session           SessionConfig
+		session           cli.SessionConfig
 		space             string
 		name              string
 		topic             string
@@ -146,7 +146,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 
 func roomListCommand() *cli.Command {
 	var (
-		session SessionConfig
+		session cli.SessionConfig
 		space   string
 	)
 
@@ -280,7 +280,7 @@ func inspectRoomState(ctx context.Context, session *messaging.Session, roomID st
 }
 
 func roomDeleteCommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "delete",
@@ -338,7 +338,7 @@ to clear the m.space.child event in the space.`,
 }
 
 func roomMembersCommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "members",

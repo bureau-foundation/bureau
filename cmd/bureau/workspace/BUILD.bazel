@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "workspace",
-    srcs = ["command.go"],
+    srcs = [
+        "command.go",
+        "create.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/workspace",
     visibility = ["//visibility:public"],
     deps = [
@@ -13,5 +16,6 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//messaging",
+        "@com_github_spf13_pflag//:pflag",
     ],
 )

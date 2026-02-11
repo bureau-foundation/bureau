@@ -37,7 +37,7 @@ workspaces, project channels, and service directories.`,
 
 func spaceCreateCommand() *cli.Command {
 	var (
-		session SessionConfig
+		session cli.SessionConfig
 		name    string
 		topic   string
 	)
@@ -111,7 +111,7 @@ if not specified.`,
 }
 
 func spaceListCommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "list",
@@ -168,7 +168,7 @@ table of room ID, alias, and name.`,
 }
 
 func spaceDeleteCommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "delete",
@@ -227,7 +227,7 @@ reclaim the room.`,
 }
 
 func spaceMembersCommand() *cli.Command {
-	var session SessionConfig
+	var session cli.SessionConfig
 
 	return &cli.Command{
 		Name:    "members",

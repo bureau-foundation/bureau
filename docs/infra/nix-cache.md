@@ -35,22 +35,28 @@ For local dev, `~/.config/nix/nix.conf` needs `accept-flake-config = true`
 to trust the flake's substituter declaration without prompting on every
 invocation.
 
-In CI, the substituter and public key are passed via `extra-conf` on
-`DeterminateSystems/determinate-nix-action@v3`, which injects them into
-the Nix config at install time (before the daemon starts).
+In CI, the substituter and public key are written to `/etc/nix/nix.custom.conf`
+(which Determinate Nix's `nix.conf` includes via `!include`), followed by a
+`systemctl restart nix-daemon` so the daemon picks up the new substituter.
 
 ### Writes (CI only, main branch)
 
 After a successful build on main, the CI workflow:
 
-1. Writes the signing secret key to a temporary file
-2. Builds the dev shell derivation (`nix build --no-link` — necessary because
-   `nix develop` fetches dependencies but doesn't realize the mkShell output)
-3. Signs the dev shell closure and the release binary closure
-4. Pushes both to R2 via S3 protocol
+- Writes the signing secret key to a temporary file (cleaned up via `trap`)
+- Configures AWS credentials for a named profile (`bureau`) using `aws configure set`
+  via `nix shell nixpkgs#awscli2` (credentials cleaned up via `trap`)
+- Builds the dev shell derivation (`nix build --no-link` — necessary because
+  `nix develop` fetches dependencies but doesn't realize the mkShell output)
+- Signs the dev shell closure and the release binary closure
+- Pushes both to R2 via Nix's S3 store backend
+
+Both the lint and build jobs push to the cache — any job that builds Nix
+derivations should push, so parallel jobs can share store paths.
 
 The push step uses `continue-on-error: true` so cache failures never block
-CI. Only pushes on main trigger the upload (PRs don't have access to secrets).
+CI. Only pushes on main trigger the upload (fork PRs don't receive secrets;
+same-repo PRs do, but the `event_name == 'push'` guard prevents execution).
 
 ## Signing
 
@@ -87,7 +93,7 @@ archives.
 | `NIX_CACHE_SIGNING_KEY` | Ed25519 secret key for signing store paths |
 | `R2_ACCESS_KEY_ID` | S3-compatible access key for R2 writes |
 | `R2_SECRET_ACCESS_KEY` | S3-compatible secret key for R2 writes |
-| `R2_ENDPOINT` | Cloudflare S3 API endpoint URL |
+| `R2_ENDPOINT` | Cloudflare S3 API endpoint, hostname only (no `https://` scheme) |
 
 ## Relevant files
 

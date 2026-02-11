@@ -1,0 +1,39 @@
+# Bureau Launcher — privileged process for sandbox lifecycle management.
+#
+# Manages machine identity (age keypair), credential decryption, and sandbox
+# lifecycle. Communicates with bureau-daemon via a unix socket. Has no network
+# access after first boot.
+#
+# Configuration: /etc/bureau/machine.conf (EnvironmentFile)
+# State: /var/lib/bureau/ (keypair, session.json)
+# Runtime: /run/bureau/ (sockets)
+#
+# First boot: run with --bootstrap-file to complete machine registration before
+# enabling this service. See script/bootstrap-machine.
+
+[Unit]
+Description=Bureau Launcher (privileged sandbox lifecycle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/bureau/machine.conf
+ExecStart=/usr/local/bin/bureau-launcher \
+    --homeserver ${BUREAU_HOMESERVER_URL} \
+    --machine-name ${BUREAU_MACHINE_NAME} \
+    --server-name ${BUREAU_SERVER_NAME} \
+    --state-dir /var/lib/bureau
+Restart=on-failure
+RestartSec=5
+
+# Security hardening.
+# NoNewPrivileges=no because bubblewrap needs privilege transitions for
+# user namespace creation.
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bureau /run/bureau /var/bureau/workspace /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

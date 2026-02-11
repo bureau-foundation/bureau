@@ -1,0 +1,18 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "bootstrap",
+    srcs = ["config.go"],
+    importpath = "github.com/bureau-foundation/bureau/lib/bootstrap",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/principal"],
+)
+
+go_test(
+    name = "bootstrap_test",
+    srcs = ["config_test.go"],
+    embed = [":bootstrap"],
+)

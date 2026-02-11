@@ -13,6 +13,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/binhash",
+        "//lib/bootstrap",
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",

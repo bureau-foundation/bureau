@@ -426,6 +426,40 @@ func (s *Session) TURNCredentials(ctx context.Context) (*TURNCredentialsResponse
 	return &response, nil
 }
 
+// ChangePassword changes the account password. The Matrix spec requires User
+// Interactive Authentication (UIA) for this endpoint, so the caller must
+// provide the current password. The server invalidates all other access tokens
+// for the account (logout_devices defaults to true in the spec).
+//
+// Corresponds to POST /_matrix/client/v3/account/password.
+func (s *Session) ChangePassword(ctx context.Context, currentPassword, newPassword string) error {
+	if currentPassword == "" {
+		return fmt.Errorf("messaging: current password is required for password change")
+	}
+	if newPassword == "" {
+		return fmt.Errorf("messaging: new password is required for password change")
+	}
+
+	// The Matrix password change endpoint requires User Interactive Auth.
+	// We embed the auth block directly rather than doing a two-step UIA
+	// flow, because password-based auth is always available.
+	requestBody := map[string]any{
+		"new_password": newPassword,
+		"auth": map[string]any{
+			"type":     "m.login.password",
+			"user":     s.userID,
+			"password": currentPassword,
+		},
+	}
+
+	_, err := s.client.doRequest(ctx, http.MethodPost,
+		"/_matrix/client/v3/account/password", s.accessToken, requestBody)
+	if err != nil {
+		return fmt.Errorf("messaging: change password failed: %w", err)
+	}
+	return nil
+}
+
 // nextTransactionID generates a unique transaction ID for idempotent event sending.
 // Format: "bureau-<timestamp_ms>-<counter>" to ensure uniqueness across restarts.
 func (s *Session) nextTransactionID() string {

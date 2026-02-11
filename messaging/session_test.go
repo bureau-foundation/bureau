@@ -849,6 +849,88 @@ func TestTURNCredentials_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestChangePassword(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+			if request.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", request.Method)
+			}
+			if request.URL.Path != "/_matrix/client/v3/account/password" {
+				t.Errorf("unexpected path: %s", request.URL.Path)
+			}
+
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request body: %v", err)
+			}
+
+			if body["new_password"] != "new-secret-password" {
+				t.Errorf("new_password = %q, want %q", body["new_password"], "new-secret-password")
+			}
+
+			auth, ok := body["auth"].(map[string]any)
+			if !ok {
+				t.Fatal("missing auth block in request body")
+			}
+			if auth["type"] != "m.login.password" {
+				t.Errorf("auth type = %q, want %q", auth["type"], "m.login.password")
+			}
+			if auth["user"] != "@test:local" {
+				t.Errorf("auth user = %q, want %q", auth["user"], "@test:local")
+			}
+			if auth["password"] != "old-password" {
+				t.Errorf("auth password = %q, want %q", auth["password"], "old-password")
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.ChangePassword(context.Background(), "old-password", "new-secret-password")
+		if err != nil {
+			t.Fatalf("ChangePassword failed: %v", err)
+		}
+	})
+
+	t.Run("wrong current password", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Invalid password"})
+		}))
+
+		err := session.ChangePassword(context.Background(), "wrong-password", "new-password")
+		if err == nil {
+			t.Fatal("expected error for wrong password")
+		}
+		if !IsMatrixError(err, ErrCodeForbidden) {
+			t.Errorf("expected M_FORBIDDEN, got: %v", err)
+		}
+	})
+
+	t.Run("empty current password", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("server should not be called")
+		}))
+
+		err := session.ChangePassword(context.Background(), "", "new-password")
+		if err == nil {
+			t.Fatal("expected error for empty current password")
+		}
+	})
+
+	t.Run("empty new password", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("server should not be called")
+		}))
+
+		err := session.ChangePassword(context.Background(), "old-password", "")
+		if err == nil {
+			t.Fatal("expected error for empty new password")
+		}
+	})
+}
+
 // Test helpers.
 
 func assertAuth(t *testing.T, request *http.Request, expectedToken string) {

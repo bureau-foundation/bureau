@@ -1,0 +1,39 @@
+# Bureau Daemon — unprivileged process for Matrix sync and config reconciliation.
+#
+# Connects to the Matrix homeserver, syncs machine configuration and credential
+# state events, reconciles sandbox state by communicating with bureau-launcher
+# via IPC. Publishes machine status heartbeats. Routes observation requests.
+#
+# Configuration: /etc/bureau/machine.conf (EnvironmentFile, shared with launcher)
+# State: /var/lib/bureau/ (session.json from launcher)
+# Runtime: /run/bureau/ (sockets)
+#
+# Requires bureau-launcher to be running (reads its session.json and communicates
+# via launcher.sock).
+
+[Unit]
+Description=Bureau Daemon (Matrix sync, config reconciliation)
+After=bureau-launcher.service
+Requires=bureau-launcher.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/bureau/machine.conf
+ExecStart=/usr/local/bin/bureau-daemon \
+    --homeserver ${BUREAU_HOMESERVER_URL} \
+    --machine-name ${BUREAU_MACHINE_NAME} \
+    --server-name ${BUREAU_SERVER_NAME} \
+    --state-dir /var/lib/bureau \
+    --launcher-socket /run/bureau/launcher.sock \
+    --admin-user bureau-admin
+Restart=on-failure
+RestartSec=5
+
+# Security hardening — daemon is fully unprivileged.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bureau /run/bureau
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

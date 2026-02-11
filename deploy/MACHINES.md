@@ -147,18 +147,37 @@ and injects them into HTTP requests.
 
 ### Worker Bootstrap (the common case)
 
-A new machine that will run Bureau principals. Needs three things from
-the operator:
+A new machine that will run Bureau principals. The operator provisions the
+machine from the hub, transfers the bootstrap config, and runs the
+bootstrap script on the new machine.
 
-1. **Nix** — install determinate nix, configure substituter
-2. **Bureau binaries** — `nix build .#bureau-launcher .#bureau-daemon`
-   (pulled from cache, not built locally)
-3. **Homeserver access** — registration token file + homeserver URL
+**On the hub machine** (where the credential file lives):
+
+```bash
+# Create the machine account and write a bootstrap config.
+bureau machine provision machine/worker-01 \
+  --credential-file ./bureau-creds \
+  --output bootstrap.json
+
+# Transfer the config to the new machine.
+scp bootstrap.json user@worker-01:/tmp/bootstrap.json
+```
+
+**On the new machine:**
+
+```bash
+# Full automated bootstrap (installs Nix, pulls binaries, registers, starts services).
+script/bootstrap-machine \
+  --substituter-url http://attic.internal:5580/bureau \
+  --cache-public-key "bureau:<PUBLIC_KEY>" \
+  /tmp/bootstrap.json
+```
+
+Or step by step:
 
 ```bash
 # 1. Install Nix (if not present)
-curl --proto '=https' --tlsv1.2 -sSf -L \
-  https://install.determinate.systems/nix | sh -s -- install
+script/setup-nix
 
 # 2. Configure binary cache (read-only, no credentials needed)
 sudo script/configure-substituter \
@@ -166,21 +185,33 @@ sudo script/configure-substituter \
   "bureau:<PUBLIC_KEY>"
 
 # 3. Pull Bureau binaries from cache
-nix build github:bureau-foundation/bureau#bureau-launcher
-nix build github:bureau-foundation/bureau#bureau-daemon
+nix build github:bureau-foundation/bureau#bureau-launcher --no-link
+nix build github:bureau-foundation/bureau#bureau-daemon --no-link
 
-# 4. First boot — launcher registers with homeserver
+# 4. First boot — launcher logs in, rotates password, publishes key
 bureau-launcher \
-  --homeserver http://matrix.internal:6167 \
-  --registration-token-file /path/to/token \
-  --machine-name machine/worker-01
+  --bootstrap-file /tmp/bootstrap.json \
+  --machine-name machine/worker-01 \
+  --first-boot-only
 
-# 5. Daemon connects to homeserver, syncs config, spawns principals
-bureau-daemon --session-file /run/bureau/session.json
+# 5. Install and start systemd services
+sudo cp deploy/systemd/bureau-{launcher,daemon}.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bureau-launcher bureau-daemon
 ```
 
-After step 4, the registration token file can be deleted. The machine
-authenticates via its Matrix session from then on.
+After first boot, the one-time password in the bootstrap config has been
+rotated. The config file is deleted automatically. The machine authenticates
+via its Matrix session from then on.
+
+**Security note:** The registration token never leaves the hub machine.
+The bootstrap config contains only a random one-time password scoped to
+a single machine account. Even if captured, it's useless after the
+launcher rotates it on first boot.
+
+**Legacy path:** The `--registration-token-file` flag on the launcher
+still works for development and testing. Production deployments should
+use the provision flow described above.
 
 ### Dev Bootstrap (adds build + push capabilities)
 
@@ -210,30 +241,33 @@ bootstraps the homeserver. The hub may also be a dev and/or worker.
 
 | Role | Secrets the machine holds | Provisioned by |
 |------|--------------------------|----------------|
-| Worker | 1: registration token (first boot only, then deleted) | operator |
-| Dev | 2: registration token + attic push token | operator |
+| Worker | 0 persistent (one-time password rotated on first boot) | operator via `bureau machine provision` |
+| Dev | 1: attic push token | operator |
 | Hub | 4: registration token + TURN secret + attic JWT secret + admin creds | operator (initial setup) |
 | Operator | 1: personal Matrix password | self |
 
 Machine age keypairs are self-generated and don't count as provisioned
 secrets. TURN credentials are ephemeral and obtained automatically.
-Substituter config (URL + public key) is not secret.
+Substituter config (URL + public key) is not secret. Worker machines hold
+zero long-term provisioned secrets — their Matrix session is obtained via
+one-time password rotation and their keypair is self-generated.
 
 ---
 
-## What This Means for the Bootstrap Script
+## Machine Lifecycle Commands
 
-The future `script/bootstrap-machine` should:
+```bash
+# Provision a new machine (run on the hub)
+bureau machine provision machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json
 
-- Accept a role (`--role worker|dev|hub`)
-- Accept a homeserver URL and registration token file
-- Install Nix if needed
-- Configure the substituter (URL + public key are not secret, can be hardcoded or fetched from a well-known endpoint)
-- Pull the appropriate binaries from the cache
-- Run first-boot registration
-- Optionally accept an attic push token for dev role
-- Clean up the registration token after first boot
+# List all fleet machines
+bureau machine list --credential-file ./bureau-creds
 
-The registration token is the only secret that needs to transit to a new
-machine. Everything else is either self-generated, derived, or obtained
-via Matrix after registration.
+# Remove a machine from the fleet
+bureau machine decommission machine/worker-01 --credential-file ./bureau-creds
+```
+
+## Systemd Units
+
+Template service files live in `deploy/systemd/`. See `deploy/systemd/machine.conf.example`
+for the EnvironmentFile format. The bootstrap script installs these automatically.

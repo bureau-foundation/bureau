@@ -11,6 +11,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//cmd/bureau/environment",
+        "//cmd/bureau/machine",
         "//cmd/bureau/matrix",
         "//cmd/bureau/observe",
         "//cmd/bureau/template",

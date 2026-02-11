@@ -17,6 +17,7 @@
 //	dashboard     Open a composite observation view (machine, channel, or file)
 //	observe       Attach to a single principal's terminal session
 //	matrix        Matrix homeserver operations
+//	machine       Manage fleet machines (provision, list, decommission)
 //	template      Manage sandbox templates
 //	environment   Manage fleet environment profiles
 //	workspace     Manage project workspaces
@@ -29,6 +30,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
+	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
@@ -63,6 +65,7 @@ observation, and structured messaging via Matrix.`,
 			observecmd.DashboardCommand(),
 			observecmd.ListCommand(),
 			matrix.Command(),
+			machinecmd.Command(),
 			templatecmd.Command(),
 			environmentcmd.Command(),
 			workspacecmd.Command(),

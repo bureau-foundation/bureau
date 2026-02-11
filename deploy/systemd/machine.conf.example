@@ -1,0 +1,7 @@
+# Bureau machine configuration.
+# Written by script/bootstrap-machine during machine setup.
+# Used by both bureau-launcher.service and bureau-daemon.service.
+
+BUREAU_HOMESERVER_URL=http://matrix.internal:6167
+BUREAU_MACHINE_NAME=machine/worker-01
+BUREAU_SERVER_NAME=bureau.local

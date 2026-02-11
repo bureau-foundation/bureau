@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
+	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -56,6 +57,8 @@ func run() error {
 	var (
 		homeserverURL         string
 		registrationTokenFile string
+		bootstrapFile         string
+		firstBootOnly         bool
 		machineName           string
 		serverName            string
 		stateDir              string
@@ -70,6 +73,8 @@ func run() error {
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 	flag.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (first boot only)")
+	flag.StringVar(&bootstrapFile, "bootstrap-file", "", "path to bootstrap config from 'bureau machine provision' (first boot only, mutually exclusive with --registration-token-file)")
+	flag.BoolVar(&firstBootOnly, "first-boot-only", false, "exit after first boot setup instead of entering the main loop")
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
 	flag.StringVar(&stateDir, "state-dir", "/var/lib/bureau", "directory for persistent state (keypair, etc.)")
@@ -81,6 +86,10 @@ func run() error {
 	flag.StringVar(&workspaceRoot, "workspace-root", "/var/bureau/workspace", "root directory for project workspaces")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
+
+	if registrationTokenFile != "" && bootstrapFile != "" {
+		return fmt.Errorf("--registration-token-file and --bootstrap-file are mutually exclusive")
+	}
 
 	if showVersion {
 		fmt.Printf("bureau-launcher %s\n", version.Info())
@@ -114,13 +123,29 @@ func run() error {
 	)
 
 	// On first boot, register the machine with Matrix and publish its key.
+	// Two bootstrap paths:
+	//   --registration-token-file: direct registration (dev/test)
+	//   --bootstrap-file: pre-provisioned login + password rotation (production)
 	if firstBoot {
-		if registrationTokenFile == "" {
-			return fmt.Errorf("--registration-token-file is required on first boot")
+		if registrationTokenFile == "" && bootstrapFile == "" {
+			return fmt.Errorf("first boot requires --registration-token-file or --bootstrap-file")
 		}
-		if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machineName, serverName, keypair, stateDir, logger); err != nil {
-			return fmt.Errorf("first boot setup: %w", err)
+		if bootstrapFile != "" {
+			if err := firstBootFromBootstrapConfig(ctx, bootstrapFile, machineName, serverName, keypair, stateDir, logger); err != nil {
+				return fmt.Errorf("bootstrap first boot: %w", err)
+			}
+		} else {
+			if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machineName, serverName, keypair, stateDir, logger); err != nil {
+				return fmt.Errorf("first boot setup: %w", err)
+			}
 		}
+	} else if firstBootOnly {
+		return fmt.Errorf("--first-boot-only is set but this machine has already completed first boot (state-dir %s has existing keypair)", stateDir)
+	}
+
+	if firstBootOnly {
+		logger.Info("first boot complete, exiting (--first-boot-only)")
+		return nil
 	}
 
 	// Load the saved Matrix session.
@@ -358,6 +383,133 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	}
 
 	return nil
+}
+
+// firstBootFromBootstrapConfig performs first boot using a pre-provisioned
+// bootstrap config file from "bureau machine provision". Instead of
+// registering a new account (which requires the registration token), it
+// logs in with the one-time password from the bootstrap config, then
+// immediately rotates the password to a value derived from the machine's
+// private key material. After rotation, the one-time password is useless
+// even if the bootstrap config file is captured.
+func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machineName, serverName string, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	config, err := bootstrap.ReadConfig(bootstrapFilePath)
+	if err != nil {
+		return fmt.Errorf("reading bootstrap config: %w", err)
+	}
+
+	// Validate that the bootstrap config matches the --machine-name flag.
+	if config.MachineName != machineName {
+		return fmt.Errorf("bootstrap config machine_name %q does not match --machine-name %q", config.MachineName, machineName)
+	}
+	if config.ServerName != serverName {
+		return fmt.Errorf("bootstrap config server_name %q does not match --server-name %q", config.ServerName, serverName)
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: config.HomeserverURL,
+		Logger:        logger,
+	})
+	if err != nil {
+		return fmt.Errorf("creating matrix client: %w", err)
+	}
+
+	// Log in with the one-time password (not register — the account was
+	// already created by "bureau machine provision").
+	session, err := client.Login(ctx, machineName, config.Password)
+	if err != nil {
+		return fmt.Errorf("logging in with bootstrap password: %w", err)
+	}
+	logger.Info("logged in with bootstrap password", "user_id", session.UserID())
+
+	// Derive a permanent password from the machine's private key material.
+	// This is deterministic: if the launcher re-runs with the same keypair,
+	// it produces the same password. The private key never leaves the
+	// machine, so this password can't be derived by anyone who captured
+	// the bootstrap config.
+	permanentPassword, err := derivePermanentPassword(machineName, keypair)
+	if err != nil {
+		return fmt.Errorf("deriving permanent password: %w", err)
+	}
+	defer permanentPassword.Close()
+
+	// Rotate the password immediately. After this, the one-time password
+	// from the bootstrap config is invalidated.
+	if err := session.ChangePassword(ctx, config.Password, permanentPassword.String()); err != nil {
+		return fmt.Errorf("rotating password: %w", err)
+	}
+	logger.Info("rotated one-time password to permanent password")
+
+	// Join the machines room and publish the public key — same as the
+	// registration-token first boot path.
+	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
+	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	if err != nil {
+		return fmt.Errorf("resolving machines room alias %q: %w", machinesAlias, err)
+	}
+
+	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
+		logger.Warn("join machines room returned error (may already be joined)", "error", err)
+	}
+
+	machineKeyContent := schema.MachineKey{
+		Algorithm: "age-x25519",
+		PublicKey: keypair.PublicKey,
+	}
+	_, err = session.SendStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
+	if err != nil {
+		return fmt.Errorf("publishing machine key: %w", err)
+	}
+	logger.Info("machine public key published",
+		"room", machinesRoomID,
+		"public_key", keypair.PublicKey,
+	)
+
+	// Join the services room (non-fatal, daemon retries on startup).
+	servicesAlias := principal.RoomAlias("bureau/services", serverName)
+	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
+	if err != nil {
+		logger.Warn("could not resolve services room (daemon will retry on startup)",
+			"alias", servicesAlias, "error", err)
+	} else {
+		if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
+			logger.Warn("join services room failed (may need admin invitation)",
+				"room_id", servicesRoomID, "error", err)
+		} else {
+			logger.Info("joined services room", "room_id", servicesRoomID)
+		}
+	}
+
+	// Save the session.
+	if err := saveSession(stateDir, config.HomeserverURL, session); err != nil {
+		return fmt.Errorf("saving session: %w", err)
+	}
+
+	// Attempt to delete the bootstrap config file. The one-time password
+	// has been rotated, so the file is no longer sensitive — but cleaning
+	// it up avoids confusion.
+	if err := os.Remove(bootstrapFilePath); err != nil {
+		logger.Warn("could not delete bootstrap config file (password already rotated, file is no longer sensitive)",
+			"path", bootstrapFilePath, "error", err)
+	} else {
+		logger.Info("deleted bootstrap config file", "path", bootstrapFilePath)
+	}
+
+	return nil
+}
+
+// derivePermanentPassword derives a password from the machine name and private
+// key material. The result is deterministic: the same keypair always produces
+// the same password. This is used after bootstrap to replace the one-time
+// password, ensuring that only the machine itself (which holds the private key)
+// can derive its own password.
+func derivePermanentPassword(machineName string, keypair *sealed.Keypair) (*secret.Buffer, error) {
+	hash := sha256.Sum256([]byte("bureau-machine-permanent:" + machineName + ":" + keypair.PrivateKey.String()))
+	hexBytes := []byte(hex.EncodeToString(hash[:]))
+	return secret.NewFromBytes(hexBytes)
 }
 
 // sessionData is the JSON structure stored on disk for the Matrix session.

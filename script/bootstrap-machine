@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Bootstrap a new machine into the Bureau fleet.
+#
+# This script runs on the new machine. It reads a bootstrap config file
+# (produced by "bureau machine provision" on the hub) and performs the
+# full setup: Nix installation, binary cache configuration, Bureau binary
+# installation, first-boot registration, and systemd service activation.
+#
+# Usage:
+#   script/bootstrap-machine [options] <bootstrap-config>
+#
+# Options:
+#   --substituter-url URL    Nix binary cache URL
+#   --cache-public-key KEY   Nix cache signing public key
+#   --skip-nix               Skip Nix installation (already installed)
+#   --flake-ref REF          Bureau flake reference (default: github:bureau-foundation/bureau)
+#   --help                   Show this help
+#
+# The bootstrap config is a JSON file with these fields:
+#   homeserver_url   Matrix homeserver URL
+#   server_name      Matrix server name (e.g., bureau.local)
+#   machine_name     Machine localpart (e.g., machine/worker-01)
+#   password         One-time password (rotated immediately on first boot)
+#
+# Prerequisites:
+#   - The bootstrap config must be produced by "bureau machine provision"
+#   - curl and jq must be available (jq for JSON parsing)
+#   - sudo access for Nix installation, systemd, and directory creation
+#
+# After successful bootstrap:
+#   - bureau-launcher and bureau-daemon services are running
+#   - The machine has published its key to #bureau/machines
+#   - The one-time password has been rotated
+#   - The bootstrap config file has been deleted
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Defaults.
+SUBSTITUTER_URL=""
+CACHE_PUBLIC_KEY=""
+SKIP_NIX=false
+FLAKE_REF="github:bureau-foundation/bureau"
+BOOTSTRAP_CONFIG=""
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+# Parse arguments.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --substituter-url)
+            SUBSTITUTER_URL="$2"
+            shift 2
+            ;;
+        --cache-public-key)
+            CACHE_PUBLIC_KEY="$2"
+            shift 2
+            ;;
+        --skip-nix)
+            SKIP_NIX=true
+            shift
+            ;;
+        --flake-ref)
+            FLAKE_REF="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+        *)
+            if [ -n "$BOOTSTRAP_CONFIG" ]; then
+                echo "Error: unexpected argument: $1" >&2
+                usage 1
+            fi
+            BOOTSTRAP_CONFIG="$1"
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$BOOTSTRAP_CONFIG" ]; then
+    echo "Error: bootstrap config file is required" >&2
+    usage 1
+fi
+
+if [ ! -f "$BOOTSTRAP_CONFIG" ]; then
+    echo "Error: bootstrap config not found: $BOOTSTRAP_CONFIG" >&2
+    exit 1
+fi
+
+# Ensure jq is available for JSON parsing.
+if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required (apt install jq / dnf install jq)" >&2
+    exit 1
+fi
+
+# Parse the bootstrap config.
+HOMESERVER_URL=$(jq -r '.homeserver_url' "$BOOTSTRAP_CONFIG")
+SERVER_NAME=$(jq -r '.server_name' "$BOOTSTRAP_CONFIG")
+MACHINE_NAME=$(jq -r '.machine_name' "$BOOTSTRAP_CONFIG")
+
+if [ "$HOMESERVER_URL" = "null" ] || [ -z "$HOMESERVER_URL" ]; then
+    echo "Error: bootstrap config missing homeserver_url" >&2
+    exit 1
+fi
+if [ "$SERVER_NAME" = "null" ] || [ -z "$SERVER_NAME" ]; then
+    echo "Error: bootstrap config missing server_name" >&2
+    exit 1
+fi
+if [ "$MACHINE_NAME" = "null" ] || [ -z "$MACHINE_NAME" ]; then
+    echo "Error: bootstrap config missing machine_name" >&2
+    exit 1
+fi
+
+echo "=== Bureau Machine Bootstrap ==="
+echo "  Machine:    $MACHINE_NAME"
+echo "  Homeserver: $HOMESERVER_URL"
+echo "  Server:     $SERVER_NAME"
+echo "  Flake:      $FLAKE_REF"
+echo ""
+
+# Step 1: Install Nix if needed.
+if [ "$SKIP_NIX" = true ]; then
+    echo "[1/6] Skipping Nix installation (--skip-nix)"
+elif command -v nix &>/dev/null; then
+    echo "[1/6] Nix already installed: $(nix --version)"
+else
+    echo "[1/6] Installing Nix..."
+    if [ -x "$SCRIPT_DIR/setup-nix" ]; then
+        "$SCRIPT_DIR/setup-nix"
+    else
+        echo "  setup-nix not found at $SCRIPT_DIR/setup-nix"
+        echo "  Install Nix manually: https://docs.determinate.systems/determinate-nix/"
+        exit 1
+    fi
+fi
+
+# Ensure nix is in PATH. Determinate Nix installs to /nix/var/nix/profiles/default/bin.
+if ! command -v nix &>/dev/null; then
+    export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+    if ! command -v nix &>/dev/null; then
+        echo "Error: nix not found in PATH after installation" >&2
+        exit 1
+    fi
+fi
+
+# Step 2: Configure binary cache if URL provided.
+if [ -n "$SUBSTITUTER_URL" ] && [ -n "$CACHE_PUBLIC_KEY" ]; then
+    echo "[2/6] Configuring binary cache..."
+    sudo "$SCRIPT_DIR/configure-substituter" "$SUBSTITUTER_URL" "$CACHE_PUBLIC_KEY"
+elif [ -n "$SUBSTITUTER_URL" ]; then
+    echo "Error: --substituter-url requires --cache-public-key" >&2
+    exit 1
+else
+    echo "[2/6] Skipping binary cache (no --substituter-url)"
+fi
+
+# Step 3: Install Bureau binaries.
+echo "[3/6] Installing Bureau binaries from $FLAKE_REF..."
+nix build "${FLAKE_REF}#bureau-launcher" --no-link
+nix build "${FLAKE_REF}#bureau-daemon" --no-link
+nix build "${FLAKE_REF}#bureau-proxy" --no-link
+
+# Create symlinks in /usr/local/bin pointing to the Nix store.
+LAUNCHER_PATH=$(nix build "${FLAKE_REF}#bureau-launcher" --print-out-paths --no-link)/bin/bureau-launcher
+DAEMON_PATH=$(nix build "${FLAKE_REF}#bureau-daemon" --print-out-paths --no-link)/bin/bureau-daemon
+PROXY_PATH=$(nix build "${FLAKE_REF}#bureau-proxy" --print-out-paths --no-link)/bin/bureau-proxy
+
+sudo ln -sf "$LAUNCHER_PATH" /usr/local/bin/bureau-launcher
+sudo ln -sf "$DAEMON_PATH" /usr/local/bin/bureau-daemon
+sudo ln -sf "$PROXY_PATH" /usr/local/bin/bureau-proxy
+
+echo "  bureau-launcher -> $LAUNCHER_PATH"
+echo "  bureau-daemon   -> $DAEMON_PATH"
+echo "  bureau-proxy    -> $PROXY_PATH"
+
+# Step 4: Create directories and run first boot.
+echo "[4/6] Running first boot..."
+sudo mkdir -p /var/lib/bureau /run/bureau /var/bureau/workspace /etc/bureau
+
+sudo bureau-launcher \
+    --bootstrap-file "$BOOTSTRAP_CONFIG" \
+    --machine-name "$MACHINE_NAME" \
+    --server-name "$SERVER_NAME" \
+    --first-boot-only
+
+echo "  First boot complete. Password rotated, key published."
+
+# Step 5: Write machine config and install systemd units.
+echo "[5/6] Installing systemd services..."
+
+sudo tee /etc/bureau/machine.conf > /dev/null <<EOF
+# Bureau machine configuration (generated by bootstrap-machine).
+BUREAU_HOMESERVER_URL=$HOMESERVER_URL
+BUREAU_MACHINE_NAME=$MACHINE_NAME
+BUREAU_SERVER_NAME=$SERVER_NAME
+EOF
+
+# Copy systemd units from the repo (if available) or from a known path.
+SYSTEMD_SRC="$REPO_ROOT/deploy/systemd"
+if [ -d "$SYSTEMD_SRC" ]; then
+    sudo cp "$SYSTEMD_SRC/bureau-launcher.service" /etc/systemd/system/
+    sudo cp "$SYSTEMD_SRC/bureau-daemon.service" /etc/systemd/system/
+else
+    echo "  Warning: systemd unit files not found at $SYSTEMD_SRC"
+    echo "  You will need to install them manually."
+fi
+
+# Step 6: Enable and start services.
+echo "[6/6] Starting services..."
+sudo systemctl daemon-reload
+sudo systemctl enable --now bureau-launcher bureau-daemon
+
+echo ""
+echo "=== Bootstrap Complete ==="
+echo "  Machine $MACHINE_NAME is now part of the Bureau fleet."
+echo ""
+echo "Verify with:"
+echo "  systemctl status bureau-launcher bureau-daemon"
+echo "  bureau machine list --credential-file <creds>"

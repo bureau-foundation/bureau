@@ -1067,13 +1067,21 @@ func TestProxyLifecycle_CrashedProcessRecreation(t *testing.T) {
 		t.Fatalf("create-sandbox: %s", response.Error)
 	}
 
-	// Kill the proxy process to simulate a crash.
+	// Kill the tmux session to simulate a sandbox crash. In the unified
+	// model, killing the tmux session is what ends the sandbox — the
+	// session watcher detects it and closes the done channel.
 	sandbox := launcher.sandboxes["test/crash"]
-	sandbox.process.Kill()
-	<-sandbox.done // wait for the process to exit
+	launcher.destroyTmuxSession("test/crash")
+
+	// Wait for the session watcher to detect the tmux session is gone.
+	select {
+	case <-sandbox.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for session watcher to close done channel")
+	}
 
 	// Attempting to create the same sandbox should succeed because the
-	// process has exited (the launcher detects this and cleans up).
+	// sandbox has exited (the launcher detects this and cleans up).
 	response2 := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
 		Principal:            "test/crash",
@@ -1408,7 +1416,7 @@ func TestHandleUpdatePayload_Validation(t *testing.T) {
 		done := make(chan struct{})
 		close(done) // simulate exited process
 		launcher.sandboxes["test/exited"] = &managedSandbox{
-			principal: "test/exited",
+			localpart: "test/exited",
 			configDir: t.TempDir(),
 			done:      done,
 		}
@@ -1430,7 +1438,7 @@ func TestHandleUpdatePayload_Validation(t *testing.T) {
 	t.Run("nil payload", func(t *testing.T) {
 		done := make(chan struct{})
 		launcher.sandboxes["test/nopayload"] = &managedSandbox{
-			principal: "test/nopayload",
+			localpart: "test/nopayload",
 			configDir: t.TempDir(),
 			done:      done,
 		}
@@ -1466,7 +1474,7 @@ func TestHandleUpdatePayload_AtomicWrite(t *testing.T) {
 	launcher := &Launcher{
 		sandboxes: map[string]*managedSandbox{
 			"test/update": {
-				principal: "test/update",
+				localpart: "test/update",
 				configDir: configDir,
 				done:      done,
 			},
@@ -1602,7 +1610,7 @@ func TestHandleUpdatePayload_WithProxy(t *testing.T) {
 	}
 }
 
-func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
+func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	requireTmux(t)
 
 	proxyBinary := buildProxyBinary(t)
@@ -1629,12 +1637,18 @@ func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 		t.Fatal("tmux session should exist after creation")
 	}
 
-	// Kill the proxy to simulate a crash.
+	// Kill the tmux session to simulate a sandbox crash. The session
+	// watcher detects the session is gone and closes the done channel.
 	sandbox := launcher.sandboxes["test/crash"]
-	sandbox.process.Kill()
-	<-sandbox.done
+	launcher.destroyTmuxSession("test/crash")
 
-	// Re-creating the sandbox should clean up the old tmux session
+	select {
+	case <-sandbox.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for session watcher to close done channel")
+	}
+
+	// Re-creating the sandbox should clean up the old sandbox
 	// (via cleanupSandbox) and create a new one.
 	response2 := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
@@ -1967,10 +1981,10 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 		// Expected: still blocking.
 	}
 
-	// Kill the proxy (simulates process exit). SIGKILL gives a non-zero
-	// exit code.
-	sandbox := launcher.sandboxes["test/waitnormal"]
-	sandbox.process.Kill()
+	// Kill the tmux session to end the sandbox. The session watcher
+	// detects the session is gone and closes the done channel, which
+	// unblocks wait-sandbox.
+	launcher.destroyTmuxSession("test/waitnormal")
 
 	// wait-sandbox should now return.
 	select {
@@ -1981,16 +1995,13 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 		if response.ExitCode == nil {
 			t.Fatal("ExitCode should be set")
 		}
-		// SIGKILL produces a non-zero exit code.
-		if *response.ExitCode == 0 {
-			t.Error("expected non-zero exit code from SIGKILL")
-		}
-		// The error string should describe the signal.
-		if response.Error == "" {
-			t.Error("expected error string describing signal")
+		// No exit-code file was written (bare shell, no sandbox script),
+		// so the session watcher reports -1.
+		if *response.ExitCode != -1 {
+			t.Errorf("expected exit code -1 (no exit-code file), got %d", *response.ExitCode)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("wait-sandbox did not return after process exit")
+		t.Fatal("wait-sandbox did not return after sandbox exit")
 	}
 
 	<-handleDone
@@ -2005,7 +2016,7 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 		"MATRIX_TOKEN": "syt_test",
 	})
 
-	// Create and immediately kill the sandbox.
+	// Create a sandbox and immediately destroy the tmux session.
 	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
 		Principal:            "test/waitalready",
@@ -2016,11 +2027,16 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 	}
 
 	sandbox := launcher.sandboxes["test/waitalready"]
-	sandbox.process.Kill()
-	<-sandbox.done // wait for exit to be recorded
+	launcher.destroyTmuxSession("test/waitalready")
+
+	select {
+	case <-sandbox.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for session watcher to close done channel")
+	}
 
 	// Now call wait-sandbox — should return immediately since the
-	// process has already exited.
+	// sandbox has already exited.
 	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "launcher.sock")
 	listener, err := net.Listen("unix", socketPath)

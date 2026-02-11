@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -605,15 +606,20 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 	return client.SessionFromToken(data.UserID, data.AccessToken)
 }
 
-// managedSandbox tracks a running proxy process for a principal.
+// managedSandbox tracks a running sandbox for a principal. A "sandbox" is the
+// aggregate of proxy + tmux session + isolation envelope (bwrap) + command.
+// The tmux session is the lifecycle boundary: when it ends (for any reason —
+// command exits, user types exit, session killed), cleanup fires: the proxy
+// is killed, sockets are removed, and the done channel closes.
 type managedSandbox struct {
-	principal string
-	process   *os.Process
-	configDir string              // temp directory containing proxy config
-	done      chan struct{}       // closed when process exits
-	exitCode  int                 // process exit code (set before done is closed)
-	exitError error               // error from wait (set before done is closed)
-	roles     map[string][]string // role name → command, from SandboxSpec.Roles
+	localpart    string
+	proxyProcess *os.Process         // credential injection proxy (killed on sandbox exit)
+	configDir    string              // temp directory for proxy config, scripts, payload
+	done         chan struct{}       // closed when the sandbox exits (tmux session ends)
+	doneOnce     sync.Once           // protects close(done) from concurrent callers
+	exitCode     int                 // command exit code (set before done is closed)
+	exitError    error               // descriptive exit error (set before done is closed)
+	roles        map[string][]string // role name → command, from SandboxSpec.Roles
 }
 
 // proxyCredentialPayload is the JSON structure piped to the proxy's stdin.
@@ -878,10 +884,10 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	if existing, exists := l.sandboxes[request.Principal]; exists {
 		select {
 		case <-existing.done:
-			// Process already exited — clean it up and allow recreation.
+			// Sandbox already finished — clean it up and allow recreation.
 			l.cleanupSandbox(request.Principal)
 		default:
-			return IPCResponse{OK: false, Error: fmt.Sprintf("principal %q already has a running sandbox (pid %d)", request.Principal, existing.process.Pid)}
+			return IPCResponse{OK: false, Error: fmt.Sprintf("principal %q already has a running sandbox (proxy pid %d)", request.Principal, existing.proxyProcess.Pid)}
 		}
 	}
 
@@ -917,8 +923,8 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	}
 
 	// Build the sandbox command if a SandboxSpec was provided. When no
-	// spec is present (legacy behavior), the tmux session gets a bare
-	// shell.
+	// spec is present, the tmux session gets a bare shell (interactive
+	// principal without a bwrap sandbox).
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
 		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent)
@@ -926,8 +932,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)
 			if sb, exists := l.sandboxes[request.Principal]; exists {
-				sb.process.Kill()
-				<-sb.done
+				sb.proxyProcess.Kill()
 				l.cleanupSandbox(request.Principal)
 			}
 			return IPCResponse{OK: false, Error: fmt.Sprintf("sandbox setup: %v", setupErr)}
@@ -945,18 +950,24 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		l.logger.Error("tmux session creation failed, rolling back proxy",
 			"principal", request.Principal, "error", err)
 		if sb, exists := l.sandboxes[request.Principal]; exists {
-			sb.process.Kill()
-			<-sb.done
+			sb.proxyProcess.Kill()
 			l.cleanupSandbox(request.Principal)
 		}
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
 
+	// Start the session watcher that drives the sandbox lifecycle.
+	// When the tmux session ends (for any reason), the watcher kills
+	// the proxy and closes the sandbox's done channel.
+	if sb, exists := l.sandboxes[request.Principal]; exists {
+		l.startSessionWatcher(request.Principal, sb)
+	}
+
 	return IPCResponse{OK: true, ProxyPID: pid}
 }
 
-// handleDestroySandbox terminates the proxy process for a principal, waits for
-// it to exit, and cleans up config files and socket files.
+// handleDestroySandbox terminates a sandbox by killing its tmux session and
+// proxy process, then cleans up config files and socket files.
 func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}
@@ -966,27 +977,26 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 		return IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}
 	}
 
-	sandbox, exists := l.sandboxes[request.Principal]
+	sb, exists := l.sandboxes[request.Principal]
 	if !exists {
 		return IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}
 	}
 
-	l.logger.Info("destroying sandbox", "principal", request.Principal, "pid", sandbox.process.Pid)
+	l.logger.Info("destroying sandbox", "principal", request.Principal, "proxy_pid", sb.proxyProcess.Pid)
 
-	// Send SIGTERM for graceful shutdown.
-	if err := sandbox.process.Signal(syscall.SIGTERM); err != nil {
-		l.logger.Warn("SIGTERM failed (process may have already exited)", "principal", request.Principal, "error", err)
-	}
+	// Kill the tmux session first. This stops the bwrap/command inside it.
+	// The session watcher will also detect this and call finishSandbox,
+	// but we call it explicitly below so the IPC response doesn't have to
+	// wait for the next poll interval.
+	l.destroyTmuxSession(request.Principal)
 
-	// Wait for exit with timeout.
-	select {
-	case <-sandbox.done:
-		// Process exited.
-	case <-time.After(10 * time.Second):
-		l.logger.Warn("proxy did not exit after SIGTERM, sending SIGKILL", "principal", request.Principal)
-		sandbox.process.Kill()
-		<-sandbox.done
-	}
+	// Close the done channel and kill the proxy. finishSandbox is
+	// idempotent (via doneOnce), so it's safe even if the session
+	// watcher fires concurrently.
+	l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"))
+
+	// Wait for done to ensure everything has settled before cleanup.
+	<-sb.done
 
 	l.cleanupSandbox(request.Principal)
 
@@ -994,9 +1004,10 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 	return IPCResponse{OK: true}
 }
 
-// handleWaitSandbox blocks until the named sandbox's process exits, then
-// responds with the exit code. This runs outside the launcher mutex so
-// that other IPC requests are not blocked during the (potentially long) wait.
+// handleWaitSandbox blocks until the named sandbox exits (tmux session
+// ends), then responds with the exit code. This runs outside the launcher
+// mutex so that other IPC requests are not blocked during the (potentially
+// long) wait.
 //
 // The handler monitors both the sandbox's done channel and the IPC
 // connection. If the daemon disconnects (crashes, restarts, context
@@ -1077,7 +1088,7 @@ func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest)
 		return IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}
 	}
 
-	// Check if the process is still alive.
+	// Check if the sandbox has already exited.
 	select {
 	case <-sandbox.done:
 		return IPCResponse{OK: false, Error: fmt.Sprintf("sandbox for %q has already exited", request.Principal)}
@@ -1245,8 +1256,11 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		}
 	}
 
-	// Write the sandbox script that exec's bwrap.
-	scriptPath, err := writeSandboxScript(sb.configDir, bwrapPath, bwrapArgs)
+	// Write the sandbox script. The script runs bwrap, captures its exit
+	// code to a file (read by the session watcher), and exits with the
+	// same code.
+	exitCodePath := filepath.Join(sb.configDir, "exit-code")
+	scriptPath, err := writeSandboxScript(sb.configDir, bwrapPath, bwrapArgs, exitCodePath)
 	if err != nil {
 		return nil, fmt.Errorf("writing sandbox script: %w", err)
 	}
@@ -1377,8 +1391,15 @@ func readSecret(path string) (*secret.Buffer, error) {
 
 // spawnProxy creates a bureau-proxy subprocess for the given principal.
 // It writes a minimal config file, pipes credentials via stdin, and waits
-// for the proxy's agent socket to appear before returning. The proxy process
-// is tracked in l.sandboxes for later destruction.
+// for the proxy's agent socket to appear before returning.
+//
+// The proxy is infrastructure that exists for the sandbox's lifetime, not
+// the other way around. spawnProxy creates the managedSandbox and stores
+// it in l.sandboxes, but does NOT close sandbox.done when the proxy exits.
+// The session watcher (started later by handleCreateSandbox) owns that.
+//
+// A background goroutine reaps the proxy process to avoid zombies and logs
+// the exit, but the sandbox lifecycle is driven by the tmux session.
 func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, matrixPolicy *schema.MatrixPolicy) (int, error) {
 	if l.proxyBinaryPath == "" {
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
@@ -1465,44 +1486,53 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 		stdinPipe.Close()
 	}
 
-	// Track the sandbox.
-	sandbox := &managedSandbox{
-		principal: principalLocalpart,
-		process:   cmd.Process,
-		configDir: configDir,
-		done:      make(chan struct{}),
+	// Track the sandbox. The done channel is NOT closed when the proxy
+	// exits — it is closed by the session watcher when the tmux session
+	// ends, or by handleDestroySandbox.
+	sb := &managedSandbox{
+		localpart:    principalLocalpart,
+		proxyProcess: cmd.Process,
+		configDir:    configDir,
+		done:         make(chan struct{}),
 	}
 
-	// Wait for the process in the background to collect exit status.
+	// proxyDone is a local signal for waitForSocket: if the proxy dies
+	// before its socket appears, we need to fail fast rather than wait
+	// the full 10 seconds.
+	proxyDone := make(chan struct{})
+
+	// Reap the proxy process in the background to avoid zombies. This
+	// goroutine does NOT close sandbox.done — that is the session
+	// watcher's responsibility.
 	go func() {
 		waitError := cmd.Wait()
-		sandbox.exitError = waitError
+		close(proxyDone)
+		exitCode := 0
 		if waitError != nil {
 			var exitErr *exec.ExitError
 			if errors.As(waitError, &exitErr) {
-				sandbox.exitCode = exitErr.ExitCode()
+				exitCode = exitErr.ExitCode()
 			} else {
-				sandbox.exitCode = -1
+				exitCode = -1
 			}
 		}
-		close(sandbox.done)
 		l.logger.Info("proxy process exited",
 			"principal", principalLocalpart,
 			"pid", cmd.Process.Pid,
-			"exit_code", sandbox.exitCode,
-			"error", sandbox.exitError,
+			"exit_code", exitCode,
+			"error", waitError,
 		)
 	}()
 
 	// Wait for the proxy to become ready (agent socket file appears).
-	if err := waitForSocket(socketPath, sandbox.done, 10*time.Second); err != nil {
+	if err := waitForSocket(socketPath, proxyDone, 10*time.Second); err != nil {
 		cmd.Process.Kill()
-		<-sandbox.done
+		<-proxyDone
 		os.RemoveAll(configDir)
 		return 0, fmt.Errorf("proxy for %q: %w", principalLocalpart, err)
 	}
 
-	l.sandboxes[principalLocalpart] = sandbox
+	l.sandboxes[principalLocalpart] = sb
 
 	l.logger.Info("proxy started",
 		"principal", principalLocalpart,
@@ -1579,17 +1609,99 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 	}
 }
 
+// startSessionWatcher starts a background goroutine that polls the tmux
+// session for the given principal. When the session disappears (for any
+// reason — command exited, session killed, tmux server crashed), the
+// goroutine reads the exit code file, kills the proxy, and closes the
+// sandbox's done channel via finishSandbox.
+//
+// This is the single lifecycle driver for all sandboxes. There are no
+// special cases for pipeline executors vs interactive agents vs human
+// operators: when the tmux session ends, the sandbox is done.
+func (l *Launcher) startSessionWatcher(localpart string, sb *managedSandbox) {
+	tmuxSocket := principal.TmuxSocketPath(l.runDir)
+	sessionName := tmuxSessionName(localpart)
+	exitCodePath := filepath.Join(sb.configDir, "exit-code")
+
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-sb.done:
+				// Sandbox already finished (e.g., handleDestroySandbox
+				// called finishSandbox before we detected the session gone).
+				return
+			case <-ticker.C:
+			}
+
+			cmd := exec.Command("tmux", "-S", tmuxSocket, "has-session", "-t", sessionName)
+			if err := cmd.Run(); err != nil {
+				// Session is gone. Read the exit code if the sandbox
+				// script wrote one.
+				exitCode := -1
+				var exitError error
+				if data, readErr := os.ReadFile(exitCodePath); readErr == nil {
+					if code, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
+						exitCode = code
+					}
+				}
+				if exitCode != 0 {
+					exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
+				}
+
+				l.logger.Info("tmux session ended",
+					"principal", localpart,
+					"session", sessionName,
+					"exit_code", exitCode,
+				)
+
+				l.finishSandbox(sb, exitCode, exitError)
+				return
+			}
+		}
+	}()
+}
+
+// finishSandbox sets the exit code and error on a sandbox and closes its
+// done channel. Safe to call from multiple goroutines (session watcher,
+// handleDestroySandbox, shutdownAllSandboxes) — doneOnce ensures the
+// channel is closed exactly once and the exit state is set atomically
+// with the close.
+//
+// Also kills the proxy process if it is still running. The proxy is
+// infrastructure for the sandbox; when the sandbox ends, the proxy has
+// no purpose.
+func (l *Launcher) finishSandbox(sb *managedSandbox, exitCode int, exitError error) {
+	sb.doneOnce.Do(func() {
+		sb.exitCode = exitCode
+		sb.exitError = exitError
+		close(sb.done)
+	})
+
+	// Kill the proxy. It may already be dead (if the sandbox command
+	// outlived it, which shouldn't happen in normal operation, or if
+	// the proxy was killed by something else). Signal errors are
+	// expected and harmless.
+	if sb.proxyProcess != nil {
+		sb.proxyProcess.Kill()
+	}
+}
+
 // cleanupSandbox removes a sandbox's temp config directory, socket files,
-// and tmux session, then deletes it from the sandboxes map. The caller must
-// ensure the process has already exited.
+// and tmux session, then deletes it from the sandboxes map. The caller
+// should ensure finishSandbox has been called (done channel is closed)
+// before calling cleanup, but this is not strictly required — cleanup
+// is filesystem-only and does not depend on process state.
 func (l *Launcher) cleanupSandbox(principalLocalpart string) {
-	sandbox, exists := l.sandboxes[principalLocalpart]
+	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
 		return
 	}
 
-	if sandbox.configDir != "" {
-		os.RemoveAll(sandbox.configDir)
+	if sb.configDir != "" {
+		os.RemoveAll(sb.configDir)
 	}
 
 	// Remove socket files (the proxy may have already removed them during
@@ -1599,44 +1711,26 @@ func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 	os.Remove(socketPath)
 	os.Remove(adminSocketPath)
 
-	// Kill the principal's tmux session. This is safe even if the session
-	// doesn't exist (the process crashed before it was created, or it was
-	// already killed) — destroyTmuxSession logs a warning and moves on.
+	// Kill the principal's tmux session if it still exists. This is
+	// belt-and-suspenders — the session should already be gone (either
+	// the command exited naturally, or handleDestroySandbox/
+	// shutdownAllSandboxes killed it). destroyTmuxSession logs a debug
+	// message and moves on if the session is already gone.
 	l.destroyTmuxSession(principalLocalpart)
 
 	delete(l.sandboxes, principalLocalpart)
 }
 
-// shutdownAllSandboxes terminates all running proxy processes and their
-// associated tmux sessions. Called during launcher shutdown. Acquires mu
-// to serialize with any in-flight IPC handlers.
+// shutdownAllSandboxes terminates all sandboxes by killing the tmux server
+// and all proxy processes. Called during launcher shutdown. Acquires mu to
+// serialize with any in-flight IPC handlers.
 func (l *Launcher) shutdownAllSandboxes() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	for principalLocalpart, sandbox := range l.sandboxes {
-		l.logger.Info("shutting down sandbox", "principal", principalLocalpart, "pid", sandbox.process.Pid)
-
-		if err := sandbox.process.Signal(syscall.SIGTERM); err != nil {
-			l.logger.Warn("SIGTERM failed", "principal", principalLocalpart, "error", err)
-		}
-
-		select {
-		case <-sandbox.done:
-			// Exited cleanly.
-		case <-time.After(5 * time.Second):
-			l.logger.Warn("killing proxy after timeout", "principal", principalLocalpart)
-			sandbox.process.Kill()
-			<-sandbox.done
-		}
-
-		l.cleanupSandbox(principalLocalpart)
-	}
-
-	// Kill the Bureau tmux server entirely. Individual sessions were
-	// already killed by cleanupSandbox above; this is belt-and-suspenders
-	// cleanup in case any sessions survived. Since Bureau owns this tmux
-	// server (dedicated socket, not the user's tmux), this is safe.
+	// Kill the Bureau tmux server entirely. This stops all tmux sessions
+	// (and thus all bwrap commands) in one shot. Since Bureau owns this
+	// tmux server (dedicated socket, not the user's tmux), this is safe.
 	tmuxSocket := principal.TmuxSocketPath(l.runDir)
 	cmd := exec.Command("tmux", "-S", tmuxSocket, "kill-server")
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -1644,6 +1738,18 @@ func (l *Launcher) shutdownAllSandboxes() {
 			"socket", tmuxSocket, "error", err, "output", string(output))
 	} else {
 		l.logger.Info("tmux server stopped", "socket", tmuxSocket)
+	}
+
+	// Finish each sandbox: close done channels and kill proxy processes.
+	for localpart, sb := range l.sandboxes {
+		l.logger.Info("shutting down sandbox", "principal", localpart, "proxy_pid", sb.proxyProcess.Pid)
+		l.finishSandbox(sb, -1, fmt.Errorf("launcher shutdown"))
+
+		// Wait for the done channel (should be immediate since we just
+		// called finishSandbox, but the session watcher goroutine may
+		// have fired concurrently).
+		<-sb.done
+		l.cleanupSandbox(localpart)
 	}
 }
 

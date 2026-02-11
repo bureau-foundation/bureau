@@ -34,29 +34,29 @@ func TestWriteAndReadStateFile(t *testing.T) {
 
 	// Add some sandbox entries.
 	launcher.sandboxes["test/echo"] = &managedSandbox{
-		principal: "test/echo",
-		process:   &os.Process{Pid: 12345},
-		configDir: "/tmp/bureau-proxy-test-echo-abc",
-		done:      make(chan struct{}),
+		localpart:    "test/echo",
+		proxyProcess: &os.Process{Pid: 12345},
+		configDir:    "/tmp/bureau-proxy-test-echo-abc",
+		done:         make(chan struct{}),
 		roles: map[string][]string{
 			"worker": {"python", "worker.py"},
 		},
 	}
 	launcher.sandboxes["service/stt"] = &managedSandbox{
-		principal: "service/stt",
-		process:   &os.Process{Pid: 67890},
-		configDir: "/tmp/bureau-proxy-service-stt-def",
-		done:      make(chan struct{}),
+		localpart:    "service/stt",
+		proxyProcess: &os.Process{Pid: 67890},
+		configDir:    "/tmp/bureau-proxy-service-stt-def",
+		done:         make(chan struct{}),
 	}
 
 	// Also add an already-exited sandbox — it should be skipped.
 	exitedDone := make(chan struct{})
 	close(exitedDone)
 	launcher.sandboxes["dead/process"] = &managedSandbox{
-		principal: "dead/process",
-		process:   &os.Process{Pid: 99999},
-		configDir: "/tmp/bureau-proxy-dead",
-		done:      exitedDone,
+		localpart:    "dead/process",
+		proxyProcess: &os.Process{Pid: 99999},
+		configDir:    "/tmp/bureau-proxy-dead",
+		done:         exitedDone,
 	}
 
 	// Write the state file.
@@ -88,8 +88,8 @@ func TestWriteAndReadStateFile(t *testing.T) {
 	if echo == nil {
 		t.Fatal("missing sandbox entry for test/echo")
 	}
-	if echo.PID != 12345 {
-		t.Errorf("test/echo PID = %d, want 12345", echo.PID)
+	if echo.ProxyPID != 12345 {
+		t.Errorf("test/echo ProxyPID = %d, want 12345", echo.ProxyPID)
 	}
 	if echo.ConfigDir != "/tmp/bureau-proxy-test-echo-abc" {
 		t.Errorf("test/echo ConfigDir = %q, want /tmp/bureau-proxy-test-echo-abc", echo.ConfigDir)
@@ -102,8 +102,8 @@ func TestWriteAndReadStateFile(t *testing.T) {
 	if stt == nil {
 		t.Fatal("missing sandbox entry for service/stt")
 	}
-	if stt.PID != 67890 {
-		t.Errorf("service/stt PID = %d, want 67890", stt.PID)
+	if stt.ProxyPID != 67890 {
+		t.Errorf("service/stt ProxyPID = %d, want 67890", stt.ProxyPID)
 	}
 
 	// Verify dead/process was excluded.
@@ -165,11 +165,11 @@ func TestReconnectSandboxes(t *testing.T) {
 
 	configDir := t.TempDir()
 
-	// Write state file with the sleep process.
+	// Write state file with the sleep process as the proxy.
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
 			"test/reconnect": {
-				PID:       sleepPID,
+				ProxyPID:  sleepPID,
 				ConfigDir: configDir,
 				Roles:     map[string][]string{"worker": {"sleep", "60"}},
 			},
@@ -200,8 +200,8 @@ func TestReconnectSandboxes(t *testing.T) {
 	if !exists {
 		t.Fatal("sandbox test/reconnect not found after reconnect")
 	}
-	if sandbox.process.Pid != sleepPID {
-		t.Errorf("PID = %d, want %d", sandbox.process.Pid, sleepPID)
+	if sandbox.proxyProcess.Pid != sleepPID {
+		t.Errorf("proxy PID = %d, want %d", sandbox.proxyProcess.Pid, sleepPID)
 	}
 	if sandbox.configDir != configDir {
 		t.Errorf("configDir = %q, want %q", sandbox.configDir, configDir)
@@ -220,13 +220,16 @@ func TestReconnectSandboxes(t *testing.T) {
 		t.Error("state file should be deleted after reconnect")
 	}
 
-	// Kill the process and verify the done channel closes.
-	sleepCmd.Process.Kill()
+	// The session watcher should detect that there is no tmux session
+	// (we didn't create one in this test) and close the done channel.
+	// This also exercises the "sandbox exits because session is gone"
+	// path that happens after exec() reconnection when the tmux server
+	// has died.
 	select {
 	case <-sandbox.done:
-		// Wait goroutine detected the exit.
+		// Session watcher detected no tmux session.
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for reconnected process to be collected")
+		t.Fatal("timed out waiting for session watcher to close done channel")
 	}
 }
 
@@ -251,7 +254,7 @@ func TestReconnectDeadProcess(t *testing.T) {
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
 			"test/dead": {
-				PID:       deadPID,
+				ProxyPID:  deadPID,
 				ConfigDir: configDir,
 			},
 		},
@@ -299,7 +302,7 @@ func TestReconnectMissingSocket(t *testing.T) {
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
 			"test/nosocket": {
-				PID:       sleepPID,
+				ProxyPID:  sleepPID,
 				ConfigDir: configDir,
 			},
 		},

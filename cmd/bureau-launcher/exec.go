@@ -40,10 +40,11 @@ type launcherState struct {
 }
 
 // sandboxEntry captures the per-sandbox state needed to reconnect after
-// exec(). The PID is the proxy process; configDir is the temp directory
-// containing its config file; roles are from the SandboxSpec.
+// exec(). ProxyPID is the credential injection proxy process; configDir is
+// the temp directory containing its config file; roles are from the
+// SandboxSpec.
 type sandboxEntry struct {
-	PID       int                 `json:"pid"`
+	ProxyPID  int                 `json:"proxy_pid"`
 	ConfigDir string              `json:"config_dir"`
 	Roles     map[string][]string `json:"roles,omitempty"`
 }
@@ -83,7 +84,7 @@ func (l *Launcher) writeStateFile() error {
 		}
 
 		state.Sandboxes[localpart] = &sandboxEntry{
-			PID:       sandbox.process.Pid,
+			ProxyPID:  sandbox.proxyProcess.Pid,
 			ConfigDir: sandbox.configDir,
 			Roles:     sandbox.roles,
 		}
@@ -268,10 +269,10 @@ func (l *Launcher) reconnectSandboxes() error {
 
 	for localpart, entry := range state.Sandboxes {
 		// os.FindProcess on Unix always succeeds (just wraps the PID).
-		process, err := os.FindProcess(entry.PID)
+		process, err := os.FindProcess(entry.ProxyPID)
 		if err != nil {
 			l.logger.Warn("cannot find process for reconnected sandbox",
-				"principal", localpart, "pid", entry.PID, "error", err)
+				"principal", localpart, "proxy_pid", entry.ProxyPID, "error", err)
 			cleanupConfigDir(entry.ConfigDir)
 			continue
 		}
@@ -279,8 +280,8 @@ func (l *Launcher) reconnectSandboxes() error {
 		// Signal 0 checks if the process is alive without sending a
 		// real signal. ESRCH means the process does not exist.
 		if err := process.Signal(syscall.Signal(0)); err != nil {
-			l.logger.Warn("reconnected sandbox process is dead",
-				"principal", localpart, "pid", entry.PID, "error", err)
+			l.logger.Warn("reconnected sandbox proxy is dead",
+				"principal", localpart, "proxy_pid", entry.ProxyPID, "error", err)
 			cleanupConfigDir(entry.ConfigDir)
 			continue
 		}
@@ -289,59 +290,59 @@ func (l *Launcher) reconnectSandboxes() error {
 		// socket is wedged — kill it and let the daemon recreate.
 		adminSocketPath := principal.RunDirAdminSocketPath(l.runDir, localpart)
 		if _, err := os.Stat(adminSocketPath); err != nil {
-			l.logger.Warn("reconnected sandbox admin socket missing, killing wedged process",
-				"principal", localpart, "pid", entry.PID,
+			l.logger.Warn("reconnected sandbox admin socket missing, killing wedged proxy",
+				"principal", localpart, "proxy_pid", entry.ProxyPID,
 				"admin_socket", adminSocketPath, "error", err)
 			process.Kill()
 			// Wait for the zombie to be collected. Use Wait4 directly
 			// because process.Wait() may not work for FindProcess'd
 			// PIDs across exec() boundaries in all Go runtime versions.
 			var status syscall.WaitStatus
-			syscall.Wait4(entry.PID, &status, 0, nil)
+			syscall.Wait4(entry.ProxyPID, &status, 0, nil)
 			cleanupConfigDir(entry.ConfigDir)
 			continue
 		}
 
-		// Reconnect: create managedSandbox with a wait goroutine.
-		sandbox := &managedSandbox{
-			principal: localpart,
-			process:   process,
-			configDir: entry.ConfigDir,
-			done:      make(chan struct{}),
-			roles:     entry.Roles,
+		// Reconnect: create managedSandbox with a proxy reaper goroutine.
+		// The done channel is NOT closed by the proxy reaper — the session
+		// watcher (started below) drives the sandbox lifecycle.
+		sb := &managedSandbox{
+			localpart:    localpart,
+			proxyProcess: process,
+			configDir:    entry.ConfigDir,
+			done:         make(chan struct{}),
+			roles:        entry.Roles,
 		}
 
-		// Start a wait goroutine to collect the exit status. Uses
-		// syscall.Wait4 directly because we have a bare PID inherited
-		// across exec(), not an *exec.Cmd.
-		go func(sandbox *managedSandbox, localpart string, pid int) {
+		// Start a goroutine to reap the proxy process (avoid zombies).
+		// Does NOT close sandbox.done — that's the session watcher's job.
+		go func(localpart string, pid int) {
 			var status syscall.WaitStatus
 			_, waitError := syscall.Wait4(pid, &status, 0, nil)
+			exitCode := 0
 			if waitError != nil {
-				sandbox.exitError = waitError
-				sandbox.exitCode = -1
+				exitCode = -1
 			} else if status.Exited() {
-				sandbox.exitCode = status.ExitStatus()
-				if sandbox.exitCode != 0 {
-					sandbox.exitError = fmt.Errorf("exit status %d", sandbox.exitCode)
-				}
+				exitCode = status.ExitStatus()
 			} else if status.Signaled() {
-				sandbox.exitCode = 128 + int(status.Signal())
-				sandbox.exitError = fmt.Errorf("killed by signal %d", status.Signal())
+				exitCode = 128 + int(status.Signal())
 			}
-			close(sandbox.done)
 			l.logger.Info("reconnected proxy process exited",
 				"principal", localpart,
 				"pid", pid,
-				"exit_code", sandbox.exitCode,
-				"error", sandbox.exitError,
+				"exit_code", exitCode,
+				"error", waitError,
 			)
-		}(sandbox, localpart, entry.PID)
+		}(localpart, entry.ProxyPID)
 
-		l.sandboxes[localpart] = sandbox
+		l.sandboxes[localpart] = sb
+
+		// Start the session watcher that drives the sandbox lifecycle.
+		l.startSessionWatcher(localpart, sb)
+
 		l.logger.Info("reconnected sandbox",
 			"principal", localpart,
-			"pid", entry.PID,
+			"proxy_pid", entry.ProxyPID,
 			"config_dir", entry.ConfigDir,
 		)
 	}

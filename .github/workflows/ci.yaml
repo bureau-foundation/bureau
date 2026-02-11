@@ -24,35 +24,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
-          use-flakehub: false
+          extra-conf: |
+            extra-substituters = https://cache.infra.bureau.foundation
+            extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
 
-      # Trust the project's binary cache so the dev shell can pull our
-      # custom Go 1.25.6 derivation instead of compiling from source.
-      - name: Configure Nix binary cache
-        run: |
-          sudo tee -a /etc/nix/nix.conf <<EOF
-          accept-flake-config = true
-          extra-substituters = https://cache.infra.bureau.foundation
-          extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
-          EOF
-          sudo systemctl restart nix-daemon
-
-      # Evaluate and fetch the dev shell closure. This is the slow part
-      # (compiling Go, downloading tools) and runs once per cache miss.
-      # Isolating it keeps the Pre-commit and Build steps showing only
-      # our actual work in the GitHub Actions UI.
       - name: Warm Nix dev shell
         run: nix develop --command true
 
-      # Gazelle (check-gazelle) runs `bazel run //:gazelle` to verify
-      # BUILD files are current. It detects CI=true and passes --config=ci
-      # for disk cache and output formatting.
-      #
-      # Cache keys are per-job so the lint and build jobs don't race to
-      # save the same entry (GitHub Actions cache is immutable). Restore
-      # keys fall back to the build job's cache, which is a superset.
       - name: Mount Bazel cache
         uses: actions/cache@v4
         with:
@@ -64,9 +43,6 @@ jobs:
             bazel-lint-${{ runner.os }}-
             bazel-build-${{ runner.os }}-
 
-      # Pre-commit manages its own Python virtualenvs for hooks like
-      # trailing-whitespace and insert-license. These live outside the
-      # Nix store and need separate caching.
       - name: Cache pre-commit environments
         uses: actions/cache@v4
         with:
@@ -75,8 +51,6 @@ jobs:
           restore-keys: |
             pre-commit-${{ runner.os }}-
 
-      # Run all pre-commit hooks except the Bazel build/test gates, which
-      # are redundant with the dedicated build job below.
       - name: Pre-commit checks
         run: >
           nix develop --command bash -c
@@ -97,24 +71,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
-          use-flakehub: false
-
-      - name: Configure Nix binary cache
-        run: |
-          sudo tee -a /etc/nix/nix.conf <<EOF
-          accept-flake-config = true
-          extra-substituters = https://cache.infra.bureau.foundation
-          extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
-          EOF
-          sudo systemctl restart nix-daemon
+          extra-conf: |
+            extra-substituters = https://cache.infra.bureau.foundation
+            extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
 
       - name: Warm Nix dev shell
         run: nix develop --command true
 
-      # Bazel's disk cache is separate from the Nix store. The --disk_cache
-      # flag is set in .bazelrc under the "ci" config.
       - name: Mount Bazel cache
         uses: actions/cache@v4
         with:
@@ -133,9 +97,11 @@ jobs:
       - name: Build Nix packages
         run: nix build
 
-      # Push store paths to our R2 binary cache so subsequent runs
-      # (and local dev) can skip building Go 1.25.6 from source.
-      # Only runs on main — PRs don't have access to secrets.
+      # Push store paths to our R2 binary cache so subsequent CI runs
+      # and local dev can pull custom derivations instead of building
+      # from source. Gated on push-to-main: the event_name check
+      # prevents execution on PRs (even same-repo PRs that have
+      # secret access), and fork PRs don't receive secrets at all.
       - name: Push to Nix binary cache
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         continue-on-error: true
@@ -146,15 +112,15 @@ jobs:
           echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
           trap 'rm -f /tmp/nix-signing-key' EXIT
 
-          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
+          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}"
 
           # nix develop doesn't realize the mkShell derivation output —
           # it only fetches the shell's dependencies. Build explicitly
           # so the output path exists in the store before signing.
           nix build --no-link .#devShells.x86_64-linux.default
 
-          # Sign and push the dev shell closure (the expensive part:
-          # includes our custom Go and all dev tools).
+          # Sign and push the dev shell closure (includes custom
+          # compilers, all dev tools, everything not in cache.nixos.org).
           nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
           nix copy --to "$CACHE" .#devShells.x86_64-linux.default
 
@@ -165,7 +131,5 @@ jobs:
       - name: Prune Bazel cache
         if: always()
         run: |
-          # Keep only files accessed in the last 7 days to stay under
-          # GitHub's 10GB cache limit.
           find ~/.cache/bazel-disk-cache -type f -atime +7 -delete 2>/dev/null || true
           du -sh ~/.cache/bazel-disk-cache 2>/dev/null || echo "Cache empty"

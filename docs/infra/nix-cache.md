@@ -1,14 +1,13 @@
 # Nix Binary Cache
 
-Bureau uses a three-tier Nix binary cache so that custom derivations
-(overridden packages, environment closures, release binaries) don't need to
-be rebuilt from source on every CI run or local `nix develop`.
+Bureau runs its own Nix binary cache so that custom derivations (overridden
+packages, environment closures, release binaries) don't need to be rebuilt
+from source on every CI run or local `nix develop`.
 
 ## Cache tiers
 
 | Tier | URL | Scope | TTL |
 |------|-----|-------|-----|
-| magic-nix-cache | GitHub Actions cache API | CI only, co-located with runner | 7 days (GHA eviction) |
 | Bureau R2 cache | `https://cache.infra.bureau.foundation` | CI + local dev | Permanent (Cloudflare R2) |
 | Upstream Nix cache | `https://cache.nixos.org` | Everything in nixpkgs | Permanent |
 
@@ -36,9 +35,9 @@ For local dev, `~/.config/nix/nix.conf` needs `accept-flake-config = true`
 to trust the flake's substituter declaration without prompting on every
 invocation.
 
-In CI, the workflow writes the substituter and public key directly to
-`/etc/nix/nix.conf` (with `accept-flake-config = true`) and restarts the
-Nix daemon before any evaluation.
+In CI, the substituter and public key are passed via `extra-conf` on
+`DeterminateSystems/determinate-nix-action@v3`, which injects them into
+the Nix config at install time (before the daemon starts).
 
 ### Writes (CI only, main branch)
 

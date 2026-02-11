@@ -111,16 +111,6 @@ const (
 	// Room: the workspace room
 	EventTypeWorkspaceReady = "m.bureau.workspace.ready"
 
-	// EventTypeWorkspaceTeardown triggers workspace teardown. When the
-	// daemon sees this event, it spawns a teardown principal (if
-	// configured via lifecycle hooks) to archive and clean up the
-	// workspace. Teardown is separate from Matrix room archival — a room
-	// can be tombstoned while its workspace persists, or vice versa.
-	//
-	// State key: "" (singleton per room)
-	// Room: the workspace room
-	EventTypeWorkspaceTeardown = "m.bureau.workspace.teardown"
-
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
 	// state events in pipeline rooms (e.g., #bureau/pipeline for
@@ -165,8 +155,8 @@ const (
 	PowerLevelOperator = 50
 
 	// PowerLevelAdmin allows full lifecycle control: workspace.setup,
-	// workspace.teardown, workspace.restore, principal.spawn. Requires
-	// admin status in the room (PL 100).
+	// workspace.restore, principal.spawn. Requires admin status in the
+	// room (PL 100).
 	PowerLevelAdmin = 100
 )
 
@@ -794,27 +784,6 @@ type WorkspaceReady struct {
 	CompletedAt string `json:"completed_at"`
 }
 
-// WorkspaceTeardown is the content of an EventTypeWorkspaceTeardown state
-// event. Triggers workspace teardown when published to a workspace room.
-type WorkspaceTeardown struct {
-	// RequestedBy is the Matrix user ID of whoever initiated the
-	// teardown (e.g., "@bureau-admin:bureau.local").
-	RequestedBy string `json:"requested_by"`
-
-	// RequestedAt is an ISO 8601 timestamp of when teardown was
-	// requested.
-	RequestedAt string `json:"requested_at"`
-
-	// Action specifies what to do with the workspace data: "delete"
-	// removes it permanently, "archive" moves it to cold storage.
-	Action string `json:"action"`
-
-	// ArchivePath is the destination for archived data when Action is
-	// "archive" (e.g., "/var/bureau/archive/iree/amdgpu/inference/").
-	// Empty when Action is "delete".
-	ArchivePath string `json:"archive_path,omitempty"`
-}
-
 // PipelineContent is the content of an EventTypePipeline state event.
 // It defines a reusable automation sequence: a list of steps executed
 // in order by the pipeline executor inside a sandbox. Steps can run
@@ -1179,7 +1148,6 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 		"users_default": 0,
 		"events": map[string]any{
 			EventTypeProject:            100,
-			EventTypeWorkspaceTeardown:  100,
 			EventTypeWorkspaceReady:     50,
 			EventTypeLayout:             0,
 			"m.room.name":               100,

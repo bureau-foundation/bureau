@@ -27,7 +27,6 @@ func TestEventTypeConstants(t *testing.T) {
 		{"template", EventTypeTemplate, "m.bureau.template"},
 		{"project", EventTypeProject, "m.bureau.project"},
 		{"workspace_ready", EventTypeWorkspaceReady, "m.bureau.workspace.ready"},
-		{"workspace_teardown", EventTypeWorkspaceTeardown, "m.bureau.workspace.teardown"},
 		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
 	}
 	for _, test := range tests {
@@ -715,7 +714,7 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	}
 
 	// Admin-only events (PL 100).
-	for _, eventType := range []string{EventTypeProject, EventTypeWorkspaceTeardown} {
+	for _, eventType := range []string{EventTypeProject} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
 		}
@@ -1845,59 +1844,6 @@ func TestWorkspaceReadyRoundTrip(t *testing.T) {
 	}
 	if decoded != original {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
-	}
-}
-
-func TestWorkspaceTeardownRoundTrip(t *testing.T) {
-	original := WorkspaceTeardown{
-		RequestedBy: "@bureau-admin:bureau.local",
-		RequestedAt: "2026-02-10T12:00:00Z",
-		Action:      "archive",
-		ArchivePath: "/var/bureau/archive/iree/amdgpu/inference/",
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal to map: %v", err)
-	}
-	assertField(t, raw, "requested_by", "@bureau-admin:bureau.local")
-	assertField(t, raw, "requested_at", "2026-02-10T12:00:00Z")
-	assertField(t, raw, "action", "archive")
-	assertField(t, raw, "archive_path", "/var/bureau/archive/iree/amdgpu/inference/")
-
-	var decoded WorkspaceTeardown
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if decoded != original {
-		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
-	}
-}
-
-func TestWorkspaceTeardownOmitsEmptyArchivePath(t *testing.T) {
-	teardown := WorkspaceTeardown{
-		RequestedBy: "@bureau-admin:bureau.local",
-		RequestedAt: "2026-02-10T12:00:00Z",
-		Action:      "delete",
-	}
-
-	data, err := json.Marshal(teardown)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal to map: %v", err)
-	}
-	assertField(t, raw, "action", "delete")
-	if _, exists := raw["archive_path"]; exists {
-		t.Error("archive_path should be omitted when empty")
 	}
 }
 

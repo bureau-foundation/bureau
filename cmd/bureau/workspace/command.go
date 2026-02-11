@@ -79,9 +79,11 @@ func destroyCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "destroy",
 		Summary: "Tear down a workspace",
-		Description: `Trigger workspace teardown on the hosting machine. The daemon spawns
-a teardown principal that checks for uncommitted changes, archives
-the data (with --archive), and removes the workspace directory.
+		Description: `Tear down a workspace on the hosting machine. Executes the
+dev-workspace-teardown pipeline, which checks for uncommitted changes,
+archives the data (with --archive), and removes the workspace directory.
+The workspace.ready state event is tombstoned to signal that the
+workspace is no longer active.
 
 The Matrix room is preserved by default — its message history remains
 accessible. Use "bureau matrix room leave" separately to remove the

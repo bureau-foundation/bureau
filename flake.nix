@@ -56,7 +56,7 @@
         # CGO_ENABLED=0, static linking). The daemon compares binary content
         # hashes to decide what needs restarting, not store paths or build
         # provenance.
-        vendorHash = "sha256-U+Y75CvMASy2AL7vuMRXr/1HBMiKsKFucReAccULJsw=";
+        vendorHash = "sha256-+a7k1XpaXNSdxx7nqt4ALzkUuVneLsPulhYpzucHpyE=";
 
         # Override the Go version used by buildGoModule. The `go` parameter
         # is a callPackage injection — passing it as a build attribute does
@@ -124,8 +124,11 @@
           name = "bureau-dev";
           packages = [
             # Build system — bazelisk reads .bazelversion to fetch the
-            # correct Bazel release (9.0.0). No need to pin Bazel in Nix.
-            pkgs.bazelisk
+            # correct Bazel release (9.0.0). Wrapped as "bazel" so that
+            # .bazelrc, scripts, and `nix develop --command` all work
+            # without relying on shell aliases (which don't apply in
+            # non-interactive invocations).
+            (pkgs.writeShellScriptBin "bazel" ''exec ${pkgs.bazelisk}/bin/bazelisk "$@"'')
             pkgs.buildifier
 
             # Go tooling for IDE support and ad-hoc testing. Uses our
@@ -174,10 +177,6 @@
             if [ -f .pre-commit-config.yaml ] && [ -d .git ]; then
               pre-commit install --install-hooks > /dev/null 2>&1 || true
             fi
-
-            # bazelisk needs to be invoked as "bazel" for .bazelrc and
-            # tooling compatibility.
-            alias bazel=bazelisk
           '';
         };
       }

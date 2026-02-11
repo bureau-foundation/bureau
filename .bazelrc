@@ -24,9 +24,11 @@ build --@rules_go//go/config:pure
 build:release --stamp
 build:release --workspace_status_command=script/bazel-workspace-status
 
-# CI: suppress color and cursor control for log readability.
+# CI: suppress color and cursor control for log readability, and use a disk
+# cache so that GitHub Actions can persist build artifacts across runs.
 build:ci --color=no
 build:ci --curses=no
+build:ci --disk_cache=~/.cache/bazel-disk-cache
 test:ci --test_output=errors
 
 # Remote execution via Buildbarn (deploy/buildbarn/).

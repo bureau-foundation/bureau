@@ -11,27 +11,26 @@ on:
 
 permissions:
   contents: read
+  id-token: write # Magic Nix Cache uses GitHub Actions OIDC for storage.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  pre-commit:
-    name: Pre-commit checks
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-
-      - name: Cache pre-commit
+      # Pre-commit manages its own Python virtualenvs for hooks like
+      # trailing-whitespace and insert-license. These live outside the
+      # Nix store and need separate caching.
+      - name: Cache pre-commit environments
         uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
@@ -39,10 +38,14 @@ jobs:
           restore-keys: |
             pre-commit-${{ runner.os }}-
 
-      - name: Verify shellcheck
-        run: shellcheck --version
-
-      - uses: pre-commit/action@v3.0.1
+      # Run all pre-commit hooks except the Bazel build/test gates, which
+      # are redundant with the dedicated build job below. Keeping them
+      # separate lets lint and build run in parallel.
+      - name: Pre-commit checks
+        run: >
+          nix develop --command bash -c
+          "SKIP=bazel-build,bazel-test pre-commit run
+          --show-diff-on-failure --color=always --all-files"
 
   build:
     name: Build and test
@@ -50,9 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bazelisk
-        uses: bazelbuild/setup-bazelisk@v3
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/magic-nix-cache-action@main
 
+      # Bazel's disk cache is separate from the Nix store. The --disk_cache
+      # flag is set in .bazelrc under the "ci" config.
       - name: Mount Bazel cache
         uses: actions/cache@v4
         with:
@@ -63,15 +68,18 @@ jobs:
             bazel-${{ runner.os }}-
 
       - name: Build
-        run: bazel build --config=ci //...
+        run: nix develop --command bazel build --config=ci //...
 
       - name: Test
-        run: bazel test --config=ci //...
+        run: nix develop --command bazel test --config=ci //...
 
-      - name: Cleanup Bazel cache
+      - name: Build Nix packages
+        run: nix build
+
+      - name: Prune Bazel cache
         if: always()
         run: |
-          # Prune cache to stay under GitHub's 10GB limit.
-          # Keep only files accessed in the last 7 days.
+          # Keep only files accessed in the last 7 days to stay under
+          # GitHub's 10GB cache limit.
           find ~/.cache/bazel-disk-cache -type f -atime +7 -delete 2>/dev/null || true
           du -sh ~/.cache/bazel-disk-cache 2>/dev/null || echo "Cache empty"

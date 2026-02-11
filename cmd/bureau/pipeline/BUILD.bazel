@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "pipeline",
@@ -22,5 +22,24 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "@com_github_spf13_pflag//:pflag",
+    ],
+)
+
+go_test(
+    name = "pipeline_test",
+    srcs = [
+        "execute_test.go",
+        "list_test.go",
+        "mock_test.go",
+        "push_test.go",
+        "show_test.go",
+        "validate_test.go",
+    ],
+    embed = [":pipeline"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/pipeline",
+        "//lib/schema",
+        "//messaging",
     ],
 )

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -912,6 +913,555 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 
 	if stillExists {
 		t.Error("health monitor should be stopped after principal is destroyed")
+	}
+}
+
+func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
+	t.Parallel()
+
+	const localpart = "agent/test"
+
+	socketDir := testutil.SocketDir(t)
+	adminSocket := filepath.Join(socketDir, "admin.sock")
+
+	// Track health check requests. The response pattern verifies that
+	// transient failures below the threshold don't accumulate across
+	// recovery events — the counter resets on each successful check.
+	var requestCount atomic.Int32
+	patternComplete := make(chan struct{})
+
+	listener, err := net.Listen("unix", adminSocket)
+	if err != nil {
+		t.Fatalf("Listen(%s) error: %v", adminSocket, err)
+	}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			count := requestCount.Add(1)
+			// Pattern: fail, fail, succeed, fail, fail, succeed
+			// With threshold=3, the reset at check 3 prevents reaching
+			// the threshold. Max consecutive failures = 2.
+			switch {
+			case count <= 2:
+				w.WriteHeader(http.StatusServiceUnavailable)
+			case count == 3:
+				w.WriteHeader(http.StatusOK)
+			case count <= 5:
+				w.WriteHeader(http.StatusServiceUnavailable)
+			default:
+				w.WriteHeader(http.StatusOK)
+				if count == 6 {
+					close(patternComplete)
+				}
+			}
+		}),
+	}
+	go server.Serve(listener)
+	t.Cleanup(func() {
+		server.Close()
+		listener.Close()
+	})
+
+	daemon := &Daemon{
+		running:             map[string]bool{localpart: true},
+		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		adminSocketPathFunc: func(string) string { return adminSocket },
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+		Endpoint:           "/health",
+		IntervalSeconds:    1,
+		FailureThreshold:   3,
+		GracePeriodSeconds: 1,
+		TimeoutSeconds:     1,
+	})
+
+	// Wait for the full pattern (6 checks) to complete.
+	select {
+	case <-patternComplete:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for health check pattern to complete")
+	}
+
+	cancel()
+
+	// If rollback had been triggered, rollbackPrincipal would attempt
+	// launcherRequest (which would fail with no launcher socket) and
+	// delete running[localpart]. The principal still being marked as
+	// running proves the recovery resets prevented false rollback.
+	if !daemon.running[localpart] {
+		t.Error("principal should still be running: transient failures with recovery should not trigger rollback")
+	}
+}
+
+func TestHealthMonitorCancelDuringPolling(t *testing.T) {
+	t.Parallel()
+
+	const localpart = "agent/test"
+
+	socketDir := testutil.SocketDir(t)
+	adminSocket := filepath.Join(socketDir, "admin.sock")
+
+	// Signal when the monitor has completed at least one health check,
+	// proving it is past the grace period and in the active polling loop.
+	firstCheckDone := make(chan struct{})
+	var once sync.Once
+
+	listener, err := net.Listen("unix", adminSocket)
+	if err != nil {
+		t.Fatalf("Listen(%s) error: %v", adminSocket, err)
+	}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(firstCheckDone) })
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+	go server.Serve(listener)
+	t.Cleanup(func() {
+		server.Close()
+		listener.Close()
+	})
+
+	daemon := &Daemon{
+		running:             map[string]bool{localpart: true},
+		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		adminSocketPathFunc: func(string) string { return adminSocket },
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+		Endpoint:           "/health",
+		IntervalSeconds:    1,
+		FailureThreshold:   3,
+		GracePeriodSeconds: 1,
+		TimeoutSeconds:     1,
+	})
+
+	// Wait until at least one health check completes, confirming the
+	// monitor is past the grace period and in the active polling loop.
+	select {
+	case <-firstCheckDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for first health check")
+	}
+
+	// Cancel the context while the monitor is in its polling loop.
+	// This exercises the ctx.Done branch in the ticker select
+	// (health.go:141-145), which is a different code path from the
+	// grace period cancellation tested in TestHealthMonitorStopDuringGracePeriod.
+	cancel()
+
+	// The monitor's goroutine should exit promptly via ctx.Done.
+	done := make(chan struct{})
+	go func() {
+		daemon.stopHealthMonitor(localpart)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("health monitor did not stop within 5 seconds after context cancellation")
+	}
+
+	// No rollback should have occurred — ctx.Done exits cleanly.
+	if !daemon.running[localpart] {
+		t.Error("principal should still be running: context cancellation should not trigger rollback")
+	}
+}
+
+func TestRollbackLauncherRejectsCreate(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+		localpart    = "agent/test"
+	)
+
+	// Matrix state: principal in config with credentials (so rollback
+	// reaches the create-sandbox step before the launcher rejects it).
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: localpart,
+			AutoStart: true,
+		}},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, localpart, schema.Credentials{
+		Ciphertext: "encrypted-creds",
+	})
+
+	var (
+		messagesMu sync.Mutex
+		messages   []string
+	)
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+			var content struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&content); err == nil {
+				messagesMu.Lock()
+				messages = append(messages, content.Body)
+				messagesMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var (
+		launcherMu sync.Mutex
+		ipcActions []string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		ipcActions = append(ipcActions, request.Action)
+		launcherMu.Unlock()
+		switch request.Action {
+		case "destroy-sandbox":
+			return launcherIPCResponse{OK: true}
+		case "create-sandbox":
+			return launcherIPCResponse{OK: false, Error: "sandbox limit exceeded"}
+		default:
+			return launcherIPCResponse{OK: true}
+		}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
+
+	daemon := &Daemon{
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{localpart: true},
+		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
+		previousSpecs:  map[string]*schema.SandboxSpec{localpart: previousSpec},
+		lastTemplates: map[string]*schema.TemplateContent{localpart: {
+			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
+		}},
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(string) string { return filepath.Join(socketDir, "nonexistent.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	daemon.rollbackPrincipal(context.Background(), localpart)
+
+	// Verify IPC sequence: destroy succeeded, create attempted.
+	launcherMu.Lock()
+	foundDestroy := false
+	foundCreate := false
+	for _, action := range ipcActions {
+		if action == "destroy-sandbox" {
+			foundDestroy = true
+		}
+		if action == "create-sandbox" {
+			foundCreate = true
+		}
+	}
+	launcherMu.Unlock()
+
+	if !foundDestroy {
+		t.Error("expected destroy-sandbox call")
+	}
+	if !foundCreate {
+		t.Error("expected create-sandbox call (even though it was rejected)")
+	}
+
+	// Principal should NOT be running — create was rejected.
+	if daemon.running[localpart] {
+		t.Error("principal should not be running after failed rollback create")
+	}
+
+	// previousSpecs and lastTemplates should be cleaned up.
+	if daemon.previousSpecs[localpart] != nil {
+		t.Error("previousSpecs should be cleaned up after failed rollback")
+	}
+	if daemon.lastTemplates[localpart] != nil {
+		t.Error("lastTemplates should be cleaned up after failed rollback")
+	}
+
+	// CRITICAL message should have been sent.
+	messagesMu.Lock()
+	foundCritical := false
+	for _, message := range messages {
+		if strings.Contains(message, "CRITICAL") && strings.Contains(message, "rollback") {
+			foundCritical = true
+			break
+		}
+	}
+	messagesMu.Unlock()
+	if !foundCritical {
+		t.Error("expected CRITICAL message when rollback create-sandbox is rejected")
+	}
+}
+
+func TestRollbackCredentialsMissing(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+		localpart    = "agent/test"
+	)
+
+	// Matrix state: principal in config but NO credentials. The
+	// readCredentials call during rollback returns M_NOT_FOUND.
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: localpart,
+			AutoStart: true,
+		}},
+	})
+
+	var (
+		messagesMu sync.Mutex
+		messages   []string
+	)
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+			var content struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&content); err == nil {
+				messagesMu.Lock()
+				messages = append(messages, content.Body)
+				messagesMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var (
+		launcherMu sync.Mutex
+		ipcActions []string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		ipcActions = append(ipcActions, request.Action)
+		launcherMu.Unlock()
+		return launcherIPCResponse{OK: true}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
+
+	daemon := &Daemon{
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{localpart: true},
+		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
+		previousSpecs:  map[string]*schema.SandboxSpec{localpart: previousSpec},
+		lastTemplates: map[string]*schema.TemplateContent{localpart: {
+			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
+		}},
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(string) string { return filepath.Join(socketDir, "nonexistent.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	daemon.rollbackPrincipal(context.Background(), localpart)
+
+	// Destroy should have been called, but create should NOT — the
+	// credential read failure aborts before reaching create-sandbox.
+	launcherMu.Lock()
+	foundDestroy := false
+	foundCreate := false
+	for _, action := range ipcActions {
+		if action == "destroy-sandbox" {
+			foundDestroy = true
+		}
+		if action == "create-sandbox" {
+			foundCreate = true
+		}
+	}
+	launcherMu.Unlock()
+
+	if !foundDestroy {
+		t.Error("expected destroy-sandbox call")
+	}
+	if foundCreate {
+		t.Error("create-sandbox should NOT be called when credentials are missing")
+	}
+
+	// Principal should NOT be running.
+	if daemon.running[localpart] {
+		t.Error("principal should not be running after failed credential read")
+	}
+
+	// previousSpecs and lastTemplates should be cleaned up.
+	if daemon.previousSpecs[localpart] != nil {
+		t.Error("previousSpecs should be cleaned up")
+	}
+	if daemon.lastTemplates[localpart] != nil {
+		t.Error("lastTemplates should be cleaned up")
+	}
+
+	// CRITICAL message about credentials should have been sent.
+	messagesMu.Lock()
+	foundCritical := false
+	for _, message := range messages {
+		if strings.Contains(message, "CRITICAL") && strings.Contains(message, "credentials") {
+			foundCritical = true
+			break
+		}
+	}
+	messagesMu.Unlock()
+	if !foundCritical {
+		t.Error("expected CRITICAL message about missing credentials")
+	}
+}
+
+func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+	)
+
+	// Config with NO principals — the running one should be destroyed.
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{})
+
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		return launcherIPCResponse{OK: true}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	// Principal has a populated previousSpecs entry (from a prior
+	// structural restart). When the principal is destroyed (removed from
+	// config), the destroy-extras pass should clean up all associated
+	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
+	daemon := &Daemon{
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{"agent/test": true},
+		lastSpecs:      map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v2"}}},
+		previousSpecs:  map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v1"}}},
+		lastTemplates: map[string]*schema.TemplateContent{"agent/test": {
+			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
+		}},
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	if daemon.running["agent/test"] {
+		t.Error("principal should not be running after removal from config")
+	}
+	if daemon.lastSpecs["agent/test"] != nil {
+		t.Error("lastSpecs should be cleaned up when principal is destroyed")
+	}
+	if daemon.previousSpecs["agent/test"] != nil {
+		t.Error("previousSpecs should be cleaned up when principal is destroyed")
+	}
+	if daemon.lastTemplates["agent/test"] != nil {
+		t.Error("lastTemplates should be cleaned up when principal is destroyed")
 	}
 }
 

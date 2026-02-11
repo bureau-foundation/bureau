@@ -176,17 +176,15 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 		return fmt.Errorf("workspace %s is in status %q, expected \"active\"", alias, workspaceState.Status)
 	}
 
-	// Patch the teardown principal's payload with the requested mode.
-	// This must happen before the status update so the daemon sees both
-	// changes on the same /sync cycle.
-	if err := patchTeardownPayload(ctx, sess, workspaceState.Machine, serverName, alias, mode); err != nil {
-		return fmt.Errorf("patching teardown payload: %w", err)
-	}
-
-	// Transition the workspace to "teardown". This triggers continuous
-	// enforcement: agents gated on "active" stop, teardown principal
-	// gated on "teardown" starts.
+	// Transition the workspace to "teardown" with the requested mode.
+	// The daemon's continuous enforcement handles the rest: agents gated
+	// on "active" stop, and the teardown principal gated on "teardown"
+	// starts. The teardown mode is carried in the workspace event itself
+	// — the daemon captures this event content when the StartCondition
+	// matches and delivers it as /run/bureau/trigger.json. No
+	// MachineConfig patching needed.
 	workspaceState.Status = "teardown"
+	workspaceState.TeardownMode = mode
 	workspaceState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
 	if err != nil {
@@ -196,52 +194,6 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 	fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", alias, mode)
 	fmt.Fprintf(os.Stderr, "  Agents gated on \"active\" will stop on next reconcile cycle.\n")
 	fmt.Fprintf(os.Stderr, "  Teardown principal will start and run the deinit pipeline.\n")
-
-	return nil
-}
-
-// patchTeardownPayload performs a read-modify-write on the machine's
-// MachineConfig to set the MODE field in the teardown principal's payload.
-// The teardown principal reads MODE to decide whether to archive or delete.
-func patchTeardownPayload(ctx context.Context, sess *messaging.Session, machine, serverName, alias, mode string) error {
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
-	configRoomID, err := sess.ResolveAlias(ctx, configRoomAlias)
-	if err != nil {
-		return fmt.Errorf("resolve config room %s: %w", configRoomAlias, err)
-	}
-
-	// Read existing MachineConfig.
-	existingContent, err := sess.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine)
-	if err != nil {
-		return fmt.Errorf("reading machine config: %w", err)
-	}
-	var config schema.MachineConfig
-	if err := json.Unmarshal(existingContent, &config); err != nil {
-		return fmt.Errorf("parsing machine config: %w", err)
-	}
-
-	// Find and patch the teardown principal.
-	teardownLocalpart := alias + "/teardown"
-	found := false
-	for index := range config.Principals {
-		if config.Principals[index].Localpart == teardownLocalpart {
-			if config.Principals[index].Payload == nil {
-				config.Principals[index].Payload = make(map[string]any)
-			}
-			config.Principals[index].Payload["MODE"] = mode
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("teardown principal %q not found in machine config for %s", teardownLocalpart, machine)
-	}
-
-	// Publish the updated config.
-	_, err = sess.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine, config)
-	if err != nil {
-		return fmt.Errorf("publishing updated machine config: %w", err)
-	}
 
 	return nil
 }

@@ -659,6 +659,133 @@ func TestPayloadVariableConversion(t *testing.T) {
 	}
 }
 
+func TestTriggerVariableConversion(t *testing.T) {
+	t.Parallel()
+
+	triggerPath := writeTrigger(t, map[string]any{
+		"status":        "teardown",
+		"teardown_mode": "archive",
+		"project":       "iree",
+		"machine":       "machine/workstation",
+		"updated_at":    "2026-02-10T03:00:00Z",
+		"nested":        map[string]any{"key": "value"},
+		"count":         3.0,
+		"enabled":       true,
+		"empty":         nil,
+	})
+
+	variables, err := loadTriggerVariables(triggerPath)
+	if err != nil {
+		t.Fatalf("loadTriggerVariables: %v", err)
+	}
+
+	tests := []struct {
+		key      string
+		expected string
+		present  bool
+	}{
+		{"EVENT_status", "teardown", true},
+		{"EVENT_teardown_mode", "archive", true},
+		{"EVENT_project", "iree", true},
+		{"EVENT_machine", "machine/workstation", true},
+		{"EVENT_updated_at", "2026-02-10T03:00:00Z", true},
+		{"EVENT_nested", `{"key":"value"}`, true},
+		{"EVENT_count", "3", true},
+		{"EVENT_enabled", "true", true},
+		{"EVENT_empty", "", false},
+		// Original keys without EVENT_ prefix should NOT be present.
+		{"status", "", false},
+		{"teardown_mode", "", false},
+	}
+
+	for _, test := range tests {
+		value, present := variables[test.key]
+		if present != test.present {
+			t.Errorf("key %q: present=%v, want %v", test.key, present, test.present)
+			continue
+		}
+		if present && value != test.expected {
+			t.Errorf("key %q: value=%q, want %q", test.key, value, test.expected)
+		}
+	}
+}
+
+func TestTriggerVariablesMissingFile(t *testing.T) {
+	t.Parallel()
+
+	// Non-existent trigger file should return empty map, not error.
+	variables, err := loadTriggerVariables(filepath.Join(t.TempDir(), "nonexistent.json"))
+	if err != nil {
+		t.Fatalf("expected no error for missing trigger file, got: %v", err)
+	}
+	if len(variables) != 0 {
+		t.Errorf("expected empty variables for missing trigger file, got %d entries", len(variables))
+	}
+}
+
+func TestTriggerVariablesPrecedence(t *testing.T) {
+	t.Parallel()
+
+	// Verify that payload variables take precedence over trigger variables
+	// when merged. If both trigger and payload define a variable with the
+	// same name, payload wins.
+	triggerPath := writeTrigger(t, map[string]any{
+		"status": "teardown",
+		"mode":   "from-trigger",
+	})
+	payloadPath := writePayload(t, map[string]any{
+		"EVENT_mode": "from-payload",
+		"OTHER":      "payload-only",
+	})
+
+	triggerVariables, err := loadTriggerVariables(triggerPath)
+	if err != nil {
+		t.Fatalf("loadTriggerVariables: %v", err)
+	}
+	payloadVariables, err := loadPayloadVariables(payloadPath)
+	if err != nil {
+		t.Fatalf("loadPayloadVariables: %v", err)
+	}
+
+	// Merge: trigger first (lower priority), payload on top.
+	merged := make(map[string]string, len(triggerVariables)+len(payloadVariables))
+	for key, value := range triggerVariables {
+		merged[key] = value
+	}
+	for key, value := range payloadVariables {
+		merged[key] = value
+	}
+
+	// EVENT_mode should be "from-payload" (payload wins over trigger's EVENT_mode).
+	if merged["EVENT_mode"] != "from-payload" {
+		t.Errorf("EVENT_mode = %q, want %q (payload should win)", merged["EVENT_mode"], "from-payload")
+	}
+	// EVENT_status should come from trigger (no collision).
+	if merged["EVENT_status"] != "teardown" {
+		t.Errorf("EVENT_status = %q, want %q", merged["EVENT_status"], "teardown")
+	}
+	// OTHER should come from payload (no collision).
+	if merged["OTHER"] != "payload-only" {
+		t.Errorf("OTHER = %q, want %q", merged["OTHER"], "payload-only")
+	}
+}
+
+// writeTrigger writes a trigger JSON file and returns its path.
+func writeTrigger(t *testing.T, content map[string]any) string {
+	t.Helper()
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "trigger.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write trigger: %v", err)
+	}
+	return path
+}
+
 func TestPayloadInlineResolution(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 

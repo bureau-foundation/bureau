@@ -1011,6 +1011,12 @@ type WorkspaceState struct {
 	// workspace data lives on.
 	Machine string `json:"machine"`
 
+	// TeardownMode specifies how the teardown principal should handle
+	// the workspace data. Set by "bureau workspace destroy --mode".
+	// Valid values: "archive" (move to .archive/), "delete" (remove).
+	// Empty for all statuses other than "teardown".
+	TeardownMode string `json:"teardown_mode,omitempty"`
+
 	// UpdatedAt is an ISO 8601 timestamp of the last status transition.
 	UpdatedAt string `json:"updated_at"`
 

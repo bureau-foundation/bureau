@@ -23,11 +23,12 @@
 //     principals gated on workspace status "active", one teardown
 //     principal gated on workspace status "teardown"), updates
 //     MachineConfig, and invites the target machine's daemon.
-//   - destroy: transitions a workspace to "teardown" status. Patches
-//     the teardown principal's payload with the requested mode
-//     (archive or delete), then publishes the status change. The
-//     daemon's continuous StartCondition enforcement handles the rest:
-//     agents stop, teardown principal starts.
+//   - destroy: transitions a workspace to "teardown" status by publishing
+//     an m.bureau.workspace event with status "teardown" and the requested
+//     teardown_mode (archive or delete). The daemon's continuous
+//     StartCondition enforcement handles the rest: agents gated on
+//     "active" stop, the teardown principal gated on "teardown" starts
+//     with the event content delivered as /run/bureau/trigger.json.
 //   - list: queries Matrix for workspace rooms. Implemented.
 //   - status, du, worktree, fetch: declared but not yet implemented
 //     (return [cli.ErrNotImplemented]).

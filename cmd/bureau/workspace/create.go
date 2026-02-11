@@ -355,8 +355,14 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 
 	// Teardown principal: starts when workspace status becomes "teardown".
 	// Archives or removes the workspace data, then publishes the final
-	// status ("archived" or "removed"). The pipeline_ref and MODE are
-	// read from payload by the teardown pipeline.
+	// status ("archived" or "removed").
+	//
+	// Payload carries static per-principal config (pipeline ref, workspace
+	// room alias). Dynamic per-invocation context (teardown mode, machine,
+	// project) comes from the trigger event — the daemon captures the
+	// workspace state event content when the StartCondition matches and
+	// delivers it as /run/bureau/trigger.json. The pipeline reads these
+	// via EVENT_* variables (e.g., ${EVENT_teardown_mode}, ${EVENT_machine}).
 	teardownLocalpart := alias + "/teardown"
 	assignments = append(assignments, schema.PrincipalAssignment{
 		Localpart: teardownLocalpart,
@@ -365,9 +371,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		Labels:    map[string]string{"role": "teardown"},
 		Payload: map[string]any{
 			"pipeline_ref":   "bureau/pipeline:dev-workspace-deinit",
-			"PROJECT":        params["repository"],
 			"WORKSPACE_ROOM": workspaceRoomAlias,
-			"MACHINE":        machine,
 		},
 		StartCondition: &schema.StartCondition{
 			EventType:    schema.EventTypeWorkspace,

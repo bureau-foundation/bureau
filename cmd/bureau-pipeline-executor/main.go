@@ -20,6 +20,7 @@ import (
 const (
 	defaultProxySocket = "/run/bureau/proxy.sock"
 	defaultPayloadPath = "/run/bureau/payload.json"
+	defaultTriggerPath = "/run/bureau/trigger.json"
 	eventTypePipeline  = "m.bureau.pipeline"
 )
 
@@ -83,13 +84,37 @@ func run() error {
 		return fmt.Errorf("pipeline %q has validation errors:\n  %s", name, strings.Join(issues, "\n  "))
 	}
 
-	// Load payload variables and resolve.
+	// Load trigger variables (from the event that satisfied the principal's
+	// StartCondition). These are prefixed with EVENT_ to avoid collisions
+	// with payload variables. Trigger variables have lower priority than
+	// payload variables: payload is explicit per-principal config, trigger
+	// is ambient context from the launching event.
+	triggerPath := os.Getenv("BUREAU_TRIGGER_PATH")
+	if triggerPath == "" {
+		triggerPath = defaultTriggerPath
+	}
+	triggerVariables, err := loadTriggerVariables(triggerPath)
+	if err != nil {
+		return fmt.Errorf("loading trigger variables: %w", err)
+	}
+
+	// Load payload variables.
 	payloadVariables, err := loadPayloadVariables(payloadPath)
 	if err != nil {
 		return fmt.Errorf("loading payload variables: %w", err)
 	}
 
-	variables, err := pipeline.ResolveVariables(content.Variables, payloadVariables, os.Getenv)
+	// Merge: trigger first (lower priority), then payload on top.
+	// ResolveVariables applies: declarations < mergedVariables < environment.
+	mergedVariables := make(map[string]string, len(triggerVariables)+len(payloadVariables))
+	for key, value := range triggerVariables {
+		mergedVariables[key] = value
+	}
+	for key, value := range payloadVariables {
+		mergedVariables[key] = value
+	}
+
+	variables, err := pipeline.ResolveVariables(content.Variables, mergedVariables, os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -333,6 +358,61 @@ func loadPayloadVariables(payloadPath string) (map[string]string, error) {
 				return nil, fmt.Errorf("payload key %q: %w", key, err)
 			}
 			variables[key] = string(encoded)
+		}
+	}
+
+	return variables, nil
+}
+
+// loadTriggerVariables reads the trigger JSON file (the content of the state
+// event that satisfied the principal's StartCondition) and converts its
+// top-level values to a string map with keys prefixed by "EVENT_". This
+// enables pipelines to reference trigger event fields via ${EVENT_status},
+// ${EVENT_teardown_mode}, ${EVENT_machine}, etc.
+//
+// Value conversion follows the same rules as loadPayloadVariables:
+//   - string → pass through
+//   - number → format without trailing zeros
+//   - bool → "true" or "false"
+//   - object/array → JSON-stringify
+//   - null → skip
+//
+// Returns an empty map (not an error) if the trigger file does not exist.
+// Principals without a StartCondition have no trigger.json.
+func loadTriggerVariables(triggerPath string) (map[string]string, error) {
+	data, err := os.ReadFile(triggerPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", triggerPath, err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", triggerPath, err)
+	}
+
+	variables := make(map[string]string, len(raw))
+	for key, value := range raw {
+		variableName := "EVENT_" + key
+
+		switch typed := value.(type) {
+		case string:
+			variables[variableName] = typed
+		case float64:
+			variables[variableName] = strconv.FormatFloat(typed, 'f', -1, 64)
+		case bool:
+			variables[variableName] = strconv.FormatBool(typed)
+		case nil:
+			// Skip null values.
+		default:
+			// Objects and arrays: JSON-stringify.
+			encoded, err := json.Marshal(typed)
+			if err != nil {
+				return nil, fmt.Errorf("trigger key %q: %w", key, err)
+			}
+			variables[variableName] = string(encoded)
 		}
 	}
 

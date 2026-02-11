@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,8 +17,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
-
-	"net/http/httptest"
 )
 
 // TestReconcile_StartConditionMet verifies that a principal with a
@@ -625,6 +625,258 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	}
 	if !daemon.running["sysadmin/test"] {
 		t.Error("unconditioned principal should still be running")
+	}
+}
+
+// TestReconcile_TriggerContentPassedToLauncher verifies that when a
+// StartCondition-gated principal launches, the create-sandbox IPC request
+// includes the full content of the matched state event as TriggerContent.
+// This is the foundation of event-driven parameter passing: the teardown
+// pipeline reads ${EVENT_teardown_mode} from trigger.json, which comes
+// from the workspace state event that satisfied its StartCondition.
+func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID    = "!config:test.local"
+		templateRoomID  = "!template:test.local"
+		workspaceRoomID = "!workspace:test.local"
+		serverName      = "test.local"
+		machineName     = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Set up a workspace event with status "teardown" and a teardown_mode field.
+	// This is the event whose content should flow through as trigger content.
+	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:       "teardown",
+		TeardownMode: "archive",
+		Project:      "iree",
+		Machine:      "machine/test",
+		UpdatedAt:    "2026-02-10T03:00:00Z",
+	})
+
+	// Configure a teardown principal gated on "teardown".
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/inference/teardown",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "teardown"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/inference/teardown", schema.Credentials{
+		Ciphertext: "encrypted-teardown-credentials",
+	})
+
+	// Use a custom mock launcher that captures TriggerContent from the IPC request.
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var capturedTriggerContent json.RawMessage
+	var triggerMu sync.Mutex
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		triggerMu.Lock()
+		defer triggerMu.Unlock()
+		if request.Action == "create-sandbox" {
+			capturedTriggerContent = request.TriggerContent
+		}
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
+		session:             session,
+		machineName:         machineName,
+		serverName:          serverName,
+		configRoomID:        configRoomID,
+		launcherSocket:      launcherSocket,
+		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
+		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		daemon.stopAllHealthMonitors()
+		daemon.stopAllLayoutWatchers()
+	})
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	if !daemon.running["iree/amdgpu/inference/teardown"] {
+		t.Fatal("teardown principal should be running")
+	}
+
+	// Verify the trigger content was passed through.
+	triggerMu.Lock()
+	defer triggerMu.Unlock()
+
+	if capturedTriggerContent == nil {
+		t.Fatal("TriggerContent should be non-nil for a StartCondition-gated principal")
+	}
+
+	// Parse the trigger content and verify it contains the workspace state fields.
+	var triggerMap map[string]any
+	if err := json.Unmarshal(capturedTriggerContent, &triggerMap); err != nil {
+		t.Fatalf("parsing TriggerContent: %v", err)
+	}
+	if triggerMap["status"] != "teardown" {
+		t.Errorf("trigger status = %v, want %q", triggerMap["status"], "teardown")
+	}
+	if triggerMap["teardown_mode"] != "archive" {
+		t.Errorf("trigger teardown_mode = %v, want %q", triggerMap["teardown_mode"], "archive")
+	}
+	if triggerMap["project"] != "iree" {
+		t.Errorf("trigger project = %v, want %q", triggerMap["project"], "iree")
+	}
+	if triggerMap["machine"] != "machine/test" {
+		t.Errorf("trigger machine = %v, want %q", triggerMap["machine"], "machine/test")
+	}
+}
+
+// TestReconcile_NoTriggerContentForUnconditionedPrincipal verifies that
+// principals without a StartCondition have nil TriggerContent in the IPC
+// request. Only event-triggered principals get trigger content.
+func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/always",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/always", schema.Credentials{
+		Ciphertext: "encrypted-always-credentials",
+	})
+
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var capturedTriggerContent json.RawMessage
+	var triggerMu sync.Mutex
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		triggerMu.Lock()
+		defer triggerMu.Unlock()
+		if request.Action == "create-sandbox" {
+			capturedTriggerContent = request.TriggerContent
+		}
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
+		session:             session,
+		machineName:         machineName,
+		serverName:          serverName,
+		configRoomID:        configRoomID,
+		launcherSocket:      launcherSocket,
+		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
+		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		daemon.stopAllHealthMonitors()
+		daemon.stopAllLayoutWatchers()
+	})
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	if !daemon.running["agent/always"] {
+		t.Fatal("principal should be running")
+	}
+
+	triggerMu.Lock()
+	defer triggerMu.Unlock()
+
+	if capturedTriggerContent != nil {
+		t.Errorf("TriggerContent should be nil for unconditioned principal, got %s", string(capturedTriggerContent))
 	}
 }
 

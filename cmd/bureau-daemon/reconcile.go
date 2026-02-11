@@ -55,14 +55,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// changes from "active" to "teardown", agents gated on "active"
 	// stop, and a teardown principal gated on "teardown" starts.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
+	triggerContents := make(map[string]json.RawMessage)
 	for _, assignment := range config.Principals {
 		if !assignment.AutoStart {
 			continue
 		}
-		if !d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition) {
+		satisfied, triggerContent := d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition)
+		if !satisfied {
 			continue
 		}
 		desired[assignment.Localpart] = assignment
+		if triggerContent != nil {
+			triggerContents[assignment.Localpart] = triggerContent
+		}
 	}
 
 	// Check for credential rotation on running principals. When the
@@ -274,6 +279,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			EncryptedCredentials: credentials.Ciphertext,
 			MatrixPolicy:         assignment.MatrixPolicy,
 			SandboxSpec:          sandboxSpec,
+			TriggerContent:       triggerContents[localpart],
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
@@ -520,16 +526,22 @@ func structurallyChanged(old, new *schema.SandboxSpec) bool {
 }
 
 // evaluateStartCondition checks whether a principal's StartCondition is
-// satisfied. Returns true if the principal should proceed with launch, false
-// if it should be deferred. When StartCondition is nil, always returns true.
+// satisfied. Returns (true, eventContent) when the condition is met, or
+// (false, nil) when it is not. When StartCondition is nil, returns (true, nil).
+//
+// The returned json.RawMessage is the full content of the matched state event.
+// The reconcile loop passes it through to the launcher as trigger content, which
+// writes it to /run/bureau/trigger.json inside the sandbox. This enables
+// event-triggered principals to read parameters from the event that launched
+// them (e.g., a workspace teardown event carrying the teardown mode).
 //
 // The condition references a state event in a specific room. When RoomAlias is
 // set, the daemon resolves it to a room ID. When empty, the daemon checks the
 // principal's own config room (where MachineConfig lives). If the state event
 // exists, the condition is met. If it's M_NOT_FOUND, the principal is deferred.
-func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) bool {
+func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) (bool, json.RawMessage) {
 	if condition == nil {
-		return true
+		return true, nil
 	}
 
 	// Determine which room to check. When RoomAlias is empty, check the
@@ -543,14 +555,14 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"principal", localpart,
 					"room_alias", condition.RoomAlias,
 				)
-				return false
+				return false, nil
 			}
 			d.logger.Error("resolving start condition room alias",
 				"principal", localpart,
 				"room_alias", condition.RoomAlias,
 				"error", err,
 			)
-			return false
+			return false, nil
 		}
 		roomID = resolved
 	}
@@ -564,7 +576,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 				"state_key", condition.StateKey,
 				"room_id", roomID,
 			)
-			return false
+			return false, nil
 		}
 		d.logger.Error("checking start condition",
 			"principal", localpart,
@@ -573,7 +585,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 			"room_id", roomID,
 			"error", err,
 		)
-		return false
+		return false, nil
 	}
 
 	// Event exists. If ContentMatch is specified, verify all key-value
@@ -587,7 +599,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 				"room_id", roomID,
 				"error", err,
 			)
-			return false
+			return false, nil
 		}
 		for matchKey, matchValue := range condition.ContentMatch {
 			actual, exists := contentMap[matchKey]
@@ -599,7 +611,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"key", matchKey,
 					"expected", matchValue,
 				)
-				return false
+				return false, nil
 			}
 			actualString, ok := actual.(string)
 			if !ok || actualString != matchValue {
@@ -611,12 +623,12 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"expected", matchValue,
 					"actual", actual,
 				)
-				return false
+				return false, nil
 			}
 		}
 	}
 
-	return true
+	return true, content
 }
 
 // readMachineConfig reads the MachineConfig state event from the config room.
@@ -668,6 +680,17 @@ type launcherIPCRequest struct {
 	// launcher atomically rewrites the payload file that is bind-mounted
 	// into the sandbox at /run/bureau/payload.json.
 	Payload map[string]any `json:"payload,omitempty"`
+
+	// TriggerContent is the raw JSON content of the state event that
+	// satisfied the principal's StartCondition. Passed through as-is to
+	// the launcher, which writes it to /run/bureau/trigger.json inside
+	// the sandbox. This enables event-triggered principals to read
+	// context from the event that caused their launch (e.g., workspace
+	// teardown mode, webhook payload, CI trigger metadata).
+	//
+	// nil when the principal has no StartCondition or when the condition
+	// has no associated event content (room-existence-only checks).
+	TriggerContent json.RawMessage `json:"trigger_content,omitempty"`
 
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path and switches its proxy

@@ -730,6 +730,16 @@ type IPCRequest struct {
 	// into the sandbox at /run/bureau/payload.json.
 	Payload map[string]any `json:"payload,omitempty"`
 
+	// TriggerContent is the raw JSON content of the state event that
+	// satisfied the principal's StartCondition. Written to
+	// /run/bureau/trigger.json inside the sandbox as a read-only bind
+	// mount. Enables event-triggered principals to read context from
+	// the event that caused their launch.
+	//
+	// nil when the principal has no StartCondition or when the condition
+	// has no associated event content.
+	TriggerContent json.RawMessage `json:"trigger_content,omitempty"`
+
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path exists and is executable,
 	// then switches to it for future sandbox creation. Existing proxy
@@ -911,7 +921,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	// shell.
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
-		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec)
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent)
 		if setupErr != nil {
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)
@@ -1140,11 +1150,13 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 // the bwrap sandbox. Returns the command to pass to tmux new-session (the
 // script path). The bwrap arguments are built from the SandboxSpec's profile
 // conversion, and a payload file is written if the spec includes a Payload.
+// When triggerContent is non-nil, it is written to trigger.json and bind-mounted
+// read-only at /run/bureau/trigger.json inside the sandbox.
 //
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent json.RawMessage) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -1184,6 +1196,22 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
 			Source: payloadPath,
 			Dest:   "/run/bureau/payload.json",
+			Mode:   sandbox.MountModeRO,
+		})
+	}
+
+	// Handle trigger content: when a StartCondition was satisfied, the
+	// daemon passes the matched event's content as raw JSON. Write it to
+	// trigger.json and bind-mount it read-only at /run/bureau/trigger.json.
+	// The pipeline executor reads this to provide EVENT_* variables.
+	if len(triggerContent) > 0 {
+		triggerPath, err := writeTriggerFile(sb.configDir, triggerContent)
+		if err != nil {
+			return nil, fmt.Errorf("writing trigger: %w", err)
+		}
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: triggerPath,
+			Dest:   "/run/bureau/trigger.json",
 			Mode:   sandbox.MountModeRO,
 		})
 	}

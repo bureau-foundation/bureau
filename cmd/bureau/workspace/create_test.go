@@ -45,19 +45,22 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 		t.Errorf("teardown role label = %q, want %q", teardown.Labels["role"], "teardown")
 	}
 
-	// Verify the payload contains the expected fields.
+	// Verify the payload contains only static per-principal config.
+	// Dynamic context (machine, project, teardown mode) comes from the
+	// trigger event, not the payload.
 	if teardown.Payload == nil {
 		t.Fatal("teardown Payload is nil")
 	}
 	if teardown.Payload["pipeline_ref"] != "bureau/pipeline:dev-workspace-deinit" {
 		t.Errorf("teardown pipeline_ref = %v, want %q", teardown.Payload["pipeline_ref"], "bureau/pipeline:dev-workspace-deinit")
 	}
-	if teardown.Payload["MACHINE"] != "machine/workstation" {
-		t.Errorf("teardown MACHINE = %v, want %q", teardown.Payload["MACHINE"], "machine/workstation")
-	}
 	workspaceRoom, ok := teardown.Payload["WORKSPACE_ROOM"].(string)
 	if !ok || workspaceRoom != "#iree/amdgpu/inference:bureau.local" {
 		t.Errorf("teardown WORKSPACE_ROOM = %v, want %q", teardown.Payload["WORKSPACE_ROOM"], "#iree/amdgpu/inference:bureau.local")
+	}
+	if len(teardown.Payload) != 2 {
+		t.Errorf("teardown payload should have exactly 2 keys (pipeline_ref, WORKSPACE_ROOM), got %d: %v",
+			len(teardown.Payload), teardown.Payload)
 	}
 }
 

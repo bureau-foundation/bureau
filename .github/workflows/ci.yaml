@@ -33,6 +33,7 @@ jobs:
       - name: Configure Nix binary cache
         run: |
           sudo tee -a /etc/nix/nix.conf <<EOF
+          accept-flake-config = true
           extra-substituters = https://cache.infra.bureau.foundation
           extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
           EOF
@@ -103,6 +104,7 @@ jobs:
       - name: Configure Nix binary cache
         run: |
           sudo tee -a /etc/nix/nix.conf <<EOF
+          accept-flake-config = true
           extra-substituters = https://cache.infra.bureau.foundation
           extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
           EOF
@@ -146,8 +148,13 @@ jobs:
 
           CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
 
+          # nix develop doesn't realize the mkShell derivation output —
+          # it only fetches the shell's dependencies. Build explicitly
+          # so the output path exists in the store before signing.
+          nix build --no-link .#devShells.x86_64-linux.default
+
           # Sign and push the dev shell closure (the expensive part:
-          # includes our custom Go 1.25.6 and all dev tools).
+          # includes our custom Go and all dev tools).
           nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
           nix copy --to "$CACHE" .#devShells.x86_64-linux.default
 

@@ -1,0 +1,74 @@
+{
+  // Clone a repository and prepare a project workspace. This is the
+  // primary system pipeline: triggered by "bureau workspace create"
+  // and run by a one-shot setup principal.
+  //
+  // A workspace is a container for worktrees: a bare git clone plus
+  // shared project-level state. Worktrees are created separately via
+  // the dev-worktree-init pipeline.
+  //
+  // Execution order:
+  //   - Create the project directory under /workspace
+  //   - Clone the repository as a bare repo (.bare/)
+  //   - Run the project-level init script if the repository provides one
+  //   - Publish m.bureau.workspace.ready to signal completion
+  //
+  // Project-specific init scripts live in .bureau/pipeline/ within the
+  // repository. They are optional — if absent, the pipeline continues
+  // without them.
+
+  "description": "Clone repository and prepare project workspace",
+
+  "variables": {
+    "REPOSITORY": {
+      "description": "Git clone URL (HTTPS or SSH)",
+      "required": true
+    },
+    "PROJECT": {
+      "description": "Project name, used as the directory name under /workspace",
+      "required": true
+    },
+    "WORKSPACE_ROOM_ID": {
+      "description": "Matrix room ID for the workspace (for status events and logging)",
+      "required": true
+    }
+  },
+
+  "steps": [
+    {
+      "name": "create-project-directory",
+      "run": "mkdir -p /workspace/${PROJECT}"
+    },
+    {
+      "name": "clone-repository",
+      "run": "if [ ! -d /workspace/${PROJECT}/.bare ]; then\n  git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare\nfi",
+      "check": "test -d /workspace/${PROJECT}/.bare/objects",
+      "timeout": "10m"
+    },
+    {
+      // Run the project-level init script from the repository if it exists.
+      // Since this is a bare clone, extract the script via git-show before
+      // running it. The guard uses git-cat-file to check existence without
+      // extracting.
+      "name": "run-project-init",
+      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/init 2>/dev/null",
+      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/init > /tmp/bureau-project-init && chmod +x /tmp/bureau-project-init && /tmp/bureau-project-init",
+      "optional": true,
+      "timeout": "10m"
+    },
+    {
+      "name": "publish-ready",
+      "publish": {
+        "event_type": "m.bureau.workspace.ready",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "content": {
+          "project": "${PROJECT}"
+        }
+      }
+    }
+  ],
+
+  "log": {
+    "room": "${WORKSPACE_ROOM_ID}"
+  }
+}

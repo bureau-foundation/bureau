@@ -104,6 +104,118 @@ func TestPrefetchEnvironment_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestPrefetchBureauVersion_AllPaths(t *testing.T) {
+	t.Parallel()
+
+	// All three store paths exist on disk, so no actual prefetch should
+	// be needed (os.Stat fast path).
+	daemonDir := t.TempDir()
+	launcherDir := t.TempDir()
+	proxyDir := t.TempDir()
+
+	called := false
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			called = true
+			return fmt.Errorf("should not be called for existing paths")
+		},
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath:   daemonDir,
+		LauncherStorePath: launcherDir,
+		ProxyStorePath:    proxyDir,
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("prefetchFunc should not be called when all paths exist")
+	}
+}
+
+func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
+	t.Parallel()
+
+	// Only DaemonStorePath is set; others are empty and should be skipped.
+	existingDir := t.TempDir()
+
+	var prefetchedPaths []string
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			prefetchedPaths = append(prefetchedPaths, storePath)
+			return nil
+		},
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: existingDir,
+		// LauncherStorePath and ProxyStorePath intentionally empty.
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prefetchedPaths) != 0 {
+		t.Errorf("expected no prefetchFunc calls (path exists), got calls for %v", prefetchedPaths)
+	}
+}
+
+func TestPrefetchBureauVersion_PrefetchFailure(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			return fmt.Errorf("substituter unavailable")
+		},
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: "/nix/store/nonexistent-daemon-binary",
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err == nil {
+		t.Fatal("expected error when prefetchFunc fails")
+	}
+	if !strings.Contains(err.Error(), "daemon") || !strings.Contains(err.Error(), "substituter unavailable") {
+		t.Errorf("error = %v, want error mentioning daemon and substituter unavailable", err)
+	}
+}
+
+func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
+	t.Parallel()
+
+	var fetchedPaths []string
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			fetchedPaths = append(fetchedPaths, storePath)
+			return nil
+		},
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath:   "/nix/store/nonexistent-daemon",
+		LauncherStorePath: "/nix/store/nonexistent-launcher",
+		ProxyStorePath:    "/nix/store/nonexistent-proxy",
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fetchedPaths) != 3 {
+		t.Errorf("expected 3 prefetch calls, got %d: %v", len(fetchedPaths), fetchedPaths)
+	}
+}
+
 func TestFindNixStore(t *testing.T) {
 	t.Parallel()
 

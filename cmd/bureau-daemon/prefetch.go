@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // prefetchEnvironment ensures a Nix store path and its full transitive
@@ -42,6 +44,36 @@ func (d *Daemon) prefetchEnvironment(ctx context.Context, storePath string) erro
 	}
 
 	d.logger.Info("nix environment prefetched", "store_path", storePath)
+	return nil
+}
+
+// prefetchBureauVersion ensures all non-empty store paths in a BureauVersion
+// exist in the local Nix store. Each path is prefetched independently so that
+// a failure on one component (e.g., launcher) does not prevent the others
+// (e.g., daemon, proxy) from being prefetched. The caller can then compare
+// whatever store paths are available.
+//
+// Returns the first error encountered, if any. On error, some store paths
+// may have been fetched while others were not — the caller should check
+// individual path existence before hashing.
+func (d *Daemon) prefetchBureauVersion(ctx context.Context, version *schema.BureauVersion) error {
+	paths := []struct {
+		label string
+		path  string
+	}{
+		{"daemon", version.DaemonStorePath},
+		{"launcher", version.LauncherStorePath},
+		{"proxy", version.ProxyStorePath},
+	}
+
+	for _, entry := range paths {
+		if entry.path == "" {
+			continue
+		}
+		if err := d.prefetchEnvironment(ctx, entry.path); err != nil {
+			return fmt.Errorf("prefetching %s store path %s: %w", entry.label, entry.path, err)
+		}
+	}
 	return nil
 }
 

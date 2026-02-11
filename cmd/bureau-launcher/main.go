@@ -490,7 +490,8 @@ func (l *Launcher) serve(ctx context.Context, listener net.Listener) {
 
 // IPCRequest is the JSON structure of a request from the daemon.
 type IPCRequest struct {
-	// Action is the request type: "create-sandbox", "destroy-sandbox", "status".
+	// Action is the request type: "create-sandbox", "destroy-sandbox",
+	// "update-payload", "update-proxy-binary", or "status".
 	Action string `json:"action"`
 
 	// Principal is the localpart of the principal to operate on (for
@@ -517,6 +518,12 @@ type IPCRequest struct {
 	// launcher atomically rewrites the payload file that is bind-mounted
 	// into the sandbox at /run/bureau/payload.json.
 	Payload map[string]any `json:"payload,omitempty"`
+
+	// BinaryPath is a filesystem path used by the "update-proxy-binary"
+	// action. The launcher validates the path exists and is executable,
+	// then switches to it for future sandbox creation. Existing proxy
+	// processes continue running their current binary.
+	BinaryPath string `json:"binary_path,omitempty"`
 }
 
 // IPCResponse is the JSON structure of a response to the daemon.
@@ -578,6 +585,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	case "update-payload":
 		response = l.handleUpdatePayload(ctx, &request)
+
+	case "update-proxy-binary":
+		response = l.handleUpdateProxyBinary(ctx, &request)
 
 	default:
 		response = IPCResponse{OK: false, Error: fmt.Sprintf("unknown action: %q", request.Action)}
@@ -766,6 +776,38 @@ func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest)
 	l.logger.Info("payload updated",
 		"principal", request.Principal,
 		"path", payloadPath,
+	)
+
+	return IPCResponse{OK: true}
+}
+
+// handleUpdateProxyBinary validates and applies a new proxy binary path. The
+// daemon sends this when BureauVersion.ProxyStorePath changes. The launcher
+// validates that the new path exists and is a regular file, then switches to
+// it for future sandbox creation. Existing proxy processes are unaffected —
+// they continue running their current binary until their sandbox is recycled.
+func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequest) IPCResponse {
+	if request.BinaryPath == "" {
+		return IPCResponse{OK: false, Error: "binary_path is required for update-proxy-binary"}
+	}
+
+	info, err := os.Stat(request.BinaryPath)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("proxy binary path %q: %v", request.BinaryPath, err)}
+	}
+	if !info.Mode().IsRegular() {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("proxy binary path %q is not a regular file", request.BinaryPath)}
+	}
+	if info.Mode()&0111 == 0 {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("proxy binary path %q is not executable", request.BinaryPath)}
+	}
+
+	previousPath := l.proxyBinaryPath
+	l.proxyBinaryPath = request.BinaryPath
+
+	l.logger.Info("proxy binary path updated",
+		"previous", previousPath,
+		"new", request.BinaryPath,
 	)
 
 	return IPCResponse{OK: true}

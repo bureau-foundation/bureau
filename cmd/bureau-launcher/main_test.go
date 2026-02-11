@@ -1662,3 +1662,145 @@ func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 		t.Error("tmux session should exist after recreate")
 	}
 }
+
+func TestHandleUpdateProxyBinary_Validation(t *testing.T) {
+	launcher := &Launcher{
+		proxyBinaryPath: "/original/path",
+		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	t.Run("missing binary path", func(t *testing.T) {
+		response := launcher.handleUpdateProxyBinary(context.Background(), &IPCRequest{
+			Action: "update-proxy-binary",
+		})
+		if response.OK {
+			t.Error("expected error for missing binary_path")
+		}
+		if !strings.Contains(response.Error, "binary_path is required") {
+			t.Errorf("error = %q, want substring 'binary_path is required'", response.Error)
+		}
+		if launcher.proxyBinaryPath != "/original/path" {
+			t.Errorf("proxyBinaryPath changed to %q on error", launcher.proxyBinaryPath)
+		}
+	})
+
+	t.Run("nonexistent path", func(t *testing.T) {
+		response := launcher.handleUpdateProxyBinary(context.Background(), &IPCRequest{
+			Action:     "update-proxy-binary",
+			BinaryPath: "/nonexistent/binary",
+		})
+		if response.OK {
+			t.Error("expected error for nonexistent path")
+		}
+		if launcher.proxyBinaryPath != "/original/path" {
+			t.Errorf("proxyBinaryPath changed to %q on error", launcher.proxyBinaryPath)
+		}
+	})
+
+	t.Run("directory instead of file", func(t *testing.T) {
+		dirPath := t.TempDir()
+		response := launcher.handleUpdateProxyBinary(context.Background(), &IPCRequest{
+			Action:     "update-proxy-binary",
+			BinaryPath: dirPath,
+		})
+		if response.OK {
+			t.Error("expected error for directory path")
+		}
+		if !strings.Contains(response.Error, "not a regular file") {
+			t.Errorf("error = %q, want substring 'not a regular file'", response.Error)
+		}
+	})
+
+	t.Run("non-executable file", func(t *testing.T) {
+		nonExecPath := filepath.Join(t.TempDir(), "not-executable")
+		if err := os.WriteFile(nonExecPath, []byte("#!/bin/sh\n"), 0644); err != nil {
+			t.Fatalf("writing test file: %v", err)
+		}
+		response := launcher.handleUpdateProxyBinary(context.Background(), &IPCRequest{
+			Action:     "update-proxy-binary",
+			BinaryPath: nonExecPath,
+		})
+		if response.OK {
+			t.Error("expected error for non-executable file")
+		}
+		if !strings.Contains(response.Error, "not executable") {
+			t.Errorf("error = %q, want substring 'not executable'", response.Error)
+		}
+	})
+
+	t.Run("valid executable", func(t *testing.T) {
+		execPath := filepath.Join(t.TempDir(), "proxy-binary")
+		if err := os.WriteFile(execPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatalf("writing test file: %v", err)
+		}
+		response := launcher.handleUpdateProxyBinary(context.Background(), &IPCRequest{
+			Action:     "update-proxy-binary",
+			BinaryPath: execPath,
+		})
+		if !response.OK {
+			t.Fatalf("handleUpdateProxyBinary failed: %s", response.Error)
+		}
+		if launcher.proxyBinaryPath != execPath {
+			t.Errorf("proxyBinaryPath = %q, want %q", launcher.proxyBinaryPath, execPath)
+		}
+	})
+}
+
+func TestHandleUpdateProxyBinary_ViaIPC(t *testing.T) {
+	// Test that the "update-proxy-binary" action is correctly routed through
+	// the IPC connection handler, not just the direct method call.
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "launcher.sock")
+
+	execPath := filepath.Join(t.TempDir(), "new-proxy")
+	if err := os.WriteFile(execPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing test binary: %v", err)
+	}
+
+	launcher := &Launcher{
+		proxyBinaryPath: "/old/proxy",
+		sandboxes:       make(map[string]*managedSandbox),
+		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		launcher.handleConnection(context.Background(), conn)
+	}()
+
+	// Send the IPC request.
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	request := IPCRequest{
+		Action:     "update-proxy-binary",
+		BinaryPath: execPath,
+	}
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		t.Fatalf("encoding request: %v", err)
+	}
+
+	var response IPCResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	if !response.OK {
+		t.Fatalf("IPC update-proxy-binary failed: %s", response.Error)
+	}
+	if launcher.proxyBinaryPath != execPath {
+		t.Errorf("proxyBinaryPath = %q, want %q", launcher.proxyBinaryPath, execPath)
+	}
+}

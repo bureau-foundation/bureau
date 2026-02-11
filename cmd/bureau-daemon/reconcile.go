@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -32,6 +33,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// place that updates lastConfig — it's always consistent with the
 	// daemon's running state.
 	d.lastConfig = config
+
+	// Check for Bureau core binary updates before principal reconciliation.
+	// Proxy binary updates take effect immediately (for future sandbox
+	// creation). Daemon and launcher binary changes are detected and
+	// logged but the exec() self-update path is not yet implemented.
+	if config.BureauVersion != nil {
+		d.reconcileBureauVersion(ctx, config.BureauVersion)
+	}
 
 	// Determine the desired set of principals.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
@@ -206,12 +215,12 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 }
 
 // reconcileRunningPrincipal checks if a running principal's configuration has
-// changed and applies hot-reloadable updates. Currently handles:
-//   - Payload changes: rewrites the bind-mounted payload file without restart
-//
-// Structural changes (command, mounts, namespaces, resources, security,
-// environment) are logged as requiring a manual restart. Automatic restart
-// is not yet implemented to avoid disrupting running agent work.
+// changed and takes appropriate action:
+//   - Structural changes (command, mounts, namespaces, resources, security,
+//     environment): destroys the sandbox. The main reconcile loop's "create
+//     missing" pass will recreate it with the new spec on the same cycle.
+//   - Payload-only changes: hot-reloads the bind-mounted payload file
+//     without restarting the sandbox.
 func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
 	// Can only detect changes for principals created from templates.
 	if assignment.Template == "" {
@@ -240,20 +249,51 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		return
 	}
 
-	// Check if only the payload changed while the structural config
-	// (everything that affects the sandbox environment) is unchanged.
-	if payloadChanged(oldSpec, newSpec) {
-		if structurallyChanged(oldSpec, newSpec) {
-			d.logger.Warn("sandbox configuration changed for running principal (restart required)",
-				"principal", localpart,
-				"template", assignment.Template,
-			)
-			// Store the new spec so we don't warn on every reconcile.
-			d.lastSpecs[localpart] = newSpec
+	// Structural changes take precedence: destroy the sandbox and let the
+	// "create missing" pass in reconcile() rebuild it with the new spec.
+	// This handles changes to command, mounts, namespaces, resources,
+	// security, environment variables, etc. — anything that requires a
+	// new bwrap invocation.
+	if structurallyChanged(oldSpec, newSpec) {
+		d.logger.Info("structural change detected, restarting sandbox",
+			"principal", localpart,
+			"template", assignment.Template,
+		)
+
+		d.stopLayoutWatcher(localpart)
+
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:    "destroy-sandbox",
+			Principal: localpart,
+		})
+		if err != nil {
+			d.logger.Error("destroy-sandbox IPC failed during structural restart",
+				"principal", localpart, "error", err)
+			return
+		}
+		if !response.OK {
+			d.logger.Error("destroy-sandbox rejected during structural restart",
+				"principal", localpart, "error", response.Error)
 			return
 		}
 
-		// Payload-only change: hot-reload by rewriting the payload file.
+		delete(d.running, localpart)
+		delete(d.lastSpecs, localpart)
+		d.lastActivityAt = time.Now()
+		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
+			"principal", localpart)
+
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("Restarting %s: sandbox configuration changed (template %s)",
+				localpart, assignment.Template),
+		))
+		return
+	}
+
+	// Payload-only change: hot-reload by rewriting the payload file.
+	// The agent process sees the update via the bind-mounted file at
+	// /run/bureau/payload.json (inotify or periodic poll).
+	if payloadChanged(oldSpec, newSpec) {
 		d.logger.Info("payload changed for running principal, hot-reloading",
 			"principal", localpart,
 		)
@@ -416,6 +456,11 @@ type launcherIPCRequest struct {
 	// launcher atomically rewrites the payload file that is bind-mounted
 	// into the sandbox at /run/bureau/payload.json.
 	Payload map[string]any `json:"payload,omitempty"`
+
+	// BinaryPath is a filesystem path used by the "update-proxy-binary"
+	// action. The launcher validates the path and switches its proxy
+	// binary for future sandbox creation.
+	BinaryPath string `json:"binary_path,omitempty"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.
@@ -425,6 +470,126 @@ type launcherIPCResponse struct {
 	ProxyPID        int    `json:"proxy_pid,omitempty"`
 	BinaryHash      string `json:"binary_hash,omitempty"`
 	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
+}
+
+// queryLauncherStatus sends a "status" IPC request to the launcher and
+// returns the launcher's binary hash and the proxy binary path it is currently
+// using for new sandbox creation. These values are needed by
+// CompareBureauVersion to determine whether launcher or proxy updates are
+// required.
+func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, proxyBinaryPath string, err error) {
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action: "status",
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("launcher status IPC: %w", err)
+	}
+	if !response.OK {
+		return "", "", fmt.Errorf("launcher status rejected: %s", response.Error)
+	}
+	return response.BinaryHash, response.ProxyBinaryPath, nil
+}
+
+// reconcileBureauVersion compares the desired BureauVersion from MachineConfig
+// against the currently running binaries and takes action on any differences.
+//
+// Proxy binary changes are applied immediately by telling the launcher to use
+// the new binary path for future sandbox creation. Daemon and launcher binary
+// changes are detected and logged but not yet acted upon — the exec()
+// self-update flow is a separate capability.
+func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.BureauVersion) {
+	// Prefetch all store paths so they're available locally for hashing.
+	if err := d.prefetchBureauVersion(ctx, desired); err != nil {
+		d.logger.Error("prefetching bureau version store paths", "error", err)
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("Failed to prefetch BureauVersion store paths: %v (will retry on next reconcile cycle)", err),
+		))
+		return
+	}
+
+	// Query the launcher for its current binary hash and proxy binary path.
+	launcherHash, proxyBinaryPath, err := d.queryLauncherStatus(ctx)
+	if err != nil {
+		d.logger.Error("querying launcher status for version comparison", "error", err)
+		return
+	}
+
+	// Compare desired versions against running versions.
+	diff, err := CompareBureauVersion(desired, d.daemonBinaryHash, launcherHash, proxyBinaryPath)
+	if err != nil {
+		d.logger.Error("comparing bureau versions", "error", err)
+		return
+	}
+	if diff == nil || !diff.NeedsUpdate() {
+		return
+	}
+
+	d.logger.Info("bureau version changes detected",
+		"daemon_changed", diff.DaemonChanged,
+		"launcher_changed", diff.LauncherChanged,
+		"proxy_changed", diff.ProxyChanged,
+	)
+
+	// Handle proxy binary update: tell the launcher to use the new binary
+	// for future sandbox creation. Existing proxies continue running their
+	// current binary until their sandbox is recycled.
+	if diff.ProxyChanged {
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:     "update-proxy-binary",
+			BinaryPath: desired.ProxyStorePath,
+		})
+		if err != nil {
+			d.logger.Error("update-proxy-binary IPC failed", "error", err)
+		} else if !response.OK {
+			d.logger.Error("update-proxy-binary rejected", "error", response.Error)
+		} else {
+			d.logger.Info("proxy binary updated on launcher",
+				"new_path", desired.ProxyStorePath)
+		}
+	}
+
+	// Daemon and launcher exec() updates are detected but deferred.
+	// The self-update flow (watchdog + exec + recovery) is a separate
+	// capability — for now, log the change so operators can see it.
+	if diff.DaemonChanged {
+		d.logger.Warn("daemon binary update available (exec not yet implemented)",
+			"desired_store_path", desired.DaemonStorePath,
+		)
+	}
+	if diff.LauncherChanged {
+		d.logger.Warn("launcher binary update available (exec not yet implemented)",
+			"desired_store_path", desired.LauncherStorePath,
+		)
+	}
+
+	// Report the version comparison result to the config room.
+	var summary string
+	switch {
+	case diff.DaemonChanged && diff.LauncherChanged && diff.ProxyChanged:
+		summary = "BureauVersion: all three binaries changed (daemon, launcher, proxy). Proxy updated; daemon and launcher exec() pending."
+	case diff.ProxyChanged && (diff.DaemonChanged || diff.LauncherChanged):
+		summary = "BureauVersion: proxy binary updated."
+		if diff.DaemonChanged {
+			summary += " Daemon update detected (exec() pending)."
+		}
+		if diff.LauncherChanged {
+			summary += " Launcher update detected (exec() pending)."
+		}
+	case diff.ProxyChanged:
+		summary = "BureauVersion: proxy binary updated for future sandbox creation."
+	default:
+		// Only daemon/launcher changed, no proxy.
+		parts := []string{}
+		if diff.DaemonChanged {
+			parts = append(parts, "daemon")
+		}
+		if diff.LauncherChanged {
+			parts = append(parts, "launcher")
+		}
+		summary = fmt.Sprintf("BureauVersion: %s update detected (exec() pending).",
+			strings.Join(parts, " and "))
+	}
+	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(summary))
 }
 
 // launcherRequest sends a request to the launcher and reads the response.

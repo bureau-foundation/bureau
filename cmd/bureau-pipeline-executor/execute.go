@@ -146,6 +146,13 @@ func runShellCommand(ctx context.Context, command string, env map[string]string)
 
 	// Put the command in its own process group. On context cancellation,
 	// kill the entire group (negative PID = all processes in the group).
+	//
+	// SIGKILL is used deliberately: sandbox steps are ephemeral by design
+	// and should not hold the pipeline hostage. SIGKILL gives no chance
+	// for graceful shutdown — a timed-out database write or state mutation
+	// will be interrupted mid-operation. Steps that perform irreversible
+	// work should set a conservative timeout that accounts for worst-case
+	// completion time rather than relying on graceful signal handling.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

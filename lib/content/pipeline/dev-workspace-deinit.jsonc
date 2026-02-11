@@ -1,0 +1,112 @@
+{
+  // Tear down a development workspace created by dev-workspace-init.
+  // Handles uncommitted work preservation, git worktree cleanup, and
+  // project directory removal.
+  //
+  // This pipeline is the inverse of dev-workspace-init. It assumes the
+  // workspace follows the dev-workspace layout: a project directory under
+  // /workspace containing a .bare/ git repository and zero or more
+  // worktrees created by dev-worktree-init.
+  //
+  // MODE controls behavior:
+  //   archive — commit dirty work to archive branches, move the project
+  //             directory to /workspace/.archive/ for later retrieval.
+  //   delete  — remove everything without preserving history.
+  //
+  // The setup principal mounts /var/bureau/workspace at /workspace
+  // (read-write, full project access).
+
+  "description": "Tear down development workspace and clean up git state",
+
+  "variables": {
+    "PROJECT": {
+      "description": "Project name (directory under /workspace)",
+      "required": true
+    },
+    "WORKSPACE_ROOM_ID": {
+      "description": "Matrix room ID for status events and logging",
+      "required": true
+    },
+    "MODE": {
+      "description": "Teardown mode: 'archive' preserves history, 'delete' removes everything",
+      "default": "archive"
+    }
+  },
+
+  "steps": [
+    {
+      "name": "validate-mode",
+      "run": "case \"${MODE}\" in archive|delete) ;; *) echo \"[deinit] invalid MODE: '${MODE}' (expected 'archive' or 'delete')\" >&2; exit 1;; esac"
+    },
+    {
+      "name": "check-project-exists",
+      "run": "test -d /workspace/${PROJECT}",
+      "check": "test -d /workspace/${PROJECT}"
+    },
+    {
+      // In archive mode, walk all git worktrees and commit any
+      // uncommitted changes to timestamped archive branches. This
+      // preserves work-in-progress in the git history before we
+      // remove the worktree directories.
+      //
+      // Skipped in delete mode (no point preserving if the repo is
+      // being removed) and when there is no .bare/ (not a git project).
+      "name": "archive-dirty-worktrees",
+      "when": "test \"${MODE}\" = archive && test -d /workspace/${PROJECT}/.bare",
+      "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nfor wt_dir in $(git -C /workspace/${PROJECT}/.bare worktree list --porcelain | grep '^worktree ' | sed 's/^worktree //'); do\n  [ \"$wt_dir\" = \"$(cd /workspace/${PROJECT}/.bare && pwd)\" ] && continue\n  if [ -n \"$(git -C \"$wt_dir\" status --porcelain 2>/dev/null)\" ]; then\n    wt_name=$(basename \"$wt_dir\")\n    branch=\"archive/${wt_name}-${timestamp}\"\n    git -C \"$wt_dir\" checkout -b \"$branch\"\n    git -C \"$wt_dir\" add -A\n    git -C \"$wt_dir\" commit -m \"Archive uncommitted work before workspace teardown\"\n    echo \"[deinit] archived ${wt_name} to ${branch}\"\n  fi\ndone",
+      "optional": true,
+      "timeout": "5m"
+    },
+    {
+      // Run the project-level deinit script from the repository if it
+      // exists. Mirrors the init pipeline's run-project-init step.
+      // Projects use this for cleanup that only the project knows about:
+      // dropping databases, deregistering services, revoking tokens, etc.
+      "name": "run-project-deinit",
+      "when": "test -d /workspace/${PROJECT}/.bare && git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/deinit 2>/dev/null",
+      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/deinit > /tmp/bureau-project-deinit && chmod +x /tmp/bureau-project-deinit && /tmp/bureau-project-deinit",
+      "optional": true,
+      "timeout": "10m"
+    },
+    {
+      // Remove all git worktrees. Uses --force because the worktrees
+      // may have uncommitted changes (already archived above in archive
+      // mode, deliberately discarded in delete mode).
+      "name": "remove-worktrees",
+      "when": "test -d /workspace/${PROJECT}/.bare",
+      "run": "git -C /workspace/${PROJECT}/.bare worktree list --porcelain | grep '^worktree ' | sed 's/^worktree //' | while read wt_dir; do\n  [ \"$wt_dir\" = \"$(cd /workspace/${PROJECT}/.bare && pwd)\" ] && continue\n  git -C /workspace/${PROJECT}/.bare worktree remove --force \"$wt_dir\" 2>/dev/null || rm -rf \"$wt_dir\"\ndone",
+      "timeout": "5m"
+    },
+    {
+      // Archive mode: move the project directory to .archive/ with a
+      // timestamp suffix. The .bare/ repository retains the full git
+      // history including any archive branches created above.
+      "name": "archive-project",
+      "when": "test \"${MODE}\" = archive",
+      "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nmkdir -p /workspace/.archive\nmv /workspace/${PROJECT} /workspace/.archive/${PROJECT}-${timestamp}",
+      "check": "test ! -d /workspace/${PROJECT}"
+    },
+    {
+      "name": "delete-project",
+      "when": "test \"${MODE}\" = delete",
+      "run": "rm -rf /workspace/${PROJECT}",
+      "check": "test ! -d /workspace/${PROJECT}"
+    },
+    {
+      "name": "publish-removed",
+      "publish": {
+        "event_type": "m.bureau.workspace.ready",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "content": {
+          "project": "${PROJECT}",
+          "status": "removed",
+          "mode": "${MODE}"
+        }
+      }
+    }
+  ],
+
+  "log": {
+    "room": "${WORKSPACE_ROOM_ID}"
+  }
+}

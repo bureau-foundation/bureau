@@ -6,7 +6,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "content",
     srcs = ["content.go"],
-    embedsrcs = ["pipeline/dev-workspace-init.jsonc"],
+    embedsrcs = [
+        "pipeline/dev-workspace-init.jsonc",
+        "pipeline/dev-workspace-deinit.jsonc",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/content",
     visibility = ["//visibility:public"],
     deps = [

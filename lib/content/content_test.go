@@ -21,22 +21,25 @@ func TestPipelines(t *testing.T) {
 		t.Fatal("expected at least one embedded pipeline")
 	}
 
-	// Verify dev-workspace-init is present and well-formed.
-	var found bool
+	// Index pipelines by name for targeted verification.
+	byName := make(map[string]Pipeline, len(pipelines))
 	for _, p := range pipelines {
-		if p.Name == "dev-workspace-init" {
-			found = true
-			verifyDevWorkspaceInit(t, p)
-			break
+		byName[p.Name] = p
+	}
+
+	// Verify both dev-workspace pipelines are present.
+	for _, name := range []string{"dev-workspace-init", "dev-workspace-deinit"} {
+		if _, exists := byName[name]; !exists {
+			names := make([]string, 0, len(pipelines))
+			for _, p := range pipelines {
+				names = append(names, p.Name)
+			}
+			t.Fatalf("%s not found in pipelines: %v", name, names)
 		}
 	}
-	if !found {
-		names := make([]string, len(pipelines))
-		for i, p := range pipelines {
-			names[i] = p.Name
-		}
-		t.Fatalf("dev-workspace-init not found in pipelines: %v", names)
-	}
+
+	verifyDevWorkspaceInit(t, byName["dev-workspace-init"])
+	verifyDevWorkspaceDeinit(t, byName["dev-workspace-deinit"])
 }
 
 func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
@@ -73,6 +76,71 @@ func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
 	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
 	if lastStep.Name != "publish-ready" {
 		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-ready")
+	}
+	if lastStep.Publish == nil {
+		t.Error("last step should be a publish step")
+	} else if lastStep.Publish.EventType != "m.bureau.workspace.ready" {
+		t.Errorf("last step publish event_type = %q", lastStep.Publish.EventType)
+	}
+
+	// Log should point to the workspace room.
+	if p.Content.Log == nil {
+		t.Error("Log should be configured")
+	} else if p.Content.Log.Room == "" {
+		t.Error("Log.Room should be set")
+	}
+
+	// SourceHash should be a valid hex-encoded SHA-256.
+	if len(p.SourceHash) != sha256.Size*2 {
+		t.Errorf("SourceHash length = %d, want %d", len(p.SourceHash), sha256.Size*2)
+	}
+	if _, err := hex.DecodeString(p.SourceHash); err != nil {
+		t.Errorf("SourceHash is not valid hex: %v", err)
+	}
+}
+
+func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
+	t.Helper()
+
+	if p.Content.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// Verify required variables.
+	requiredVariables := []string{"PROJECT", "WORKSPACE_ROOM_ID"}
+	for _, name := range requiredVariables {
+		variable, exists := p.Content.Variables[name]
+		if !exists {
+			t.Errorf("missing required variable declaration: %s", name)
+			continue
+		}
+		if !variable.Required {
+			t.Errorf("variable %s should be marked required", name)
+		}
+	}
+
+	// MODE should have a default of "archive".
+	modeVariable, exists := p.Content.Variables["MODE"]
+	if !exists {
+		t.Error("missing MODE variable declaration")
+	} else if modeVariable.Default != "archive" {
+		t.Errorf("MODE default = %q, want %q", modeVariable.Default, "archive")
+	}
+
+	// Should have enough steps for validate + check + cleanup + publish.
+	if len(p.Content.Steps) < 4 {
+		t.Fatalf("expected at least 4 steps, got %d", len(p.Content.Steps))
+	}
+
+	// First step should validate the MODE variable.
+	if p.Content.Steps[0].Name != "validate-mode" {
+		t.Errorf("first step name = %q, want %q", p.Content.Steps[0].Name, "validate-mode")
+	}
+
+	// Last step should publish removal status.
+	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
+	if lastStep.Name != "publish-removed" {
+		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-removed")
 	}
 	if lastStep.Publish == nil {
 		t.Error("last step should be a publish step")

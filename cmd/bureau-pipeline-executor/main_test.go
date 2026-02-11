@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -759,6 +758,3 @@ func TestSandboxGuardRejectsOutsideSandbox(t *testing.T) {
 		t.Errorf("expected sandbox guard error, got: %v", err)
 	}
 }
-
-// Verify the url package is used (suppresses unused import).
-var _ = url.QueryEscape

@@ -373,19 +373,3 @@ func TestResourceConfigHasLimits(t *testing.T) {
 		})
 	}
 }
-
-func TestDefaultVariables(t *testing.T) {
-	t.Parallel()
-
-	vars := DefaultVariables()
-
-	// BUREAU_ROOT should be set.
-	if vars["BUREAU_ROOT"] == "" {
-		t.Error("BUREAU_ROOT should be set")
-	}
-
-	// PROXY_SOCKET should default to /run/bureau/proxy.sock.
-	if vars["PROXY_SOCKET"] != "/run/bureau/proxy.sock" {
-		t.Errorf("expected PROXY_SOCKET=/run/bureau/proxy.sock, got %q", vars["PROXY_SOCKET"])
-	}
-}

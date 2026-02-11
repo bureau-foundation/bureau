@@ -1,0 +1,113 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// threadLogger posts pipeline progress to a Matrix thread. A root message
+// is created at pipeline start, and each step logs a reply to that thread.
+//
+// All methods are nil-safe: when the receiver is nil, they are no-ops. This
+// lets the executor call logging methods unconditionally without checking
+// whether thread logging is configured.
+type threadLogger struct {
+	proxy       *proxyClient
+	roomID      string
+	rootEventID string
+}
+
+// newThreadLogger creates a thread in the specified room for pipeline
+// progress logging. The root message announces the pipeline start and
+// its event ID anchors all subsequent thread replies.
+//
+// When room starts with "#", it is resolved to a room ID via the proxy.
+//
+// Returns an error if the thread cannot be created. The caller should
+// treat this as fatal when observation is configured — running a pipeline
+// with no record of what happened is worse than not running at all.
+func newThreadLogger(ctx context.Context, proxy *proxyClient, room string, pipelineName string, stepCount int) (*threadLogger, error) {
+	roomID := room
+	if len(room) > 0 && room[0] == '#' {
+		resolved, err := proxy.resolveAlias(ctx, room)
+		if err != nil {
+			return nil, fmt.Errorf("resolving log room %q: %w", room, err)
+		}
+		roomID = resolved
+	}
+
+	rootMessage := map[string]string{
+		"msgtype": "m.text",
+		"body":    fmt.Sprintf("Pipeline %s started (%d steps)", pipelineName, stepCount),
+	}
+
+	rootEventID, err := proxy.sendMessage(ctx, roomID, rootMessage)
+	if err != nil {
+		return nil, fmt.Errorf("creating pipeline thread in %s: %w", roomID, err)
+	}
+
+	return &threadLogger{
+		proxy:       proxy,
+		roomID:      roomID,
+		rootEventID: rootEventID,
+	}, nil
+}
+
+// logStep posts a step status update as a thread reply.
+func (l *threadLogger) logStep(ctx context.Context, index, total int, name, status string, duration time.Duration) {
+	if l == nil {
+		return
+	}
+
+	body := fmt.Sprintf("step %d/%d: %s... %s (%s)", index+1, total, name, status, formatDuration(duration))
+	l.sendThreadReply(ctx, body)
+}
+
+// logComplete posts a pipeline completion message as a thread reply.
+func (l *threadLogger) logComplete(ctx context.Context, name string, duration time.Duration) {
+	if l == nil {
+		return
+	}
+
+	body := fmt.Sprintf("Pipeline %s: complete (%s)", name, formatDuration(duration))
+	l.sendThreadReply(ctx, body)
+}
+
+// logFailed posts a pipeline failure message as a thread reply.
+func (l *threadLogger) logFailed(ctx context.Context, name, stepName string, err error) {
+	if l == nil {
+		return
+	}
+
+	body := fmt.Sprintf("Pipeline %s: failed at step %q: %v", name, stepName, err)
+	l.sendThreadReply(ctx, body)
+}
+
+func (l *threadLogger) sendThreadReply(ctx context.Context, body string) {
+	content := map[string]any{
+		"msgtype": "m.text",
+		"body":    body,
+		"m.relates_to": map[string]any{
+			"rel_type": "m.thread",
+			"event_id": l.rootEventID,
+		},
+	}
+	// Thread replies are best-effort within a running pipeline: if one
+	// reply fails to send, we log the error but don't abort the pipeline.
+	// The root message creation (in newThreadLogger) is the mandatory
+	// check — if we can't create the thread at all, the pipeline doesn't
+	// start.
+	if _, err := l.proxy.sendMessage(ctx, l.roomID, content); err != nil {
+		fmt.Printf("[pipeline] warning: failed to send thread reply: %v\n", err)
+	}
+}
+
+// formatDuration formats a duration for human-readable status output.
+// Uses seconds with one decimal place.
+func formatDuration(duration time.Duration) string {
+	return fmt.Sprintf("%.1fs", duration.Seconds())
+}

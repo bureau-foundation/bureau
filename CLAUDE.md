@@ -38,7 +38,8 @@ cmd/           Binary entry points:
   bureau-bridge/       TCP-to-Unix socket bridge CLI
   bureau-sandbox/      Sandbox creation CLI
   bureau-credentials/  Credential provisioning and machine config CLI
-  bureau-proxy-call/   One-shot HTTP request through a proxy socket
+  bureau-proxy-call/         One-shot HTTP request through a proxy socket
+  bureau-pipeline-executor/  Pipeline executor for sandboxed step sequencing
 deploy/        Deployment configurations (matrix/, etc.)
 script/        Dev environment setup (Nix installer, version pins)
 ```

@@ -249,25 +249,6 @@ func (v Variables) ExpandProfile(p *Profile) *Profile {
 	return result
 }
 
-// DefaultVariables returns the default variable set with common Bureau paths.
-func DefaultVariables() Variables {
-	bureauRoot := os.Getenv("BUREAU_ROOT")
-	if bureauRoot == "" {
-		bureauRoot = os.ExpandEnv("$HOME/.cache/bureau")
-	}
-
-	proxySocket := os.Getenv("BUREAU_PROXY_SOCKET")
-	if proxySocket == "" {
-		proxySocket = "/run/bureau/proxy.sock"
-	}
-
-	return Variables{
-		"BUREAU_ROOT":  bureauRoot,
-		"PROXY_SOCKET": proxySocket,
-		"TERM":         os.Getenv("TERM"),
-	}
-}
-
 // Validate checks that a profile is valid.
 func (p *Profile) Validate() error {
 	var errors []string

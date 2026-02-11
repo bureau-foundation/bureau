@@ -328,6 +328,51 @@ func (s *HTTPService) streamSSE(w http.ResponseWriter, resp *http.Response, star
 	)
 }
 
+// ForwardRequest sends an HTTP request through this service's upstream with
+// credential injection. Unlike ServeHTTP which writes directly to a
+// ResponseWriter, this returns the raw response for programmatic use by
+// structured API handlers (e.g., the /v1/matrix/* endpoints).
+//
+// The caller is responsible for closing the response body.
+func (s *HTTPService) ForwardRequest(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	// Validate credentials are available before making request.
+	var missingCredentials []string
+	for _, credentialName := range s.injectHeaders {
+		if s.credential == nil || s.credential.Get(credentialName) == nil {
+			missingCredentials = append(missingCredentials, credentialName)
+		}
+	}
+	if len(missingCredentials) > 0 {
+		return nil, fmt.Errorf("missing credentials: %v", missingCredentials)
+	}
+
+	// Build upstream URL.
+	upstreamURL := *s.upstream
+	upstreamURL.Path = singleJoiningSlash(s.upstream.Path, path)
+
+	request, err := http.NewRequestWithContext(ctx, method, upstreamURL.String(), body)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+
+	// Inject credential headers.
+	for headerName, credentialName := range s.injectHeaders {
+		value := s.credential.Get(credentialName)
+		request.Header.Set(headerName, value.String())
+	}
+
+	response, err := s.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("upstream request: %w", err)
+	}
+
+	return response, nil
+}
+
 // shouldStripHeader checks if a header should be stripped from incoming requests.
 func (s *HTTPService) shouldStripHeader(name string) bool {
 	nameLower := strings.ToLower(name)

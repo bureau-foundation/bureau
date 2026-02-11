@@ -61,6 +61,15 @@ func run() int {
 		}
 	}
 
+	// Refuse to run outside a sandbox. The default socket path
+	// (/run/bureau/proxy.sock) is a bind-mount destination inside a bwrap
+	// namespace — outside a sandbox it could point to another instance's
+	// socket or not exist at all.
+	if os.Getenv("BUREAU_SANDBOX") != "1" {
+		fmt.Fprintf(os.Stderr, "error: bureau-proxy-call must run inside a Bureau sandbox (BUREAU_SANDBOX=1 not set)\n")
+		return 1
+	}
+
 	// Look for --stream flag
 	for i, arg := range args {
 		if arg == "--stream" {

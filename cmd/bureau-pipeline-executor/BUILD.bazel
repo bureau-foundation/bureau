@@ -1,0 +1,35 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-pipeline-executor_lib",
+    srcs = [
+        "doc.go",
+        "execute.go",
+        "log.go",
+        "main.go",
+        "proxy.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-pipeline-executor",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/pipeline",
+        "//lib/schema",
+        "//lib/version",
+    ],
+)
+
+go_binary(
+    name = "bureau-pipeline-executor",
+    embed = [":bureau-pipeline-executor_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-pipeline-executor_test",
+    srcs = ["main_test.go"],
+    embed = [":bureau-pipeline-executor_lib"],
+    deps = ["//lib/schema"],
+)

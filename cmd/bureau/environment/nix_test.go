@@ -5,6 +5,8 @@ package environment
 
 import (
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/nix"
 )
 
 func TestCurrentSystem(t *testing.T) {
@@ -173,16 +175,15 @@ func TestOverrideArgs(t *testing.T) {
 	})
 }
 
-func TestNixPath(t *testing.T) {
-	// This test verifies that nixPath finds nix on this machine.
-	// It will fail on machines without nix installed, which is fine —
-	// those machines can't run environment commands anyway.
-	path, err := nixPath()
+func TestNixFindBinary(t *testing.T) {
+	// This test verifies that nix.FindBinary resolves nix on this
+	// machine. Skipped on machines without Nix installed.
+	path, err := nix.FindBinary("nix")
 	if err != nil {
 		t.Skipf("nix not available: %v", err)
 	}
 	if path == "" {
-		t.Fatal("nixPath() returned empty string with no error")
+		t.Fatal("nix.FindBinary(\"nix\") returned empty string with no error")
 	}
 	t.Logf("nix found at: %s", path)
 }

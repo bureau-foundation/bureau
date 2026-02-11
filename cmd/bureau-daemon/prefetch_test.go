@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -228,12 +229,12 @@ func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
 func TestFindNixStore(t *testing.T) {
 	t.Parallel()
 
-	path, err := findNixStore()
+	path, err := nix.FindBinary("nix-store")
 	if err != nil {
 		t.Skipf("nix-store not available: %v", err)
 	}
 	if !strings.Contains(path, "nix-store") {
-		t.Errorf("findNixStore() = %q, expected path containing 'nix-store'", path)
+		t.Errorf("nix.FindBinary(\"nix-store\") = %q, expected path containing 'nix-store'", path)
 	}
 }
 

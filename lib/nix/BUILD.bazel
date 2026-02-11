@@ -1,0 +1,17 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nix",
+    srcs = ["nix.go"],
+    importpath = "github.com/bureau-foundation/bureau/lib/nix",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nix_test",
+    srcs = ["nix_test.go"],
+    embed = [":nix"],
+)

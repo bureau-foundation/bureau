@@ -4,12 +4,11 @@
 package environment
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/nix"
 )
 
 const defaultFlakeRef = "github:bureau-foundation/environment"
@@ -45,23 +44,6 @@ func parseOverrideInputs(overrides []string) (*nixOptions, error) {
 	return options, nil
 }
 
-// nixPath returns the path to the nix binary, checking the standard
-// Determinate Nix installation location if it's not on PATH.
-func nixPath() (string, error) {
-	// Check PATH first (works inside nix develop and NixOS).
-	if path, err := exec.LookPath("nix"); err == nil {
-		return path, nil
-	}
-
-	// Determinate Nix installs to a profile outside PATH by default.
-	const determinatePath = "/nix/var/nix/profiles/default/bin/nix"
-	if _, err := os.Stat(determinatePath); err == nil {
-		return determinatePath, nil
-	}
-
-	return "", fmt.Errorf("nix not found on PATH or at %s — install Nix first (see script/setup-nix)", determinatePath)
-}
-
 // overrideArgs returns the --override-input flags for a nix command.
 func (options *nixOptions) overrideArgs() []string {
 	if options == nil {
@@ -90,25 +72,16 @@ type flakePackage struct {
 // listProfiles queries a flake for its package outputs on the current
 // system. Returns profile names and their derivation names.
 func listProfiles(flakeRef string, options *nixOptions) ([]profileInfo, error) {
-	nix, err := nixPath()
+	args := []string{"flake", "show", flakeRef, "--json"}
+	args = append(args, options.overrideArgs()...)
+
+	output, err := nix.Run(args...)
 	if err != nil {
 		return nil, err
 	}
 
-	args := []string{"flake", "show", flakeRef, "--json"}
-	args = append(args, options.overrideArgs()...)
-
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(nix, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, nixError("nix flake show", &stderr, err)
-	}
-
 	var show flakeShowJSON
-	if err := json.Unmarshal(stdout.Bytes(), &show); err != nil {
+	if err := json.Unmarshal([]byte(output), &show); err != nil {
 		return nil, fmt.Errorf("parsing nix flake show output: %w", err)
 	}
 
@@ -140,37 +113,17 @@ type profileInfo struct {
 // buildProfile builds a profile from a flake and places the result
 // symlink at outLink. Returns the store path of the built derivation.
 func buildProfile(flakeRef, profile, outLink string, options *nixOptions) (string, error) {
-	nix, err := nixPath()
-	if err != nil {
-		return "", err
-	}
-
 	installable := flakeRef + "#" + profile
 
 	args := []string{"build", installable, "--out-link", outLink, "--print-out-paths"}
 	args = append(args, options.overrideArgs()...)
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(nix, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", nixError("nix build "+installable, &stderr, err)
+	output, err := nix.Run(args...)
+	if err != nil {
+		return "", err
 	}
 
-	storePath := strings.TrimSpace(stdout.String())
-	return storePath, nil
-}
-
-// nixError formats a nix command error, preferring stderr output over
-// the generic exec error.
-func nixError(command string, stderr *bytes.Buffer, err error) error {
-	stderrText := strings.TrimSpace(stderr.String())
-	if stderrText != "" {
-		return fmt.Errorf("%s: %s", command, stderrText)
-	}
-	return fmt.Errorf("%s: %w", command, err)
+	return strings.TrimSpace(output), nil
 }
 
 // currentSystem returns the Nix system identifier for the current

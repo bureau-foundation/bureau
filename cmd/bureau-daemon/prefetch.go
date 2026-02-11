@@ -4,13 +4,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 
+	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -82,46 +80,6 @@ func (d *Daemon) prefetchBureauVersion(ctx context.Context, version *schema.Bure
 // caches in nix.conf). This is a no-op when the path is already valid
 // in the local store.
 func prefetchNixStore(ctx context.Context, storePath string) error {
-	nixStoreBinary, err := findNixStore()
-	if err != nil {
-		return err
-	}
-
-	var stderr bytes.Buffer
-	command := exec.CommandContext(ctx, nixStoreBinary, "--realise", storePath)
-	command.Stderr = &stderr
-
-	if err := command.Run(); err != nil {
-		return nixStoreError(storePath, &stderr, err)
-	}
-	return nil
-}
-
-// findNixStore returns the path to the nix-store binary, checking PATH
-// first and then the standard Determinate Nix installation location.
-//
-// This mirrors the pattern in cmd/bureau/environment/nix.go (nixPath)
-// but for nix-store instead of nix. Duplicated intentionally — the
-// daemon and CLI are separate binaries with no cross-binary imports.
-func findNixStore() (string, error) {
-	if path, err := exec.LookPath("nix-store"); err == nil {
-		return path, nil
-	}
-
-	const determinatePath = "/nix/var/nix/profiles/default/bin/nix-store"
-	if _, err := os.Stat(determinatePath); err == nil {
-		return determinatePath, nil
-	}
-
-	return "", fmt.Errorf("nix-store not found on PATH or at %s", determinatePath)
-}
-
-// nixStoreError formats a nix-store command error, preferring stderr
-// output over the generic exec error message.
-func nixStoreError(storePath string, stderr *bytes.Buffer, err error) error {
-	stderrText := strings.TrimSpace(stderr.String())
-	if stderrText != "" {
-		return fmt.Errorf("nix-store --realise %s: %s", storePath, stderrText)
-	}
-	return fmt.Errorf("nix-store --realise %s: %w", storePath, err)
+	_, err := nix.RunStore(ctx, "--realise", storePath)
+	return err
 }

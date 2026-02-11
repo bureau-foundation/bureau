@@ -18,6 +18,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/nix",
         "@com_github_spf13_pflag//:pflag",
     ],
 )
@@ -26,4 +27,5 @@ go_test(
     name = "environment_test",
     srcs = ["nix_test.go"],
     embed = [":environment"],
+    deps = ["//lib/nix"],
 )

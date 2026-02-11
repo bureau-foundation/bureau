@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/git"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -422,16 +423,13 @@ func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID, _ strin
 		return nil, fmt.Errorf("workspace %q has no .bare directory (not a git workspace)", command.Workspace)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "git", "-C", bareDir, "worktree", "list")
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git worktree list in %s: %w (stderr: %s)", bareDir, err, strings.TrimSpace(stderr.String()))
+	repo := git.NewRepository(bareDir)
+	rawOutput, err := repo.Run(ctx, "worktree", "list")
+	if err != nil {
+		return nil, err
 	}
 
-	output := strings.TrimSpace(stdout.String())
+	output := strings.TrimSpace(rawOutput)
 	var worktrees []string
 	if output != "" {
 		worktrees = strings.Split(output, "\n")
@@ -460,18 +458,14 @@ func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID, _ string, comm
 	}
 
 	lockPath := filepath.Join(bareDir, "bureau.lock")
-
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "flock", lockPath, "git", "-C", bareDir, "fetch", "--all")
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git fetch --all in %s: %w (stderr: %s)", bareDir, err, strings.TrimSpace(stderr.String()))
+	repo := git.NewRepository(bareDir)
+	output, err := repo.RunLocked(ctx, lockPath, "fetch", "--all")
+	if err != nil {
+		return nil, err
 	}
 
 	return map[string]any{
 		"workspace": command.Workspace,
-		"output":    strings.TrimSpace(stdout.String() + stderr.String()),
+		"output":    output,
 	}, nil
 }

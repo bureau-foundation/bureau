@@ -80,7 +80,7 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			ctx, cancel, session, err := connectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}

@@ -53,7 +53,7 @@ template overrides versus what it inherits.`,
 
 			templateRefString := args[0]
 
-			ctx, cancel, session, err := connectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}

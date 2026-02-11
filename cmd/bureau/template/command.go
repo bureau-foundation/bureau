@@ -4,16 +4,12 @@
 package template
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
-	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // Command returns the "template" command group.
@@ -85,38 +81,6 @@ All commands that access Matrix require an operator session. Run
 			},
 		},
 	}
-}
-
-// connectOperator loads the operator session and creates an authenticated
-// Matrix session. Returns the session and a context with a 30-second timeout.
-func connectOperator() (context.Context, context.CancelFunc, *messaging.Session, error) {
-	operatorSession, err := cli.LoadSession()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: operatorSession.Homeserver,
-		Logger:        logger,
-	})
-	if err != nil {
-		cancel()
-		return nil, nil, nil, fmt.Errorf("create matrix client: %w", err)
-	}
-
-	session, err := client.SessionFromToken(operatorSession.UserID, operatorSession.AccessToken)
-	if err != nil {
-		cancel()
-		return nil, nil, nil, fmt.Errorf("create session: %w", err)
-	}
-
-	return ctx, cancel, session, nil
 }
 
 // printTemplateJSON marshals a TemplateContent as indented JSON to stdout.

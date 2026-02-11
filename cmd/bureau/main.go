@@ -12,6 +12,7 @@ import (
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
+	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -46,6 +47,7 @@ observation, and structured messaging via Matrix.`,
 			matrix.Command(),
 			machinecmd.Command(),
 			templatecmd.Command(),
+			pipelinecmd.Command(),
 			environmentcmd.Command(),
 			workspacecmd.Command(),
 			{

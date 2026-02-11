@@ -49,47 +49,58 @@ type TemplateRef struct {
 // Returns an error if the reference is empty, contains no colon, or has
 // an empty room or template component.
 func ParseTemplateRef(reference string) (TemplateRef, error) {
+	room, name, server, err := parseRef(reference, "template")
+	if err != nil {
+		return TemplateRef{}, err
+	}
+	return TemplateRef{
+		Room:     room,
+		Template: name,
+		Server:   server,
+	}, nil
+}
+
+// parseRef extracts room, name, and server from a state event reference
+// string. The format is "<room-alias-localpart>[@<server>]:<name>". Both
+// TemplateRef and PipelineRef use this same parsing logic — the entityKind
+// parameter (e.g., "template", "pipeline") controls error messages.
+func parseRef(reference, entityKind string) (room, name, server string, err error) {
 	if reference == "" {
-		return TemplateRef{}, fmt.Errorf("empty template reference")
+		return "", "", "", fmt.Errorf("empty %s reference", entityKind)
 	}
 
-	// The last colon separates room reference from template name.
+	// The last colon separates room reference from name.
 	// This handles server:port in federated references.
 	lastColon := strings.LastIndex(reference, ":")
 	if lastColon < 0 {
-		return TemplateRef{}, fmt.Errorf("template reference %q missing colon separator", reference)
+		return "", "", "", fmt.Errorf("%s reference %q missing colon separator", entityKind, reference)
 	}
 
 	roomReference := reference[:lastColon]
-	templateName := reference[lastColon+1:]
+	name = reference[lastColon+1:]
 
 	if roomReference == "" {
-		return TemplateRef{}, fmt.Errorf("template reference %q has empty room", reference)
+		return "", "", "", fmt.Errorf("%s reference %q has empty room", entityKind, reference)
 	}
-	if templateName == "" {
-		return TemplateRef{}, fmt.Errorf("template reference %q has empty template name", reference)
+	if name == "" {
+		return "", "", "", fmt.Errorf("%s reference %q has empty %s name", entityKind, reference, entityKind)
 	}
 
 	// Split room reference into localpart and optional @server.
-	var room, server string
 	if atIndex := strings.Index(roomReference, "@"); atIndex >= 0 {
 		room = roomReference[:atIndex]
 		server = roomReference[atIndex+1:]
 		if room == "" {
-			return TemplateRef{}, fmt.Errorf("template reference %q has empty room localpart", reference)
+			return "", "", "", fmt.Errorf("%s reference %q has empty room localpart", entityKind, reference)
 		}
 		if server == "" {
-			return TemplateRef{}, fmt.Errorf("template reference %q has empty server after @", reference)
+			return "", "", "", fmt.Errorf("%s reference %q has empty server after @", entityKind, reference)
 		}
 	} else {
 		room = roomReference
 	}
 
-	return TemplateRef{
-		Room:     room,
-		Template: templateName,
-		Server:   server,
-	}, nil
+	return room, name, server, nil
 }
 
 // String returns the canonical wire-format representation of the template

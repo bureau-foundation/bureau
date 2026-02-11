@@ -89,35 +89,45 @@ func pipelineLocalpart(pipelineRef string) string {
 	timestamp := time.Now().UnixMilli()
 
 	// Extract a short, filesystem-safe label from the pipeline ref.
+	// Use ParsePipelineRef to get the pipeline name cleanly; fall
+	// back to the raw ref string if parsing fails (e.g., bare names
+	// or malformed refs — we don't want localpart generation to fail).
 	label := "run"
 	if pipelineRef != "" {
-		// Pipeline refs look like "bureau/pipeline:dev-workspace-init".
-		// Extract the part after the colon (template name) if present.
-		if colonIndex := strings.LastIndex(pipelineRef, ":"); colonIndex >= 0 && colonIndex < len(pipelineRef)-1 {
-			label = pipelineRef[colonIndex+1:]
+		ref, err := schema.ParsePipelineRef(pipelineRef)
+		if err == nil {
+			label = ref.Pipeline
 		} else {
 			label = pipelineRef
 		}
-		// Sanitize: replace non-alphanumeric/dash with dash, truncate.
-		var sanitized strings.Builder
-		for _, character := range label {
-			if (character >= 'a' && character <= 'z') ||
-				(character >= '0' && character <= '9') ||
-				character == '-' {
-				sanitized.WriteRune(character)
-			} else if character >= 'A' && character <= 'Z' {
-				sanitized.WriteRune(character - 'A' + 'a')
-			} else {
-				sanitized.WriteRune('-')
-			}
-		}
-		label = sanitized.String()
-		if len(label) > 20 {
-			label = label[:20]
-		}
+		label = sanitizeLabel(label)
 	}
 
 	return fmt.Sprintf("pipeline/%s/%d", label, timestamp)
+}
+
+// sanitizeLabel converts a string into a lowercase, filesystem-safe
+// label suitable for use in principal localparts. Non-alphanumeric
+// characters (except dash) are replaced with dashes, uppercase is
+// lowered, and the result is truncated to 20 characters.
+func sanitizeLabel(input string) string {
+	var sanitized strings.Builder
+	for _, character := range input {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '-' {
+			sanitized.WriteRune(character)
+		} else if character >= 'A' && character <= 'Z' {
+			sanitized.WriteRune(character - 'A' + 'a')
+		} else {
+			sanitized.WriteRune('-')
+		}
+	}
+	result := sanitized.String()
+	if len(result) > 20 {
+		result = result[:20]
+	}
+	return result
 }
 
 // executePipeline is the async lifecycle for a pipeline.execute

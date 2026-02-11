@@ -7,6 +7,7 @@ go_library(
     name = "cli",
     srcs = [
         "command.go",
+        "connect.go",
         "doc.go",
         "local_machine.go",
         "login.go",

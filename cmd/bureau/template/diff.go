@@ -64,7 +64,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			}
 
 			// Fetch the Matrix version.
-			ctx, cancel, session, err := connectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}

@@ -82,7 +82,7 @@ exist without actually publishing.`,
 			}
 
 			// Connect to Matrix for inheritance verification and publishing.
-			ctx, cancel, session, err := connectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}

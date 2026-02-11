@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package template
+package pipeline
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-// listCommand returns the "list" subcommand for listing templates in a room.
+// listCommand returns the "list" subcommand for listing pipelines in a room.
 func listCommand() *cli.Command {
 	var (
 		serverName string
@@ -25,21 +25,21 @@ func listCommand() *cli.Command {
 
 	return &cli.Command{
 		Name:    "list",
-		Summary: "List templates in a room",
-		Description: `List all sandbox templates in a Matrix room. Shows each template's name,
-description, and inheritance reference (if any).
+		Summary: "List pipelines in a room",
+		Description: `List all automation pipelines in a Matrix room. Shows each pipeline's
+name, description, and step count.
 
-The room argument is a room alias localpart (e.g., "bureau/template").
+The room argument is a room alias localpart (e.g., "bureau/pipeline").
 It is resolved to a full Matrix alias using the --server-name flag.`,
-		Usage: "bureau template list [flags] <room-alias-localpart>",
+		Usage: "bureau pipeline list [flags] <room-alias-localpart>",
 		Examples: []cli.Example{
 			{
-				Description: "List built-in templates",
-				Command:     "bureau template list bureau/template",
+				Description: "List built-in pipelines",
+				Command:     "bureau pipeline list bureau/pipeline",
 			},
 			{
-				Description: "List project templates as JSON",
-				Command:     "bureau template list --json iree/template",
+				Description: "List project pipelines as JSON",
+				Command:     "bureau pipeline list --json iree/pipeline",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
@@ -50,7 +50,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 		},
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau template list [flags] <room-alias-localpart>")
+				return fmt.Errorf("usage: bureau pipeline list [flags] <room-alias-localpart>")
 			}
 
 			roomLocalpart := args[0]
@@ -67,44 +67,48 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				return fmt.Errorf("resolving room alias %q: %w", roomAlias, err)
 			}
 
-			// Fetch all state events in the room, then filter for templates.
+			// Fetch all state events in the room, then filter for pipelines.
 			events, err := session.GetRoomState(ctx, roomID)
 			if err != nil {
 				return fmt.Errorf("getting room state: %w", err)
 			}
 
-			type templateEntry struct {
+			type pipelineEntry struct {
 				Name        string `json:"name"`
 				Description string `json:"description"`
-				Inherits    string `json:"inherits,omitempty"`
+				Steps       int    `json:"steps"`
 			}
 
-			var templates []templateEntry
+			var pipelines []pipelineEntry
 			for _, event := range events {
-				if event.Type != schema.EventTypeTemplate {
+				if event.Type != schema.EventTypePipeline {
 					continue
 				}
 				if event.StateKey == nil {
 					continue
 				}
 
-				// Extract description and inherits from the Content map.
 				description, _ := event.Content["description"].(string)
-				inherits, _ := event.Content["inherits"].(string)
 
-				templates = append(templates, templateEntry{
+				// Extract step count from the untyped content map.
+				stepCount := 0
+				if steps, ok := event.Content["steps"].([]any); ok {
+					stepCount = len(steps)
+				}
+
+				pipelines = append(pipelines, pipelineEntry{
 					Name:        *event.StateKey,
 					Description: description,
-					Inherits:    inherits,
+					Steps:       stepCount,
 				})
 			}
 
 			if outputJSON {
 				// Ensure empty array in JSON output, not null.
-				if templates == nil {
-					templates = []templateEntry{}
+				if pipelines == nil {
+					pipelines = []pipelineEntry{}
 				}
-				data, err := json.MarshalIndent(templates, "", "  ")
+				data, err := json.MarshalIndent(pipelines, "", "  ")
 				if err != nil {
 					return fmt.Errorf("marshal JSON: %w", err)
 				}
@@ -112,15 +116,15 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				return nil
 			}
 
-			if len(templates) == 0 {
-				fmt.Fprintf(os.Stderr, "no templates found in %s\n", roomAlias)
+			if len(pipelines) == 0 {
+				fmt.Fprintf(os.Stderr, "no pipelines found in %s\n", roomAlias)
 				return nil
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
-			fmt.Fprintf(writer, "NAME\tDESCRIPTION\tINHERITS\n")
-			for _, entry := range templates {
-				fmt.Fprintf(writer, "%s\t%s\t%s\n", entry.Name, entry.Description, entry.Inherits)
+			fmt.Fprintf(writer, "NAME\tDESCRIPTION\tSTEPS\n")
+			for _, entry := range pipelines {
+				fmt.Fprintf(writer, "%s\t%s\t%d\n", entry.Name, entry.Description, entry.Steps)
 			}
 			return writer.Flush()
 		},

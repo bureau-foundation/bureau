@@ -9,6 +9,7 @@ go_library(
         "client.go",
         "control.go",
         "dashboard.go",
+        "doc.go",
         "expand.go",
         "layout.go",
         "list.go",

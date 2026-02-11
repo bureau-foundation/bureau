@@ -1,14 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package template provides template resolution for Bureau sandbox templates.
-// Templates are stored as m.bureau.template state events in Matrix rooms and
-// support single-level and multi-level inheritance. This package fetches
-// templates from Matrix and walks the inheritance chain to produce a
-// fully-merged TemplateContent.
-//
-// The daemon uses this for sandbox creation (Resolve → SandboxSpec), and the
-// CLI uses it for template inspection (Resolve, Fetch, list operations).
 package template
 
 import (

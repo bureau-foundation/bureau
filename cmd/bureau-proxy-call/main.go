@@ -1,8 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-proxy-call is a client for the bureau-proxy service.
-// It sends requests to the proxy and streams responses to stdout/stderr.
 package main
 
 import (

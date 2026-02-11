@@ -1,17 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package config provides configuration loading for Bureau components.
-//
-// Configuration is loaded from a single file specified by:
-//   - BUREAU_CONFIG environment variable, or
-//   - --config flag passed to the command
-//
-// There are no fallbacks or automatic discovery. This ensures deterministic,
-// auditable configuration with no hidden overrides.
-//
-// The config file may contain environment-specific sections (development,
-// staging, production) that override base values when the environment matches.
 package config
 
 import (

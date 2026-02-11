@@ -9,6 +9,7 @@ go_library(
         "bwrap.go",
         "capabilities.go",
         "config.go",
+        "doc.go",
         "escape.go",
         "overlay.go",
         "sandbox.go",

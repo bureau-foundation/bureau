@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "command.go",
         "diff.go",
+        "doc.go",
         "impact.go",
         "list.go",
         "push.go",

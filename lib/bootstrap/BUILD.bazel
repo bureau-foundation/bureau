@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "bootstrap",
-    srcs = ["config.go"],
+    srcs = [
+        "config.go",
+        "doc.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/bootstrap",
     visibility = ["//visibility:public"],
     deps = ["//lib/principal"],

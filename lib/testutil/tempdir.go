@@ -1,7 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package testutil provides shared test helpers for Bureau packages.
 package testutil
 
 import (

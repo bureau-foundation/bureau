@@ -1,18 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// bureau-bridge bridges TCP connections to a Unix socket.
-//
-// This enables HTTP clients inside a network-isolated sandbox to reach
-// the credential proxy via localhost.
-//
-// Usage (standalone):
-//
-//	bureau-bridge --listen 127.0.0.1:8642 --socket /run/bureau/proxy.sock
-//
-// Usage (exec mode - starts bridge then runs command):
-//
-//	bureau-bridge --listen 127.0.0.1:8642 --socket /run/bureau/proxy.sock -- claude --dangerously-skip-permissions
 package main
 
 import (

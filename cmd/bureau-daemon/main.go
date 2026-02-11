@@ -1,23 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-daemon is the unprivileged, network-facing Bureau process. It connects
-// to the Matrix homeserver, reads machine configuration, and orchestrates the
-// launcher (via unix socket IPC) to create and destroy sandboxes.
-//
-// The daemon has no access to credentials or private keys — it forwards
-// encrypted credential bundles to the launcher, which decrypts them. This
-// privilege separation means the network-facing process never holds plaintext
-// secrets.
-//
-// On startup:
-//  1. Loads the Matrix session written by the launcher during first-boot.
-//  2. Ensures the per-machine config room exists.
-//  3. Performs an initial Matrix /sync to establish a since token.
-//  4. Reads MachineConfig state to determine which principals to run.
-//  5. Reconciles: creates missing sandboxes, destroys extra ones.
-//  6. Enters a /sync long-poll loop to watch for state changes.
-//  7. Periodically publishes MachineStatus heartbeats.
 package main
 
 import (

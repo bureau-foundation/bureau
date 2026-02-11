@@ -1,17 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package bridge provides a TCP-to-Unix socket forwarder.
-//
-// This enables HTTP clients inside a network-isolated sandbox to reach
-// the credential proxy via localhost. The bridge listens on a TCP port
-// and forwards all connections to a Unix socket.
-//
-// Inside a sandbox with --unshare-net, this allows:
-//
-//	ANTHROPIC_BASE_URL=http://127.0.0.1:8642/http/anthropic
-//
-// The agent can reach the proxy via localhost, but cannot reach the internet.
 package bridge
 
 import (

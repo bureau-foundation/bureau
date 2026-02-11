@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "build.go",
         "command.go",
+        "doc.go",
         "list.go",
         "nix.go",
         "status.go",

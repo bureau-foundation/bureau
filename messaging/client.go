@@ -1,16 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package messaging wraps the Matrix client-server API for Bureau's needs.
-//
-// The package provides two types:
-//   - Client handles unauthenticated operations (registration, login).
-//   - Session wraps a Client with an access token for authenticated operations
-//     (room management, messaging, sync).
-//
-// Sessions are lightweight (a pointer to the parent Client plus an access token
-// string) and safe to create in large numbers. The proxy holds one Client and
-// many Sessions — one per agent sandbox.
 package messaging
 
 import (

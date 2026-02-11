@@ -1,9 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package observe implements the bureau observe, dashboard, and list
-// subcommands. These connect to the daemon's observation relay for
-// live terminal access, composite dashboards, and target listing.
 package observe
 
 import (

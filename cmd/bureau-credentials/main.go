@@ -1,20 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-credentials provisions encrypted credential bundles and machine
-// configurations to Matrix. It reads credentials from stdin (never from CLI
-// arguments) and encrypts them to the target machine's age public key before
-// publishing as Matrix state events.
-//
-// The tool operates on per-machine config rooms in Matrix:
-//
-//   - "provision" encrypts credentials and publishes m.bureau.credentials
-//   - "assign" writes m.bureau.machine_config to assign principals to a machine
-//   - "list" shows provisioned credential bundles (key names only, not values)
-//   - "keygen" generates an age keypair for escrow use
-//
-// All subcommands that access Matrix require a --config flag pointing to the
-// credential file written by bureau-matrix-setup.
 package main
 
 import (

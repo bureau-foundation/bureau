@@ -7,6 +7,7 @@ go_library(
     name = "transport",
     srcs = [
         "datachannel_conn.go",
+        "doc.go",
         "ice.go",
         "signaler.go",
         "signaler_matrix.go",

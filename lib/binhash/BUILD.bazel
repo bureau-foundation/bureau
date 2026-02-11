@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "binhash",
-    srcs = ["binhash.go"],
+    srcs = [
+        "binhash.go",
+        "doc.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/binhash",
     visibility = ["//visibility:public"],
 )

@@ -1,22 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package sealed provides age encryption and decryption for Bureau credential
-// bundles. It wraps filippo.io/age to provide a simple interface for the
-// specific operations Bureau needs: generate keypairs, encrypt plaintext to
-// multiple recipients, decrypt ciphertext with a private key.
-//
-// Ciphertext is base64-encoded for storage in Matrix state event JSON fields.
-// The base64 encoding is handled internally — callers pass plaintext []byte in
-// and get base64 strings out (and vice versa for decryption).
-//
-// Private keys and decrypted plaintext are returned as *secret.Buffer values,
-// which are backed by mmap memory outside the Go heap (locked against swap,
-// excluded from core dumps, zeroed on close).
-//
-// This package is used by:
-//   - The launcher (decrypt credential bundles with the machine's private key)
-//   - bureau-credentials (encrypt credential bundles to machine public keys + operator escrow)
 package sealed
 
 import (

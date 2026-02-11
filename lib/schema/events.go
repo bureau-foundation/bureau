@@ -1,38 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package schema defines the Matrix state event types and content structures
-// used by Bureau. These are the "Bureau protocol" — the set of Matrix events
-// that Bureau components read and write to coordinate machines, principals,
-// credentials, and services.
-//
-// Event type constants are the Matrix event types. Go structs define the JSON
-// content of each event. State keys are always the principal's localpart
-// (e.g., "machine/workstation", "iree/amdgpu/pm", "service/stt/whisper").
-//
-// # Room layout
-//
-// Shared rooms (created by bureau-matrix-setup):
-//
-//   - #bureau/machines:<server>  — MachineKey, MachineStatus events for all machines
-//   - #bureau/services:<server>  — Service registration events
-//   - #bureau/templates:<server> — Built-in sandbox templates (base, base-networked)
-//
-// Per-project/org template rooms:
-//
-//   - #iree/templates:<server>   — Project-specific templates
-//
-// Workspace rooms (created by bureau workspace create):
-//
-//   - #iree/amdgpu/inference:<server> — Per-workspace: ProjectConfig, WorkspaceReady, WorkspaceTeardown
-//
-// Per-machine rooms (created by the launcher at registration):
-//
-//   - #bureau/config/<machine-localpart>:<server>  — MachineConfig, Credentials for one machine
-//
-// The per-machine config room ensures that credential ciphertext is only
-// visible to the machine that can decrypt it (plus the admin account).
-// Template rooms use standard Matrix power levels for edit control.
 package schema
 
 // Matrix state event type constants. These are the "type" field in Matrix

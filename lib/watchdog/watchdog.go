@@ -1,25 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package watchdog provides atomic state file operations for tracking risky
-// process transitions like exec(). A process writes a watchdog state before
-// the transition; on startup, any process can read the state to determine
-// whether the transition succeeded or failed.
-//
-// Typical usage for self-updating binaries:
-//
-//  1. Before exec(): Write watchdog with previous and new binary paths.
-//  2. exec() the new binary.
-//  3. New binary starts, reads watchdog via Check, finds its own path ==
-//     State.NewBinary → the update succeeded. Clear the watchdog.
-//  4. If the new binary crashes: systemd restarts the old binary, which reads
-//     the watchdog via Check, finds its own path == State.PreviousBinary →
-//     the new version failed. Report the failure, then Clear the watchdog.
-//
-// The watchdog file is written atomically (write to temporary file, fsync,
-// rename) so readers never see a partial or corrupt state. Staleness checking
-// via Check prevents acting on ancient watchdog files left behind by unrelated
-// restarts.
 package watchdog
 
 import (

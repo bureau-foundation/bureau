@@ -1,12 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package matrix implements the bureau matrix subcommands for interacting
-// with the Bureau Matrix homeserver. Most subcommands route through the
-// agent's proxy socket (which holds Matrix credentials and enforces
-// MatrixPolicy). The "setup" subcommand is an exception — it talks
-// directly to the homeserver since the proxy doesn't exist yet during
-// bootstrap.
 package matrix
 
 import (

@@ -1,14 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package template implements the bureau template subcommands for managing
-// sandbox templates stored as Matrix state events. Templates define the
-// sandbox configuration (command, filesystem, namespaces, resources, security,
-// environment) and support multi-level inheritance.
-//
-// All commands that access Matrix use the operator session from
-// ~/.config/bureau/session.json (created by "bureau login"). The --server-name
-// flag controls how room alias localparts are resolved to full Matrix aliases.
 package template
 
 import (

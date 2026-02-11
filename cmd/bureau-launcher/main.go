@@ -1,18 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-launcher is the privileged Bureau process. It manages machine
-// identity, credential decryption, and sandbox lifecycle. It has no network
-// access — all external communication flows through bureau-daemon, which
-// communicates with the launcher via a unix socket.
-//
-// On first boot, the launcher generates an age keypair, registers a Matrix
-// account for the machine, and publishes the machine's public key. On every
-// boot, it loads the keypair and listens for lifecycle requests from the
-// daemon.
-//
-// See CREDENTIALS.md for the full security model and privilege separation
-// design.
 package main
 
 import (

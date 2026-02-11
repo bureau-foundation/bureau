@@ -1,12 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cli provides a lightweight command-line framework for the bureau
-// tool. It handles subcommand dispatch, structured help output, and
-// typo suggestions for unknown commands and flags.
-//
-// Each subcommand is a *Command with optional nested Subcommands. The
-// top-level command is assembled in main.go and dispatched via Execute.
 package cli
 
 import (

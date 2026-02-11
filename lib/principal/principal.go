@@ -1,17 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package principal handles Bureau principal identity: validation of
-// hierarchical localparts, construction of Matrix user IDs and room
-// aliases, and mapping between Matrix identities and filesystem paths.
-//
-// Bureau uses Matrix localparts with "/" separators to create a
-// hierarchical namespace that maps 1:1 to filesystem paths:
-//
-//	@iree/amdgpu/pm:bureau.local → /run/bureau/principal/iree/amdgpu/pm.sock
-//
-// This package enforces the safety invariants that make this mapping
-// possible: no path traversal, no hidden segments, bounded length.
 package principal
 
 import (

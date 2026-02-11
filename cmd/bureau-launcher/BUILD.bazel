@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 go_library(
     name = "bureau-launcher_lib",
     srcs = [
+        "doc.go",
         "main.go",
         "sandbox.go",
     ],

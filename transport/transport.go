@@ -1,21 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package transport provides daemon-to-daemon communication for cross-machine
-// service routing. The Listener and Dialer interfaces abstract the physical
-// connection mechanism so the daemon can relay service requests between
-// machines without exposing transport details to sandboxed agents or their
-// proxies.
-//
-// The production implementation uses WebRTC data channels (pion/webrtc) with
-// ICE/TURN for NAT traversal and Matrix state events for signaling. Each
-// peer daemon gets one PeerConnection with SCTP-multiplexed data channels —
-// no head-of-line blocking between concurrent service requests.
-//
-// The daemon uses a Listener to accept inbound requests from peer daemons
-// and routes them to local provider proxies. It uses a Dialer (via a relay
-// Unix socket) to forward requests to remote peers. Sandboxes and proxies
-// never touch transport — they see Unix sockets and HTTP.
 package transport
 
 import (

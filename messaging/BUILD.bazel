@@ -7,6 +7,7 @@ go_library(
     name = "messaging",
     srcs = [
         "client.go",
+        "doc.go",
         "errors.go",
         "session.go",
         "types.go",

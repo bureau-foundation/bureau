@@ -1,23 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-observe-relay is the per-session relay process forked by the daemon
-// for each observation session. It attaches to a Bureau-managed tmux session
-// and relays terminal I/O between the tmux PTY and a unix socket inherited
-// from the daemon.
-//
-// This binary is not invoked directly by users. The daemon spawns it with:
-//
-//	bureau-observe-relay <tmux-session-name>
-//
-// The daemon passes a connected unix socket on fd 3. The relay reads and
-// writes the observation protocol on this fd while the daemon bridges the
-// other end to the transport layer.
-//
-// Environment variables:
-//
-//	BUREAU_TMUX_SOCKET       tmux server socket path (default: /run/bureau/tmux.sock)
-//	BUREAU_OBSERVE_READONLY  set to "1" for read-only observation (no input relay)
 package main
 
 import (

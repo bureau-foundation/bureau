@@ -1,22 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package observe implements Bureau's observation primitive: live
-// bidirectional terminal access to any principal in the fleet. Observation
-// connects a local terminal to a remote tmux session through the daemon
-// transport layer, providing full-fidelity interactive access with
-// scrollback history.
-//
-// The package is organized around the observation data flow:
-//
-//   - protocol.go: wire format for the observation stream (framed binary messages)
-//   - ringbuffer.go: terminal-aware ring buffer for scrollback history replay
-//   - relay.go: remote-side PTY management and tmux attachment
-//   - client.go: local-side terminal I/O and daemon connection
-//   - layout.go: tmux layout detection and Matrix state event conversion
-//   - dashboard.go: composite observation views from room layouts
-//
-// See .notes/design/OBSERVATION.md for the full architecture.
 package observe
 
 import (

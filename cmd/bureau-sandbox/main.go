@@ -1,13 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// bureau-sandbox runs commands in an isolated bubblewrap sandbox.
-//
-// Usage:
-//
-//	bureau-sandbox run [flags] -- <command> [args...]
-//	bureau-sandbox validate [flags]
-//	bureau-sandbox test [flags]
 package main
 
 import (

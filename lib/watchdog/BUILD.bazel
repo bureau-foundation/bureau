@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "watchdog",
-    srcs = ["watchdog.go"],
+    srcs = [
+        "doc.go",
+        "watchdog.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/watchdog",
     visibility = ["//visibility:public"],
 )

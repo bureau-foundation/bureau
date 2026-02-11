@@ -9,6 +9,7 @@ go_library(
         "cli_service.go",
         "config.go",
         "credentials.go",
+        "doc.go",
         "filter.go",
         "handler.go",
         "http_service.go",

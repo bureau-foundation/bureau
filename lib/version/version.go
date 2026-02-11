@@ -1,11 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package version provides build version information for Bureau binaries.
-//
-// Version information is injected at build time via -ldflags, for example:
-//
-//	go build -ldflags "-X github.com/bureau-foundation/bureau/lib/version.GitCommit=$(git rev-parse --short HEAD)"
 package version
 
 import (

@@ -1,8 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau-proxy is a credential proxy service for agents.
-// It allows agents to use CLI tools without seeing credentials.
 package main
 
 import (

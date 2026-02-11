@@ -1,12 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package binhash provides SHA256 content hashing for binary files. Bureau
-// uses binary content hashes to determine whether process binaries actually
-// changed when Nix store paths change. An input-addressed Nix derivation
-// produces a new store path whenever any input changes (source, dependencies,
-// build flags), but the output binary is often byte-identical. Comparing
-// SHA256 digests avoids unnecessary process restarts.
 package binhash
 
 import (

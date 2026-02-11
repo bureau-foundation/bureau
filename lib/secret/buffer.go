@@ -1,18 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package secret provides a memory-safe buffer for sensitive data such as
-// passwords, access tokens, and encryption keys.
-//
-// Buffer allocates memory outside the Go heap via mmap(MAP_ANONYMOUS),
-// locks it into physical RAM via mlock (preventing swap), and marks it
-// excluded from core dumps via madvise(MADV_DONTDUMP). On Close, the
-// memory is zeroed, unlocked, and unmapped.
-//
-// Because the memory is allocated outside the Go heap, the garbage
-// collector never sees it and cannot copy or relocate it. This is the
-// only way to guarantee that secret material does not persist in memory
-// after it is no longer needed.
 package secret
 
 import (

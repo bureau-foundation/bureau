@@ -1,27 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Bureau is the unified CLI for interacting with a Bureau deployment.
-// It provides subcommands for observing agent sessions, managing the
-// Matrix homeserver, and administering the deployment.
-//
-// Usage:
-//
-//	bureau <command> [flags]
-//
-// Commands:
-//
-//	login         Authenticate as an operator
-//	whoami        Show the current operator identity
-//	list          List observable targets
-//	dashboard     Open a composite observation view (machine, channel, or file)
-//	observe       Attach to a single principal's terminal session
-//	matrix        Matrix homeserver operations
-//	machine       Manage fleet machines (provision, list, decommission)
-//	template      Manage sandbox templates
-//	environment   Manage fleet environment profiles
-//	workspace     Manage project workspaces
-//	version       Print version information
 package main
 
 import (

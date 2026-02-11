@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "principal",
     srcs = [
+        "doc.go",
         "match.go",
         "principal.go",
     ],

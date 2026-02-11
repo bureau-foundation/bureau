@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "testutil",
-    srcs = ["tempdir.go"],
+    srcs = [
+        "doc.go",
+        "tempdir.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/testutil",
     visibility = ["//visibility:public"],
 )

@@ -1,24 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package workspace implements the bureau workspace subcommands for
-// managing project workspaces across the Bureau fleet. A workspace is
-// a host-side directory structure under /var/bureau/workspace/ that
-// gets mounted into sandboxes — source code with git worktrees,
-// creative writing projects, ML training data, or anything else that
-// principals need shared access to.
-//
-// The room alias IS the workspace path: #iree/amdgpu/inference maps
-// mechanically to /var/bureau/workspace/iree/amdgpu/inference/. No
-// lookup table, no configuration — the path is derived from the alias.
-//
-// Commands are organized into lifecycle (create, destroy), status
-// (list, status, du), and git convenience (worktree, fetch) groups.
-// Most commands work remotely through Matrix: the CLI posts a command
-// message, the daemon on the target machine executes it and replies
-// in a thread.
-//
-// See .notes/design/WORKSPACE.md for the full design.
 package workspace
 
 import (

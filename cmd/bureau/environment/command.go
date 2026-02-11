@@ -1,16 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package environment implements the bureau environment subcommands for
-// managing fleet environment profiles. Environments are Nix flake
-// outputs defined in the bureau-foundation/environment repo (or a
-// custom flake). Each profile specifies the complete set of packages
-// available on a class of machine — Buildbarn runners, sandbox agents,
-// and test actions all consume these profiles.
-//
-// The subcommands wrap nix commands with Bureau-specific conventions:
-// standard output paths, profile naming, and integration with the
-// Buildbarn deployment.
 package environment
 
 import (

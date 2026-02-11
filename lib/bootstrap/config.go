@@ -1,10 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package bootstrap defines the machine bootstrap configuration format
-// shared between the provisioning CLI (which writes configs) and the
-// launcher (which reads them). This avoids import cycles: both the CLI
-// and the launcher import lib/bootstrap, neither imports the other.
 package bootstrap
 
 import (

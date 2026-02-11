@@ -5,7 +5,10 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
 go_library(
     name = "bureau-bridge_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "doc.go",
+        "main.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-bridge",
     visibility = ["//visibility:private"],
     deps = [

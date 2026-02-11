@@ -1183,16 +1183,18 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	// Convert the SandboxSpec to a sandbox.Profile.
 	profile := specToProfile(spec, proxySocketPath)
 
-	// Expand template variables in the profile. Templates reference
-	// workspace paths via ${PROJECT}, ${WORKTREE_PATH}, etc. — these
-	// are resolved here at launch time when concrete values are known.
-	// The SandboxSpec carries unexpanded variable references (documented
-	// in its EnvironmentVariables doc comment); the launcher is where
-	// expansion happens because it has the concrete values.
+	// Expand template variables in the profile. The SandboxSpec carries
+	// unexpanded ${VARIABLE} references in EnvironmentVariables, Filesystem
+	// Source paths, and Command entries; the launcher resolves them here at
+	// launch time when concrete values are known. Values must reflect
+	// IN-SANDBOX paths (what the agent process sees), not host paths — the
+	// bwrap bind mounts translate host paths to sandbox paths.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": l.workspaceRoot,
-		"PROXY_SOCKET":   proxySocketPath,
+		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
 		"TERM":           os.Getenv("TERM"),
+		"MACHINE_NAME":   l.machineName,
+		"SERVER_NAME":    l.serverName,
 	}
 	project, worktreePath := workspaceContext(principalLocalpart)
 	if project != "" {

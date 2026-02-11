@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
+	quickstartcmd "github.com/bureau-foundation/bureau/cmd/bureau/quickstart"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -39,6 +40,7 @@ func run() error {
 Manage sandboxed agent processes with credential isolation, live
 observation, and structured messaging via Matrix.`,
 		Subcommands: []*cli.Command{
+			quickstartcmd.Command(),
 			cli.LoginCommand(),
 			cli.WhoAmICommand(),
 			observecmd.ObserveCommand(),

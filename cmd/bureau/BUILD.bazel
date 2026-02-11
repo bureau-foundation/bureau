@@ -18,6 +18,7 @@ go_library(
         "//cmd/bureau/matrix",
         "//cmd/bureau/observe",
         "//cmd/bureau/pipeline",
+        "//cmd/bureau/quickstart",
         "//cmd/bureau/template",
         "//cmd/bureau/workspace",
         "//lib/version",

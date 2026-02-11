@@ -106,6 +106,7 @@
           "bureau-proxy-call"
           "bureau-observe-relay"
           "bureau-pipeline-executor"
+          "bureau-test-agent"
         ];
       in
       {

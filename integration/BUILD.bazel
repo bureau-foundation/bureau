@@ -22,6 +22,7 @@ go_test(
         "machine_test.go",
         "messaging_test.go",
         "pipeline_test.go",
+        "quickstart_test.go",
         "setup_test.go",
         "workspace_test.go",
     ],
@@ -33,6 +34,7 @@ go_test(
         "//cmd/bureau-observe-relay",
         "//cmd/bureau-pipeline-executor",
         "//cmd/bureau-proxy",
+        "//cmd/bureau-test-agent",
     ],
     env = {
         "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
@@ -41,6 +43,7 @@ go_test(
         "OBSERVE_RELAY_BINARY": "$(rlocationpath //cmd/bureau-observe-relay:bureau-observe-relay)",
         "PIPELINE_EXECUTOR_BINARY": "$(rlocationpath //cmd/bureau-pipeline-executor:bureau-pipeline-executor)",
         "PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
+        "TEST_AGENT_BINARY": "$(rlocationpath //cmd/bureau-test-agent:bureau-test-agent)",
     },
     local = True,
     tags = ["manual"],

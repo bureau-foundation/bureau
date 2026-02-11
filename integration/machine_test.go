@@ -273,6 +273,24 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 	}
 }
 
+// principalSession creates a messaging.Session for a registered principal
+// using its access token. The caller is responsible for closing the session.
+func principalSession(t *testing.T, account principalAccount) *messaging.Session {
+	t.Helper()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal session: %v", err)
+	}
+	session, err := client.SessionFromToken(account.UserID, account.Token)
+	if err != nil {
+		t.Fatalf("session from token for %s: %v", account.Localpart, err)
+	}
+	return session
+}
+
 // pushCredentials encrypts a principal's Matrix credentials with the
 // machine's public key and pushes them as an m.bureau.credentials state
 // event to the machine's config room. The credentials are encrypted so

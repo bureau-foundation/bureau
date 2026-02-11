@@ -526,6 +526,44 @@ func waitForCommandResults(t *testing.T, session *messaging.Session, roomID, req
 	}
 }
 
+// --- Room Message Polling ---
+
+// waitForMessageInRoom polls a room's timeline for a message from the
+// specified sender containing the specified substring. Fails the test if the
+// message is not found before the timeout expires.
+func waitForMessageInRoom(t *testing.T, session *messaging.Session, roomID, bodyContains, senderID string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
+			Direction: "b",
+			Limit:     50,
+		})
+		if err != nil {
+			t.Logf("RoomMessages poll error (retrying): %v", err)
+		} else {
+			for _, event := range response.Chunk {
+				if event.Type != "m.room.message" {
+					continue
+				}
+				if event.Sender != senderID {
+					continue
+				}
+				body, _ := event.Content["body"].(string)
+				if strings.Contains(body, bodyContains) {
+					return body
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for message containing %q from %s in room %s",
+				timeout, bodyContains, senderID, roomID)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // --- Proxy Test Helpers ---
 
 // proxyHTTPClient creates an HTTP client that connects through a proxy Unix

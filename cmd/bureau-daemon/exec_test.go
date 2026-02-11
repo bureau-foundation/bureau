@@ -538,6 +538,9 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		failedExecPaths:  make(map[string]bool),
 		running:          make(map[string]bool),
 		lastSpecs:        make(map[string]*schema.SandboxSpec),
+		previousSpecs:    make(map[string]*schema.SandboxSpec),
+		lastTemplates:    make(map[string]*schema.TemplateContent),
+		healthMonitors:   make(map[string]*healthMonitor),
 		services:         make(map[string]*schema.Service),
 		proxyRoutes:      make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
@@ -557,6 +560,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		},
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// Run reconcile — should detect daemon change and call exec.
 	if err := daemon.reconcile(context.Background()); err != nil {

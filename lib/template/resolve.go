@@ -104,7 +104,7 @@ func Fetch(ctx context.Context, session *messaging.Session, ref schema.TemplateR
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload): merged, child values win on conflict
 //   - Slices (Filesystem, CreateDirs, RequiredCredentials): child appended after parent,
 //     deduplicated where applicable (Filesystem by Dest, strings by value)
-//   - Pointers (Namespaces, Resources, Security): child replaces parent if non-nil
+//   - Pointers (Namespaces, Resources, Security, HealthCheck): child replaces parent if non-nil
 //   - Inherits is always cleared (consumed during resolution)
 func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result := *parent
@@ -141,6 +141,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	}
 	if child.Security != nil {
 		result.Security = child.Security
+	}
+	if child.HealthCheck != nil {
+		result.HealthCheck = child.HealthCheck
 	}
 
 	return result

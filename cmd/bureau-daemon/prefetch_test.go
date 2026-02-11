@@ -311,6 +311,9 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -321,6 +324,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 		},
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// First reconcile: prefetch fails, principal should NOT start.
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -426,6 +430,9 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -437,6 +444,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 		},
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)

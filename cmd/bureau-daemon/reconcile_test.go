@@ -473,6 +473,9 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -480,6 +483,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
@@ -600,6 +604,9 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		daemonBinaryHash:    daemonHash,
 		running:             make(map[string]bool),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -607,6 +614,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
@@ -729,6 +737,9 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 				Command: []string{"/bin/agent", "--mode=v1"},
 			},
 		},
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -736,6 +747,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// Reconcile: template command changed from v1 to v2.
 	// Should see: destroy-sandbox (structural restart) + create-sandbox (recreate).
@@ -776,6 +788,14 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	// Principal should be running again after the cycle.
 	if !daemon.running["agent/test"] {
 		t.Error("principal should be running after structural restart cycle")
+	}
+
+	// Structural restart should save the old spec as a rollback target.
+	// After the "create missing" pass recreates, previousSpecs should
+	// still hold the pre-restart spec (it's only cleared on rollback or
+	// principal removal).
+	if daemon.previousSpecs["agent/test"] == nil {
+		t.Error("expected previousSpecs to be populated after structural restart")
 	}
 }
 
@@ -861,6 +881,9 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 				// No payload — verifying structural-only detection.
 			},
 		},
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -868,6 +891,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
@@ -962,6 +986,9 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 				Payload: map[string]any{"model": "gpt-4"},
 			},
 		},
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -969,6 +996,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)

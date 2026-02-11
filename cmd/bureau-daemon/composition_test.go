@@ -208,6 +208,10 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		launcherSocket: launcherSocket,
 		statusInterval: time.Hour,
 		running:        make(map[string]bool),
+		lastSpecs:      make(map[string]*schema.SandboxSpec),
+		previousSpecs:  make(map[string]*schema.SandboxSpec),
+		lastTemplates:  make(map[string]*schema.TemplateContent),
+		healthMonitors: make(map[string]*healthMonitor),
 		services:       make(map[string]*schema.Service),
 		proxyRoutes:    make(map[string]string),
 		peerAddresses:  make(map[string]string),
@@ -219,6 +223,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	ctx := context.Background()
 	agentSocket := socketBase + principalLocalpart + principal.SocketSuffix
@@ -361,6 +366,9 @@ func TestReconcileNoConfig(t *testing.T) {
 		servicesRoomID: "!services:test",
 		launcherSocket: "/nonexistent/launcher.sock",
 		running:        make(map[string]bool),
+		previousSpecs:  make(map[string]*schema.SandboxSpec),
+		lastTemplates:  make(map[string]*schema.TemplateContent),
+		healthMonitors: make(map[string]*healthMonitor),
 		services:       make(map[string]*schema.Service),
 		proxyRoutes:    make(map[string]string),
 		peerAddresses:  make(map[string]string),
@@ -369,6 +377,7 @@ func TestReconcileNoConfig(t *testing.T) {
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// The mock has no state event for m.bureau.machine_config, so the
 	// mock returns M_NOT_FOUND. Reconcile should treat this as "no config yet"

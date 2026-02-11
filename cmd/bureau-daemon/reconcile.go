@@ -17,8 +17,12 @@ import (
 )
 
 // reconcile reads the current MachineConfig from Matrix and ensures the
-// running sandboxes match the desired state.
+// running sandboxes match the desired state. Acquires reconcileMu to
+// serialize with health monitor rollbacks.
 func (d *Daemon) reconcile(ctx context.Context) error {
+	d.reconcileMu.Lock()
+	defer d.reconcileMu.Unlock()
+
 	config, err := d.readMachineConfig(ctx)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -36,8 +40,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 	// Check for Bureau core binary updates before principal reconciliation.
 	// Proxy binary updates take effect immediately (for future sandbox
-	// creation). Daemon and launcher binary changes are detected and
-	// logged but the exec() self-update path is not yet implemented.
+	// creation). Daemon binary changes trigger exec() self-replacement.
+	// Launcher binary changes are detected but not yet acted on.
 	if config.BureauVersion != nil {
 		d.reconcileBureauVersion(ctx, config.BureauVersion)
 	}
@@ -88,12 +92,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// assignment references a template. When Template is empty, the
 		// launcher creates only a proxy process (no bwrap sandbox).
 		var sandboxSpec *schema.SandboxSpec
+		var resolvedTemplate *schema.TemplateContent
 		if assignment.Template != "" {
 			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
 			if err != nil {
 				d.logger.Error("resolving template", "principal", localpart, "template", assignment.Template, "error", err)
 				continue
 			}
+			resolvedTemplate = template
 			sandboxSpec = resolveInstanceConfig(template, &assignment)
 			d.logger.Info("resolved sandbox spec from template",
 				"principal", localpart,
@@ -143,12 +149,20 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			d.lastSpecs = make(map[string]*schema.SandboxSpec)
 		}
 		d.lastSpecs[localpart] = sandboxSpec
+		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
 		// Start watching the tmux session for layout changes. This also
 		// restores any previously saved layout from Matrix.
 		d.startLayoutWatcher(ctx, localpart)
+
+		// Start health monitoring if the template defines a health check.
+		// The monitor waits a grace period before its first probe, giving
+		// the sandbox and proxy time to initialize.
+		if resolvedTemplate != nil && resolvedTemplate.HealthCheck != nil {
+			d.startHealthMonitor(ctx, localpart, resolvedTemplate.HealthCheck)
+		}
 
 		// Register all known local service routes on the new consumer's
 		// proxy so it can reach services that were discovered before it
@@ -187,9 +201,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.logger.Info("stopping principal", "principal", localpart)
 
-		// Stop the layout watcher before destroying the sandbox. This
-		// ensures a clean shutdown rather than having the watcher see
-		// the tmux session disappear underneath it.
+		// Stop health monitoring and layout watching before destroying
+		// the sandbox. This ensures clean shutdown rather than having
+		// monitors see the sandbox disappear underneath them.
+		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
@@ -207,6 +222,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		delete(d.running, localpart)
 		delete(d.lastSpecs, localpart)
+		delete(d.previousSpecs, localpart)
+		delete(d.lastTemplates, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal stopped", "principal", localpart)
 	}
@@ -241,11 +258,13 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	if oldSpec == nil {
 		// No previous spec stored (principal was created without one,
 		// or from a previous daemon instance). Store the current spec
-		// for future comparisons but don't trigger any changes.
+		// and template for future comparisons but don't trigger any
+		// changes.
 		if d.lastSpecs == nil {
 			d.lastSpecs = make(map[string]*schema.SandboxSpec)
 		}
 		d.lastSpecs[localpart] = newSpec
+		d.lastTemplates[localpart] = template
 		return
 	}
 
@@ -260,6 +279,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 			"template", assignment.Template,
 		)
 
+		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
@@ -276,6 +296,12 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 				"principal", localpart, "error", response.Error)
 			return
 		}
+
+		// Save the current spec as the rollback target before clearing
+		// it. The "create missing" pass will recreate the sandbox with
+		// the new spec; if health checks fail, the daemon can roll back
+		// to this previous working configuration.
+		d.previousSpecs[localpart] = d.lastSpecs[localpart]
 
 		delete(d.running, localpart)
 		delete(d.lastSpecs, localpart)

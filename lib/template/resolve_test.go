@@ -507,6 +507,68 @@ func TestMergePointerOverride(t *testing.T) {
 	}
 }
 
+func TestMergeHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	parentHealthCheck := &schema.HealthCheck{
+		Endpoint:         "/health",
+		IntervalSeconds:  10,
+		FailureThreshold: 3,
+	}
+	childHealthCheck := &schema.HealthCheck{
+		Endpoint:           "/api/v1/status",
+		IntervalSeconds:    30,
+		TimeoutSeconds:     10,
+		FailureThreshold:   5,
+		GracePeriodSeconds: 60,
+	}
+
+	t.Run("parent only", func(t *testing.T) {
+		parent := &schema.TemplateContent{HealthCheck: parentHealthCheck}
+		child := &schema.TemplateContent{}
+
+		result := Merge(parent, child)
+		if result.HealthCheck == nil {
+			t.Fatal("HealthCheck should be inherited from parent")
+		}
+		if result.HealthCheck.Endpoint != "/health" {
+			t.Errorf("Endpoint = %q, want /health", result.HealthCheck.Endpoint)
+		}
+		if result.HealthCheck.IntervalSeconds != 10 {
+			t.Errorf("IntervalSeconds = %d, want 10", result.HealthCheck.IntervalSeconds)
+		}
+	})
+
+	t.Run("child overrides parent", func(t *testing.T) {
+		parent := &schema.TemplateContent{HealthCheck: parentHealthCheck}
+		child := &schema.TemplateContent{HealthCheck: childHealthCheck}
+
+		result := Merge(parent, child)
+		if result.HealthCheck == nil {
+			t.Fatal("HealthCheck should be present")
+		}
+		if result.HealthCheck.Endpoint != "/api/v1/status" {
+			t.Errorf("Endpoint = %q, want /api/v1/status (child override)", result.HealthCheck.Endpoint)
+		}
+		if result.HealthCheck.IntervalSeconds != 30 {
+			t.Errorf("IntervalSeconds = %d, want 30 (child override)", result.HealthCheck.IntervalSeconds)
+		}
+		if result.HealthCheck.GracePeriodSeconds != 60 {
+			t.Errorf("GracePeriodSeconds = %d, want 60 (child override)", result.HealthCheck.GracePeriodSeconds)
+		}
+	})
+
+	t.Run("neither", func(t *testing.T) {
+		parent := &schema.TemplateContent{}
+		child := &schema.TemplateContent{}
+
+		result := Merge(parent, child)
+		if result.HealthCheck != nil {
+			t.Errorf("HealthCheck should be nil when neither parent nor child has one")
+		}
+	})
+}
+
 func TestMergeClearsInherits(t *testing.T) {
 	t.Parallel()
 

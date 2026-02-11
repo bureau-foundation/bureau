@@ -202,6 +202,9 @@ func run() error {
 		failedExecPaths:  make(map[string]bool),
 		running:          make(map[string]bool),
 		lastSpecs:        make(map[string]*schema.SandboxSpec),
+		previousSpecs:    make(map[string]*schema.SandboxSpec),
+		lastTemplates:    make(map[string]*schema.TemplateContent),
+		healthMonitors:   make(map[string]*healthMonitor),
 		services:         make(map[string]*schema.Service),
 		proxyRoutes:      make(map[string]string),
 		peerAddresses:    make(map[string]string),
@@ -236,9 +239,10 @@ func run() error {
 		defer daemon.stopObserveListener()
 	}
 
-	// Layout watchers are started during reconciliation for each running
-	// principal. Ensure they all stop on shutdown.
+	// Layout watchers and health monitors are started during reconciliation
+	// for each running principal. Ensure they all stop on shutdown.
 	defer daemon.stopAllLayoutWatchers()
+	defer daemon.stopAllHealthMonitors()
 
 	// Perform the initial Matrix /sync to establish a since token and
 	// baseline state (reconcile, peer addresses, service directory).
@@ -317,6 +321,13 @@ type Daemon struct {
 	// without replacing the test process.
 	execFunc func(binary string, argv []string, env []string) error
 
+	// reconcileMu serializes access to the running/lastSpecs/previousSpecs/
+	// lastTemplates maps and launcher IPC calls that modify sandbox state.
+	// The reconcile loop holds this during reconcile(); health monitor
+	// goroutines acquire it before performing rollback. Use RLock for
+	// read-only access (e.g., publishStatus counting running sandboxes).
+	reconcileMu sync.RWMutex
+
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.
 	running map[string]bool
@@ -326,6 +337,27 @@ type Daemon struct {
 	// be hot-reloaded without restarting the sandbox. Nil entries mean
 	// the principal was created without a SandboxSpec (no template).
 	lastSpecs map[string]*schema.SandboxSpec
+
+	// previousSpecs stores the last-known-good SandboxSpec before a
+	// structural restart. On health check rollback, the daemon recreates
+	// the sandbox with this spec. Cleared after rollback or when the
+	// principal is removed from config. Keyed by principal localpart.
+	previousSpecs map[string]*schema.SandboxSpec
+
+	// lastTemplates stores the resolved TemplateContent for each running
+	// principal. Health monitors read HealthCheck config from here.
+	// Keyed by principal localpart.
+	lastTemplates map[string]*schema.TemplateContent
+
+	// healthMonitors tracks running health check goroutines, keyed by
+	// principal localpart. Protected by healthMonitorsMu. Started after
+	// sandbox creation when the resolved template has a HealthCheck.
+	healthMonitors   map[string]*healthMonitor
+	healthMonitorsMu sync.Mutex
+
+	// previousCPU stores the last /proc/stat reading for CPU utilization
+	// delta computation. First heartbeat after startup reports 0%.
+	previousCPU *cpuReading
 
 	// services is the cached service directory, built from m.bureau.service
 	// state events in #bureau/services. Keyed by service localpart (the
@@ -445,23 +477,32 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 
 // publishStatus sends a MachineStatus state event to the machines room.
 func (d *Daemon) publishStatus(ctx context.Context) {
+	d.reconcileMu.RLock()
 	runningCount := 0
 	for range d.running {
 		runningCount++
 	}
-
 	var lastActivity string
 	if !d.lastActivityAt.IsZero() {
 		lastActivity = d.lastActivityAt.UTC().Format(time.RFC3339)
 	}
+	d.reconcileMu.RUnlock()
 
 	transportAddress := d.transportListener.Address()
+
+	// Compute CPU utilization from the delta since the last heartbeat.
+	// The first heartbeat after startup reports 0% (no baseline yet).
+	currentCPU := readCPUStats()
+	cpuUtilization := cpuPercent(d.previousCPU, currentCPU)
+	d.previousCPU = currentCPU
 
 	status := schema.MachineStatus{
 		Principal: d.machineUserID,
 		Sandboxes: schema.SandboxCounts{
 			Running: runningCount,
 		},
+		CPUPercent:       cpuUtilization,
+		MemoryUsedGB:     memoryUsedGB(),
 		UptimeSeconds:    uptimeSeconds(),
 		LastActivityAt:   lastActivity,
 		TransportAddress: transportAddress,

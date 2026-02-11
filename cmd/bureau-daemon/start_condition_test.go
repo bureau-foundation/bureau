@@ -414,6 +414,9 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
 		services:            make(map[string]*schema.Service),
 		proxyRoutes:         make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
@@ -425,6 +428,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	}
 
 	cleanup := func() {
+		daemon.stopAllHealthMonitors()
 		daemon.stopAllLayoutWatchers()
 		listener.Close()
 		session.Close()

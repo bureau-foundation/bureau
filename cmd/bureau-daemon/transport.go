@@ -263,13 +263,19 @@ func (d *Daemon) handleTransportInbound(w http.ResponseWriter, r *http.Request) 
 // to discover transport addresses of peer daemons. Called on initial sync and
 // whenever the machines room has state changes, so the relay handler has
 // up-to-date routing information.
+//
+// Builds the complete set of current peers from state events, then reconciles
+// against the in-memory map: adding new peers, updating changed addresses,
+// and removing peers that are no longer present. Cached HTTP transports for
+// stale addresses are closed to release connections.
 func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 	events, err := d.session.GetRoomState(ctx, d.machinesRoomID)
 	if err != nil {
 		return fmt.Errorf("fetching machines room state: %w", err)
 	}
 
-	updated := 0
+	// Build the authoritative set of peer addresses from state events.
+	currentPeers := make(map[string]string) // machine principal → transport address
 	for _, event := range events {
 		if event.Type != schema.EventTypeMachineStatus {
 			continue
@@ -290,18 +296,81 @@ func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 			continue
 		}
 
-		if d.peerAddresses[status.Principal] != status.TransportAddress {
-			d.logger.Info("peer transport address discovered",
-				"machine", status.Principal,
-				"address", status.TransportAddress,
+		currentPeers[status.Principal] = status.TransportAddress
+	}
+
+	// Collect addresses that may become unreferenced after mutations.
+	staleAddresses := make(map[string]bool)
+
+	// Add new peers and update changed addresses.
+	updated := 0
+	for machineID, address := range currentPeers {
+		oldAddress, exists := d.peerAddresses[machineID]
+		if exists && oldAddress == address {
+			continue
+		}
+		if exists {
+			d.logger.Info("peer transport address changed",
+				"machine", machineID,
+				"old_address", oldAddress,
+				"new_address", address,
 			)
-			d.peerAddresses[status.Principal] = status.TransportAddress
-			updated++
+			staleAddresses[oldAddress] = true
+		} else {
+			d.logger.Info("peer transport address discovered",
+				"machine", machineID,
+				"address", address,
+			)
+		}
+		d.peerAddresses[machineID] = address
+		updated++
+	}
+
+	// Remove peers no longer present in state events.
+	removed := 0
+	for machineID, address := range d.peerAddresses {
+		if _, exists := currentPeers[machineID]; !exists {
+			d.logger.Info("peer transport address removed",
+				"machine", machineID,
+				"address", address,
+			)
+			staleAddresses[address] = true
+			delete(d.peerAddresses, machineID)
+			removed++
 		}
 	}
 
-	if updated > 0 {
-		d.logger.Info("peer addresses synced", "peers", len(d.peerAddresses), "updated", updated)
+	// Clean up cached transports for addresses no longer referenced by
+	// any peer. An address might appear in staleAddresses but still be
+	// used by a different peer (e.g., two machines shared an address and
+	// only one was removed), so we check against the post-mutation map.
+	if len(staleAddresses) > 0 {
+		activeAddresses := make(map[string]bool, len(d.peerAddresses))
+		for _, address := range d.peerAddresses {
+			activeAddresses[address] = true
+		}
+
+		d.peerTransportsMu.Lock()
+		for address := range staleAddresses {
+			if activeAddresses[address] {
+				continue
+			}
+			if roundTripper, exists := d.peerTransports[address]; exists {
+				delete(d.peerTransports, address)
+				if httpTransport, ok := roundTripper.(*http.Transport); ok {
+					httpTransport.CloseIdleConnections()
+				}
+			}
+		}
+		d.peerTransportsMu.Unlock()
+	}
+
+	if updated > 0 || removed > 0 {
+		d.logger.Info("peer addresses synced",
+			"peers", len(d.peerAddresses),
+			"updated", updated,
+			"removed", removed,
+		)
 	}
 	return nil
 }

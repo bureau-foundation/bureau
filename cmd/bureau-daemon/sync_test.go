@@ -362,6 +362,233 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	}
 }
 
+// TestSyncPeerAddresses_RemovesStalePeers verifies that syncPeerAddresses
+// removes peers whose MachineStatus state events are no longer present.
+func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const machinesRoomID = "!machines:test"
+
+	// State events: only peerA is present. peerB will be stale.
+	peerAKey := "machine/peer-a"
+	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeMachineStatus,
+			StateKey: &peerAKey,
+			Content: map[string]any{
+				"principal":         "@machine/peer-a:bureau.local",
+				"transport_address": "10.0.0.1:9090",
+			},
+		},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	// Pre-populate with two peers. peerB is stale (not in state events).
+	daemon := &Daemon{
+		machineUserID:  "@machine/test:bureau.local",
+		session:        session,
+		machinesRoomID: machinesRoomID,
+		peerAddresses: map[string]string{
+			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
+			"@machine/peer-b:bureau.local": "10.0.0.2:9090",
+		},
+		peerTransports: map[string]http.RoundTripper{
+			"10.0.0.1:9090": &http.Transport{},
+			"10.0.0.2:9090": &http.Transport{},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
+		t.Fatalf("syncPeerAddresses: %v", err)
+	}
+
+	// peerA should still be present.
+	if address, ok := daemon.peerAddresses["@machine/peer-a:bureau.local"]; !ok {
+		t.Error("peer-a should still be in peerAddresses")
+	} else if address != "10.0.0.1:9090" {
+		t.Errorf("peer-a address = %q, want %q", address, "10.0.0.1:9090")
+	}
+
+	// peerB should be removed.
+	if _, ok := daemon.peerAddresses["@machine/peer-b:bureau.local"]; ok {
+		t.Error("peer-b should have been removed from peerAddresses")
+	}
+
+	// peerA's transport should still be cached.
+	daemon.peerTransportsMu.RLock()
+	_, peerATransportExists := daemon.peerTransports["10.0.0.1:9090"]
+	_, peerBTransportExists := daemon.peerTransports["10.0.0.2:9090"]
+	daemon.peerTransportsMu.RUnlock()
+
+	if !peerATransportExists {
+		t.Error("peer-a transport should still be cached")
+	}
+	if peerBTransportExists {
+		t.Error("peer-b transport should have been cleaned up")
+	}
+}
+
+// TestSyncPeerAddresses_UpdatesChangedAddress verifies that when a peer's
+// transport address changes, the old address is updated and its cached
+// transport is cleaned up.
+func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const machinesRoomID = "!machines:test"
+
+	// State events: peerA has a new address.
+	peerAKey := "machine/peer-a"
+	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeMachineStatus,
+			StateKey: &peerAKey,
+			Content: map[string]any{
+				"principal":         "@machine/peer-a:bureau.local",
+				"transport_address": "10.0.0.99:9090",
+			},
+		},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon := &Daemon{
+		machineUserID:  "@machine/test:bureau.local",
+		session:        session,
+		machinesRoomID: machinesRoomID,
+		peerAddresses: map[string]string{
+			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
+		},
+		peerTransports: map[string]http.RoundTripper{
+			"10.0.0.1:9090": &http.Transport{},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
+		t.Fatalf("syncPeerAddresses: %v", err)
+	}
+
+	// Address should be updated.
+	if address := daemon.peerAddresses["@machine/peer-a:bureau.local"]; address != "10.0.0.99:9090" {
+		t.Errorf("peer-a address = %q, want %q", address, "10.0.0.99:9090")
+	}
+
+	// Old transport should be cleaned up, new one not yet cached.
+	daemon.peerTransportsMu.RLock()
+	_, oldTransportExists := daemon.peerTransports["10.0.0.1:9090"]
+	_, newTransportExists := daemon.peerTransports["10.0.0.99:9090"]
+	daemon.peerTransportsMu.RUnlock()
+
+	if oldTransportExists {
+		t.Error("transport for old address should have been cleaned up")
+	}
+	if newTransportExists {
+		t.Error("transport for new address should not be cached yet (lazy creation)")
+	}
+}
+
+// TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely verifies that when
+// two peers share a transport address and one is removed, the cached transport
+// is preserved because the other peer still references it.
+func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const machinesRoomID = "!machines:test"
+
+	// Only peerA remains. peerB (same address) is gone.
+	peerAKey := "machine/peer-a"
+	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeMachineStatus,
+			StateKey: &peerAKey,
+			Content: map[string]any{
+				"principal":         "@machine/peer-a:bureau.local",
+				"transport_address": "10.0.0.1:9090",
+			},
+		},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	// Two peers sharing the same address (e.g., behind a load balancer).
+	sharedAddress := "10.0.0.1:9090"
+	daemon := &Daemon{
+		machineUserID:  "@machine/test:bureau.local",
+		session:        session,
+		machinesRoomID: machinesRoomID,
+		peerAddresses: map[string]string{
+			"@machine/peer-a:bureau.local": sharedAddress,
+			"@machine/peer-b:bureau.local": sharedAddress,
+		},
+		peerTransports: map[string]http.RoundTripper{
+			sharedAddress: &http.Transport{},
+		},
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
+		t.Fatalf("syncPeerAddresses: %v", err)
+	}
+
+	// peerB should be removed but peerA still uses the shared address.
+	if _, ok := daemon.peerAddresses["@machine/peer-b:bureau.local"]; ok {
+		t.Error("peer-b should have been removed")
+	}
+
+	// Transport for the shared address should be preserved.
+	daemon.peerTransportsMu.RLock()
+	_, transportExists := daemon.peerTransports[sharedAddress]
+	daemon.peerTransportsMu.RUnlock()
+
+	if !transportExists {
+		t.Error("transport for shared address should be preserved (peer-a still uses it)")
+	}
+}
+
 func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	t.Parallel()
 

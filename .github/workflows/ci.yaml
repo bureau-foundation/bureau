@@ -72,16 +72,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
-          trap 'rm -f /tmp/nix-signing-key; rm -rf ~/.aws' EXIT
+          trap 'rm -f /tmp/nix-signing-key' EXIT
 
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile bureau
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile bureau
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set region auto --profile bureau
-
-          CACHE="s3://bureau-cache?profile=bureau&endpoint=${{ secrets.R2_ENDPOINT }}"
+          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
 
           nix build --no-link .#devShells.x86_64-linux.default
           nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
@@ -141,23 +134,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
-          trap 'rm -f /tmp/nix-signing-key; rm -rf ~/.aws' EXIT
+          trap 'rm -f /tmp/nix-signing-key' EXIT
 
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile bureau
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile bureau
-          nix shell nixpkgs#awscli2 --command \
-            aws configure set region auto --profile bureau
-
-          echo "=== Diagnostic: verifying R2 credentials ==="
-          nix shell nixpkgs#awscli2 --command \
-            aws s3 ls "s3://bureau-cache" \
-              --profile bureau \
-              --endpoint-url "https://${{ secrets.R2_ENDPOINT }}" 2>&1 || true
-          echo "=== End diagnostic ==="
-
-          CACHE="s3://bureau-cache?profile=bureau&endpoint=${{ secrets.R2_ENDPOINT }}"
+          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
 
           nix build --no-link .#devShells.x86_64-linux.default
           nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default

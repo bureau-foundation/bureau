@@ -345,7 +345,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	}
 
 	// Section 7: Machine account membership.
-	results = append(results, checkMachineMembership(ctx, session, roomIDs)...)
+	results = append(results, checkMachineMembership(ctx, session, serverName, roomIDs)...)
 
 	// Section 8: Base templates published.
 	if templatesRoomID, ok := roomIDs["bureau/templates"]; ok {
@@ -592,80 +592,90 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 	)
 }
 
-// checkMachineMembership verifies that machine accounts (those with
-// m.bureau.machine_key state in the machines room) are members of the
-// system and services rooms. Missing memberships are fixable via invite.
-func checkMachineMembership(ctx context.Context, session *messaging.Session, roomIDs map[string]string) []checkResult {
+// checkMachineMembership verifies that active machine accounts (those with
+// non-empty m.bureau.machine_key state in the machines room) are members of
+// the services room. Machines don't need to be in the system room — they
+// receive instructions through per-machine config rooms, not system room
+// membership. Missing memberships are fixable via invite.
+//
+// The state key for machine_key events is the machine's localpart (e.g.,
+// "machine/worker-01"), not the full Matrix user ID. This function
+// constructs the full user ID using the server name for membership checks
+// and invite fixes.
+//
+// Decommissioned machines have their machine_key content cleared to {}.
+// These are skipped — only machines with a non-empty "key" field are
+// considered active.
+func checkMachineMembership(ctx context.Context, session *messaging.Session, serverName string, roomIDs map[string]string) []checkResult {
 	machinesRoomID, ok := roomIDs["bureau/machines"]
 	if !ok {
 		return nil
 	}
 
-	// Find machine users from m.bureau.machine_key state events.
+	// Find active machine users from m.bureau.machine_key state events.
+	// The state key is the machine's localpart. Skip events with empty
+	// content (decommissioned machines).
 	events, err := session.GetRoomState(ctx, machinesRoomID)
 	if err != nil {
 		return []checkResult{fail("machine membership", fmt.Sprintf("cannot read machines room state: %v", err))}
 	}
 
-	var machineUsers []string
+	type machineEntry struct {
+		localpart string
+		userID    string
+	}
+	var machines []machineEntry
 	for _, event := range events {
-		if event.Type == schema.EventTypeMachineKey && event.StateKey != nil && *event.StateKey != "" {
-			machineUsers = append(machineUsers, *event.StateKey)
+		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil || *event.StateKey == "" {
+			continue
 		}
+		// Decommissioned machines have their key cleared to empty content.
+		// Only consider machines with a non-empty "key" field as active.
+		if keyValue, _ := event.Content["key"].(string); keyValue == "" {
+			continue
+		}
+		localpart := *event.StateKey
+		userID := fmt.Sprintf("@%s:%s", localpart, serverName)
+		machines = append(machines, machineEntry{localpart: localpart, userID: userID})
 	}
 
-	if len(machineUsers) == 0 {
+	if len(machines) == 0 {
 		return nil
 	}
 
 	var results []checkResult
-	checkRooms := []struct {
-		alias string
-		name  string
-	}{
-		{"bureau/system", "system room"},
-		{"bureau/services", "services room"},
+
+	servicesRoomID, ok := roomIDs["bureau/services"]
+	if !ok {
+		return nil
 	}
 
-	for _, checkRoom := range checkRooms {
-		roomID, ok := roomIDs[checkRoom.alias]
-		if !ok {
-			continue
-		}
+	members, err := session.GetRoomMembers(ctx, servicesRoomID)
+	if err != nil {
+		return []checkResult{fail("services room membership", fmt.Sprintf("cannot read members: %v", err))}
+	}
 
-		members, err := session.GetRoomMembers(ctx, roomID)
-		if err != nil {
-			results = append(results, fail(
-				checkRoom.name+" membership",
-				fmt.Sprintf("cannot read members: %v", err),
+	memberSet := make(map[string]bool)
+	for _, member := range members {
+		if member.Membership == "join" {
+			memberSet[member.UserID] = true
+		}
+	}
+
+	for _, machine := range machines {
+		checkName := fmt.Sprintf("%s in services room", machine.userID)
+		if memberSet[machine.userID] {
+			results = append(results, pass(checkName, "member"))
+		} else {
+			capturedUserID := machine.userID
+			results = append(results, failWithFix(
+				checkName,
+				"not a member of services room",
+				fmt.Sprintf("invite %s to services room", capturedUserID),
+				func(ctx context.Context, session *messaging.Session) error {
+					return session.InviteUser(ctx, servicesRoomID, capturedUserID)
+				},
 			))
-			continue
-		}
-
-		memberSet := make(map[string]bool)
-		for _, member := range members {
-			if member.Membership == "join" {
-				memberSet[member.UserID] = true
-			}
-		}
-
-		for _, machineUser := range machineUsers {
-			checkName := fmt.Sprintf("%s in %s", machineUser, checkRoom.name)
-			if memberSet[machineUser] {
-				results = append(results, pass(checkName, "member"))
-			} else {
-				capturedRoomID := roomID
-				capturedUser := machineUser
-				capturedRoomName := checkRoom.name
-				results = append(results, failWithFix(
-					checkName,
-					fmt.Sprintf("not a member of %s", capturedRoomName),
-					fmt.Sprintf("invite %s to %s", capturedUser, capturedRoomName),
-					func(ctx context.Context, session *messaging.Session) error {
-						return session.InviteUser(ctx, capturedRoomID, capturedUser)
-					},
-				))
-			}
 		}
 	}
 

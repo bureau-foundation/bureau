@@ -69,9 +69,9 @@ func TestMachineKeyRoundTrip(t *testing.T) {
 func TestMachineStatusRoundTrip(t *testing.T) {
 	original := MachineStatus{
 		Principal:             "@machine/workstation:bureau.local",
-		CPUPercent:            42.5,
-		MemoryUsedGB:          12.3,
-		GPUUtilizationPercent: 87.0,
+		CPUPercent:            42,
+		MemoryUsedMB:          12595,
+		GPUUtilizationPercent: 87,
 		Sandboxes:             SandboxCounts{Running: 5, Idle: 2},
 		UptimeSeconds:         86400,
 	}
@@ -86,9 +86,9 @@ func TestMachineStatusRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "principal", "@machine/workstation:bureau.local")
-	assertField(t, raw, "cpu_percent", 42.5)
-	assertField(t, raw, "memory_used_gb", 12.3)
-	assertField(t, raw, "gpu_utilization_percent", 87.0)
+	assertField(t, raw, "cpu_percent", float64(42))
+	assertField(t, raw, "memory_used_mb", float64(12595))
+	assertField(t, raw, "gpu_utilization_percent", float64(87))
 	assertField(t, raw, "uptime_seconds", float64(86400))
 
 	var decoded MachineStatus
@@ -103,8 +103,8 @@ func TestMachineStatusRoundTrip(t *testing.T) {
 func TestMachineStatusOmitsZeroGPU(t *testing.T) {
 	status := MachineStatus{
 		Principal:     "@machine/pi-kitchen:bureau.local",
-		CPUPercent:    15.0,
-		MemoryUsedGB:  0.8,
+		CPUPercent:    15,
+		MemoryUsedMB:  819,
 		Sandboxes:     SandboxCounts{Running: 1, Idle: 0},
 		UptimeSeconds: 3600,
 		// GPUUtilizationPercent deliberately zero.

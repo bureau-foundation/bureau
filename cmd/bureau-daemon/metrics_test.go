@@ -155,17 +155,17 @@ func TestReadCPUStatsLiveSystem(t *testing.T) {
 	}
 }
 
-func TestMemoryUsedGB(t *testing.T) {
+func TestMemoryUsedMB(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping: syscall.Sysinfo only available on Linux")
 	}
 
-	used := memoryUsedGB()
+	used := memoryUsedMB()
 	if used <= 0 {
-		t.Errorf("memoryUsedGB = %f, expected positive value", used)
+		t.Errorf("memoryUsedMB = %d, expected positive value", used)
 	}
-	// Sanity: used memory should be less than 100 TB (catches unit conversion bugs).
-	if used > 100*1024 {
-		t.Errorf("memoryUsedGB = %f, unreasonably large (unit conversion bug?)", used)
+	// Sanity: used memory should be less than 100 TB in MB (catches unit conversion bugs).
+	if used > 100*1024*1024 {
+		t.Errorf("memoryUsedMB = %d, unreasonably large (unit conversion bug?)", used)
 	}
 }

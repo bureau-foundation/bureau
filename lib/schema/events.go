@@ -174,16 +174,21 @@ type MachineStatus struct {
 	// (e.g., "@machine/workstation:bureau.local").
 	Principal string `json:"principal"`
 
-	// CPUPercent is the current CPU utilization (0-100, may exceed 100 on
-	// multi-core for per-core reporting).
-	CPUPercent float64 `json:"cpu_percent"`
+	// CPUPercent is the current CPU utilization as an integer (0-100, may
+	// exceed 100 on multi-core for per-core reporting). Truncated from the
+	// actual float value. Integer because Matrix canonical JSON forbids
+	// fractional numbers.
+	CPUPercent int `json:"cpu_percent"`
 
-	// MemoryUsedGB is the current memory usage in gigabytes.
-	MemoryUsedGB float64 `json:"memory_used_gb"`
+	// MemoryUsedMB is the current memory usage in megabytes. Integer
+	// megabytes give adequate precision for monitoring while complying
+	// with Matrix canonical JSON (which forbids fractional numbers).
+	MemoryUsedMB int `json:"memory_used_mb"`
 
-	// GPUUtilizationPercent is the GPU utilization (0-100). Zero if no GPU
-	// or GPU monitoring is unavailable.
-	GPUUtilizationPercent float64 `json:"gpu_utilization_percent,omitempty"`
+	// GPUUtilizationPercent is the GPU utilization as an integer (0-100).
+	// Zero if no GPU or GPU monitoring is unavailable. Integer because
+	// Matrix canonical JSON forbids fractional numbers.
+	GPUUtilizationPercent int `json:"gpu_utilization_percent,omitempty"`
 
 	// Sandboxes reports counts of sandbox states on this machine.
 	Sandboxes SandboxCounts `json:"sandboxes"`

@@ -770,9 +770,11 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 func TestRunDoctor_FixMachineMembership(t *testing.T) {
 	adminUserID := "@bureau-admin:local"
 	mock := newHealthyMock(adminUserID)
-	mock.machineUsers = []string{"@machine/workstation:local"}
+	// machineUsers are state keys (localparts), matching how the launcher
+	// publishes machine_key events. The doctor constructs full user IDs
+	// from these using the server name.
+	mock.machineUsers = []string{"machine/workstation"}
 	mock.roomMembers = map[string][]string{
-		"!system:local":   {adminUserID},
 		"!services:local": {adminUserID},
 		"!machines:local": {adminUserID, "@machine/workstation:local"},
 	}
@@ -791,39 +793,32 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 
 	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
 
-	// Both membership checks should fail.
-	membershipResults := make(map[string]checkResult)
-	for _, result := range results {
-		if strings.HasPrefix(result.Name, "@machine/workstation:local in ") {
-			membershipResults[result.Name] = result
+	// Services membership should fail (machine not in services room).
+	// The doctor constructs the full user ID from the localpart state key.
+	servicesCheckName := "@machine/workstation:local in services room"
+	var servicesResult *checkResult
+	for i, result := range results {
+		if result.Name == servicesCheckName {
+			servicesResult = &results[i]
 		}
 	}
 
-	for _, roomName := range []string{"system room", "services room"} {
-		checkName := "@machine/workstation:local in " + roomName
-		result, ok := membershipResults[checkName]
-		if !ok {
-			t.Errorf("missing membership check: %s", checkName)
-			continue
-		}
-		if result.Status != statusFail {
-			t.Errorf("expected %s to FAIL, got %s", checkName, result.Status)
-		}
-		if result.fix == nil {
-			t.Errorf("expected %s to have a fix function", checkName)
-		}
+	if servicesResult == nil {
+		t.Fatal("missing membership check: " + servicesCheckName)
+	}
+	if servicesResult.Status != statusFail {
+		t.Errorf("expected %s to FAIL, got %s", servicesCheckName, servicesResult.Status)
+	}
+	if servicesResult.fix == nil {
+		t.Errorf("expected %s to have a fix function", servicesCheckName)
 	}
 
 	executeFixes(t.Context(), session, results, false)
 
-	// Verify invites were sent.
-	systemInvites := mock.getInvites("!system:local")
-	if len(systemInvites) != 1 || systemInvites[0] != "@machine/workstation:local" {
-		t.Errorf("expected invite to system room, got %v", systemInvites)
-	}
+	// Verify invite was sent to services room with the full user ID.
 	servicesInvites := mock.getInvites("!services:local")
 	if len(servicesInvites) != 1 || servicesInvites[0] != "@machine/workstation:local" {
-		t.Errorf("expected invite to services room, got %v", servicesInvites)
+		t.Errorf("expected invite to services room for @machine/workstation:local, got %v", servicesInvites)
 	}
 }
 

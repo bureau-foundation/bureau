@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -90,10 +89,11 @@ func cpuPercent(previous, current *cpuReading) float64 {
 	return float64(busyDelta) / float64(totalDelta) * 100
 }
 
-// memoryUsedGB returns the current system memory usage in gigabytes.
+// memoryUsedMB returns the current system memory usage in megabytes.
 // Uses syscall.Sysinfo (same call used by uptimeSeconds in main.go).
-// Returns 0 if the syscall fails.
-func memoryUsedGB() float64 {
+// Returns 0 if the syscall fails. Integer megabytes comply with Matrix
+// canonical JSON (which forbids fractional numbers).
+func memoryUsedMB() int {
 	var info syscall.Sysinfo_t
 	if err := syscall.Sysinfo(&info); err != nil {
 		return 0
@@ -103,11 +103,5 @@ func memoryUsedGB() float64 {
 	if totalBytes < freeBytes {
 		return 0
 	}
-	return float64(totalBytes-freeBytes) / (1024 * 1024 * 1024)
-}
-
-// formatMemoryGB formats a memory value in GB with two decimal places,
-// matching the precision appropriate for MachineStatus reporting.
-func formatMemoryGB(gigabytes float64) string {
-	return fmt.Sprintf("%.2f", gigabytes)
+	return int((totalBytes - freeBytes) / (1024 * 1024))
 }

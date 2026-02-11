@@ -501,8 +501,8 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		Sandboxes: schema.SandboxCounts{
 			Running: runningCount,
 		},
-		CPUPercent:       cpuUtilization,
-		MemoryUsedGB:     memoryUsedGB(),
+		CPUPercent:       int(cpuUtilization),
+		MemoryUsedMB:     memoryUsedMB(),
 		UptimeSeconds:    uptimeSeconds(),
 		LastActivityAt:   lastActivity,
 		TransportAddress: transportAddress,

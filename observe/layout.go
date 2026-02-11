@@ -5,12 +5,12 @@ package observe
 
 import (
 	"fmt"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 // Layout describes the tmux session structure for an observation target.
@@ -90,12 +90,9 @@ type tmuxPane struct {
 // ReadTmuxLayout reads the current layout of a tmux session and returns
 // it as a Layout struct. Queries tmux for window list, pane arrangement,
 // and running commands.
-//
-// serverSocket is the tmux server socket path (the -S flag).
-// sessionName is the tmux session to read (e.g., "bureau/iree/amdgpu/pm").
-func ReadTmuxLayout(serverSocket, sessionName string) (*Layout, error) {
+func ReadTmuxLayout(server *tmux.Server, sessionName string) (*Layout, error) {
 	// Query window list.
-	windowLines, err := tmuxCommand(serverSocket, "list-windows",
+	windowLines, err := server.Run("list-windows",
 		"-t", sessionName,
 		"-F", "#{window_index}\t#{window_name}")
 	if err != nil {
@@ -114,7 +111,7 @@ func ReadTmuxLayout(serverSocket, sessionName string) (*Layout, error) {
 
 		// Query panes for this window.
 		paneTarget := sessionName + ":" + windowIndex
-		paneLines, err := tmuxCommand(serverSocket, "list-panes",
+		paneLines, err := server.Run("list-panes",
 			"-t", paneTarget,
 			"-F", "#{pane_index}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_top}\t#{pane_current_command}")
 		if err != nil {
@@ -145,19 +142,14 @@ func ReadTmuxLayout(serverSocket, sessionName string) (*Layout, error) {
 // starts commands. Existing panes running matching commands are left
 // untouched; extra panes are closed; missing panes are created.
 //
-// serverSocket is the tmux server socket path (the -S flag).
-// sessionName is the tmux session to modify (e.g., "bureau/iree/amdgpu/pm").
 // If the session does not exist, it is created.
-func ApplyLayout(serverSocket, sessionName string, layout *Layout) error {
+func ApplyLayout(server *tmux.Server, sessionName string, layout *Layout) error {
 	if len(layout.Windows) == 0 {
 		return fmt.Errorf("layout has no windows")
 	}
 
 	// Check if the session already exists.
-	sessionExists := false
-	if _, err := tmuxCommand(serverSocket, "has-session", "-t", sessionName); err == nil {
-		sessionExists = true
-	}
+	sessionExists := server.HasSession(sessionName)
 
 	for windowIndex, window := range layout.Windows {
 		if len(window.Panes) == 0 {
@@ -176,17 +168,17 @@ func ApplyLayout(serverSocket, sessionName string, layout *Layout) error {
 				if firstCommand != "" {
 					args = append(args, firstCommand)
 				}
-				if _, err := tmuxCommand(serverSocket, args...); err != nil {
+				if _, err := server.Run(args...); err != nil {
 					return fmt.Errorf("creating session %q: %w", sessionName, err)
 				}
 			} else {
 				// Session exists. Rename the current window.
-				_, _ = tmuxCommand(serverSocket, "rename-window",
+				_, _ = server.Run("rename-window",
 					"-t", sessionName, window.Name)
 			}
 
 			// Get the window target for this first window.
-			indexLine, err := tmuxCommand(serverSocket, "list-windows",
+			indexLine, err := server.Run("list-windows",
 				"-t", sessionName, "-F", "#{window_index}")
 			if err != nil {
 				return fmt.Errorf("listing windows after creation: %w", err)
@@ -203,12 +195,12 @@ func ApplyLayout(serverSocket, sessionName string, layout *Layout) error {
 			if firstCommand != "" {
 				args = append(args, firstCommand)
 			}
-			if _, err := tmuxCommand(serverSocket, args...); err != nil {
+			if _, err := server.Run(args...); err != nil {
 				return fmt.Errorf("creating window %q: %w", window.Name, err)
 			}
 
 			// Get the index of the newly created window (the last one).
-			indexLine, err := tmuxCommand(serverSocket, "list-windows",
+			indexLine, err := server.Run("list-windows",
 				"-t", sessionName, "-F", "#{window_index}")
 			if err != nil {
 				return fmt.Errorf("listing windows: %w", err)
@@ -238,7 +230,7 @@ func ApplyLayout(serverSocket, sessionName string, layout *Layout) error {
 				args = append(args, command)
 			}
 
-			if _, err := tmuxCommand(serverSocket, args...); err != nil {
+			if _, err := server.Run(args...); err != nil {
 				return fmt.Errorf("splitting pane in window %q: %w", window.Name, err)
 			}
 		}
@@ -373,20 +365,6 @@ func inferPaneSplits(rawPanes []tmuxPane) []Pane {
 	}
 
 	return panes
-}
-
-// tmuxCommand runs a tmux command against the given server socket and
-// returns the combined stdout/stderr output. All tmux interactions go
-// through this function to ensure the -S flag is always present.
-func tmuxCommand(serverSocket string, args ...string) (string, error) {
-	fullArgs := append([]string{"-S", serverSocket}, args...)
-	cmd := exec.Command("tmux", fullArgs...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("tmux %s: %w (output: %s)",
-			strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	return string(output), nil
 }
 
 // LayoutEqual reports whether two layouts are structurally identical.

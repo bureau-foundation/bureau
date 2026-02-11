@@ -1,0 +1,24 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "tmux",
+    srcs = [
+        "server.go",
+        "testserver.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/tmux",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/testutil"],
+)
+
+go_test(
+    name = "tmux_test",
+    srcs = ["server_test.go"],
+    deps = [
+        ":tmux",
+        "//lib/testutil",
+    ],
+)

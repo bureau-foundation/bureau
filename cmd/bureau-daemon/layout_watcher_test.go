@@ -10,26 +10,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // newTestDaemonWithLayout creates a Daemon with a mock Matrix server and an
-// isolated tmux server socket for layout watcher tests. Returns the daemon,
-// mock state (for verifying published events), and the tmux socket path.
-func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
+// isolated tmux server for layout watcher tests. Returns the daemon, mock
+// state (for verifying published events), and the tmux server.
+func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, *tmux.Server) {
 	t.Helper()
 
-	socketDir := testutil.SocketDir(t)
-	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	tmuxServer := tmux.NewTestServer(t)
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -63,36 +60,29 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 		proxyRoutes:       make(map[string]string),
 		peerAddresses:     make(map[string]string),
 		peerTransports:    make(map[string]http.RoundTripper),
-		tmuxServerSocket:  tmuxSocket,
+		tmuxServer:        tmuxServer,
 		layoutWatchers:    make(map[string]*layoutWatcher),
 		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Kill tmux server on cleanup.
-	t.Cleanup(func() {
-		exec.Command("tmux", "-S", tmuxSocket, "kill-server").Run()
-	})
-
-	return daemon, matrixState, tmuxSocket
+	return daemon, matrixState, tmuxServer
 }
 
 // createTestTmuxSession creates a tmux session on the test-isolated server.
 // Blocks until the session is ready. The session runs "cat" so it stays alive
 // and accepts input.
-func createTestTmuxSession(t *testing.T, serverSocket, sessionName string) {
+func createTestTmuxSession(t *testing.T, server *tmux.Server, sessionName string) {
 	t.Helper()
-	cmd := exec.Command("tmux", "-S", serverSocket, "new-session", "-d",
+	_, err := server.Run("new-session", "-d",
 		"-s", sessionName, "-x", "160", "-y", "48", "cat")
-	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("create tmux session %q: %v\n%s", sessionName, err, output)
+		t.Fatalf("create tmux session %q: %v", sessionName, err)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		check := exec.Command("tmux", "-S", serverSocket, "has-session", "-t", sessionName)
-		if check.Run() == nil {
+		if server.HasSession(sessionName) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -107,11 +97,11 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 		t.Skip("requires tmux")
 	}
 
-	daemon, matrixState, tmuxSocket := newTestDaemonWithLayout(t)
+	daemon, matrixState, tmuxServer := newTestDaemonWithLayout(t)
 
 	localpart := "test/layout"
 	sessionName := "bureau/" + localpart
-	createTestTmuxSession(t, tmuxSocket, sessionName)
+	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -123,9 +113,8 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Split a pane to trigger a layout change.
-	cmd := exec.Command("tmux", "-S", tmuxSocket, "split-window", "-t", sessionName, "-h", "cat")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("split-window: %v\n%s", err, output)
+	if _, err := tmuxServer.Run("split-window", "-t", sessionName, "-h", "cat"); err != nil {
+		t.Fatalf("split-window: %v", err)
 	}
 
 	// Wait for debounce (500ms) + publish.
@@ -171,7 +160,7 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 		t.Skip("requires tmux")
 	}
 
-	daemon, matrixState, tmuxSocket := newTestDaemonWithLayout(t)
+	daemon, matrixState, tmuxServer := newTestDaemonWithLayout(t)
 
 	localpart := "test/restore"
 	sessionName := "bureau/" + localpart
@@ -192,7 +181,7 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 	})
 
 	// Create the tmux session (starts with 1 window).
-	createTestTmuxSession(t, tmuxSocket, sessionName)
+	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,13 +193,13 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify the tmux session now has 2 windows.
-	output, err := exec.Command("tmux", "-S", tmuxSocket, "list-windows",
-		"-t", sessionName, "-F", "#{window_name}").CombinedOutput()
+	output, err := tmuxServer.Run("list-windows",
+		"-t", sessionName, "-F", "#{window_name}")
 	if err != nil {
-		t.Fatalf("list-windows: %v\n%s", err, output)
+		t.Fatalf("list-windows: %v", err)
 	}
 
-	windowNames := strings.Split(strings.TrimSpace(string(output)), "\n")
+	windowNames := strings.Split(strings.TrimSpace(output), "\n")
 	if len(windowNames) != 2 {
 		t.Errorf("tmux session has %d windows, want 2\nwindow names: %v",
 			len(windowNames), windowNames)
@@ -224,11 +213,11 @@ func TestLayoutWatcherStopCleanup(t *testing.T) {
 		t.Skip("requires tmux")
 	}
 
-	daemon, _, tmuxSocket := newTestDaemonWithLayout(t)
+	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
 	localpart := "test/stop"
 	sessionName := "bureau/" + localpart
-	createTestTmuxSession(t, tmuxSocket, sessionName)
+	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -266,11 +255,11 @@ func TestLayoutWatcherIdempotentStart(t *testing.T) {
 		t.Skip("requires tmux")
 	}
 
-	daemon, _, tmuxSocket := newTestDaemonWithLayout(t)
+	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
 	localpart := "test/idempotent"
 	sessionName := "bureau/" + localpart
-	createTestTmuxSession(t, tmuxSocket, sessionName)
+	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -298,11 +287,11 @@ func TestLayoutWatcherStopAll(t *testing.T) {
 		t.Skip("requires tmux")
 	}
 
-	daemon, _, tmuxSocket := newTestDaemonWithLayout(t)
+	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
 	principals := []string{"a/one", "a/two", "a/three"}
 	for _, name := range principals {
-		createTestTmuxSession(t, tmuxSocket, "bureau/"+name)
+		createTestTmuxSession(t, tmuxServer, "bureau/"+name)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

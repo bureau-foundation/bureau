@@ -994,8 +994,8 @@ func (d *Daemon) forkObserveRelay(sessionName string, readOnly bool) (net.Conn, 
 
 	// Build environment for the relay process.
 	environment := os.Environ()
-	if d.tmuxServerSocket != "" {
-		environment = append(environment, "BUREAU_TMUX_SOCKET="+d.tmuxServerSocket)
+	if d.tmuxServer != nil {
+		environment = append(environment, "BUREAU_TMUX_SOCKET="+d.tmuxServer.SocketPath())
 	}
 	if readOnly {
 		environment = append(environment, "BUREAU_OBSERVE_READONLY=1")

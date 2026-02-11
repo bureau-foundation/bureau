@@ -3,17 +3,17 @@
 
 package observe
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/tmux"
+)
 
 // Dashboard creates a local tmux session for a composite observation
 // view. It reads the layout (typically from a Matrix room state event)
 // and creates a local tmux session with windows and panes: each
 // "observe" pane runs a bureau-observe process connected to the target
 // principal, each "command" pane runs the specified local command.
-//
-// serverSocket is the local tmux server socket path for the dashboard
-// session. This can be the user's default tmux server (dashboards are
-// local, not Bureau-managed sessions).
 //
 // sessionName is the local tmux session name to create
 // (e.g., "observe/iree/amdgpu/general").
@@ -23,7 +23,7 @@ import "fmt"
 //
 // Dashboard blocks until the local tmux session is created and all
 // panes are started. It does not wait for the session to end.
-func Dashboard(serverSocket, sessionName, daemonSocket string, layout *Layout) error {
+func Dashboard(server *tmux.Server, sessionName, daemonSocket string, layout *Layout) error {
 	if layout == nil {
 		return fmt.Errorf("layout is nil")
 	}
@@ -39,7 +39,7 @@ func Dashboard(serverSocket, sessionName, daemonSocket string, layout *Layout) e
 	// pass through unchanged; role panes become informational shells.
 	resolved := resolveLayout(layout, daemonSocket)
 
-	return ApplyLayout(serverSocket, sessionName, resolved)
+	return ApplyLayout(server, sessionName, resolved)
 }
 
 // resolveLayout creates a copy of the layout with all pane types

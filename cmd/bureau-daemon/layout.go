@@ -40,7 +40,16 @@ type layoutWatcher struct {
 // startLayoutWatcher begins monitoring the tmux session for a principal.
 // Safe to call multiple times for the same principal (subsequent calls are
 // no-ops). The watcher runs until stopped or the parent context is cancelled.
+//
+// Requires d.tmuxServer to be non-nil. In production, this is always true
+// (set in run()). If nil, the watcher is not started and a warning is logged.
 func (d *Daemon) startLayoutWatcher(ctx context.Context, localpart string) {
+	if d.tmuxServer == nil {
+		d.logger.Warn("layout watcher not started: tmux server not configured",
+			"principal", localpart)
+		return
+	}
+
 	d.layoutWatchersMu.Lock()
 	defer d.layoutWatchersMu.Unlock()
 
@@ -107,7 +116,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done ch
 	// started before restoring from Matrix so we don't miss layout events
 	// triggered by the restore itself (the debounce + LayoutEqual check
 	// prevents spurious re-publishes).
-	controlClient, err := observe.NewControlClient(ctx, d.tmuxServerSocket, sessionName)
+	controlClient, err := observe.NewControlClient(ctx, d.tmuxServer, sessionName)
 	if err != nil {
 		d.logger.Error("start layout control client failed",
 			"principal", localpart,
@@ -122,7 +131,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done ch
 	// it as the baseline for change detection.
 	var lastPublished *observe.Layout
 	if stored, err := d.readLayoutEvent(ctx, localpart); err == nil {
-		if err := observe.ApplyLayout(d.tmuxServerSocket, sessionName, stored); err != nil {
+		if err := observe.ApplyLayout(d.tmuxServer, sessionName, stored); err != nil {
 			d.logger.Error("restore layout from matrix failed",
 				"principal", localpart,
 				"error", err,
@@ -143,7 +152,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done ch
 
 	// Watch for layout changes and publish to Matrix.
 	for range controlClient.Events() {
-		current, err := observe.ReadTmuxLayout(d.tmuxServerSocket, sessionName)
+		current, err := observe.ReadTmuxLayout(d.tmuxServer, sessionName)
 		if err != nil {
 			d.logger.Error("read tmux layout failed",
 				"principal", localpart,

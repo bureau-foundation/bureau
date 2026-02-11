@@ -17,6 +17,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/observe"
 	"golang.org/x/term"
 )
@@ -286,9 +287,12 @@ display their role identity.`,
 			}
 
 			tmuxArgs := []string{"-S", tmuxSocket}
-			serverSocket := tmuxSocket
+			// Dashboard sessions live in the user's tmux server, not
+			// Bureau's dedicated server. No config override needed —
+			// the user's tmux is already running with their config.
+			server := tmux.NewServer(tmuxSocket, "")
 
-			if err := observe.Dashboard(serverSocket, sessionName, socketPath, layout); err != nil {
+			if err := observe.Dashboard(server, sessionName, socketPath, layout); err != nil {
 				return fmt.Errorf("create dashboard: %w", err)
 			}
 

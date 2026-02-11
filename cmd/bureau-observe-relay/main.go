@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -33,10 +34,11 @@ func run() error {
 
 	// Read configuration from environment. The daemon sets these before
 	// forking the relay process.
-	serverSocket := os.Getenv("BUREAU_TMUX_SOCKET")
-	if serverSocket == "" {
-		serverSocket = "/run/bureau/tmux.sock"
+	socketPath := os.Getenv("BUREAU_TMUX_SOCKET")
+	if socketPath == "" {
+		socketPath = "/run/bureau/tmux.sock"
 	}
+	server := tmux.NewServer(socketPath, "")
 
 	readOnly := os.Getenv("BUREAU_OBSERVE_READONLY") == "1"
 
@@ -59,5 +61,5 @@ func run() error {
 	}
 	defer connection.Close()
 
-	return observe.Relay(connection, serverSocket, sessionName, readOnly)
+	return observe.Relay(connection, server, sessionName, readOnly)
 }

@@ -13,13 +13,13 @@ import (
 
 func TestReadTmuxLayoutSinglePane(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "test-single", "sleep 3600")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "test-single", "sleep 3600")
 
 	// Rename the default window so we have a known name.
-	mustTmux(t, serverSocket, "rename-window", "-t", "test-single", "main")
+	mustTmux(t, server, "rename-window", "-t", "test-single", "main")
 
-	layout, err := ReadTmuxLayout(serverSocket, "test-single")
+	layout, err := ReadTmuxLayout(server, "test-single")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}
@@ -47,14 +47,14 @@ func TestReadTmuxLayoutSinglePane(t *testing.T) {
 
 func TestReadTmuxLayoutHorizontalSplit(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "test-hsplit", "sleep 3600")
-	mustTmux(t, serverSocket, "rename-window", "-t", "test-hsplit", "agents")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "test-hsplit", "sleep 3600")
+	mustTmux(t, server, "rename-window", "-t", "test-hsplit", "agents")
 
 	// Split horizontally (side by side). The new pane gets 30%.
-	mustTmux(t, serverSocket, "split-window", "-t", "test-hsplit", "-h", "-l", "30%", "sleep 3600")
+	mustTmux(t, server, "split-window", "-t", "test-hsplit", "-h", "-l", "30%", "sleep 3600")
 
-	layout, err := ReadTmuxLayout(serverSocket, "test-hsplit")
+	layout, err := ReadTmuxLayout(server, "test-hsplit")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}
@@ -82,14 +82,14 @@ func TestReadTmuxLayoutHorizontalSplit(t *testing.T) {
 
 func TestReadTmuxLayoutVerticalSplit(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "test-vsplit", "sleep 3600")
-	mustTmux(t, serverSocket, "rename-window", "-t", "test-vsplit", "stack")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "test-vsplit", "sleep 3600")
+	mustTmux(t, server, "rename-window", "-t", "test-vsplit", "stack")
 
 	// Split vertically (top/bottom). The new pane gets 40%.
-	mustTmux(t, serverSocket, "split-window", "-t", "test-vsplit", "-v", "-l", "40%", "sleep 3600")
+	mustTmux(t, server, "split-window", "-t", "test-vsplit", "-v", "-l", "40%", "sleep 3600")
 
-	layout, err := ReadTmuxLayout(serverSocket, "test-vsplit")
+	layout, err := ReadTmuxLayout(server, "test-vsplit")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}
@@ -110,14 +110,14 @@ func TestReadTmuxLayoutVerticalSplit(t *testing.T) {
 
 func TestReadTmuxLayoutMultipleWindows(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "test-multiwin", "sleep 3600")
-	mustTmux(t, serverSocket, "rename-window", "-t", "test-multiwin", "agents")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "test-multiwin", "sleep 3600")
+	mustTmux(t, server, "rename-window", "-t", "test-multiwin", "agents")
 
 	// Add a second window.
-	mustTmux(t, serverSocket, "new-window", "-t", "test-multiwin", "-n", "tools", "sleep 3600")
+	mustTmux(t, server, "new-window", "-t", "test-multiwin", "-n", "tools", "sleep 3600")
 
-	layout, err := ReadTmuxLayout(serverSocket, "test-multiwin")
+	layout, err := ReadTmuxLayout(server, "test-multiwin")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}
@@ -136,11 +136,11 @@ func TestReadTmuxLayoutMultipleWindows(t *testing.T) {
 
 func TestReadTmuxLayoutSessionNotFound(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 	// Start the server with a dummy session so it's running.
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
-	_, err := ReadTmuxLayout(serverSocket, "nonexistent")
+	_, err := ReadTmuxLayout(server, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent session, got nil")
 	}
@@ -148,7 +148,7 @@ func TestReadTmuxLayoutSessionNotFound(t *testing.T) {
 
 func TestApplyLayoutCreatesSession(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -161,24 +161,24 @@ func TestApplyLayoutCreatesSession(t *testing.T) {
 		},
 	}
 
-	if err := ApplyLayout(serverSocket, "test-apply", layout); err != nil {
+	if err := ApplyLayout(server, "test-apply", layout); err != nil {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
 	// Verify the session exists.
-	if _, err := tmuxCommand(serverSocket, "has-session", "-t", "test-apply"); err != nil {
-		t.Fatalf("session not created: %v", err)
+	if !server.HasSession("test-apply") {
+		t.Fatal("session not created")
 	}
 
 	// Verify window name.
-	windowName := mustTmuxTrimmed(t, serverSocket, "list-windows",
+	windowName := mustTmuxTrimmed(t, server, "list-windows",
 		"-t", "test-apply", "-F", "#{window_name}")
 	if windowName != "main" {
 		t.Errorf("window name = %q, want %q", windowName, "main")
 	}
 
 	// Verify pane count.
-	paneCount := countPanes(t, serverSocket, "test-apply")
+	paneCount := countPanes(t, server, "test-apply")
 	if paneCount != 1 {
 		t.Errorf("pane count = %d, want 1", paneCount)
 	}
@@ -186,7 +186,7 @@ func TestApplyLayoutCreatesSession(t *testing.T) {
 
 func TestApplyLayoutWithSplits(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -200,17 +200,17 @@ func TestApplyLayoutWithSplits(t *testing.T) {
 		},
 	}
 
-	if err := ApplyLayout(serverSocket, "test-splits", layout); err != nil {
+	if err := ApplyLayout(server, "test-splits", layout); err != nil {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
-	paneCount := countPanes(t, serverSocket, "test-splits")
+	paneCount := countPanes(t, server, "test-splits")
 	if paneCount != 2 {
 		t.Fatalf("pane count = %d, want 2", paneCount)
 	}
 
 	// Verify pane arrangement: two panes side by side (horizontal split).
-	paneOutput := mustTmuxTrimmed(t, serverSocket, "list-panes",
+	paneOutput := mustTmuxTrimmed(t, server, "list-panes",
 		"-t", "test-splits", "-F", "#{pane_left},#{pane_top}")
 	lines := splitLines(paneOutput)
 	if len(lines) != 2 {
@@ -228,7 +228,7 @@ func TestApplyLayoutWithSplits(t *testing.T) {
 
 func TestApplyLayoutMultipleWindows(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -248,12 +248,12 @@ func TestApplyLayoutMultipleWindows(t *testing.T) {
 		},
 	}
 
-	if err := ApplyLayout(serverSocket, "test-multiwin-apply", layout); err != nil {
+	if err := ApplyLayout(server, "test-multiwin-apply", layout); err != nil {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
 	// Verify window count and names.
-	windowLines := mustTmuxTrimmed(t, serverSocket, "list-windows",
+	windowLines := mustTmuxTrimmed(t, server, "list-windows",
 		"-t", "test-multiwin-apply", "-F", "#{window_name}")
 	names := splitLines(windowLines)
 	if len(names) != 2 {
@@ -269,11 +269,11 @@ func TestApplyLayoutMultipleWindows(t *testing.T) {
 
 func TestApplyLayoutEmptyLayoutError(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 	// Need a running server for has-session check.
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
-	err := ApplyLayout(serverSocket, "test-empty", &Layout{})
+	err := ApplyLayout(server, "test-empty", &Layout{})
 	if err == nil {
 		t.Fatal("expected error for empty layout, got nil")
 	}
@@ -284,8 +284,8 @@ func TestApplyLayoutEmptyLayoutError(t *testing.T) {
 
 func TestApplyLayoutEmptyWindowError(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
 	layout := &Layout{
 		Windows: []Window{
@@ -293,7 +293,7 @@ func TestApplyLayoutEmptyWindowError(t *testing.T) {
 		},
 	}
 
-	err := ApplyLayout(serverSocket, "test-empty-win", layout)
+	err := ApplyLayout(server, "test-empty-win", layout)
 	if err == nil {
 		t.Fatal("expected error for empty window, got nil")
 	}
@@ -304,7 +304,7 @@ func TestApplyLayoutEmptyWindowError(t *testing.T) {
 
 func TestApplyThenReadRoundTrip(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	original := &Layout{
 		Windows: []Window{
@@ -325,14 +325,14 @@ func TestApplyThenReadRoundTrip(t *testing.T) {
 		},
 	}
 
-	if err := ApplyLayout(serverSocket, "test-roundtrip", original); err != nil {
+	if err := ApplyLayout(server, "test-roundtrip", original); err != nil {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
 	// Give tmux a moment to settle (process creation, pane rendering).
 	time.Sleep(200 * time.Millisecond)
 
-	readBack, err := ReadTmuxLayout(serverSocket, "test-roundtrip")
+	readBack, err := ReadTmuxLayout(server, "test-roundtrip")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestApplyLayoutWithSessionSlashes(t *testing.T) {
 	t.Parallel()
 	// Bureau session names use slashes: "bureau/iree/amdgpu/pm".
 	// Verify tmux handles these correctly.
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -398,11 +398,11 @@ func TestApplyLayoutWithSessionSlashes(t *testing.T) {
 		},
 	}
 
-	if err := ApplyLayout(serverSocket, "bureau/iree/amdgpu/pm", layout); err != nil {
+	if err := ApplyLayout(server, "bureau/iree/amdgpu/pm", layout); err != nil {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
-	readBack, err := ReadTmuxLayout(serverSocket, "bureau/iree/amdgpu/pm")
+	readBack, err := ReadTmuxLayout(server, "bureau/iree/amdgpu/pm")
 	if err != nil {
 		t.Fatalf("ReadTmuxLayout: %v", err)
 	}

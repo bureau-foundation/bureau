@@ -23,6 +23,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/transport"
@@ -215,7 +216,7 @@ func run() error {
 			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
 		observeSocketPath:      principal.ObserveSocketPath(runDir),
-		tmuxServerSocket:       principal.TmuxSocketPath(runDir),
+		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
 		observeRelayBinary:     observeRelayBinary,
 		layoutWatchers:         make(map[string]*layoutWatcher),
 		workspaceRoot:          workspaceRoot,
@@ -502,10 +503,10 @@ type Daemon struct {
 	// observeListener is the net.Listener for the observation socket.
 	observeListener net.Listener
 
-	// tmuxServerSocket is the path to Bureau's dedicated tmux server socket.
-	// Passed to relay processes as BUREAU_TMUX_SOCKET so they attach to the
-	// correct tmux server. Defaults to /run/bureau/tmux.sock.
-	tmuxServerSocket string
+	// tmuxServer is Bureau's dedicated tmux server. Passed to relay
+	// processes via BUREAU_TMUX_SOCKET (using SocketPath()) so they
+	// attach to the correct tmux server.
+	tmuxServer *tmux.Server
 
 	// observeRelayBinary is the path to the bureau-observe-relay binary.
 	// The daemon forks this for each observation session. Defaults to

@@ -6,10 +6,11 @@ package observe
 import (
 	"encoding/json"
 	"net"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 // readMessageTimeout reads a single message from conn with a deadline.
@@ -50,11 +51,11 @@ func readDataUntil(t *testing.T, conn net.Conn, expected string, timeout time.Du
 
 // startRelay launches Relay in a goroutine and returns the error channel.
 // The relayConn end is passed to Relay; the caller uses clientConn.
-func startRelay(t *testing.T, clientConn, relayConn net.Conn, serverSocket, sessionName string, readOnly bool) chan error {
+func startRelay(t *testing.T, clientConn, relayConn net.Conn, server *tmux.Server, sessionName string, readOnly bool) chan error {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() {
-		result <- Relay(relayConn, serverSocket, sessionName, readOnly)
+		result <- Relay(relayConn, server, sessionName, readOnly)
 	}()
 	return result
 }
@@ -85,12 +86,12 @@ func consumeHandshake(t *testing.T, conn net.Conn) MetadataPayload {
 
 func TestRelayMetadataAndHistory(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-meta", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-meta", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	metadata := consumeHandshake(t, clientConn)
 
@@ -124,19 +125,19 @@ func TestRelayMetadataAndHistory(t *testing.T) {
 
 func TestRelayReadOutput(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-read", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-read", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	consumeHandshake(t, clientConn)
 
 	// Type into the tmux session directly. The relay should capture and
 	// forward the terminal output as data messages.
-	TmuxSendKeys(t, serverSocket, sessionName, "hello-from-tmux")
-	TmuxSendKeys(t, serverSocket, sessionName, "Enter")
+	TmuxSendKeys(t, server, sessionName, "hello-from-tmux")
+	TmuxSendKeys(t, server, sessionName, "Enter")
 
 	readDataUntil(t, clientConn, "hello-from-tmux", 5*time.Second)
 
@@ -149,12 +150,12 @@ func TestRelayReadOutput(t *testing.T) {
 
 func TestRelaySendInput(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-input", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-input", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	consumeHandshake(t, clientConn)
 
@@ -168,7 +169,7 @@ func TestRelaySendInput(t *testing.T) {
 	// Wait for it to render, then check the pane content.
 	readDataUntil(t, clientConn, "relay-input-test", 5*time.Second)
 
-	content := TmuxCapturePane(t, serverSocket, sessionName)
+	content := TmuxCapturePane(t, server, sessionName)
 	if !strings.Contains(content, "relay-input-test") {
 		t.Errorf("tmux pane does not contain relay input, got:\n%s", content)
 	}
@@ -182,12 +183,12 @@ func TestRelaySendInput(t *testing.T) {
 
 func TestRelayReadOnly(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-ro", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-ro", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, true)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, true)
 
 	consumeHandshake(t, clientConn)
 
@@ -200,14 +201,14 @@ func TestRelayReadOnly(t *testing.T) {
 	// Give time for the input to potentially propagate (it shouldn't).
 	time.Sleep(500 * time.Millisecond)
 
-	content := TmuxCapturePane(t, serverSocket, sessionName)
+	content := TmuxCapturePane(t, server, sessionName)
 	if strings.Contains(content, "SHOULD-NOT-APPEAR") {
 		t.Errorf("read-only relay forwarded input to tmux pane:\n%s", content)
 	}
 
 	// Verify that output still flows: type via tmux directly.
-	TmuxSendKeys(t, serverSocket, sessionName, "readonly-output")
-	TmuxSendKeys(t, serverSocket, sessionName, "Enter")
+	TmuxSendKeys(t, server, sessionName, "readonly-output")
+	TmuxSendKeys(t, server, sessionName, "Enter")
 
 	readDataUntil(t, clientConn, "readonly-output", 5*time.Second)
 
@@ -220,12 +221,12 @@ func TestRelayReadOnly(t *testing.T) {
 
 func TestRelayResize(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-resize", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-resize", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	consumeHandshake(t, clientConn)
 
@@ -240,14 +241,9 @@ func TestRelayResize(t *testing.T) {
 	// Wait for tmux to process the resize and then check the client dimensions.
 	time.Sleep(500 * time.Millisecond)
 
-	cmd := exec.Command("tmux", "-S", serverSocket, "list-clients",
+	clientDimensions := mustTmuxTrimmed(t, server, "list-clients",
 		"-t", sessionName,
 		"-F", "#{client_width} #{client_height}")
-	output, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("list-clients: %v", err)
-	}
-	clientDimensions := strings.TrimSpace(string(output))
 	if !strings.Contains(clientDimensions, "100 50") {
 		t.Errorf("client dimensions = %q, want to contain %q", clientDimensions, "100 50")
 	}
@@ -261,20 +257,17 @@ func TestRelayResize(t *testing.T) {
 
 func TestRelaySessionEnd(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-end", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-end", "")
 
 	clientConn, relayConn := net.Pipe()
 	defer clientConn.Close()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	consumeHandshake(t, clientConn)
 
 	// Kill the tmux session. The relay should detect the exit and shut down.
-	killCmd := exec.Command("tmux", "-S", serverSocket, "kill-session", "-t", sessionName)
-	if output, err := killCmd.CombinedOutput(); err != nil {
-		t.Fatalf("kill session: %v\n%s", err, output)
-	}
+	mustTmux(t, server, "kill-session", "-t", sessionName)
 
 	select {
 	case err := <-relayResult:
@@ -288,11 +281,11 @@ func TestRelaySessionEnd(t *testing.T) {
 
 func TestRelayConnectionClose(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "test-close", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "test-close", "")
 
 	clientConn, relayConn := net.Pipe()
-	relayResult := startRelay(t, clientConn, relayConn, serverSocket, sessionName, false)
+	relayResult := startRelay(t, clientConn, relayConn, server, sessionName, false)
 
 	consumeHandshake(t, clientConn)
 

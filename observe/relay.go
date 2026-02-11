@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,10 +31,6 @@ import (
 //   - Handles resize messages by setting the PTY window size
 //   - Feeds all PTY output through the ring buffer for future observers
 //
-// serverSocket is the tmux server socket path (the -S flag). All tmux
-// commands use this to avoid interfering with the user's personal tmux
-// or killing the agent's own session.
-//
 // sessionName is the tmux session to attach to (e.g., "bureau/iree/amdgpu/pm").
 //
 // readOnly controls whether input from the connection is relayed to the
@@ -42,7 +39,7 @@ import (
 //
 // Relay blocks until the tmux session ends, the connection closes, or
 // an unrecoverable error occurs. Returns nil on clean shutdown.
-func Relay(connection io.ReadWriteCloser, serverSocket, sessionName string, readOnly bool) error {
+func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName string, readOnly bool) error {
 	// Allocate a PTY pair for tmux to attach to.
 	master, slavePath, err := openPTY()
 	if err != nil {
@@ -55,14 +52,14 @@ func Relay(connection io.ReadWriteCloser, serverSocket, sessionName string, read
 		return fmt.Errorf("open PTY slave %s: %w", slavePath, err)
 	}
 
-	// Build tmux attach command. Always use -S to target the correct server.
-	tmuxArgs := []string{"-S", serverSocket, "attach-session"}
+	// Build tmux attach command. Server.Command injects -S automatically.
+	attachArgs := []string{"attach-session"}
 	if readOnly {
-		tmuxArgs = append(tmuxArgs, "-r")
+		attachArgs = append(attachArgs, "-r")
 	}
-	tmuxArgs = append(tmuxArgs, "-t", sessionName)
+	attachArgs = append(attachArgs, "-t", sessionName)
 
-	cmd := exec.Command("tmux", tmuxArgs...)
+	cmd := server.Command(attachArgs...)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
@@ -83,7 +80,7 @@ func Relay(connection io.ReadWriteCloser, serverSocket, sessionName string, read
 	ring := NewRingBuffer(DefaultRingBufferSize)
 
 	// Query tmux for session metadata and send it to the observer.
-	metadata, err := queryMetadata(serverSocket, sessionName)
+	metadata, err := queryMetadata(server, sessionName)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -260,8 +257,8 @@ func setWindowSize(fd int, columns, rows uint16) error {
 
 // queryMetadata queries the tmux server for pane information about the
 // given session and constructs a MetadataPayload.
-func queryMetadata(serverSocket, sessionName string) (MetadataPayload, error) {
-	output, err := tmuxCommand(serverSocket, "list-panes",
+func queryMetadata(server *tmux.Server, sessionName string) (MetadataPayload, error) {
+	output, err := server.Run("list-panes",
 		"-t", sessionName,
 		"-F", "#{pane_index}\t#{pane_current_command}\t#{pane_width}\t#{pane_height}\t#{pane_active}")
 	if err != nil {

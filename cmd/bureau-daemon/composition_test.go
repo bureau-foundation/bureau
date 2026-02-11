@@ -26,6 +26,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -203,6 +204,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		servicesRoomID:    servicesRoomID,
 		launcherSocket:    launcherSocket,
 		statusInterval:    time.Hour,
+		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),

@@ -22,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -135,7 +136,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 
 	socketDir := testutil.SocketDir(t)
 	observeSocketPath := filepath.Join(socketDir, "observe.sock")
-	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	tmuxServer := tmux.NewServer(filepath.Join(socketDir, "tmux.sock"), "")
 
 	running := make(map[string]bool)
 	for _, localpart := range runningPrincipals {
@@ -203,7 +204,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		peerAddresses:      make(map[string]string),
 		peerTransports:     make(map[string]http.RoundTripper),
 		observeSocketPath:  observeSocketPath,
-		tmuxServerSocket:   tmuxSocket,
+		tmuxServer:         tmuxServer,
 		observeRelayBinary: relayBinary,
 		layoutWatchers:     make(map[string]*layoutWatcher),
 		logger:             logger,

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 // DefaultDebounceInterval is the default time to wait after the last
@@ -50,7 +52,7 @@ type LayoutChanged struct {
 // so attaching a ControlClient does not constrain the terminal dimensions
 // of real clients.
 type ControlClient struct {
-	serverSocket     string
+	server           *tmux.Server
 	sessionName      string
 	debounceInterval time.Duration
 	events           chan LayoutChanged
@@ -78,16 +80,13 @@ func WithDebounceInterval(interval time.Duration) ControlClientOption {
 // monitors the given tmux session for layout changes. The returned
 // client emits events on the Events() channel.
 //
-// serverSocket is the tmux server socket path (the -S flag).
-// sessionName is the tmux session to monitor.
-//
 // The client runs until ctx is cancelled or the tmux session ends.
 // Call Stop() or cancel the context to shut down.
-func NewControlClient(ctx context.Context, serverSocket, sessionName string, options ...ControlClientOption) (*ControlClient, error) {
+func NewControlClient(ctx context.Context, server *tmux.Server, sessionName string, options ...ControlClientOption) (*ControlClient, error) {
 	clientContext, cancel := context.WithCancel(ctx)
 
 	client := &ControlClient{
-		serverSocket:     serverSocket,
+		server:           server,
 		sessionName:      sessionName,
 		debounceInterval: DefaultDebounceInterval,
 		events:           make(chan LayoutChanged, 16),
@@ -121,8 +120,7 @@ func (client *ControlClient) Stop() {
 // start launches the tmux control mode subprocess and the reader
 // goroutine. Called once from NewControlClient.
 func (client *ControlClient) start(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "tmux", "-S", client.serverSocket,
-		"-C", "attach-session", "-t", client.sessionName)
+	cmd := client.server.CommandContext(ctx, "-C", "attach-session", "-t", client.sessionName)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

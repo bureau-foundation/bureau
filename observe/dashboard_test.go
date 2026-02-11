@@ -7,11 +7,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 func TestDashboardCommandPanes(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -25,25 +27,25 @@ func TestDashboardCommandPanes(t *testing.T) {
 		},
 	}
 
-	err := Dashboard(serverSocket, "observe/test/tools", "/tmp/fake-daemon.sock", layout)
+	err := Dashboard(server, "observe/test/tools", "/tmp/fake-daemon.sock", layout)
 	if err != nil {
 		t.Fatalf("Dashboard: %v", err)
 	}
 
 	// Verify the session was created with the correct name.
-	if _, err := tmuxCommand(serverSocket, "has-session", "-t", "observe/test/tools"); err != nil {
-		t.Fatalf("session not created: %v", err)
+	if !server.HasSession("observe/test/tools") {
+		t.Fatal("session not created")
 	}
 
 	// Verify window name.
-	windowName := mustTmuxTrimmed(t, serverSocket, "list-windows",
+	windowName := mustTmuxTrimmed(t, server, "list-windows",
 		"-t", "observe/test/tools", "-F", "#{window_name}")
 	if windowName != "tools" {
 		t.Errorf("window name = %q, want %q", windowName, "tools")
 	}
 
 	// Verify two panes exist.
-	paneOutput := mustTmuxTrimmed(t, serverSocket, "list-panes",
+	paneOutput := mustTmuxTrimmed(t, server, "list-panes",
 		"-t", "observe/test/tools", "-F", "#{pane_index}")
 	paneLines := splitLines(paneOutput)
 	if len(paneLines) != 2 {
@@ -53,13 +55,13 @@ func TestDashboardCommandPanes(t *testing.T) {
 
 func TestDashboardObservePanes(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 	daemonSocket := "/run/bureau/observe.sock"
 
 	// The bureau observe commands will fail immediately (no daemon
 	// running, binary may not be in PATH). Set remain-on-exit so that
 	// panes stay around for inspection after the command exits.
-	initTmuxServerWithRemainOnExit(t, serverSocket)
+	initTmuxServerWithRemainOnExit(t, server)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -73,14 +75,14 @@ func TestDashboardObservePanes(t *testing.T) {
 		},
 	}
 
-	err := Dashboard(serverSocket, "observe/iree/amdgpu/general", daemonSocket, layout)
+	err := Dashboard(server, "observe/iree/amdgpu/general", daemonSocket, layout)
 	if err != nil {
 		t.Fatalf("Dashboard: %v", err)
 	}
 
 	// Verify the session exists.
-	if _, err := tmuxCommand(serverSocket, "has-session", "-t", "observe/iree/amdgpu/general"); err != nil {
-		t.Fatalf("session not created: %v", err)
+	if !server.HasSession("observe/iree/amdgpu/general") {
+		t.Fatal("session not created")
 	}
 
 	// Give processes a moment to start so pane_start_command is populated.
@@ -88,7 +90,7 @@ func TestDashboardObservePanes(t *testing.T) {
 
 	// Verify panes were created. The bureau observe commands will fail
 	// (no daemon running), but the panes survive (remain-on-exit).
-	paneOutput := mustTmuxTrimmed(t, serverSocket, "list-panes",
+	paneOutput := mustTmuxTrimmed(t, server, "list-panes",
 		"-t", "observe/iree/amdgpu/general",
 		"-F", "#{pane_start_command}")
 	paneLines := splitLines(paneOutput)
@@ -111,8 +113,8 @@ func TestDashboardObservePanes(t *testing.T) {
 
 func TestDashboardMixedPaneTypes(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	initTmuxServerWithRemainOnExit(t, serverSocket)
+	server := TmuxServer(t)
+	initTmuxServerWithRemainOnExit(t, server)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -132,13 +134,13 @@ func TestDashboardMixedPaneTypes(t *testing.T) {
 		},
 	}
 
-	err := Dashboard(serverSocket, "observe/mixed", "/tmp/daemon.sock", layout)
+	err := Dashboard(server, "observe/mixed", "/tmp/daemon.sock", layout)
 	if err != nil {
 		t.Fatalf("Dashboard: %v", err)
 	}
 
 	// Verify two windows.
-	windowOutput := mustTmuxTrimmed(t, serverSocket, "list-windows",
+	windowOutput := mustTmuxTrimmed(t, server, "list-windows",
 		"-t", "observe/mixed", "-F", "#{window_name}")
 	windows := splitLines(windowOutput)
 	if len(windows) != 2 {
@@ -154,7 +156,7 @@ func TestDashboardMixedPaneTypes(t *testing.T) {
 
 func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	layout := &Layout{
 		Windows: []Window{
@@ -167,7 +169,7 @@ func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 		},
 	}
 
-	err := Dashboard(serverSocket, "observe/role-test", "/tmp/daemon.sock", layout)
+	err := Dashboard(server, "observe/role-test", "/tmp/daemon.sock", layout)
 	if err != nil {
 		t.Fatalf("Dashboard: %v", err)
 	}
@@ -176,7 +178,7 @@ func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Capture the pane content — it should show the role name.
-	content := TmuxCapturePane(t, serverSocket, "observe/role-test")
+	content := TmuxCapturePane(t, server, "observe/role-test")
 	if !strings.Contains(content, "role: agent") {
 		t.Errorf("pane content should contain 'role: agent', got:\n%s", content)
 	}
@@ -184,11 +186,11 @@ func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 
 func TestDashboardNilLayoutError(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 	// Need a running server.
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
-	err := Dashboard(serverSocket, "test", "/tmp/daemon.sock", nil)
+	err := Dashboard(server, "test", "/tmp/daemon.sock", nil)
 	if err == nil {
 		t.Fatal("expected error for nil layout")
 	}
@@ -199,8 +201,8 @@ func TestDashboardNilLayoutError(t *testing.T) {
 
 func TestDashboardEmptyDaemonSocketError(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
 	layout := &Layout{
 		Windows: []Window{
@@ -208,7 +210,7 @@ func TestDashboardEmptyDaemonSocketError(t *testing.T) {
 		},
 	}
 
-	err := Dashboard(serverSocket, "test", "", layout)
+	err := Dashboard(server, "test", "", layout)
 	if err == nil {
 		t.Fatal("expected error for empty daemon socket")
 	}
@@ -219,10 +221,10 @@ func TestDashboardEmptyDaemonSocketError(t *testing.T) {
 
 func TestDashboardEmptyLayoutError(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, "dummy", "sleep 3600")
+	server := TmuxServer(t)
+	TmuxSession(t, server, "dummy", "sleep 3600")
 
-	err := Dashboard(serverSocket, "test", "/tmp/daemon.sock", &Layout{})
+	err := Dashboard(server, "test", "/tmp/daemon.sock", &Layout{})
 	if err == nil {
 		t.Fatal("expected error for empty layout")
 	}
@@ -317,8 +319,8 @@ func TestResolveLayoutEmptyPaneGetsNoCommand(t *testing.T) {
 // tmux server running while Dashboard creates its sessions with
 // potentially short-lived commands. TmuxServer's cleanup handles
 // final teardown.
-func initTmuxServerWithRemainOnExit(t *testing.T, serverSocket string) {
+func initTmuxServerWithRemainOnExit(t *testing.T, server *tmux.Server) {
 	t.Helper()
-	TmuxSession(t, serverSocket, "keepalive", "sleep 3600")
-	mustTmux(t, serverSocket, "set-option", "-g", "remain-on-exit", "on")
+	TmuxSession(t, server, "keepalive", "sleep 3600")
+	mustTmux(t, server, "set-option", "-g", "remain-on-exit", "on")
 }

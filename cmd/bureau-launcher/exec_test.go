@@ -18,6 +18,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
 )
 
@@ -182,12 +183,15 @@ func TestReconnectSandboxes(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	tmuxServer := tmux.NewTestServer(t)
+
 	launcher := &Launcher{
 		runDir:          runDir,
 		stateDir:        t.TempDir(),
 		proxyBinaryPath: "",
 		sandboxes:       make(map[string]*managedSandbox),
 		failedExecPaths: make(map[string]bool),
+		tmuxServer:      tmuxServer,
 		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 

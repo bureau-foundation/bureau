@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 func TestDerivePassword(t *testing.T) {
@@ -850,6 +851,7 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 		runDir:          tempDir,
 		stateDir:        filepath.Join(tempDir, "state"),
 		proxyBinaryPath: proxyBinaryPath,
+		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(tempDir), "/dev/null"),
 		sandboxes:       make(map[string]*managedSandbox),
 		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -1140,24 +1142,16 @@ func requireTmux(t *testing.T) {
 }
 
 // newTestRunDir creates a short temp directory suitable for use as --run-dir
-// in tests. The tmux server socket at <dir>/tmux.sock is cleaned up on test
-// teardown. All tmux commands in tests MUST use the socket derived from this
-// run-dir via -S to avoid interfering with the user's or agent's tmux sessions.
-func newTestRunDir(t *testing.T) string {
+// in tests. Returns the runDir and a tmux.Server targeting the socket at
+// <dir>/tmux.sock. The server is cleaned up on test teardown.
+func newTestRunDir(t *testing.T) (string, *tmux.Server) {
 	t.Helper()
 	runDir := testutil.SocketDir(t)
-	tmuxSocket := principal.TmuxSocketPath(runDir)
+	server := tmux.NewServer(principal.TmuxSocketPath(runDir), "/dev/null")
 	t.Cleanup(func() {
-		exec.Command("tmux", "-S", tmuxSocket, "kill-server").Run()
+		server.KillServer()
 	})
-	return runDir
-}
-
-// tmuxSessionExists checks whether a tmux session with the given name exists
-// on the specified tmux server socket.
-func tmuxSessionExists(socketPath, sessionName string) bool {
-	cmd := exec.Command("tmux", "-S", socketPath, "has-session", "-t", sessionName)
-	return cmd.Run() == nil
+	return runDir, server
 }
 
 func TestTmuxSessionName(t *testing.T) {
@@ -1181,13 +1175,13 @@ func TestTmuxSessionName(t *testing.T) {
 func TestTmuxSessionLifecycle(t *testing.T) {
 	requireTmux(t)
 
-	runDir := newTestRunDir(t)
-	tmuxSocket := principal.TmuxSocketPath(runDir)
+	runDir, tmuxServer := newTestRunDir(t)
 
 	launcher := &Launcher{
-		runDir:    runDir,
-		sandboxes: make(map[string]*managedSandbox),
-		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:     runDir,
+		tmuxServer: tmuxServer,
+		sandboxes:  make(map[string]*managedSandbox),
+		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	localpart := "test/tmux"
@@ -1199,7 +1193,7 @@ func TestTmuxSessionLifecycle(t *testing.T) {
 	}
 
 	// Verify the session exists on the Bureau tmux server.
-	if !tmuxSessionExists(tmuxSocket, sessionName) {
+	if !tmuxServer.HasSession(sessionName) {
 		t.Fatalf("tmux session %q should exist after creation", sessionName)
 	}
 
@@ -1207,7 +1201,7 @@ func TestTmuxSessionLifecycle(t *testing.T) {
 	launcher.destroyTmuxSession(localpart)
 
 	// Verify the session is gone.
-	if tmuxSessionExists(tmuxSocket, sessionName) {
+	if tmuxServer.HasSession(sessionName) {
 		t.Errorf("tmux session %q should not exist after destruction", sessionName)
 	}
 }
@@ -1215,13 +1209,13 @@ func TestTmuxSessionLifecycle(t *testing.T) {
 func TestTmuxSessionConfiguration(t *testing.T) {
 	requireTmux(t)
 
-	runDir := newTestRunDir(t)
-	tmuxSocket := principal.TmuxSocketPath(runDir)
+	runDir, tmuxServer := newTestRunDir(t)
 
 	launcher := &Launcher{
-		runDir:    runDir,
-		sandboxes: make(map[string]*managedSandbox),
-		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:     runDir,
+		tmuxServer: tmuxServer,
+		sandboxes:  make(map[string]*managedSandbox),
+		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	localpart := "test/config"
 	sessionName := tmuxSessionName(localpart)
@@ -1241,27 +1235,23 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 	}
 
 	for _, test := range globalOptions {
-		cmd := exec.Command("tmux", "-S", tmuxSocket,
-			"show-option", "-gv", test.option)
-		output, err := cmd.CombinedOutput()
+		output, err := tmuxServer.Run("show-option", "-gv", test.option)
 		if err != nil {
-			t.Errorf("show-option -gv %s: %v (output: %s)", test.option, err, output)
+			t.Errorf("show-option -gv %s: %v", test.option, err)
 			continue
 		}
-		got := strings.TrimSpace(string(output))
+		got := strings.TrimSpace(output)
 		if got != test.want {
 			t.Errorf("global tmux option %s = %q, want %q", test.option, got, test.want)
 		}
 	}
 
 	// Verify per-session status-left contains the principal name.
-	cmd := exec.Command("tmux", "-S", tmuxSocket,
-		"show-option", "-t", sessionName, "-v", "status-left")
-	output, err := cmd.CombinedOutput()
+	output, err := tmuxServer.Run("show-option", "-t", sessionName, "-v", "status-left")
 	if err != nil {
-		t.Errorf("show-option status-left: %v (output: %s)", err, output)
+		t.Errorf("show-option status-left: %v", err)
 	} else {
-		got := strings.TrimSpace(string(output))
+		got := strings.TrimSpace(output)
 		if !strings.Contains(got, localpart) {
 			t.Errorf("status-left = %q, should contain principal %q", got, localpart)
 		}
@@ -1271,13 +1261,13 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 func TestTmuxSessionMultipleSessions(t *testing.T) {
 	requireTmux(t)
 
-	runDir := newTestRunDir(t)
-	tmuxSocket := principal.TmuxSocketPath(runDir)
+	runDir, tmuxServer := newTestRunDir(t)
 
 	launcher := &Launcher{
-		runDir:    runDir,
-		sandboxes: make(map[string]*managedSandbox),
-		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:     runDir,
+		tmuxServer: tmuxServer,
+		sandboxes:  make(map[string]*managedSandbox),
+		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	localparts := []string{"test/a", "test/b", "test/c"}
@@ -1292,20 +1282,20 @@ func TestTmuxSessionMultipleSessions(t *testing.T) {
 	// Verify all sessions exist.
 	for _, localpart := range localparts {
 		sessionName := tmuxSessionName(localpart)
-		if !tmuxSessionExists(tmuxSocket, sessionName) {
+		if !tmuxServer.HasSession(sessionName) {
 			t.Errorf("session %q should exist", sessionName)
 		}
 	}
 
 	// Destroy one session and verify the others survive.
 	launcher.destroyTmuxSession("test/b")
-	if tmuxSessionExists(tmuxSocket, tmuxSessionName("test/b")) {
+	if tmuxServer.HasSession(tmuxSessionName("test/b")) {
 		t.Error("session bureau/test/b should be gone after destroy")
 	}
-	if !tmuxSessionExists(tmuxSocket, tmuxSessionName("test/a")) {
+	if !tmuxServer.HasSession(tmuxSessionName("test/a")) {
 		t.Error("session bureau/test/a should still exist")
 	}
-	if !tmuxSessionExists(tmuxSocket, tmuxSessionName("test/c")) {
+	if !tmuxServer.HasSession(tmuxSessionName("test/c")) {
 		t.Error("session bureau/test/c should still exist")
 	}
 }
@@ -1315,8 +1305,9 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 
 	proxyBinary := buildProxyBinary(t)
 	launcher := newTestLauncher(t, proxyBinary)
-	launcher.runDir = newTestRunDir(t)
-	tmuxSocket := principal.TmuxSocketPath(launcher.runDir)
+	runDir, tmuxServer := newTestRunDir(t)
+	launcher.runDir = runDir
+	launcher.tmuxServer = tmuxServer
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
@@ -1334,7 +1325,7 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	}
 
 	sessionName := tmuxSessionName("test/tmuxproxy")
-	if !tmuxSessionExists(tmuxSocket, sessionName) {
+	if !tmuxServer.HasSession(sessionName) {
 		t.Fatalf("tmux session %q should exist after sandbox creation", sessionName)
 	}
 
@@ -1359,7 +1350,7 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 		t.Fatalf("destroy-sandbox failed: %s", destroyResponse.Error)
 	}
 
-	if tmuxSessionExists(tmuxSocket, sessionName) {
+	if tmuxServer.HasSession(sessionName) {
 		t.Errorf("tmux session %q should not exist after sandbox destruction", sessionName)
 	}
 	if _, exists := launcher.sandboxes["test/tmuxproxy"]; exists {
@@ -1615,8 +1606,9 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 
 	proxyBinary := buildProxyBinary(t)
 	launcher := newTestLauncher(t, proxyBinary)
-	launcher.runDir = newTestRunDir(t)
-	tmuxSocket := principal.TmuxSocketPath(launcher.runDir)
+	runDir, tmuxServer := newTestRunDir(t)
+	launcher.runDir = runDir
+	launcher.tmuxServer = tmuxServer
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN": "syt_test",
@@ -1633,7 +1625,7 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	}
 
 	sessionName := tmuxSessionName("test/crash")
-	if !tmuxSessionExists(tmuxSocket, sessionName) {
+	if !tmuxServer.HasSession(sessionName) {
 		t.Fatal("tmux session should exist after creation")
 	}
 
@@ -1660,7 +1652,7 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	}
 
 	// The new tmux session should exist.
-	if !tmuxSessionExists(tmuxSocket, sessionName) {
+	if !tmuxServer.HasSession(sessionName) {
 		t.Error("tmux session should exist after recreate")
 	}
 }

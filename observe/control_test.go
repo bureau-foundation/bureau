@@ -13,8 +13,8 @@ import (
 // coalesce into a single LayoutChanged event after the debounce interval.
 func TestControlClientDebounce(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/debounce", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/debounce", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -22,7 +22,7 @@ func TestControlClientDebounce(t *testing.T) {
 	// Use a 1 second debounce so the sequential split-window commands
 	// (each spawns a tmux subprocess taking ~50-100ms) all land within
 	// a single debounce window.
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(1*time.Second))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -36,7 +36,7 @@ func TestControlClientDebounce(t *testing.T) {
 	// produces a %layout-change notification. With 1s debounce,
 	// they should coalesce into one event.
 	for range 3 {
-		mustTmux(t, serverSocket, "split-window", "-t", sessionName, "-v")
+		mustTmux(t, server, "split-window", "-t", sessionName, "-v")
 	}
 
 	// Wait for exactly one event.
@@ -53,13 +53,13 @@ func TestControlClientDebounce(t *testing.T) {
 // triggers a layout change event.
 func TestControlClientWindowAdd(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/winadd", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/winadd", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -69,7 +69,7 @@ func TestControlClientWindowAdd(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Create a new window — triggers %window-add.
-	mustTmux(t, serverSocket, "new-window", "-t", sessionName)
+	mustTmux(t, server, "new-window", "-t", sessionName)
 	receiveEvent(t, client, 3*time.Second)
 }
 
@@ -77,13 +77,13 @@ func TestControlClientWindowAdd(t *testing.T) {
 // triggers a layout change event.
 func TestControlClientWindowRename(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/winrename", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/winrename", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -92,7 +92,7 @@ func TestControlClientWindowRename(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	mustTmux(t, serverSocket, "rename-window", "-t", sessionName, "renamed")
+	mustTmux(t, server, "rename-window", "-t", sessionName, "renamed")
 	receiveEvent(t, client, 3*time.Second)
 }
 
@@ -101,16 +101,16 @@ func TestControlClientWindowRename(t *testing.T) {
 // one, tmux sends %unlinked-window-close instead of %window-close.
 func TestControlClientWindowClose(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/winclose", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/winclose", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Create a second window so we can close it.
-	mustTmux(t, serverSocket, "new-window", "-t", sessionName)
+	mustTmux(t, server, "new-window", "-t", sessionName)
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -121,7 +121,7 @@ func TestControlClientWindowClose(t *testing.T) {
 
 	// Find the index of the second window. We can't hardcode it because
 	// the starting index depends on base-index (0 by default).
-	windowList := mustTmuxTrimmed(t, serverSocket, "list-windows",
+	windowList := mustTmuxTrimmed(t, server, "list-windows",
 		"-t", sessionName, "-F", "#{window_index}")
 	windowIndices := splitLines(windowList)
 	if len(windowIndices) < 2 {
@@ -132,7 +132,7 @@ func TestControlClientWindowClose(t *testing.T) {
 	// Close the second window. The control client is attached to the
 	// session; when we kill a non-current window, tmux sends
 	// %unlinked-window-close.
-	mustTmux(t, serverSocket, "kill-window", "-t", sessionName+":"+secondWindowIndex)
+	mustTmux(t, server, "kill-window", "-t", sessionName+":"+secondWindowIndex)
 	receiveEvent(t, client, 3*time.Second)
 }
 
@@ -140,13 +140,13 @@ func TestControlClientWindowClose(t *testing.T) {
 // unrelated to layout (like %output) do not trigger events.
 func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/ignore", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/ignore", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -156,7 +156,7 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 	// Give time to attach, then send keystrokes. This generates
 	// %output notifications but no layout changes.
 	time.Sleep(300 * time.Millisecond)
-	TmuxSendKeys(t, serverSocket, sessionName, "hello")
+	TmuxSendKeys(t, server, sessionName, "hello")
 
 	assertNoEvent(t, client, 500*time.Millisecond)
 }
@@ -166,12 +166,12 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 // Stop returns promptly.
 func TestControlClientCleanShutdown(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/shutdown", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/shutdown", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -204,13 +204,13 @@ func TestControlClientCleanShutdown(t *testing.T) {
 // causes the control client to shut down cleanly.
 func TestControlClientSessionExit(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/exit", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/exit", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -218,7 +218,7 @@ func TestControlClientSessionExit(t *testing.T) {
 
 	// Kill the session. The control mode client should detect the
 	// exit and shut down.
-	mustTmux(t, serverSocket, "kill-session", "-t", sessionName)
+	mustTmux(t, server, "kill-session", "-t", sessionName)
 
 	stopped := make(chan struct{})
 	go func() {
@@ -239,19 +239,19 @@ func TestControlClientSessionExit(t *testing.T) {
 // created with a specific size.
 func TestControlClientNoSizeConstraint(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
+	server := TmuxServer(t)
 
 	// Create a session with a known size.
-	mustTmux(t, serverSocket, "new-session", "-d", "-s", "control/size",
+	mustTmux(t, server, "new-session", "-d", "-s", "control/size",
 		"-x", "120", "-y", "40")
 	t.Cleanup(func() {
-		tmuxCommand(serverSocket, "kill-session", "-t", "control/size")
+		server.Run("kill-session", "-t", "control/size")
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := NewControlClient(ctx, serverSocket, "control/size",
+	_, err := NewControlClient(ctx, server, "control/size",
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -261,7 +261,7 @@ func TestControlClientNoSizeConstraint(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Verify the window dimensions are unchanged.
-	dimensions := mustTmuxTrimmed(t, serverSocket, "display-message",
+	dimensions := mustTmuxTrimmed(t, server, "display-message",
 		"-t", "control/size", "-p", "#{window_width} #{window_height}")
 	if dimensions != "120 40" {
 		t.Errorf("window dimensions = %q, want %q (control client constrained the size)",
@@ -273,13 +273,13 @@ func TestControlClientNoSizeConstraint(t *testing.T) {
 // %begin/%end response blocks are not treated as notifications.
 func TestControlClientResponseBlockFiltering(t *testing.T) {
 	t.Parallel()
-	serverSocket := TmuxServer(t)
-	sessionName := TmuxSession(t, serverSocket, "control/blocks", "")
+	server := TmuxServer(t)
+	sessionName := TmuxSession(t, server, "control/blocks", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := NewControlClient(ctx, serverSocket, sessionName,
+	client, err := NewControlClient(ctx, server, sessionName,
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
@@ -292,7 +292,7 @@ func TestControlClientResponseBlockFiltering(t *testing.T) {
 	assertNoEvent(t, client, 300*time.Millisecond)
 
 	// Now trigger a real layout change to prove events still work.
-	mustTmux(t, serverSocket, "split-window", "-t", sessionName, "-v")
+	mustTmux(t, server, "split-window", "-t", sessionName, "-v")
 	receiveEvent(t, client, 3*time.Second)
 }
 

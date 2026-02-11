@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 // safeBuffer is a thread-safe bytes.Buffer. Session.Run writes terminal
@@ -40,13 +42,13 @@ func (sb *safeBuffer) String() string {
 // end-to-end observation test: client session, I/O pipes, result
 // channels for both the client and relay goroutines.
 type integrationFixture struct {
-	serverSocket string
-	sessionName  string
-	session      *Session
-	inputWriter  *io.PipeWriter
-	output       *safeBuffer
-	runResult    chan error
-	relayResult  chan error
+	server      *tmux.Server
+	sessionName string
+	session     *Session
+	inputWriter *io.PipeWriter
+	output      *safeBuffer
+	runResult   chan error
+	relayResult chan error
 }
 
 // setupIntegration creates a full observation stack for integration testing:
@@ -63,15 +65,15 @@ type integrationFixture struct {
 func setupIntegration(t *testing.T, sessionName string, readOnly bool) *integrationFixture {
 	t.Helper()
 
-	serverSocket := TmuxServer(t)
-	TmuxSession(t, serverSocket, sessionName, "")
+	server := TmuxServer(t)
+	TmuxSession(t, server, sessionName, "")
 
 	// Pipe: relay reads/writes relayEnd, bridge reads/writes bridgeEnd.
 	relayEnd, bridgeEnd := net.Pipe()
 
 	relayResult := make(chan error, 1)
 	go func() {
-		relayResult <- Relay(relayEnd, serverSocket, sessionName, readOnly)
+		relayResult <- Relay(relayEnd, server, sessionName, readOnly)
 	}()
 
 	daemonSocket := startObservationBridge(t, bridgeEnd, sessionName)
@@ -102,13 +104,13 @@ func setupIntegration(t *testing.T, sessionName string, readOnly bool) *integrat
 	})
 
 	fixture := &integrationFixture{
-		serverSocket: serverSocket,
-		sessionName:  sessionName,
-		session:      session,
-		inputWriter:  inputWriter,
-		output:       &output,
-		runResult:    runResult,
-		relayResult:  relayResult,
+		server:      server,
+		sessionName: sessionName,
+		session:     session,
+		inputWriter: inputWriter,
+		output:      &output,
+		runResult:   runResult,
+		relayResult: relayResult,
 	}
 
 	// Wait for the session to fully establish before returning.
@@ -232,12 +234,12 @@ func pollForContent(t *testing.T, buffer *safeBuffer, expected string, timeout t
 
 // pollForTmuxContent polls a tmux pane until the expected substring appears
 // in the captured content or the timeout expires.
-func pollForTmuxContent(t *testing.T, serverSocket, target, expected string, timeout time.Duration) {
+func pollForTmuxContent(t *testing.T, server *tmux.Server, target, expected string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var lastContent string
 	for time.Now().Before(deadline) {
-		lastContent = TmuxCapturePane(t, serverSocket, target)
+		lastContent = TmuxCapturePane(t, server, target)
 		if strings.Contains(lastContent, expected) {
 			return
 		}
@@ -279,7 +281,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	}
 
 	// Verify the input appeared in the tmux pane.
-	pollForTmuxContent(t, fixture.serverSocket, fixture.sessionName,
+	pollForTmuxContent(t, fixture.server, fixture.sessionName,
 		"e2e-input-test", 5*time.Second)
 
 	// Verify the echoed output came back through the full return path:
@@ -287,8 +289,8 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	pollForContent(t, fixture.output, "e2e-input-test", 5*time.Second)
 
 	// Type directly in tmux and verify it reaches the client.
-	TmuxSendKeys(t, fixture.serverSocket, fixture.sessionName, "tmux-direct-output")
-	TmuxSendKeys(t, fixture.serverSocket, fixture.sessionName, "Enter")
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "tmux-direct-output")
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
 	pollForContent(t, fixture.output, "tmux-direct-output", 5*time.Second)
 
 	// Clean shutdown: close the input pipe so Session.Run's input
@@ -314,14 +316,14 @@ func TestIntegrationReadOnly(t *testing.T) {
 	// Give time for the input to potentially propagate (it should not).
 	time.Sleep(500 * time.Millisecond)
 
-	content := TmuxCapturePane(t, fixture.serverSocket, fixture.sessionName)
+	content := TmuxCapturePane(t, fixture.server, fixture.sessionName)
 	if strings.Contains(content, "SHOULD-NOT-APPEAR") {
 		t.Errorf("read-only mode forwarded input to tmux pane:\n%s", content)
 	}
 
 	// Verify output still flows: type directly in tmux → relay → client.
-	TmuxSendKeys(t, fixture.serverSocket, fixture.sessionName, "readonly-output-test")
-	TmuxSendKeys(t, fixture.serverSocket, fixture.sessionName, "Enter")
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "readonly-output-test")
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
 	pollForContent(t, fixture.output, "readonly-output-test", 5*time.Second)
 
 	fixture.inputWriter.Close()
@@ -344,7 +346,7 @@ func TestIntegrationResize(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Query tmux for the attached client's dimensions.
-	clientDimensions := mustTmuxTrimmed(t, fixture.serverSocket, "list-clients",
+	clientDimensions := mustTmuxTrimmed(t, fixture.server, "list-clients",
 		"-t", fixture.sessionName,
 		"-F", "#{client_width} #{client_height}")
 	if !strings.Contains(clientDimensions, "120 40") {
@@ -366,7 +368,7 @@ func TestIntegrationSessionEnd(t *testing.T) {
 
 	// Kill the tmux session. The relay should detect the exit and
 	// propagate the shutdown through the bridge to the client.
-	if _, err := tmuxCommand(fixture.serverSocket, "kill-session", "-t", fixture.sessionName); err != nil {
+	if _, err := fixture.server.Run("kill-session", "-t", fixture.sessionName); err != nil {
 		t.Fatalf("kill-session: %v", err)
 	}
 

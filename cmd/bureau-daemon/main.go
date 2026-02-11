@@ -198,6 +198,7 @@ func run() error {
 		stateDir:          stateDir,
 		failedExecPaths:   make(map[string]bool),
 		running:           make(map[string]bool),
+		exitWatchers:      make(map[string]context.CancelFunc),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
 		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
@@ -402,6 +403,14 @@ type Daemon struct {
 	// principal. Health monitors read HealthCheck config from here.
 	// Keyed by principal localpart.
 	lastTemplates map[string]*schema.TemplateContent
+
+	// exitWatchers tracks per-principal cancellation functions for
+	// watchSandboxExit goroutines. When the daemon intentionally
+	// destroys a sandbox (credential rotation, structural restart,
+	// condition change), it cancels the watcher first so the old
+	// goroutine does not see the destroy as an unexpected exit and
+	// corrupt the daemon's running state. Protected by reconcileMu.
+	exitWatchers map[string]context.CancelFunc
 
 	// healthMonitors tracks running health check goroutines, keyed by
 	// principal localpart. Protected by healthMonitorsMu. Started after

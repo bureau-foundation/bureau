@@ -897,8 +897,8 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 		t.Errorf("admin power level = %v, want 100", users[adminUserID])
 	}
 
-	// Machine should have power level 50 (can publish workspace state and
-	// invite, but cannot change project config or initiate teardown).
+	// Machine should have power level 50 (can invite principals into
+	// workspace rooms, but cannot modify power levels or project config).
 	if users[machineUserID] != 50 {
 		t.Errorf("machine power level = %v, want 50", users[machineUserID])
 	}
@@ -928,9 +928,17 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 		}
 	}
 
-	// Machine-level events (PL 50).
-	if events[EventTypeWorkspace] != 50 {
-		t.Errorf("%s power level = %v, want 50", EventTypeWorkspace, events[EventTypeWorkspace])
+	// Admin-only power level management (PL 100). Continuwuity validates
+	// all fields in m.room.power_levels against sender PL (not just changed
+	// ones), so only admin can modify power levels.
+	if events["m.room.power_levels"] != 100 {
+		t.Errorf("m.room.power_levels power level = %v, want 100", events["m.room.power_levels"])
+	}
+
+	// Default-level events (PL 0): workspace state and layout. Room
+	// membership is the authorization boundary — the room is invite-only.
+	if events[EventTypeWorkspace] != 0 {
+		t.Errorf("%s power level = %v, want 0", EventTypeWorkspace, events[EventTypeWorkspace])
 	}
 
 	// Default-level events (PL 0).

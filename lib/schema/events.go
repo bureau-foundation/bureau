@@ -1385,9 +1385,16 @@ type LayoutMemberFilter struct {
 // workspace rooms are collaboration spaces where agents send messages freely.
 //
 // Three tiers:
-//   - Admin (100): project config, teardown, room metadata, power levels
-//   - Machine/daemon (50): workspace state, layout, invite
-//   - Default (0): messages, read state
+//   - Admin (100): project config, room metadata, join rules, power levels
+//   - Machine/daemon (50): invite principals into workspace rooms
+//   - Default (0): messages, workspace state, layout, read state
+//
+// Workspace state events (m.bureau.workspace) are at PL 0 — any room member
+// can publish them. Authorization relies on room membership: the room is
+// invite-only, and only the daemon (PL 50) or admin can invite. This avoids
+// the daemon needing to modify m.room.power_levels, which Continuwuity
+// rejects from non-admin senders due to a spec compliance gap (it validates
+// ALL fields in the event against the sender's PL, not just changed fields).
 //
 // The admin creates workspace rooms via "bureau workspace create", so using
 // this as PowerLevelContentOverride in CreateRoom is safe (the creator
@@ -1405,7 +1412,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 		"users_default": 0,
 		"events": map[string]any{
 			EventTypeProject:            100,
-			EventTypeWorkspace:          50,
+			EventTypeWorkspace:          0,
 			EventTypeLayout:             0,
 			"m.room.name":               100,
 			"m.room.topic":              100,

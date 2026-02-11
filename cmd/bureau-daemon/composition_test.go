@@ -688,6 +688,21 @@ func (m *mockMatrixState) handler() http.Handler {
 			return
 		}
 
+		// POST /rooms/{roomId}/invite — invite user.
+		if pathAfterRoom == "invite" && r.Method == "POST" {
+			m.handleInvite(w, r, roomID)
+			return
+		}
+
+		// PUT /rooms/{roomId}/send/{eventType}/{txnId} — send event.
+		if strings.HasPrefix(pathAfterRoom, "send/") && r.Method == "PUT" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"event_id": "$mock-send-event-id",
+			})
+			return
+		}
+
 		// GET /rooms/{roomId}/members — return room members.
 		if pathAfterRoom == "members" && r.Method == "GET" {
 			m.handleGetRoomMembers(w, roomID)
@@ -788,6 +803,13 @@ func (m *mockMatrixState) handlePutStateEvent(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]string{
 		"event_id": "$mock-event-id",
 	})
+}
+
+func (m *mockMatrixState) handleInvite(w http.ResponseWriter, r *http.Request, roomID string) {
+	// Accept all invite requests. In a real homeserver, this would
+	// check power levels and membership state.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{})
 }
 
 func (m *mockMatrixState) handleResolveAlias(w http.ResponseWriter, alias string) {

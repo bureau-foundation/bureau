@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -56,17 +57,21 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// stop, and a teardown principal gated on "teardown" starts.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
 	triggerContents := make(map[string]json.RawMessage)
+	conditionRoomIDs := make(map[string]string) // localpart → resolved workspace room ID
 	for _, assignment := range config.Principals {
 		if !assignment.AutoStart {
 			continue
 		}
-		satisfied, triggerContent := d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition)
+		satisfied, triggerContent, conditionRoomID := d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition)
 		if !satisfied {
 			continue
 		}
 		desired[assignment.Localpart] = assignment
 		if triggerContent != nil {
 			triggerContents[assignment.Localpart] = triggerContent
+		}
+		if conditionRoomID != "" {
+			conditionRoomIDs[assignment.Localpart] = conditionRoomID
 		}
 	}
 
@@ -102,6 +107,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.logger.Info("credentials changed, restarting principal",
 			"principal", localpart)
 
+		d.cancelExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
@@ -121,6 +127,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		delete(d.running, localpart)
+		delete(d.exitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -272,6 +279,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			}
 		}
 
+		// Invite the principal to any workspace room it references so it
+		// can publish state events after joining. Two sources:
+		// StartCondition.RoomAlias (resolved during condition evaluation)
+		// and WORKSPACE_ROOM_ID in the payload (static per-principal
+		// config from workspace create). Best-effort: if the invite
+		// fails, the sandbox is still created.
+		workspaceRoomID := conditionRoomIDs[localpart]
+		if workspaceRoomID == "" && sandboxSpec != nil {
+			if value, ok := sandboxSpec.Payload["WORKSPACE_ROOM_ID"].(string); ok {
+				workspaceRoomID = value
+			}
+		}
+		if workspaceRoomID != "" {
+			d.ensurePrincipalRoomAccess(ctx, localpart, workspaceRoomID)
+		}
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
@@ -338,6 +361,25 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				"error", err,
 			)
 		}
+
+		// Watch for sandbox process exit. The goroutine blocks on the
+		// launcher's wait-sandbox IPC until the sandbox's tmux session
+		// exits, then clears d.running and triggers re-reconciliation.
+		// Uses shutdownCtx (not the sync cycle's ctx) so the watcher
+		// survives across sync iterations but cancels on daemon shutdown.
+		// shutdownCtx is nil in unit tests — those tests don't exercise
+		// exit watching (mock launchers return immediately for all IPC).
+		//
+		// Each watcher gets a per-principal cancellable context so the
+		// daemon can cancel it before an intentional destroy (credential
+		// rotation, structural restart, condition change). Without this,
+		// the old watcher would see the destroy as an unexpected exit,
+		// clear d.running, and trigger a duplicate recreation.
+		if d.shutdownCtx != nil {
+			watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
+			d.exitWatchers[localpart] = watcherCancel
+			go d.watchSandboxExit(watcherCtx, localpart)
+		}
 	}
 
 	// Destroy sandboxes for principals that should not be running.
@@ -347,6 +389,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.logger.Info("stopping principal", "principal", localpart)
+
+		// Cancel the exit watcher before destroying — the destroy is
+		// intentional, not an unexpected exit.
+		d.cancelExitWatcher(localpart)
 
 		// Stop health monitoring and layout watching before destroying
 		// the sandbox. This ensures clean shutdown rather than having
@@ -368,6 +414,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		delete(d.running, localpart)
+		delete(d.exitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -427,6 +474,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 			"template", assignment.Template,
 		)
 
+		d.cancelExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
@@ -452,6 +500,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		d.previousSpecs[localpart] = d.lastSpecs[localpart]
 
 		delete(d.running, localpart)
+		delete(d.exitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -526,27 +575,28 @@ func structurallyChanged(old, new *schema.SandboxSpec) bool {
 }
 
 // evaluateStartCondition checks whether a principal's StartCondition is
-// satisfied. Returns (true, eventContent) when the condition is met, or
-// (false, nil) when it is not. When StartCondition is nil, returns (true, nil).
+// satisfied. Returns (satisfied, eventContent, resolvedRoomID):
+//   - satisfied: true when the condition is met
+//   - eventContent: the full content of the matched state event, passed
+//     through as trigger content to the sandbox
+//   - resolvedRoomID: the Matrix room ID resolved from StartCondition.RoomAlias,
+//     empty when the condition uses the config room or is nil
 //
-// The returned json.RawMessage is the full content of the matched state event.
-// The reconcile loop passes it through to the launcher as trigger content, which
-// writes it to /run/bureau/trigger.json inside the sandbox. This enables
-// event-triggered principals to read parameters from the event that launched
-// them (e.g., a workspace teardown event carrying the teardown mode).
+// When StartCondition is nil, returns (true, nil, "").
 //
 // The condition references a state event in a specific room. When RoomAlias is
 // set, the daemon resolves it to a room ID. When empty, the daemon checks the
 // principal's own config room (where MachineConfig lives). If the state event
 // exists, the condition is met. If it's M_NOT_FOUND, the principal is deferred.
-func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) (bool, json.RawMessage) {
+func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) (bool, json.RawMessage, string) {
 	if condition == nil {
-		return true, nil
+		return true, nil, ""
 	}
 
 	// Determine which room to check. When RoomAlias is empty, check the
 	// principal's config room (the room where the MachineConfig lives).
 	roomID := d.configRoomID
+	conditionRoomID := "" // Only set when RoomAlias is used (workspace rooms).
 	if condition.RoomAlias != "" {
 		resolved, err := d.session.ResolveAlias(ctx, condition.RoomAlias)
 		if err != nil {
@@ -555,16 +605,17 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"principal", localpart,
 					"room_alias", condition.RoomAlias,
 				)
-				return false, nil
+				return false, nil, ""
 			}
 			d.logger.Error("resolving start condition room alias",
 				"principal", localpart,
 				"room_alias", condition.RoomAlias,
 				"error", err,
 			)
-			return false, nil
+			return false, nil, ""
 		}
 		roomID = resolved
+		conditionRoomID = resolved
 	}
 
 	content, err := d.session.GetStateEvent(ctx, roomID, condition.EventType, condition.StateKey)
@@ -576,7 +627,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 				"state_key", condition.StateKey,
 				"room_id", roomID,
 			)
-			return false, nil
+			return false, nil, ""
 		}
 		d.logger.Error("checking start condition",
 			"principal", localpart,
@@ -585,7 +636,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 			"room_id", roomID,
 			"error", err,
 		)
-		return false, nil
+		return false, nil, ""
 	}
 
 	// Event exists. If ContentMatch is specified, verify all key-value
@@ -599,7 +650,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 				"room_id", roomID,
 				"error", err,
 			)
-			return false, nil
+			return false, nil, ""
 		}
 		for matchKey, matchValue := range condition.ContentMatch {
 			actual, exists := contentMap[matchKey]
@@ -611,7 +662,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"key", matchKey,
 					"expected", matchValue,
 				)
-				return false, nil
+				return false, nil, ""
 			}
 			actualString, ok := actual.(string)
 			if !ok || actualString != matchValue {
@@ -623,12 +674,12 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 					"expected", matchValue,
 					"actual", actual,
 				)
-				return false, nil
+				return false, nil, ""
 			}
 		}
 	}
 
-	return true, content
+	return true, content, conditionRoomID
 }
 
 // readMachineConfig reads the MachineConfig state event from the config room.
@@ -657,6 +708,113 @@ func (d *Daemon) readCredentials(ctx context.Context, principalLocalpart string)
 		return nil, fmt.Errorf("parsing credentials for %q: %w", principalLocalpart, err)
 	}
 	return &credentials, nil
+}
+
+// ensurePrincipalRoomAccess invites a principal to a workspace room so it can
+// publish state events (m.bureau.workspace at PL 0). Called before
+// create-sandbox for principals whose StartCondition references a workspace
+// room or whose payload contains WORKSPACE_ROOM_ID.
+//
+// The invite is best-effort: failures are logged but do not block sandbox
+// creation. M_FORBIDDEN typically means the user is already a member.
+func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, workspaceRoomID string) {
+	userID := principal.MatrixUserID(localpart, d.serverName)
+
+	// Invite the principal to the workspace room. Workspace rooms use
+	// membership as the authorization boundary (m.bureau.workspace at PL 0,
+	// room is invite-only), so the invite is the only access control step
+	// needed. Power level modification is not attempted — Continuwuity
+	// validates all fields in m.room.power_levels against the sender's PL
+	// (not just changed ones), so only admin (PL 100) can modify PLs.
+	if err := d.session.InviteUser(ctx, workspaceRoomID, userID); err != nil {
+		// M_FORBIDDEN typically means the user is already a member.
+		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			d.logger.Warn("failed to invite principal to workspace room",
+				"principal", localpart,
+				"room_id", workspaceRoomID,
+				"error", err,
+			)
+		}
+	}
+}
+
+// cancelExitWatcher cancels the watchSandboxExit goroutine for a principal.
+// Must be called before an intentional destroy-sandbox IPC so the watcher
+// does not interpret the destroy as an unexpected exit and corrupt daemon state.
+// Caller must hold reconcileMu.
+func (d *Daemon) cancelExitWatcher(localpart string) {
+	if cancel, ok := d.exitWatchers[localpart]; ok {
+		cancel()
+	}
+}
+
+// watchSandboxExit blocks until the named sandbox's process exits, then clears
+// the daemon's running state and triggers re-reconciliation. This enables the
+// daemon to detect one-shot principals (setup/teardown) that complete their work
+// and exit, as well as unexpected agent crashes that need restart.
+//
+// The re-reconciliation re-evaluates StartConditions for all principals:
+//   - One-shot principals (setup/teardown) won't restart because their condition
+//     became false after they published a state change (e.g., "pending" → "active").
+//   - Long-running agents restart automatically if their condition is still met.
+//
+// Must be called as a goroutine. Uses reconcileMu to safely modify shared state.
+func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
+	exitCode, exitDescription, err := d.launcherWaitSandbox(ctx, localpart)
+	if err != nil {
+		if ctx.Err() != nil {
+			return // Daemon shutting down.
+		}
+		d.logger.Error("wait-sandbox failed",
+			"principal", localpart,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("sandbox exited",
+		"principal", localpart,
+		"exit_code", exitCode,
+		"description", exitDescription,
+	)
+
+	d.reconcileMu.Lock()
+	if d.running[localpart] {
+		d.stopHealthMonitor(localpart)
+		d.stopLayoutWatcher(localpart)
+		delete(d.running, localpart)
+		delete(d.exitWatchers, localpart)
+		delete(d.lastSpecs, localpart)
+		delete(d.previousSpecs, localpart)
+		delete(d.lastTemplates, localpart)
+		delete(d.lastCredentials, localpart)
+		delete(d.lastVisibility, localpart)
+		delete(d.lastMatrixPolicy, localpart)
+		delete(d.lastObservePolicy, localpart)
+		d.lastActivityAt = time.Now()
+	}
+	d.reconcileMu.Unlock()
+
+	// Post exit notification to config room.
+	status := "exited normally"
+	if exitCode != 0 {
+		status = fmt.Sprintf("exited with code %d", exitCode)
+		if exitDescription != "" {
+			status += fmt.Sprintf(" (%s)", exitDescription)
+		}
+	}
+	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+		fmt.Sprintf("Sandbox %s %s", localpart, status),
+	))
+
+	// Trigger re-reconciliation so the loop can decide whether to restart.
+	// This acquires reconcileMu again — safe because we released it above.
+	if err := d.reconcile(ctx); err != nil {
+		d.logger.Error("reconciliation after sandbox exit failed",
+			"principal", localpart,
+			"error", err,
+		)
+	}
 }
 
 // launcherIPCRequest mirrors the launcher's IPCRequest type. Defined here to

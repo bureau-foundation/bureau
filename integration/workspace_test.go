@@ -326,13 +326,15 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 	teardownAccount := registerPrincipal(t, "wsp/pipeline/teardown", "test-password")
 
 	// Setup and teardown principals need membership in the workspace room
-	// to publish state events via their proxy. Invite them and have them
-	// join, then grant PL 50 so they can send m.bureau.workspace events.
+	// to publish state events via their proxy. The daemon invites them
+	// during reconciliation (ensurePrincipalRoomAccess), but the proxy
+	// doesn't auto-join invited rooms yet — the principal must call
+	// JoinRoom, which requires a session outside the sandbox. For now,
+	// the test pre-joins them using their tokens. The daemon's invite
+	// is redundant but harmless (idempotent).
 	for _, account := range []principalAccount{setupAccount, teardownAccount} {
 		inviteAndJoinRoom(t, admin, workspaceRoomID, account)
 	}
-	grantPowerLevel(t, admin, workspaceRoomID, setupAccount.UserID, 50)
-	grantPowerLevel(t, admin, workspaceRoomID, teardownAccount.UserID, 50)
 
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
@@ -351,6 +353,12 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 				Template:  templateRef,
 				AutoStart: true,
 				Labels:    map[string]string{"role": "setup"},
+				StartCondition: &schema.StartCondition{
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    workspaceRoomAlias,
+					ContentMatch: map[string]string{"status": "pending"},
+				},
 				Payload: map[string]any{
 					"pipeline_inline": map[string]any{
 						"description": "Test workspace setup",
@@ -531,9 +539,10 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 }
 
 // inviteAndJoinRoom invites a principal to a room and has the principal
-// join using their own Matrix session. This is a workaround for the
-// production gap where the daemon should invite workspace principals
-// to workspace rooms during reconciliation.
+// join using their own Matrix session. The daemon invites principals
+// during reconciliation (ensurePrincipalRoomAccess), but the proxy
+// doesn't auto-join invited rooms yet, so this helper provides the JOIN
+// step that the proxy will eventually handle.
 func inviteAndJoinRoom(t *testing.T, admin *messaging.Session, roomID string, account principalAccount) {
 	t.Helper()
 
@@ -562,38 +571,6 @@ func inviteAndJoinRoom(t *testing.T, admin *messaging.Session, roomID string, ac
 
 	if _, err := session.JoinRoom(ctx, roomID); err != nil {
 		t.Fatalf("%s join room %s: %v", account.Localpart, roomID, err)
-	}
-}
-
-// grantPowerLevel updates a room's power levels to grant a specific user
-// the specified power level. Reads the current power levels, modifies the
-// users map, and sends the updated event.
-func grantPowerLevel(t *testing.T, admin *messaging.Session, roomID, userID string, powerLevel int) {
-	t.Helper()
-
-	ctx := t.Context()
-
-	// Read current power levels.
-	content, err := admin.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
-	if err != nil {
-		t.Fatalf("read power levels for room %s: %v", roomID, err)
-	}
-
-	var powerLevels map[string]any
-	if err := json.Unmarshal(content, &powerLevels); err != nil {
-		t.Fatalf("unmarshal power levels: %v", err)
-	}
-
-	users, _ := powerLevels["users"].(map[string]any)
-	if users == nil {
-		users = make(map[string]any)
-		powerLevels["users"] = users
-	}
-	users[userID] = powerLevel
-
-	_, err = admin.SendStateEvent(ctx, roomID, "m.room.power_levels", "", powerLevels)
-	if err != nil {
-		t.Fatalf("update power levels for %s in room %s: %v", userID, roomID, err)
 	}
 }
 

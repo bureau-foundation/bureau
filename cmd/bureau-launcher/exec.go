@@ -319,15 +319,21 @@ func (l *Launcher) reconnectSandboxes() error {
 			_, waitError := syscall.Wait4(pid, &status, 0, nil)
 			if waitError != nil {
 				sandbox.exitError = waitError
-			} else if status.Exited() && status.ExitStatus() != 0 {
-				sandbox.exitError = fmt.Errorf("exit status %d", status.ExitStatus())
+				sandbox.exitCode = -1
+			} else if status.Exited() {
+				sandbox.exitCode = status.ExitStatus()
+				if sandbox.exitCode != 0 {
+					sandbox.exitError = fmt.Errorf("exit status %d", sandbox.exitCode)
+				}
 			} else if status.Signaled() {
+				sandbox.exitCode = 128 + int(status.Signal())
 				sandbox.exitError = fmt.Errorf("killed by signal %d", status.Signal())
 			}
 			close(sandbox.done)
 			l.logger.Info("reconnected proxy process exited",
 				"principal", localpart,
 				"pid", pid,
+				"exit_code", sandbox.exitCode,
 				"error", sandbox.exitError,
 			)
 		}(sandbox, localpart, entry.PID)

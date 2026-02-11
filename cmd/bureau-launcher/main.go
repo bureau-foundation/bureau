@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -610,7 +611,8 @@ type managedSandbox struct {
 	process   *os.Process
 	configDir string              // temp directory containing proxy config
 	done      chan struct{}       // closed when process exits
-	exitError error               // set when process exits
+	exitCode  int                 // process exit code (set before done is closed)
+	exitError error               // error from wait (set before done is closed)
 	roles     map[string][]string // role name → command, from SandboxSpec.Roles
 }
 
@@ -740,6 +742,11 @@ type IPCResponse struct {
 	// the "status" action so the daemon can hash-compare the current
 	// proxy against the desired version.
 	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
+
+	// ExitCode is the process exit code returned by "wait-sandbox".
+	// Uses a pointer to distinguish "exit code 0" (success) from
+	// "field not present" (non-wait-sandbox responses).
+	ExitCode *int `json:"exit_code,omitempty"`
 }
 
 // handleConnection processes a single IPC request/response cycle.
@@ -760,6 +767,15 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	l.logger.Info("IPC request", "action", request.Action, "principal", request.Principal)
+
+	// wait-sandbox blocks until a sandbox process exits, potentially for
+	// hours. Handle it before acquiring the mutex so that other IPC
+	// requests (create-sandbox, destroy-sandbox, status, etc.) are not
+	// blocked while a wait is pending.
+	if request.Action == "wait-sandbox" {
+		l.handleWaitSandbox(ctx, conn, encoder, &request)
+		return
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -944,6 +960,70 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 
 	l.logger.Info("sandbox destroyed", "principal", request.Principal)
 	return IPCResponse{OK: true}
+}
+
+// handleWaitSandbox blocks until the named sandbox's process exits, then
+// responds with the exit code. This runs outside the launcher mutex so
+// that other IPC requests are not blocked during the (potentially long) wait.
+//
+// The handler monitors both the sandbox's done channel and the IPC
+// connection. If the daemon disconnects (crashes, restarts, context
+// cancelled), the handler returns without sending a response.
+func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
+	if request.Principal == "" {
+		encoder.Encode(IPCResponse{OK: false, Error: "principal is required"})
+		return
+	}
+
+	if err := principal.ValidateLocalpart(request.Principal); err != nil {
+		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)})
+		return
+	}
+
+	// Look up the sandbox under the lock, then release immediately.
+	l.mu.Lock()
+	sandbox, exists := l.sandboxes[request.Principal]
+	l.mu.Unlock()
+
+	if !exists {
+		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)})
+		return
+	}
+
+	// Clear the read/write deadline — wait-sandbox can block for hours
+	// (pipeline execution time). The 30-second deadline set by
+	// handleConnection is only appropriate for quick request-response
+	// actions.
+	conn.SetDeadline(time.Time{})
+
+	// Monitor connection closure in a background goroutine. If the
+	// daemon disconnects (crash, restart, context cancellation on the
+	// daemon side), the Read returns an error and we close connClosed.
+	// This prevents the handler from blocking on a dead connection.
+	connClosed := make(chan struct{})
+	go func() {
+		buffer := make([]byte, 1)
+		conn.Read(buffer)
+		close(connClosed)
+	}()
+
+	select {
+	case <-sandbox.done:
+		exitCode := sandbox.exitCode
+		response := IPCResponse{OK: true, ExitCode: &exitCode}
+		if sandbox.exitError != nil {
+			response.Error = sandbox.exitError.Error()
+		}
+		encoder.Encode(response)
+
+	case <-connClosed:
+		l.logger.Info("wait-sandbox: daemon disconnected",
+			"principal", request.Principal)
+
+	case <-ctx.Done():
+		l.logger.Info("wait-sandbox: launcher shutting down",
+			"principal", request.Principal)
+	}
 }
 
 // handleUpdatePayload atomically rewrites the payload file for a running
@@ -1345,11 +1425,21 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Wait for the process in the background to collect exit status.
 	go func() {
-		sandbox.exitError = cmd.Wait()
+		waitError := cmd.Wait()
+		sandbox.exitError = waitError
+		if waitError != nil {
+			var exitErr *exec.ExitError
+			if errors.As(waitError, &exitErr) {
+				sandbox.exitCode = exitErr.ExitCode()
+			} else {
+				sandbox.exitCode = -1
+			}
+		}
 		close(sandbox.done)
 		l.logger.Info("proxy process exited",
 			"principal", principalLocalpart,
 			"pid", cmd.Process.Pid,
+			"exit_code", sandbox.exitCode,
 			"error", sandbox.exitError,
 		)
 	}()

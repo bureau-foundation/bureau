@@ -1792,3 +1792,350 @@ func TestHandleUpdateProxyBinary_ViaIPC(t *testing.T) {
 		t.Errorf("proxyBinaryPath = %q, want %q", launcher.proxyBinaryPath, execPath)
 	}
 }
+
+// sendIPCRequest is a test helper that opens a connection to the launcher
+// socket, sends a request, reads the response, and returns it. For
+// short-lived IPC actions (not wait-sandbox).
+func sendIPCRequest(t *testing.T, socketPath string, request IPCRequest) IPCResponse {
+	t.Helper()
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial launcher: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	var response IPCResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return response
+}
+
+func TestWaitSandbox_Validation(t *testing.T) {
+	t.Parallel()
+
+	launcher := &Launcher{
+		sandboxes: make(map[string]*managedSandbox),
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "test.sock")
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	tests := []struct {
+		name      string
+		request   IPCRequest
+		expectErr string
+	}{
+		{
+			name:      "missing principal",
+			request:   IPCRequest{Action: "wait-sandbox"},
+			expectErr: "principal is required",
+		},
+		{
+			name:      "invalid principal",
+			request:   IPCRequest{Action: "wait-sandbox", Principal: "../escape"},
+			expectErr: "invalid principal",
+		},
+		{
+			name:      "unknown principal",
+			request:   IPCRequest{Action: "wait-sandbox", Principal: "test/nonexistent"},
+			expectErr: "no sandbox running",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responseChan := make(chan IPCResponse, 1)
+			go func() {
+				conn, dialErr := net.Dial("unix", socketPath)
+				if dialErr != nil {
+					t.Errorf("Dial: %v", dialErr)
+					return
+				}
+				defer conn.Close()
+
+				if encodeErr := json.NewEncoder(conn).Encode(test.request); encodeErr != nil {
+					t.Errorf("Encode: %v", encodeErr)
+					return
+				}
+				var response IPCResponse
+				if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+					t.Errorf("Decode: %v", decodeErr)
+					return
+				}
+				responseChan <- response
+			}()
+
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				t.Fatalf("Accept: %v", acceptErr)
+			}
+			launcher.handleConnection(context.Background(), conn)
+
+			response := <-responseChan
+			if response.OK {
+				t.Error("expected error response")
+			}
+			if !strings.Contains(response.Error, test.expectErr) {
+				t.Errorf("error = %q, want substring %q", response.Error, test.expectErr)
+			}
+		})
+	}
+}
+
+func TestWaitSandbox_ProcessExit(t *testing.T) {
+	t.Parallel()
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN": "syt_test",
+	})
+
+	// Create a sandbox.
+	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/waitnormal",
+		EncryptedCredentials: ciphertext,
+	})
+	if !createResponse.OK {
+		t.Fatalf("create-sandbox: %s", createResponse.Error)
+	}
+
+	// Set up the IPC socket for wait-sandbox.
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	// Start wait-sandbox in a goroutine (it blocks until the process exits).
+	responseChan := make(chan IPCResponse, 1)
+	go func() {
+		conn, dialErr := net.Dial("unix", socketPath)
+		if dialErr != nil {
+			t.Errorf("Dial: %v", dialErr)
+			return
+		}
+		defer conn.Close()
+
+		if encodeErr := json.NewEncoder(conn).Encode(IPCRequest{
+			Action:    "wait-sandbox",
+			Principal: "test/waitnormal",
+		}); encodeErr != nil {
+			t.Errorf("Encode: %v", encodeErr)
+			return
+		}
+
+		var response IPCResponse
+		if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+			t.Errorf("Decode: %v", decodeErr)
+			return
+		}
+		responseChan <- response
+	}()
+
+	// Accept and handle the wait-sandbox request.
+	conn, acceptErr := listener.Accept()
+	if acceptErr != nil {
+		t.Fatalf("Accept: %v", acceptErr)
+	}
+	handleDone := make(chan struct{})
+	go func() {
+		launcher.handleConnection(context.Background(), conn)
+		close(handleDone)
+	}()
+
+	// Verify wait-sandbox is actually blocking: no response yet.
+	select {
+	case <-responseChan:
+		t.Fatal("wait-sandbox returned before process exit")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: still blocking.
+	}
+
+	// Kill the proxy (simulates process exit). SIGKILL gives a non-zero
+	// exit code.
+	sandbox := launcher.sandboxes["test/waitnormal"]
+	sandbox.process.Kill()
+
+	// wait-sandbox should now return.
+	select {
+	case response := <-responseChan:
+		if !response.OK {
+			t.Fatalf("wait-sandbox failed: %s", response.Error)
+		}
+		if response.ExitCode == nil {
+			t.Fatal("ExitCode should be set")
+		}
+		// SIGKILL produces a non-zero exit code.
+		if *response.ExitCode == 0 {
+			t.Error("expected non-zero exit code from SIGKILL")
+		}
+		// The error string should describe the signal.
+		if response.Error == "" {
+			t.Error("expected error string describing signal")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait-sandbox did not return after process exit")
+	}
+
+	<-handleDone
+}
+
+func TestWaitSandbox_AlreadyExited(t *testing.T) {
+	t.Parallel()
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN": "syt_test",
+	})
+
+	// Create and immediately kill the sandbox.
+	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/waitalready",
+		EncryptedCredentials: ciphertext,
+	})
+	if !createResponse.OK {
+		t.Fatalf("create-sandbox: %s", createResponse.Error)
+	}
+
+	sandbox := launcher.sandboxes["test/waitalready"]
+	sandbox.process.Kill()
+	<-sandbox.done // wait for exit to be recorded
+
+	// Now call wait-sandbox — should return immediately since the
+	// process has already exited.
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	responseChan := make(chan IPCResponse, 1)
+	go func() {
+		conn, dialErr := net.Dial("unix", socketPath)
+		if dialErr != nil {
+			t.Errorf("Dial: %v", dialErr)
+			return
+		}
+		defer conn.Close()
+
+		if encodeErr := json.NewEncoder(conn).Encode(IPCRequest{
+			Action:    "wait-sandbox",
+			Principal: "test/waitalready",
+		}); encodeErr != nil {
+			t.Errorf("Encode: %v", encodeErr)
+			return
+		}
+
+		var response IPCResponse
+		if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+			t.Errorf("Decode: %v", decodeErr)
+			return
+		}
+		responseChan <- response
+	}()
+
+	conn, acceptErr := listener.Accept()
+	if acceptErr != nil {
+		t.Fatalf("Accept: %v", acceptErr)
+	}
+	launcher.handleConnection(context.Background(), conn)
+
+	select {
+	case response := <-responseChan:
+		if !response.OK {
+			t.Fatalf("wait-sandbox failed: %s", response.Error)
+		}
+		if response.ExitCode == nil {
+			t.Fatal("ExitCode should be set")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait-sandbox did not return for already-exited process")
+	}
+}
+
+func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
+	t.Parallel()
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN": "syt_test",
+	})
+
+	// Create a sandbox that stays alive.
+	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/waitblock",
+		EncryptedCredentials: ciphertext,
+	})
+	if !createResponse.OK {
+		t.Fatalf("create-sandbox: %s", createResponse.Error)
+	}
+
+	// Start a real IPC server so we can test concurrent requests.
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Accept connections in a loop (like the real launcher).
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go launcher.handleConnection(ctx, conn)
+		}
+	}()
+
+	// Send a wait-sandbox request that will block (process is still alive).
+	waitConn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial wait: %v", err)
+	}
+	defer waitConn.Close()
+
+	if encodeErr := json.NewEncoder(waitConn).Encode(IPCRequest{
+		Action:    "wait-sandbox",
+		Principal: "test/waitblock",
+	}); encodeErr != nil {
+		t.Fatalf("Encode wait: %v", encodeErr)
+	}
+
+	// Give the handler a moment to start blocking.
+	time.Sleep(50 * time.Millisecond)
+
+	// While wait-sandbox is blocking, send a status request — it should
+	// succeed without being blocked by the wait.
+	statusResponse := sendIPCRequest(t, socketPath, IPCRequest{Action: "status"})
+	if !statusResponse.OK {
+		t.Fatalf("status request blocked by wait-sandbox: %s", statusResponse.Error)
+	}
+}

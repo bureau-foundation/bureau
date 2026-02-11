@@ -676,6 +676,7 @@ type launcherIPCResponse struct {
 	ProxyPID        int    `json:"proxy_pid,omitempty"`
 	BinaryHash      string `json:"binary_hash,omitempty"`
 	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
 }
 
 // queryLauncherStatus sends a "status" IPC request to the launcher and
@@ -834,4 +835,71 @@ func (d *Daemon) launcherRequest(ctx context.Context, request launcherIPCRequest
 	}
 
 	return &response, nil
+}
+
+// launcherWaitSandbox sends a "wait-sandbox" IPC request to the launcher
+// and blocks until the named sandbox's process exits. Returns the process
+// exit code (0 for success, non-zero for failure, -1 for abnormal
+// termination).
+//
+// Unlike launcherRequest, this method is designed for long-lived
+// connections. The context controls cancellation: when cancelled, the
+// connection is closed, which unblocks the launcher's handler.
+//
+// The error string in the response (if any) describes the process exit
+// condition (signal name, etc.) and is informational — the exit code is
+// the authoritative success/failure indicator.
+func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart string) (int, string, error) {
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "unix", d.launcherSocket)
+	if err != nil {
+		return -1, "", fmt.Errorf("connecting to launcher at %s: %w", d.launcherSocket, err)
+	}
+	defer conn.Close()
+
+	// Close the connection when the context is cancelled. This unblocks
+	// the Read call below and signals the launcher to clean up its
+	// wait-sandbox handler.
+	readDone := make(chan struct{})
+	defer close(readDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-readDone:
+		}
+	}()
+
+	// Send the request with a short write deadline — the send itself
+	// should be fast; only the response blocks for the process lifetime.
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	request := launcherIPCRequest{
+		Action:    "wait-sandbox",
+		Principal: principalLocalpart,
+	}
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return -1, "", fmt.Errorf("sending wait-sandbox request: %w", err)
+	}
+
+	// Clear the write deadline and read without a deadline — the
+	// launcher responds only after the sandbox process exits.
+	conn.SetDeadline(time.Time{})
+
+	var response launcherIPCResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		if ctx.Err() != nil {
+			return -1, "", ctx.Err()
+		}
+		return -1, "", fmt.Errorf("reading wait-sandbox response: %w", err)
+	}
+
+	if !response.OK {
+		return -1, "", fmt.Errorf("wait-sandbox: %s", response.Error)
+	}
+
+	exitCode := 0
+	if response.ExitCode != nil {
+		exitCode = *response.ExitCode
+	}
+	return exitCode, response.Error, nil
 }

@@ -864,6 +864,12 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 0", EventTypeLayout, events[EventTypeLayout])
 	}
 
+	// Messages are writable by anyone in the room (power level 0) so the
+	// daemon can post command results and pipeline results.
+	if events["m.room.message"] != 0 {
+		t.Errorf("m.room.message power level = %v, want 0", events["m.room.message"])
+	}
+
 	// Default event power level should be 100 (admin-only room).
 	if levels["events_default"] != 100 {
 		t.Errorf("events_default = %v, want 100", levels["events_default"])

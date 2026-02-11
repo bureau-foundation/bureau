@@ -146,10 +146,15 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 	return stepResult{status: "ok", duration: duration}
 }
 
-// runShellCommand executes a command via /bin/sh -c with stdout and stderr
+// runShellCommand executes a command via sh -c with stdout and stderr
 // inherited from the executor process. Additional environment variables
 // from the step's env map are set on the command. Returns the exit code
 // and any error (signals, context cancellation, etc.).
+//
+// The shell is resolved via PATH, not hardcoded to /bin/sh. Inside bwrap
+// sandboxes the Nix environment's bin directory is on PATH but /bin may
+// not exist. PATH lookup is also more correct on NixOS hosts where
+// /bin/sh may be a different shell than the environment's.
 //
 // The command runs in its own process group so that context cancellation
 // (timeout) kills the shell and all its children. Without Setpgid, only
@@ -168,7 +173,7 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 // irreversible operations where abrupt termination could leave state
 // inconsistent.
 func runShellCommand(ctx context.Context, command string, env map[string]string, gracePeriod time.Duration) (int, error) {
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

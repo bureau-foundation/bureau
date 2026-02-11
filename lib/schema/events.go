@@ -1442,6 +1442,7 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 			EventTypeMachineConfig:      100,
 			EventTypeCredentials:        100,
 			EventTypeLayout:             0, // daemon publishes layout state
+			"m.room.message":            0, // daemon posts command results and pipeline results
 			"m.room.name":               100,
 			"m.room.topic":              100,
 			"m.room.avatar":             100,

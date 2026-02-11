@@ -1782,7 +1782,11 @@ func (l *Launcher) createTmuxSession(localpart string, command ...string) error 
 	// Create a detached tmux session. The first new-session on this socket
 	// also starts the tmux server. When a command is provided, tmux runs
 	// it instead of the default shell.
-	args := []string{"-S", tmuxSocket, "new-session", "-d", "-s", sessionName}
+	//
+	// -f /dev/null prevents tmux from loading the user's ~/.tmux.conf,
+	// which can crash the server with incompatible options. Bureau
+	// configures its own options via configureTmuxSession after creation.
+	args := []string{"-f", "/dev/null", "-S", tmuxSocket, "new-session", "-d", "-s", sessionName}
 	args = append(args, command...)
 	cmd := exec.Command("tmux", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {

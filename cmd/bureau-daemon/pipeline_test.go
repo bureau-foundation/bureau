@@ -260,30 +260,55 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 		t.Errorf("BUREAU_RESULT_PATH = %q", spec.EnvironmentVariables["BUREAU_RESULT_PATH"])
 	}
 
-	// Verify filesystem mounts.
-	if len(spec.Filesystem) < 2 {
-		t.Fatalf("expected at least 2 filesystem mounts, got %d", len(spec.Filesystem))
+	// Verify filesystem mounts by destination rather than by index.
+	// Order is not semantically meaningful and shifts when mounts are added.
+	findMount := func(dest string) *schema.TemplateMount {
+		for index := range spec.Filesystem {
+			if spec.Filesystem[index].Dest == dest {
+				return &spec.Filesystem[index]
+			}
+		}
+		return nil
+	}
+
+	// Executor binary mount (bind-mounted at its host path so bwrap can
+	// find it regardless of where it lives on the host).
+	executorMount := findMount(daemon.pipelineExecutorBinary)
+	if executorMount == nil {
+		t.Error("executor binary mount not found")
+	} else {
+		if executorMount.Source != daemon.pipelineExecutorBinary {
+			t.Errorf("executor mount source = %q, want %q", executorMount.Source, daemon.pipelineExecutorBinary)
+		}
+		if executorMount.Mode != "ro" {
+			t.Errorf("executor mount mode = %q, want 'ro'", executorMount.Mode)
+		}
 	}
 
 	// Result file mount.
-	resultMount := spec.Filesystem[0]
-	if resultMount.Source != "/tmp/result-abc/result.jsonl" {
-		t.Errorf("result mount source = %q", resultMount.Source)
-	}
-	if resultMount.Dest != "/run/bureau/result.jsonl" {
-		t.Errorf("result mount dest = %q", resultMount.Dest)
-	}
-	if resultMount.Mode != "rw" {
-		t.Errorf("result mount mode = %q, want 'rw'", resultMount.Mode)
+	resultMount := findMount("/run/bureau/result.jsonl")
+	if resultMount == nil {
+		t.Error("result file mount not found")
+	} else {
+		if resultMount.Source != "/tmp/result-abc/result.jsonl" {
+			t.Errorf("result mount source = %q", resultMount.Source)
+		}
+		if resultMount.Mode != "rw" {
+			t.Errorf("result mount mode = %q, want 'rw'", resultMount.Mode)
+		}
 	}
 
 	// Workspace root mount.
-	workspaceMount := spec.Filesystem[1]
-	if workspaceMount.Source != "/var/bureau/workspace" {
-		t.Errorf("workspace mount source = %q", workspaceMount.Source)
-	}
-	if workspaceMount.Mode != "rw" {
-		t.Errorf("workspace mount mode = %q, want 'rw'", workspaceMount.Mode)
+	workspaceMount := findMount("/var/bureau/workspace")
+	if workspaceMount == nil {
+		t.Error("workspace root mount not found")
+	} else {
+		if workspaceMount.Source != "/var/bureau/workspace" {
+			t.Errorf("workspace mount source = %q", workspaceMount.Source)
+		}
+		if workspaceMount.Mode != "rw" {
+			t.Errorf("workspace mount mode = %q, want 'rw'", workspaceMount.Mode)
+		}
 	}
 
 	// Verify namespaces.

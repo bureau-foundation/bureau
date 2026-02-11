@@ -436,6 +436,96 @@ func waitForStateEvent(t *testing.T, session *messaging.Session, roomID, eventTy
 	}
 }
 
+// --- Pipeline Test Helpers ---
+
+// findRunnerEnv builds the Nix integration-test-env and returns the store
+// path. The integration-test-env provides a shell and coreutils needed by
+// sandbox commands (pipeline steps, workspace scripts) inside bwrap sandboxes.
+// Production environments come from the environment repo; this derivation
+// provides them for integration tests without pulling in the full repo.
+// Skips the test if Nix is not installed or the build fails.
+func findRunnerEnv(t *testing.T) string {
+	t.Helper()
+
+	// The nix binary is at a well-known path, not necessarily in PATH
+	// when running under Bazel.
+	nixBinary := "/nix/var/nix/profiles/default/bin/nix"
+	if _, err := os.Stat(nixBinary); err != nil {
+		t.Skip("nix not available: integration tests requiring sandbox environments need Nix")
+	}
+
+	cmd := exec.Command(nixBinary, "build", ".#integration-test-env",
+		"--print-out-paths", "--no-link")
+	cmd.Dir = workspaceRoot
+	output, err := cmd.Output()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			t.Skipf("nix build .#integration-test-env failed: %v\nstderr: %s", err, exitError.Stderr)
+		}
+		t.Skipf("nix build .#integration-test-env failed: %v", err)
+	}
+
+	storePath := strings.TrimSpace(string(output))
+	if storePath == "" {
+		t.Skip("nix build .#integration-test-env produced empty output")
+	}
+
+	// Verify the store path has the expected bin directory with a shell.
+	binDirectory := filepath.Join(storePath, "bin")
+	if _, err := os.Stat(binDirectory); err != nil {
+		t.Fatalf("integration-test-env bin directory missing at %s: %v", binDirectory, err)
+	}
+	if _, err := os.Stat(filepath.Join(binDirectory, "sh")); err != nil {
+		t.Fatalf("integration-test-env missing sh: %v", err)
+	}
+
+	return storePath
+}
+
+// waitForCommandResults polls a room's timeline for m.bureau.command_result
+// events with a matching request_id. Returns when at least count matching
+// events are found or the timeout expires.
+func waitForCommandResults(t *testing.T, session *messaging.Session, roomID, requestID string, count int, timeout time.Duration) []messaging.Event {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
+			Direction: "b",
+			Limit:     50,
+		})
+		if err != nil {
+			t.Fatalf("RoomMessages for room %s: %v", roomID, err)
+		}
+
+		var matching []messaging.Event
+		for _, event := range response.Chunk {
+			if event.Type != "m.room.message" {
+				continue
+			}
+			msgtype, _ := event.Content["msgtype"].(string)
+			if msgtype != "m.bureau.command_result" {
+				continue
+			}
+			eventRequestID, _ := event.Content["request_id"].(string)
+			if eventRequestID != requestID {
+				continue
+			}
+			matching = append(matching, event)
+		}
+
+		if len(matching) >= count {
+			return matching
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %d command results with request_id %q in room %s (found %d)",
+				timeout, count, requestID, roomID, len(matching))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // --- Proxy Test Helpers ---
 
 // proxyHTTPClient creates an HTTP client that connects through a proxy Unix

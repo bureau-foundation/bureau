@@ -268,6 +268,12 @@ func (d *Daemon) buildPipelineExecutorSpec(
 			"TERM":               "xterm-256color",
 		},
 		Filesystem: []schema.TemplateMount{
+			// Executor binary: bind-mounted at its host path so bwrap
+			// can find it. Required when the binary is not under /nix/store
+			// (e.g., Bazel outputs, go install paths). Harmless when it is
+			// under /nix/store since the more-specific mount coexists with
+			// the /nix/store mount.
+			{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: "ro"},
 			// Result file: bind-mounted RW so the executor can write
 			// JSONL and the daemon reads the host file after exit.
 			{Source: resultFilePath, Dest: "/run/bureau/result.jsonl", Mode: "rw"},

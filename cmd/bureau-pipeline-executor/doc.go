@@ -26,7 +26,7 @@
 //
 // Step execution supports:
 //
-//   - run: shell commands via /bin/sh -c with inherited stdout/stderr
+//   - run: shell commands via sh -c (PATH lookup) with inherited stdout/stderr
 //   - publish: state event publication via proxy putState
 //   - when: guard conditions that skip steps on non-zero exit
 //   - check: post-run health checks that fail steps on non-zero exit

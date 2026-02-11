@@ -129,6 +129,19 @@
               name = "bureau-runner-env";
               paths = self.lib.baseRunnerPackages pkgs;
             };
+
+            # Integration test environment: runner-env plus a shell and
+            # coreutils. Sandbox commands (pipeline steps, workspace scripts)
+            # run via "sh -c" and need basic tools. Production environments
+            # get these from the environment repo; this derivation provides
+            # them for integration tests without pulling in the full repo.
+            integration-test-env = pkgs.buildEnv {
+              name = "bureau-integration-test-env";
+              paths = self.lib.baseRunnerPackages pkgs ++ [
+                pkgs.bash
+                pkgs.coreutils
+              ];
+            };
           };
 
         devShells.default = pkgs.mkShell {

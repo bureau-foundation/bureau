@@ -48,11 +48,13 @@ func (m *testMachine) PrincipalSocketPath(localpart string) string {
 // startMachine. LauncherBinary and DaemonBinary are required; the rest
 // are optional and conditionally passed as CLI flags.
 type machineOptions struct {
-	LauncherBinary     string // required
-	DaemonBinary       string // required
-	ProxyBinary        string // optional: launcher --proxy-binary
-	ObserveRelayBinary string // optional: daemon --observe-relay-binary
-	StatusInterval     string // optional: daemon --status-interval (default "2s")
+	LauncherBinary         string // required
+	DaemonBinary           string // required
+	ProxyBinary            string // optional: launcher --proxy-binary
+	ObserveRelayBinary     string // optional: daemon --observe-relay-binary
+	StatusInterval         string // optional: daemon --status-interval (default "2s")
+	PipelineExecutorBinary string // optional: daemon --pipeline-executor-binary
+	PipelineEnvironment    string // optional: daemon --pipeline-environment (Nix store path)
 }
 
 // principalAccount holds the registration details for a principal Matrix
@@ -181,11 +183,18 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		"--server-name", testServerName,
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
+		"--workspace-root", machine.WorkspaceRoot,
 		"--admin-user", "bureau-admin",
 		"--status-interval", statusInterval,
 	}
 	if options.ObserveRelayBinary != "" {
 		daemonArgs = append(daemonArgs, "--observe-relay-binary", options.ObserveRelayBinary)
+	}
+	if options.PipelineExecutorBinary != "" {
+		daemonArgs = append(daemonArgs, "--pipeline-executor-binary", options.PipelineExecutorBinary)
+	}
+	if options.PipelineEnvironment != "" {
+		daemonArgs = append(daemonArgs, "--pipeline-environment", options.PipelineEnvironment)
 	}
 
 	startProcess(t, machine.Name+"-daemon", options.DaemonBinary, daemonArgs...)

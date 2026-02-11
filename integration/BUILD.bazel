@@ -21,6 +21,7 @@ go_test(
         "lifecycle_test.go",
         "machine_test.go",
         "messaging_test.go",
+        "pipeline_test.go",
         "setup_test.go",
     ],
     data = [
@@ -29,6 +30,7 @@ go_test(
         "//cmd/bureau-daemon",
         "//cmd/bureau-launcher",
         "//cmd/bureau-observe-relay",
+        "//cmd/bureau-pipeline-executor",
         "//cmd/bureau-proxy",
     ],
     env = {
@@ -36,6 +38,7 @@ go_test(
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",
         "LAUNCHER_BINARY": "$(rlocationpath //cmd/bureau-launcher:bureau-launcher)",
         "OBSERVE_RELAY_BINARY": "$(rlocationpath //cmd/bureau-observe-relay:bureau-observe-relay)",
+        "PIPELINE_EXECUTOR_BINARY": "$(rlocationpath //cmd/bureau-pipeline-executor:bureau-pipeline-executor)",
         "PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
     },
     local = True,
@@ -43,6 +46,7 @@ go_test(
     deps = [
         "//lib/bootstrap",
         "//lib/principal",
+        "//lib/schema",
         "//lib/sealed",
         "//messaging",
         "//observe",

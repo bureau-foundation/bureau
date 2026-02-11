@@ -78,6 +78,8 @@ jobs:
             aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile bureau
           nix shell nixpkgs#awscli2 --command \
             aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile bureau
+          nix shell nixpkgs#awscli2 --command \
+            aws configure set region auto --profile bureau
 
           CACHE="s3://bureau-cache?profile=bureau&endpoint=${{ secrets.R2_ENDPOINT }}"
 
@@ -145,6 +147,8 @@ jobs:
             aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile bureau
           nix shell nixpkgs#awscli2 --command \
             aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile bureau
+          nix shell nixpkgs#awscli2 --command \
+            aws configure set region auto --profile bureau
 
           CACHE="s3://bureau-cache?profile=bureau&endpoint=${{ secrets.R2_ENDPOINT }}"
 

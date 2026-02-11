@@ -164,6 +164,11 @@
 
           env.CGO_ENABLED = "0";
 
+          # Nix strips TMPDIR from the host environment. Git 2.52+'s SSH
+          # signing uses TMPDIR for its signing buffer and falls back to
+          # "/" when unset, causing "Permission denied" on commit.
+          env.TMPDIR = "/tmp";
+
           shellHook = ''
             # Install pre-commit hooks on first shell entry.
             if [ -f .pre-commit-config.yaml ] && [ -d .git ]; then

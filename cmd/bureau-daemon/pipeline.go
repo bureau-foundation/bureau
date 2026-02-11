@@ -1,0 +1,524 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+// Pipeline execution: the daemon-side integration that spawns an
+// ephemeral sandbox running bureau-pipeline-executor, waits for it to
+// finish, reads the JSONL result file, and posts structured results as
+// threaded Matrix replies.
+//
+// The pipeline executor runs in a proper bwrap sandbox with its own
+// proxy process (holding the daemon's Matrix token via DirectCredentials).
+// The result file is a host-side temporary file bind-mounted RW into the
+// sandbox so the daemon can read it after the sandbox exits.
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
+)
+
+// handlePipelineExecute validates the pipeline.execute command,
+// starts an async goroutine for the execution lifecycle, and returns
+// an "accepted" result immediately. The goroutine handles sandbox
+// creation, waiting, result reading, threaded result posting, and
+// cleanup.
+func handlePipelineExecute(ctx context.Context, d *Daemon, roomID, eventID string, command schema.CommandMessage) (any, error) {
+	if d.pipelineExecutorBinary == "" {
+		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
+	}
+
+	// Validate the binary exists and is executable.
+	info, err := os.Stat(d.pipelineExecutorBinary)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline executor binary: %w", err)
+	}
+	if info.Mode()&0111 == 0 {
+		return nil, fmt.Errorf("pipeline executor binary is not executable: %s", d.pipelineExecutorBinary)
+	}
+
+	// Extract the pipeline reference from command parameters. The
+	// pipeline can be specified as a pipeline ref (room:template), a
+	// file path, or inline in the payload. The executor handles all
+	// three — we just need to pass it through.
+	pipelineRef, _ := command.Parameters["pipeline"].(string)
+	if pipelineRef == "" {
+		// When no explicit pipeline ref is provided, the executor
+		// falls back to payload-based resolution (pipeline_ref or
+		// pipeline_inline keys).
+		if command.Parameters["pipeline_ref"] == nil && command.Parameters["pipeline_inline"] == nil {
+			return nil, fmt.Errorf("parameter 'pipeline', 'pipeline_ref', or 'pipeline_inline' is required")
+		}
+	}
+
+	// Generate an ephemeral principal localpart. The timestamp ensures
+	// uniqueness; the pipeline ref (sanitized) provides human-readable
+	// context in logs and tmux session names.
+	localpart := pipelineLocalpart(pipelineRef)
+
+	d.logger.Info("pipeline.execute accepted",
+		"room_id", roomID,
+		"localpart", localpart,
+		"pipeline", pipelineRef,
+		"request_id", command.RequestID,
+	)
+
+	// Start async execution. Uses the daemon's shutdown context (not
+	// the sync cycle's context) so the pipeline survives across sync
+	// iterations but cancels on daemon shutdown.
+	go d.executePipeline(d.shutdownCtx, roomID, eventID, command, localpart, pipelineRef)
+
+	return map[string]any{
+		"status":    "accepted",
+		"principal": localpart,
+	}, nil
+}
+
+// pipelineLocalpart generates a unique principal localpart for a
+// pipeline execution. Uses the current timestamp for uniqueness and
+// a sanitized fragment of the pipeline ref for readability.
+func pipelineLocalpart(pipelineRef string) string {
+	timestamp := time.Now().UnixMilli()
+
+	// Extract a short, filesystem-safe label from the pipeline ref.
+	label := "run"
+	if pipelineRef != "" {
+		// Pipeline refs look like "bureau/pipeline:dev-workspace-init".
+		// Extract the part after the colon (template name) if present.
+		if colonIndex := strings.LastIndex(pipelineRef, ":"); colonIndex >= 0 && colonIndex < len(pipelineRef)-1 {
+			label = pipelineRef[colonIndex+1:]
+		} else {
+			label = pipelineRef
+		}
+		// Sanitize: replace non-alphanumeric/dash with dash, truncate.
+		var sanitized strings.Builder
+		for _, character := range label {
+			if (character >= 'a' && character <= 'z') ||
+				(character >= '0' && character <= '9') ||
+				character == '-' {
+				sanitized.WriteRune(character)
+			} else if character >= 'A' && character <= 'Z' {
+				sanitized.WriteRune(character - 'A' + 'a')
+			} else {
+				sanitized.WriteRune('-')
+			}
+		}
+		label = sanitized.String()
+		if len(label) > 20 {
+			label = label[:20]
+		}
+	}
+
+	return fmt.Sprintf("pipeline/%s/%d", label, timestamp)
+}
+
+// executePipeline is the async lifecycle for a pipeline.execute
+// command. It creates an ephemeral sandbox, waits for the executor
+// to finish, reads the JSONL result file, posts the result as a
+// threaded Matrix reply, and cleans up the sandbox.
+func (d *Daemon) executePipeline(
+	ctx context.Context,
+	roomID, commandEventID string,
+	command schema.CommandMessage,
+	localpart, pipelineRef string,
+) {
+	// Exit immediately if the daemon is already shutting down. The
+	// goroutine was started in handlePipelineExecute; by the time it
+	// is scheduled, the shutdown context may have been cancelled.
+	if err := ctx.Err(); err != nil {
+		d.logger.Info("pipeline execution cancelled before start",
+			"localpart", localpart, "reason", err)
+		return
+	}
+
+	start := time.Now()
+
+	// Create a temp directory for the result file. This lives on the
+	// host filesystem and is bind-mounted into the sandbox as RW. The
+	// daemon reads it after the sandbox exits.
+	resultDirectory, err := os.MkdirTemp("", "bureau-pipeline-result-*")
+	if err != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("creating result temp directory: %v", err))
+		return
+	}
+	defer os.RemoveAll(resultDirectory)
+
+	resultFilePath := filepath.Join(resultDirectory, "result.jsonl")
+	// Create the empty file so bwrap can bind-mount it.
+	if err := os.WriteFile(resultFilePath, nil, 0644); err != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("creating result file: %v", err))
+		return
+	}
+
+	// Build the sandbox spec for the pipeline executor.
+	spec := d.buildPipelineExecutorSpec(pipelineRef, resultFilePath, command)
+
+	// Build credentials from the daemon's own Matrix session. The
+	// pipeline executor talks to Matrix through its proxy, which needs
+	// a valid token.
+	credentials := map[string]string{
+		"MATRIX_TOKEN":   d.session.AccessToken(),
+		"MATRIX_USER_ID": d.machineUserID,
+	}
+
+	// Create the ephemeral sandbox.
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:            "create-sandbox",
+		Principal:         localpart,
+		DirectCredentials: credentials,
+		SandboxSpec:       spec,
+	})
+	if err != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("create-sandbox IPC failed: %v", err))
+		return
+	}
+	if !response.OK {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("create-sandbox rejected: %s", response.Error))
+		return
+	}
+
+	d.logger.Info("pipeline executor sandbox created",
+		"localpart", localpart,
+		"proxy_pid", response.ProxyPID,
+	)
+
+	// Wait for the executor to finish. This blocks until the process
+	// exits or the context is cancelled (daemon shutdown).
+	exitCode, exitDescription, waitError := d.launcherWaitSandbox(ctx, localpart)
+	if waitError != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("waiting for pipeline executor: %v", waitError))
+		d.destroyPipelineSandbox(ctx, localpart)
+		return
+	}
+
+	d.logger.Info("pipeline executor exited",
+		"localpart", localpart,
+		"exit_code", exitCode,
+		"exit_description", exitDescription,
+	)
+
+	// Read the JSONL result file.
+	entries, readError := readPipelineResultFile(resultFilePath)
+	if readError != nil {
+		d.logger.Warn("failed to read pipeline result file",
+			"localpart", localpart,
+			"path", resultFilePath,
+			"error", readError,
+		)
+		// Don't fail — we still have the exit code.
+	}
+
+	// Post the structured result as a threaded reply.
+	d.postPipelineResult(ctx, roomID, commandEventID, command, start,
+		exitCode, exitDescription, entries)
+
+	// Clean up the ephemeral sandbox.
+	d.destroyPipelineSandbox(ctx, localpart)
+}
+
+// buildPipelineExecutorSpec constructs a SandboxSpec for the pipeline
+// executor. The sandbox provides:
+//   - bwrap isolation with PID namespace
+//   - The pipeline executor binary as the entrypoint
+//   - BUREAU_SANDBOX=1, BUREAU_RESULT_PATH, TERM environment variables
+//   - The result file bind-mounted RW
+//   - The workspace root bind-mounted RW (for git operations)
+//   - The Nix environment (if configured) for toolchain access
+//   - Security defaults: new session, die-with-parent, no-new-privs
+func (d *Daemon) buildPipelineExecutorSpec(
+	pipelineRef string,
+	resultFilePath string,
+	command schema.CommandMessage,
+) *schema.SandboxSpec {
+	// Build the command. When a pipeline ref is provided, pass it as
+	// the CLI argument. Otherwise, the executor resolves via payload.
+	executorCommand := []string{d.pipelineExecutorBinary}
+	if pipelineRef != "" {
+		executorCommand = append(executorCommand, pipelineRef)
+	}
+
+	spec := &schema.SandboxSpec{
+		Command: executorCommand,
+		EnvironmentVariables: map[string]string{
+			"BUREAU_SANDBOX":     "1",
+			"BUREAU_RESULT_PATH": "/run/bureau/result.jsonl",
+			"TERM":               "xterm-256color",
+		},
+		Filesystem: []schema.TemplateMount{
+			// Result file: bind-mounted RW so the executor can write
+			// JSONL and the daemon reads the host file after exit.
+			{Source: resultFilePath, Dest: "/run/bureau/result.jsonl", Mode: "rw"},
+			// Workspace root: needed by pipeline steps that perform
+			// git operations (clone, fetch, worktree create/remove).
+			{Source: d.workspaceRoot, Dest: d.workspaceRoot, Mode: "rw"},
+		},
+		Namespaces: &schema.TemplateNamespaces{
+			PID: true,
+		},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+	}
+
+	// When a Nix environment is configured, the launcher bind-mounts
+	// /nix/store and prepends the environment's bin/ to PATH. This
+	// gives the executor access to tools like git, sh, etc.
+	if d.pipelineEnvironment != "" {
+		spec.EnvironmentPath = d.pipelineEnvironment
+	}
+
+	// Build the payload from command parameters. The executor reads
+	// the payload for pipeline_ref, pipeline_inline, and variables.
+	if len(command.Parameters) > 0 {
+		spec.Payload = command.Parameters
+	}
+
+	return spec
+}
+
+// destroyPipelineSandbox sends a destroy-sandbox request for an
+// ephemeral pipeline principal. Errors are logged but not propagated
+// — the result has already been posted by this point.
+func (d *Daemon) destroyPipelineSandbox(ctx context.Context, localpart string) {
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+	})
+	if err != nil {
+		d.logger.Error("destroy-sandbox IPC failed for pipeline executor",
+			"principal", localpart, "error", err)
+		return
+	}
+	if !response.OK {
+		d.logger.Error("destroy-sandbox rejected for pipeline executor",
+			"principal", localpart, "error", response.Error)
+		return
+	}
+	d.logger.Info("pipeline executor sandbox destroyed", "principal", localpart)
+}
+
+// --- Result file reading ---
+
+// pipelineResultEntry is the generic structure for reading JSONL
+// entries from the result file. The Type field determines which
+// additional fields are populated.
+type pipelineResultEntry struct {
+	Type       string `json:"type"`
+	Pipeline   string `json:"pipeline,omitempty"`
+	StepCount  int    `json:"step_count,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
+	Index      int    `json:"index,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Status     string `json:"status,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Error      string `json:"error,omitempty"`
+	FailedStep string `json:"failed_step,omitempty"`
+	LogEventID string `json:"log_event_id,omitempty"`
+}
+
+// readPipelineResultFile reads a JSONL result file and returns the
+// parsed entries. Returns an empty slice (not an error) if the file
+// is empty (executor was killed before writing anything).
+func readPipelineResultFile(path string) ([]pipelineResultEntry, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening result file: %w", err)
+	}
+	defer file.Close()
+
+	var entries []pipelineResultEntry
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry pipelineResultEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return entries, fmt.Errorf("parsing result line: %w (line: %s)", err, string(line))
+		}
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return entries, fmt.Errorf("reading result file: %w", err)
+	}
+	return entries, nil
+}
+
+// --- Result posting ---
+
+// postPipelineResult posts the pipeline execution outcome as a
+// threaded reply to the original command message. Includes step-level
+// detail from the JSONL result file when available.
+func (d *Daemon) postPipelineResult(
+	ctx context.Context,
+	roomID, commandEventID string,
+	command schema.CommandMessage,
+	start time.Time,
+	exitCode int,
+	exitDescription string,
+	entries []pipelineResultEntry,
+) {
+	durationMilliseconds := time.Since(start).Milliseconds()
+
+	// Find the terminal entry (complete or failed) for summary info.
+	var terminalEntry *pipelineResultEntry
+	for index := len(entries) - 1; index >= 0; index-- {
+		if entries[index].Type == "complete" || entries[index].Type == "failed" {
+			terminalEntry = &entries[index]
+			break
+		}
+	}
+
+	// Build step summaries from the result entries.
+	var steps []map[string]any
+	for _, entry := range entries {
+		if entry.Type != "step" {
+			continue
+		}
+		step := map[string]any{
+			"index":       entry.Index,
+			"name":        entry.Name,
+			"status":      entry.Status,
+			"duration_ms": entry.DurationMS,
+		}
+		if entry.Error != "" {
+			step["error"] = entry.Error
+		}
+		steps = append(steps, step)
+	}
+
+	// Determine overall status.
+	status := "error"
+	var body string
+	if exitCode == 0 && terminalEntry != nil && terminalEntry.Type == "complete" {
+		status = "success"
+		body = fmt.Sprintf("pipeline.execute: completed in %dms", durationMilliseconds)
+	} else if terminalEntry != nil && terminalEntry.Type == "failed" {
+		body = fmt.Sprintf("pipeline.execute: failed at step %q: %s",
+			terminalEntry.FailedStep, terminalEntry.Error)
+	} else if exitCode != 0 {
+		body = fmt.Sprintf("pipeline.execute: executor exited with code %d", exitCode)
+		if exitDescription != "" {
+			body += fmt.Sprintf(" (%s)", exitDescription)
+		}
+	} else {
+		// Exit code 0 but no terminal entry — executor produced no
+		// result file or it was empty.
+		body = "pipeline.execute: completed (no result details)"
+		status = "success"
+	}
+
+	content := map[string]any{
+		"msgtype":      schema.MsgTypeCommandResult,
+		"body":         body,
+		"status":       status,
+		"exit_code":    exitCode,
+		"duration_ms":  durationMilliseconds,
+		"m.relates_to": threadRelation(commandEventID),
+	}
+
+	if len(steps) > 0 {
+		content["steps"] = steps
+	}
+
+	if terminalEntry != nil && terminalEntry.LogEventID != "" {
+		content["log_event_id"] = terminalEntry.LogEventID
+	}
+
+	if command.RequestID != "" {
+		content["request_id"] = command.RequestID
+	}
+
+	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+		d.logger.Error("failed to post pipeline result",
+			"room_id", roomID,
+			"error", err,
+		)
+	}
+}
+
+// postPipelineError posts a pipeline execution error as a threaded
+// reply. Used for failures that happen before or outside the executor
+// (sandbox creation failures, IPC errors, etc.).
+func (d *Daemon) postPipelineError(
+	ctx context.Context,
+	roomID, commandEventID string,
+	command schema.CommandMessage,
+	start time.Time,
+	errorMessage string,
+) {
+	d.logger.Error("pipeline execution failed",
+		"room_id", roomID,
+		"error", errorMessage,
+	)
+
+	durationMilliseconds := time.Since(start).Milliseconds()
+	body := fmt.Sprintf("pipeline.execute: error: %s", errorMessage)
+
+	content := map[string]any{
+		"msgtype":      schema.MsgTypeCommandResult,
+		"body":         body,
+		"status":       "error",
+		"error":        errorMessage,
+		"duration_ms":  durationMilliseconds,
+		"m.relates_to": threadRelation(commandEventID),
+	}
+
+	if command.RequestID != "" {
+		content["request_id"] = command.RequestID
+	}
+
+	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+		d.logger.Error("failed to post pipeline error",
+			"room_id", roomID,
+			"error", err,
+		)
+	}
+}
+
+// postPipelineAccepted posts an immediate "accepted" acknowledgment
+// to the command thread so the sender knows the pipeline is starting.
+// Called by executePipeline before sandbox creation.
+func (d *Daemon) postPipelineAccepted(
+	ctx context.Context,
+	roomID, commandEventID string,
+	command schema.CommandMessage,
+	localpart string,
+) {
+	body := fmt.Sprintf("pipeline.execute: starting executor as %s", localpart)
+
+	content := map[string]any{
+		"msgtype":      schema.MsgTypeCommandResult,
+		"body":         body,
+		"status":       "accepted",
+		"principal":    localpart,
+		"m.relates_to": threadRelation(commandEventID),
+	}
+
+	if command.RequestID != "" {
+		content["request_id"] = command.RequestID
+	}
+
+	if _, sendError := d.session.SendEvent(ctx, roomID, "m.room.message", content); sendError != nil {
+		d.logger.Error("failed to post pipeline accepted message",
+			"room_id", roomID,
+			"error", sendError,
+		)
+	}
+}

@@ -694,8 +694,24 @@ type IPCRequest struct {
 	Principal string `json:"principal,omitempty"`
 
 	// EncryptedCredentials is the base64-encoded age ciphertext from
-	// the m.bureau.credentials state event (for create-sandbox).
+	// the m.bureau.credentials state event (for create-sandbox). The
+	// launcher decrypts this using its keypair.
+	//
+	// Mutually exclusive with DirectCredentials — set one or neither.
 	EncryptedCredentials string `json:"encrypted_credentials,omitempty"`
+
+	// DirectCredentials provides plaintext credentials for the proxy
+	// (for create-sandbox). Used when the daemon spawns ephemeral
+	// sandboxes using its own Matrix session, bypassing age encryption.
+	// Safe because the IPC socket is local-only and the daemon is a
+	// trusted process on the same machine.
+	//
+	// Expected keys: MATRIX_TOKEN, MATRIX_USER_ID. Additional keys
+	// (OPENAI_API_KEY, etc.) are forwarded to the proxy as external
+	// credentials.
+	//
+	// Mutually exclusive with EncryptedCredentials — set one or neither.
+	DirectCredentials map[string]string `json:"direct_credentials,omitempty"`
 
 	// MatrixPolicy is the Matrix access policy for this principal's proxy.
 	// Forwarded from the PrincipalAssignment in MachineConfig. The launcher
@@ -859,7 +875,11 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		}
 	}
 
-	// Decrypt the credential bundle if provided.
+	// Resolve credentials: either decrypt an age ciphertext bundle or
+	// use plaintext direct credentials from the daemon. At most one
+	// source should be set — if both are set, EncryptedCredentials wins
+	// (it's the normal path; DirectCredentials is the daemon-spawned
+	// ephemeral path).
 	var credentials map[string]string
 	if request.EncryptedCredentials != "" {
 		decrypted, err := sealed.Decrypt(request.EncryptedCredentials, l.keypair.PrivateKey)
@@ -871,6 +891,8 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
 			return IPCResponse{OK: false, Error: fmt.Sprintf("parsing decrypted credentials: %v", err)}
 		}
+	} else if len(request.DirectCredentials) > 0 {
+		credentials = request.DirectCredentials
 	}
 
 	l.logger.Info("spawning proxy for principal",

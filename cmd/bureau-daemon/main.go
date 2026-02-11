@@ -37,16 +37,18 @@ func main() {
 
 func run() error {
 	var (
-		homeserverURL      string
-		machineName        string
-		serverName         string
-		runDir             string
-		stateDir           string
-		adminUser          string
-		observeRelayBinary string
-		workspaceRoot      string
-		statusInterval     time.Duration
-		showVersion        bool
+		homeserverURL          string
+		machineName            string
+		serverName             string
+		runDir                 string
+		stateDir               string
+		adminUser              string
+		observeRelayBinary     string
+		workspaceRoot          string
+		pipelineExecutorBinary string
+		pipelineEnvironment    string
+		statusInterval         time.Duration
+		showVersion            bool
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
@@ -57,6 +59,8 @@ func run() error {
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
 	flag.StringVar(&observeRelayBinary, "observe-relay-binary", "bureau-observe-relay", "path to the observation relay binary")
 	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
+	flag.StringVar(&pipelineExecutorBinary, "pipeline-executor-binary", "", "path to bureau-pipeline-executor binary (enables pipeline.execute command)")
+	flag.StringVar(&pipelineEnvironment, "pipeline-environment", "", "Nix store path providing pipeline executor's toolchain (e.g., /nix/store/...-runner-env)")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
@@ -209,12 +213,15 @@ func run() error {
 		adminSocketPathFunc: func(localpart string) string {
 			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
-		observeSocketPath:  principal.ObserveSocketPath(runDir),
-		tmuxServerSocket:   principal.TmuxSocketPath(runDir),
-		observeRelayBinary: observeRelayBinary,
-		layoutWatchers:     make(map[string]*layoutWatcher),
-		workspaceRoot:      workspaceRoot,
-		logger:             logger,
+		observeSocketPath:      principal.ObserveSocketPath(runDir),
+		tmuxServerSocket:       principal.TmuxSocketPath(runDir),
+		observeRelayBinary:     observeRelayBinary,
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		workspaceRoot:          workspaceRoot,
+		pipelineExecutorBinary: pipelineExecutorBinary,
+		pipelineEnvironment:    pipelineEnvironment,
+		shutdownCtx:            ctx,
+		logger:                 logger,
 	}
 
 	// Seed failed exec paths from watchdog check so the reconcile loop
@@ -517,6 +524,26 @@ type Daemon struct {
 	// (e.g., /var/bureau/workspace). Command handlers use this to
 	// locate workspace directories for status, du, and git operations.
 	workspaceRoot string
+
+	// pipelineExecutorBinary is the filesystem path to the
+	// bureau-pipeline-executor binary. When set, the daemon can handle
+	// pipeline.execute commands by spawning an ephemeral sandbox that
+	// runs this binary. When empty, pipeline.execute returns an error.
+	pipelineExecutorBinary string
+
+	// pipelineEnvironment is the Nix store path providing the
+	// pipeline executor's toolchain (e.g., /nix/store/...-runner-env).
+	// The launcher bind-mounts /nix/store and prepends this path's bin/
+	// to PATH inside the sandbox. When empty, the pipeline executor
+	// sandbox has no Nix environment (only what bwrap provides by
+	// default), which limits the shell commands pipeline steps can run.
+	pipelineEnvironment string
+
+	// shutdownCtx is the daemon's top-level context, cancelled on
+	// SIGINT/SIGTERM. Used by async operations (pipeline execution)
+	// that outlive a single sync cycle and need the daemon's lifecycle
+	// for cancellation.
+	shutdownCtx context.Context
 
 	logger *slog.Logger
 }

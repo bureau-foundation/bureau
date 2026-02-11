@@ -1,0 +1,761 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+func TestPipelineLocalpart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		pipelineRef string
+		wantPrefix  string
+	}{
+		{
+			name:        "ref with colon",
+			pipelineRef: "bureau/pipeline:dev-workspace-init",
+			wantPrefix:  "pipeline/dev-workspace-init/",
+		},
+		{
+			name:        "bare name",
+			pipelineRef: "my-pipeline",
+			wantPrefix:  "pipeline/my-pipeline/",
+		},
+		{
+			name:        "empty ref",
+			pipelineRef: "",
+			wantPrefix:  "pipeline/run/",
+		},
+		{
+			name:        "uppercase normalized",
+			pipelineRef: "bureau/pipeline:My-Pipeline",
+			wantPrefix:  "pipeline/my-pipeline/",
+		},
+		{
+			name:        "long name truncated",
+			pipelineRef: "bureau/pipeline:this-is-a-very-long-pipeline-name-that-exceeds-twenty-chars",
+			wantPrefix:  "pipeline/this-is-a-very-long-/",
+		},
+		{
+			name:        "special characters sanitized",
+			pipelineRef: "bureau/pipeline:my_pipeline.v2",
+			wantPrefix:  "pipeline/my-pipeline-v2/",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result := pipelineLocalpart(test.pipelineRef)
+			if !strings.HasPrefix(result, test.wantPrefix) {
+				t.Errorf("pipelineLocalpart(%q) = %q, want prefix %q",
+					test.pipelineRef, result, test.wantPrefix)
+			}
+			// Verify the localpart ends with a numeric timestamp.
+			afterPrefix := result[len(test.wantPrefix):]
+			if afterPrefix == "" {
+				t.Errorf("pipelineLocalpart(%q) = %q, missing timestamp suffix",
+					test.pipelineRef, result)
+			}
+		})
+	}
+
+	// Verify uniqueness: two calls produce different localparts.
+	first := pipelineLocalpart("test")
+	second := pipelineLocalpart("test")
+	// They could be the same if called within the same millisecond,
+	// but the timestamp should differ for calls separated by any delay.
+	// For a simple check, just verify they're non-empty.
+	if first == "" || second == "" {
+		t.Error("pipelineLocalpart should produce non-empty strings")
+	}
+}
+
+func TestReadPipelineResultFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("complete pipeline", func(t *testing.T) {
+		t.Parallel()
+		directory := t.TempDir()
+		path := filepath.Join(directory, "result.jsonl")
+
+		lines := []string{
+			`{"type":"start","pipeline":"dev-init","step_count":2,"timestamp":"2026-02-10T12:00:00Z"}`,
+			`{"type":"step","index":0,"name":"fetch","status":"ok","duration_ms":1200}`,
+			`{"type":"step","index":1,"name":"setup","status":"ok","duration_ms":800}`,
+			`{"type":"complete","status":"ok","duration_ms":2000,"log_event_id":"$abc123"}`,
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		entries, err := readPipelineResultFile(path)
+		if err != nil {
+			t.Fatalf("readPipelineResultFile: %v", err)
+		}
+
+		if len(entries) != 4 {
+			t.Fatalf("expected 4 entries, got %d", len(entries))
+		}
+
+		// Verify start entry.
+		if entries[0].Type != "start" || entries[0].Pipeline != "dev-init" || entries[0].StepCount != 2 {
+			t.Errorf("start entry: %+v", entries[0])
+		}
+
+		// Verify step entries.
+		if entries[1].Type != "step" || entries[1].Name != "fetch" || entries[1].Status != "ok" {
+			t.Errorf("step 0: %+v", entries[1])
+		}
+		if entries[2].Type != "step" || entries[2].Name != "setup" || entries[2].DurationMS != 800 {
+			t.Errorf("step 1: %+v", entries[2])
+		}
+
+		// Verify complete entry.
+		if entries[3].Type != "complete" || entries[3].LogEventID != "$abc123" {
+			t.Errorf("complete entry: %+v", entries[3])
+		}
+	})
+
+	t.Run("failed pipeline", func(t *testing.T) {
+		t.Parallel()
+		directory := t.TempDir()
+		path := filepath.Join(directory, "result.jsonl")
+
+		lines := []string{
+			`{"type":"start","pipeline":"deploy","step_count":3,"timestamp":"2026-02-10T12:00:00Z"}`,
+			`{"type":"step","index":0,"name":"build","status":"ok","duration_ms":5000}`,
+			`{"type":"step","index":1,"name":"test","status":"failed","duration_ms":3000,"error":"exit code 1"}`,
+			`{"type":"failed","status":"failed","error":"step failed: exit code 1","failed_step":"test","duration_ms":8000,"log_event_id":"$xyz"}`,
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		entries, err := readPipelineResultFile(path)
+		if err != nil {
+			t.Fatalf("readPipelineResultFile: %v", err)
+		}
+
+		if len(entries) != 4 {
+			t.Fatalf("expected 4 entries, got %d", len(entries))
+		}
+
+		// Verify the failed step has the error.
+		if entries[2].Status != "failed" || entries[2].Error != "exit code 1" {
+			t.Errorf("failed step: %+v", entries[2])
+		}
+
+		// Verify the terminal failed entry.
+		if entries[3].Type != "failed" || entries[3].FailedStep != "test" {
+			t.Errorf("terminal entry: %+v", entries[3])
+		}
+	})
+
+	t.Run("empty file", func(t *testing.T) {
+		t.Parallel()
+		directory := t.TempDir()
+		path := filepath.Join(directory, "result.jsonl")
+
+		if err := os.WriteFile(path, nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		entries, err := readPipelineResultFile(path)
+		if err != nil {
+			t.Fatalf("readPipelineResultFile: %v", err)
+		}
+
+		if len(entries) != 0 {
+			t.Errorf("expected 0 entries for empty file, got %d", len(entries))
+		}
+	})
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		t.Parallel()
+		_, err := readPipelineResultFile("/nonexistent/result.jsonl")
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+	})
+
+	t.Run("partial write (crash mid-pipeline)", func(t *testing.T) {
+		t.Parallel()
+		directory := t.TempDir()
+		path := filepath.Join(directory, "result.jsonl")
+
+		// Only start + one step, no terminal entry.
+		lines := []string{
+			`{"type":"start","pipeline":"crashed","step_count":5,"timestamp":"2026-02-10T12:00:00Z"}`,
+			`{"type":"step","index":0,"name":"step-one","status":"ok","duration_ms":100}`,
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		entries, err := readPipelineResultFile(path)
+		if err != nil {
+			t.Fatalf("readPipelineResultFile: %v", err)
+		}
+
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(entries))
+		}
+	})
+}
+
+func TestBuildPipelineExecutorSpec(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		pipelineExecutorBinary: "/nix/store/abc-executor/bin/bureau-pipeline-executor",
+		pipelineEnvironment:    "/nix/store/xyz-runner-env",
+		workspaceRoot:          "/var/bureau/workspace",
+	}
+
+	command := schema.CommandMessage{
+		Command:   "pipeline.execute",
+		RequestID: "req-42",
+		Parameters: map[string]any{
+			"pipeline": "bureau/pipeline:dev-workspace-init",
+			"project":  "my-project",
+		},
+	}
+
+	spec := daemon.buildPipelineExecutorSpec(
+		"bureau/pipeline:dev-workspace-init",
+		"/tmp/result-abc/result.jsonl",
+		command,
+	)
+
+	// Verify command.
+	if len(spec.Command) != 2 {
+		t.Fatalf("expected 2 command elements, got %d: %v", len(spec.Command), spec.Command)
+	}
+	if spec.Command[0] != daemon.pipelineExecutorBinary {
+		t.Errorf("command[0] = %q, want %q", spec.Command[0], daemon.pipelineExecutorBinary)
+	}
+	if spec.Command[1] != "bureau/pipeline:dev-workspace-init" {
+		t.Errorf("command[1] = %q, want pipeline ref", spec.Command[1])
+	}
+
+	// Verify environment variables.
+	if spec.EnvironmentVariables["BUREAU_SANDBOX"] != "1" {
+		t.Errorf("BUREAU_SANDBOX = %q, want '1'", spec.EnvironmentVariables["BUREAU_SANDBOX"])
+	}
+	if spec.EnvironmentVariables["BUREAU_RESULT_PATH"] != "/run/bureau/result.jsonl" {
+		t.Errorf("BUREAU_RESULT_PATH = %q", spec.EnvironmentVariables["BUREAU_RESULT_PATH"])
+	}
+
+	// Verify filesystem mounts.
+	if len(spec.Filesystem) < 2 {
+		t.Fatalf("expected at least 2 filesystem mounts, got %d", len(spec.Filesystem))
+	}
+
+	// Result file mount.
+	resultMount := spec.Filesystem[0]
+	if resultMount.Source != "/tmp/result-abc/result.jsonl" {
+		t.Errorf("result mount source = %q", resultMount.Source)
+	}
+	if resultMount.Dest != "/run/bureau/result.jsonl" {
+		t.Errorf("result mount dest = %q", resultMount.Dest)
+	}
+	if resultMount.Mode != "rw" {
+		t.Errorf("result mount mode = %q, want 'rw'", resultMount.Mode)
+	}
+
+	// Workspace root mount.
+	workspaceMount := spec.Filesystem[1]
+	if workspaceMount.Source != "/var/bureau/workspace" {
+		t.Errorf("workspace mount source = %q", workspaceMount.Source)
+	}
+	if workspaceMount.Mode != "rw" {
+		t.Errorf("workspace mount mode = %q, want 'rw'", workspaceMount.Mode)
+	}
+
+	// Verify namespaces.
+	if spec.Namespaces == nil || !spec.Namespaces.PID {
+		t.Error("expected PID namespace isolation")
+	}
+
+	// Verify security.
+	if spec.Security == nil {
+		t.Fatal("expected security config")
+	}
+	if !spec.Security.NewSession || !spec.Security.DieWithParent || !spec.Security.NoNewPrivs {
+		t.Errorf("security = %+v, want all true", spec.Security)
+	}
+
+	// Verify environment path.
+	if spec.EnvironmentPath != daemon.pipelineEnvironment {
+		t.Errorf("EnvironmentPath = %q, want %q", spec.EnvironmentPath, daemon.pipelineEnvironment)
+	}
+
+	// Verify payload.
+	if spec.Payload == nil {
+		t.Fatal("expected payload from command parameters")
+	}
+	if spec.Payload["project"] != "my-project" {
+		t.Errorf("payload[project] = %v, want 'my-project'", spec.Payload["project"])
+	}
+}
+
+func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		pipelineExecutorBinary: "/usr/bin/executor",
+		pipelineEnvironment:    "", // No Nix environment.
+		workspaceRoot:          "/var/bureau/workspace",
+	}
+
+	spec := daemon.buildPipelineExecutorSpec("test", "/tmp/result.jsonl",
+		schema.CommandMessage{})
+
+	if spec.EnvironmentPath != "" {
+		t.Errorf("EnvironmentPath should be empty, got %q", spec.EnvironmentPath)
+	}
+}
+
+func TestBuildPipelineExecutorSpec_NoRef(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		pipelineExecutorBinary: "/usr/bin/executor",
+		workspaceRoot:          "/var/bureau/workspace",
+	}
+
+	// When pipelineRef is empty, the executor resolves via payload.
+	spec := daemon.buildPipelineExecutorSpec("", "/tmp/result.jsonl",
+		schema.CommandMessage{
+			Parameters: map[string]any{
+				"pipeline_ref": "bureau/pipeline:inline-test",
+			},
+		})
+
+	// Command should have only the binary, no pipeline ref argument.
+	if len(spec.Command) != 1 {
+		t.Fatalf("expected 1 command element (no ref arg), got %d: %v",
+			len(spec.Command), spec.Command)
+	}
+
+	// Pipeline ref should be in the payload.
+	if spec.Payload["pipeline_ref"] != "bureau/pipeline:inline-test" {
+		t.Errorf("payload missing pipeline_ref")
+	}
+}
+
+func TestHandlePipelineExecute_NoBinary(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	// daemon has no pipelineExecutorBinary set.
+	event := buildPipelineCommandEvent("$pipe1", "@admin:bureau.local",
+		"bureau/pipeline:test", "req-1")
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
+	}
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "pipeline-executor-binary") {
+		t.Errorf("error should mention missing binary, got: %q", errorText)
+	}
+}
+
+func TestHandlePipelineExecute_MissingPipeline(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	// Create a temporary "binary" that exists and is executable.
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	// Command has no pipeline, pipeline_ref, or pipeline_inline parameter.
+	event := messaging.Event{
+		EventID: "$pipe2",
+		Type:    "m.room.message",
+		Sender:  "@admin:bureau.local",
+		Content: map[string]any{
+			"msgtype":    schema.MsgTypeCommand,
+			"body":       "pipeline.execute",
+			"command":    "pipeline.execute",
+			"parameters": map[string]any{},
+		},
+	}
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
+	}
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "pipeline") {
+		t.Errorf("error should mention missing pipeline, got: %q", errorText)
+	}
+}
+
+func TestHandlePipelineExecute_Accepted(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	// Create a temporary "binary" that exists and is executable.
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	// Use a pre-cancelled context for shutdownCtx. The handler starts
+	// an async goroutine that would race against the synchronous result
+	// — the cancelled context makes executePipeline exit immediately,
+	// so only the synchronous "accepted" result is captured.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	harness.daemon.shutdownCtx = cancelledCtx
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	event := buildPipelineCommandEvent("$pipe3", "@admin:bureau.local",
+		"bureau/pipeline:dev-init", "req-accepted")
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+
+	// The synchronous result should be "accepted".
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected exactly 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "success" {
+		t.Errorf("status = %v, want 'success' (accepted)", message.Content["status"])
+	}
+
+	result, ok := message.Content["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result is not a map: %T", message.Content["result"])
+	}
+	if result["status"] != "accepted" {
+		t.Errorf("result.status = %v, want 'accepted'", result["status"])
+	}
+	principalLocalpart, _ := result["principal"].(string)
+	if !strings.HasPrefix(principalLocalpart, "pipeline/") {
+		t.Errorf("result.principal = %q, want prefix 'pipeline/'", principalLocalpart)
+	}
+}
+
+func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	// Create a temporary "binary" that exists and is executable.
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	const roomID = "!workspace:test"
+	// Sender has PL 50, pipeline.execute requires PL 100 (admin).
+	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+		"users": map[string]any{
+			"@operator:bureau.local": float64(50),
+		},
+	})
+
+	event := buildPipelineCommandEvent("$pipe4", "@operator:bureau.local",
+		"bureau/pipeline:test", "req-denied")
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
+	}
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "authorization denied") {
+		t.Errorf("error should mention authorization, got: %q", errorText)
+	}
+}
+
+func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	// Use a pre-cancelled context so the async goroutine exits
+	// immediately without racing against the synchronous result.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	harness.daemon.shutdownCtx = cancelledCtx
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	// No "pipeline" parameter, but pipeline_ref is present.
+	event := messaging.Event{
+		EventID: "$pipe5",
+		Type:    "m.room.message",
+		Sender:  "@admin:bureau.local",
+		Content: map[string]any{
+			"msgtype": schema.MsgTypeCommand,
+			"body":    "pipeline.execute",
+			"command": "pipeline.execute",
+			"parameters": map[string]any{
+				"pipeline_ref": "bureau/pipeline:via-payload",
+			},
+		},
+	}
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected exactly 1 sent message, got %d", len(messages))
+	}
+
+	result, ok := messages[0].Content["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result is not a map: %T", messages[0].Content["result"])
+	}
+	if result["status"] != "accepted" {
+		t.Errorf("result.status = %v, want 'accepted'", result["status"])
+	}
+}
+
+// buildPipelineCommandEvent creates a messaging.Event for a
+// pipeline.execute command with a pipeline ref parameter.
+func buildPipelineCommandEvent(eventID, sender, pipelineRef, requestID string) messaging.Event {
+	content := map[string]any{
+		"msgtype": schema.MsgTypeCommand,
+		"body":    "pipeline.execute " + pipelineRef,
+		"command": "pipeline.execute",
+		"parameters": map[string]any{
+			"pipeline": pipelineRef,
+		},
+	}
+	if requestID != "" {
+		content["request_id"] = requestID
+	}
+
+	return messaging.Event{
+		EventID: eventID,
+		Type:    "m.room.message",
+		Sender:  sender,
+		Content: content,
+	}
+}
+
+// TestPostPipelineResult verifies the structure of posted pipeline results.
+func TestPostPipelineResult(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	t.Run("successful pipeline", func(t *testing.T) {
+		entries := []pipelineResultEntry{
+			{Type: "start", Pipeline: "test", StepCount: 2},
+			{Type: "step", Index: 0, Name: "build", Status: "ok", DurationMS: 1000},
+			{Type: "step", Index: 1, Name: "test", Status: "ok", DurationMS: 2000},
+			{Type: "complete", Status: "ok", DurationMS: 3000, LogEventID: "$log1"},
+		}
+
+		command := schema.CommandMessage{
+			Command:   "pipeline.execute",
+			RequestID: "req-success",
+		}
+
+		ctx := context.Background()
+		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd1",
+			command, timeNow(), 0, "", entries)
+
+		messages := harness.getSentMessages()
+		if len(messages) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(messages))
+		}
+
+		content := messages[0].Content
+		if content["status"] != "success" {
+			t.Errorf("status = %v, want 'success'", content["status"])
+		}
+		if content["log_event_id"] != "$log1" {
+			t.Errorf("log_event_id = %v, want '$log1'", content["log_event_id"])
+		}
+		if content["request_id"] != "req-success" {
+			t.Errorf("request_id = %v", content["request_id"])
+		}
+
+		steps, ok := content["steps"].([]any)
+		if !ok {
+			t.Fatalf("steps is not a slice: %T", content["steps"])
+		}
+		if len(steps) != 2 {
+			t.Errorf("expected 2 steps, got %d", len(steps))
+		}
+	})
+
+	t.Run("failed pipeline", func(t *testing.T) {
+		// Clear previous messages.
+		harness.sentMessagesMu.Lock()
+		harness.sentMessages = nil
+		harness.sentMessagesMu.Unlock()
+
+		entries := []pipelineResultEntry{
+			{Type: "start", Pipeline: "deploy", StepCount: 2},
+			{Type: "step", Index: 0, Name: "build", Status: "ok", DurationMS: 1000},
+			{Type: "step", Index: 1, Name: "deploy", Status: "failed", DurationMS: 500, Error: "connection refused"},
+			{Type: "failed", Status: "failed", Error: "step failed", FailedStep: "deploy", DurationMS: 1500},
+		}
+
+		ctx := context.Background()
+		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd2",
+			schema.CommandMessage{Command: "pipeline.execute"},
+			timeNow(), 1, "exit status 1", entries)
+
+		messages := harness.getSentMessages()
+		if len(messages) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(messages))
+		}
+
+		content := messages[0].Content
+		if content["status"] != "error" {
+			t.Errorf("status = %v, want 'error'", content["status"])
+		}
+		body, _ := content["body"].(string)
+		if !strings.Contains(body, "deploy") {
+			t.Errorf("body should mention failed step, got: %q", body)
+		}
+	})
+
+	t.Run("no result file (killed)", func(t *testing.T) {
+		harness.sentMessagesMu.Lock()
+		harness.sentMessages = nil
+		harness.sentMessagesMu.Unlock()
+
+		ctx := context.Background()
+		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd3",
+			schema.CommandMessage{Command: "pipeline.execute"},
+			timeNow(), 137, "killed by signal 9", nil)
+
+		messages := harness.getSentMessages()
+		if len(messages) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(messages))
+		}
+
+		content := messages[0].Content
+		if content["status"] != "error" {
+			t.Errorf("status = %v, want 'error'", content["status"])
+		}
+		exitCode, ok := content["exit_code"].(float64)
+		if !ok || int(exitCode) != 137 {
+			t.Errorf("exit_code = %v, want 137", content["exit_code"])
+		}
+	})
+}
+
+// timeNow returns a time.Time for testing (the duration will be tiny
+// since tests run fast, which is fine for verifying structure).
+func timeNow() time.Time {
+	return time.Now()
+}
+
+// TestPipelineResultSerialization verifies that pipelineResultEntry
+// can round-trip through JSON (matching the executor's output format).
+func TestPipelineResultSerialization(t *testing.T) {
+	t.Parallel()
+
+	original := pipelineResultEntry{
+		Type:       "step",
+		Index:      2,
+		Name:       "deploy",
+		Status:     "failed",
+		DurationMS: 4500,
+		Error:      "connection refused",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded pipelineResultEntry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.Type != original.Type || decoded.Name != original.Name ||
+		decoded.Status != original.Status || decoded.Error != original.Error {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}

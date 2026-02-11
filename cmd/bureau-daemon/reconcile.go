@@ -649,6 +649,7 @@ type launcherIPCRequest struct {
 	Action               string               `json:"action"`
 	Principal            string               `json:"principal,omitempty"`
 	EncryptedCredentials string               `json:"encrypted_credentials,omitempty"`
+	DirectCredentials    map[string]string    `json:"direct_credentials,omitempty"`
 	MatrixPolicy         *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
 
 	// SandboxSpec is the fully-resolved sandbox configuration produced by

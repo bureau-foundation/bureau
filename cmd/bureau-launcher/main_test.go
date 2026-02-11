@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
@@ -846,10 +847,9 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 		machineName:     "machine/test",
 		serverName:      "bureau.local",
 		homeserverURL:   "http://localhost:9999",
+		runDir:          tempDir,
 		stateDir:        filepath.Join(tempDir, "state"),
 		proxyBinaryPath: proxyBinaryPath,
-		socketBasePath:  filepath.Join(tempDir, "principal") + "/",
-		adminBasePath:   filepath.Join(tempDir, "admin") + "/",
 		sandboxes:       make(map[string]*managedSandbox),
 		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -913,7 +913,7 @@ func TestProxyLifecycle(t *testing.T) {
 	}
 
 	// --- Verify agent socket exists and serves health check ---
-	socketPath := launcher.socketBasePath + "test/echo.sock"
+	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/echo")
 	agentClient := unixHTTPClient(socketPath)
 
 	healthResponse, err := agentClient.Get("http://localhost/health")
@@ -948,7 +948,7 @@ func TestProxyLifecycle(t *testing.T) {
 	}
 
 	// --- Verify admin socket accepts service registration ---
-	adminSocketPath := launcher.adminBasePath + "test/echo.sock"
+	adminSocketPath := principal.RunDirAdminSocketPath(launcher.runDir, "test/echo")
 	adminClient := unixHTTPClient(adminSocketPath)
 
 	serviceRequest, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/test-svc",
@@ -1036,7 +1036,7 @@ func TestProxyLifecycle_WithoutCredentials(t *testing.T) {
 	}
 
 	// Verify health endpoint works.
-	socketPath := launcher.socketBasePath + "test/nocreds.sock"
+	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/nocreds")
 	client := unixHTTPClient(socketPath)
 
 	healthResponse, err := client.Get("http://localhost/health")
@@ -1131,17 +1131,18 @@ func requireTmux(t *testing.T) {
 	}
 }
 
-// newTestTmuxSocket returns a path for a test-isolated tmux server socket
-// in a temporary directory, and registers cleanup to kill the tmux server
-// when the test finishes. All tmux commands in tests MUST use this socket
-// via -S to avoid interfering with the user's or agent's tmux sessions.
-func newTestTmuxSocket(t *testing.T) string {
+// newTestRunDir creates a short temp directory suitable for use as --run-dir
+// in tests. The tmux server socket at <dir>/tmux.sock is cleaned up on test
+// teardown. All tmux commands in tests MUST use the socket derived from this
+// run-dir via -S to avoid interfering with the user's or agent's tmux sessions.
+func newTestRunDir(t *testing.T) string {
 	t.Helper()
-	socketPath := filepath.Join(testutil.SocketDir(t), "tmux.sock")
+	runDir := testutil.SocketDir(t)
+	tmuxSocket := principal.TmuxSocketPath(runDir)
 	t.Cleanup(func() {
-		exec.Command("tmux", "-S", socketPath, "kill-server").Run()
+		exec.Command("tmux", "-S", tmuxSocket, "kill-server").Run()
 	})
-	return socketPath
+	return runDir
 }
 
 // tmuxSessionExists checks whether a tmux session with the given name exists
@@ -1172,12 +1173,13 @@ func TestTmuxSessionName(t *testing.T) {
 func TestTmuxSessionLifecycle(t *testing.T) {
 	requireTmux(t)
 
-	tmuxSocket := newTestTmuxSocket(t)
+	runDir := newTestRunDir(t)
+	tmuxSocket := principal.TmuxSocketPath(runDir)
 
 	launcher := &Launcher{
-		tmuxServerSocket: tmuxSocket,
-		sandboxes:        make(map[string]*managedSandbox),
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:    runDir,
+		sandboxes: make(map[string]*managedSandbox),
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	localpart := "test/tmux"
@@ -1205,14 +1207,14 @@ func TestTmuxSessionLifecycle(t *testing.T) {
 func TestTmuxSessionConfiguration(t *testing.T) {
 	requireTmux(t)
 
-	tmuxSocket := newTestTmuxSocket(t)
+	runDir := newTestRunDir(t)
+	tmuxSocket := principal.TmuxSocketPath(runDir)
 
 	launcher := &Launcher{
-		tmuxServerSocket: tmuxSocket,
-		sandboxes:        make(map[string]*managedSandbox),
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:    runDir,
+		sandboxes: make(map[string]*managedSandbox),
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
-
 	localpart := "test/config"
 	sessionName := tmuxSessionName(localpart)
 
@@ -1258,32 +1260,16 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 	}
 }
 
-func TestTmuxSessionSkippedWhenSocketEmpty(t *testing.T) {
-	// When tmuxServerSocket is empty, tmux operations are no-ops.
-	launcher := &Launcher{
-		tmuxServerSocket: "",
-		sandboxes:        make(map[string]*managedSandbox),
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
-
-	// createTmuxSession should return nil (no error, no action).
-	if err := launcher.createTmuxSession("test/noop"); err != nil {
-		t.Errorf("createTmuxSession with empty socket should succeed, got: %v", err)
-	}
-
-	// destroyTmuxSession should not panic or error.
-	launcher.destroyTmuxSession("test/noop")
-}
-
 func TestTmuxSessionMultipleSessions(t *testing.T) {
 	requireTmux(t)
 
-	tmuxSocket := newTestTmuxSocket(t)
+	runDir := newTestRunDir(t)
+	tmuxSocket := principal.TmuxSocketPath(runDir)
 
 	launcher := &Launcher{
-		tmuxServerSocket: tmuxSocket,
-		sandboxes:        make(map[string]*managedSandbox),
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:    runDir,
+		sandboxes: make(map[string]*managedSandbox),
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	localparts := []string{"test/a", "test/b", "test/c"}
@@ -1321,7 +1307,8 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 
 	proxyBinary := buildProxyBinary(t)
 	launcher := newTestLauncher(t, proxyBinary)
-	launcher.tmuxServerSocket = newTestTmuxSocket(t)
+	launcher.runDir = newTestRunDir(t)
+	tmuxSocket := principal.TmuxSocketPath(launcher.runDir)
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
@@ -1339,12 +1326,12 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	}
 
 	sessionName := tmuxSessionName("test/tmuxproxy")
-	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+	if !tmuxSessionExists(tmuxSocket, sessionName) {
 		t.Fatalf("tmux session %q should exist after sandbox creation", sessionName)
 	}
 
 	// Verify the proxy is also running (agent socket responds).
-	socketPath := launcher.socketBasePath + "test/tmuxproxy.sock"
+	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/tmuxproxy")
 	agentClient := unixHTTPClient(socketPath)
 	healthResponse, err := agentClient.Get("http://localhost/health")
 	if err != nil {
@@ -1364,7 +1351,7 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 		t.Fatalf("destroy-sandbox failed: %s", destroyResponse.Error)
 	}
 
-	if tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+	if tmuxSessionExists(tmuxSocket, sessionName) {
 		t.Errorf("tmux session %q should not exist after sandbox destruction", sessionName)
 	}
 	if _, exists := launcher.sandboxes["test/tmuxproxy"]; exists {
@@ -1620,7 +1607,8 @@ func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 
 	proxyBinary := buildProxyBinary(t)
 	launcher := newTestLauncher(t, proxyBinary)
-	launcher.tmuxServerSocket = newTestTmuxSocket(t)
+	launcher.runDir = newTestRunDir(t)
+	tmuxSocket := principal.TmuxSocketPath(launcher.runDir)
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN": "syt_test",
@@ -1637,7 +1625,7 @@ func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 	}
 
 	sessionName := tmuxSessionName("test/crash")
-	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+	if !tmuxSessionExists(tmuxSocket, sessionName) {
 		t.Fatal("tmux session should exist after creation")
 	}
 
@@ -1658,7 +1646,7 @@ func TestTmuxSessionCleanedUpOnCrashedProxy(t *testing.T) {
 	}
 
 	// The new tmux session should exist.
-	if !tmuxSessionExists(launcher.tmuxServerSocket, sessionName) {
+	if !tmuxSessionExists(tmuxSocket, sessionName) {
 		t.Error("tmux session should exist after recreate")
 	}
 }

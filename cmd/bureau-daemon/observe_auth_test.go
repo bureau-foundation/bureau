@@ -6,13 +6,16 @@ package main
 import (
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestAuthorizeObserveDefaultDeny(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{}
+	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
+	}
 	// No lastConfig — everything should be denied.
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if authz.Allowed {
@@ -24,6 +27,7 @@ func TestAuthorizeObserveNoPolicyDeny(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
 				{Localpart: "iree/amdgpu/pm", AutoStart: true},
@@ -41,6 +45,7 @@ func TestAuthorizeObserveDefaultPolicyAllows(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers: []string{"**"},
@@ -63,6 +68,7 @@ func TestAuthorizeObservePrincipalPolicyOverridesDefault(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers: []string{"**"},
@@ -97,6 +103,7 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers:   []string{"**"},
@@ -132,6 +139,7 @@ func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers:   []string{"**"},
@@ -158,6 +166,7 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers: []string{"ops/*"},
@@ -191,6 +200,7 @@ func TestAuthorizeObserveUnknownPrincipal(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
 				AllowedObservers: []string{"**"},
@@ -210,6 +220,7 @@ func TestAuthorizeListFiltering(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
 				{
@@ -258,6 +269,7 @@ func TestFindObservePolicyFallback(t *testing.T) {
 	}
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: defaultPolicy,
 			Principals: []schema.PrincipalAssignment{

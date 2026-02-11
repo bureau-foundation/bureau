@@ -417,3 +417,179 @@ func TestSpaceNotAllowed(t *testing.T) {
 		t.Error("ValidateLocalpart(\"alice bob\") = nil, want error (space should not be allowed)")
 	}
 }
+
+func TestRunDirSocketPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		runDir    string
+		localpart string
+		want      string
+	}{
+		{
+			name:      "default run dir",
+			runDir:    DefaultRunDir,
+			localpart: "iree/amdgpu/pm",
+			want:      "/run/bureau/principal/iree/amdgpu/pm.sock",
+		},
+		{
+			name:      "custom run dir",
+			runDir:    "/tmp/test",
+			localpart: "alice",
+			want:      "/tmp/test/principal/alice.sock",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RunDirSocketPath(test.runDir, test.localpart)
+			if got != test.want {
+				t.Errorf("RunDirSocketPath(%q, %q) = %q, want %q", test.runDir, test.localpart, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunDirAdminSocketPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		runDir    string
+		localpart string
+		want      string
+	}{
+		{
+			name:      "default run dir",
+			runDir:    DefaultRunDir,
+			localpart: "iree/amdgpu/pm",
+			want:      "/run/bureau/admin/iree/amdgpu/pm.sock",
+		},
+		{
+			name:      "custom run dir",
+			runDir:    "/tmp/test",
+			localpart: "alice",
+			want:      "/tmp/test/admin/alice.sock",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RunDirAdminSocketPath(test.runDir, test.localpart)
+			if got != test.want {
+				t.Errorf("RunDirAdminSocketPath(%q, %q) = %q, want %q", test.runDir, test.localpart, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunDirConsistentWithDefaults(t *testing.T) {
+	// RunDirSocketPath with DefaultRunDir must produce the same result as
+	// SocketPath, and similarly for admin paths.
+	localpart := "iree/amdgpu/pm"
+
+	if got, want := RunDirSocketPath(DefaultRunDir, localpart), SocketPath(localpart); got != want {
+		t.Errorf("RunDirSocketPath(DefaultRunDir, %q) = %q, want %q (SocketPath)", localpart, got, want)
+	}
+
+	if got, want := RunDirAdminSocketPath(DefaultRunDir, localpart), AdminSocketPath(localpart); got != want {
+		t.Errorf("RunDirAdminSocketPath(DefaultRunDir, %q) = %q, want %q (AdminSocketPath)", localpart, got, want)
+	}
+}
+
+func TestDerivedSocketPaths(t *testing.T) {
+	runDir := "/tmp/test"
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"launcher", LauncherSocketPath(runDir), "/tmp/test/launcher.sock"},
+		{"tmux", TmuxSocketPath(runDir), "/tmp/test/tmux.sock"},
+		{"relay", RelaySocketPath(runDir), "/tmp/test/relay.sock"},
+		{"observe", ObserveSocketPath(runDir), "/tmp/test/observe.sock"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Errorf("got %q, want %q", test.got, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateRunDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		runDir  string
+		wantErr string
+	}{
+		{
+			name:   "default is valid",
+			runDir: DefaultRunDir,
+		},
+		{
+			name:   "short temp path",
+			runDir: "/tmp/test",
+		},
+		{
+			name:    "too long for any localpart",
+			runDir:  strings.Repeat("a", 100),
+			wantErr: "too long for any localpart",
+		},
+		{
+			name:   "long but still usable run dir",
+			runDir: "/tmp/bureau-testing",
+			// 19 bytes — overhead is 16, so available = 107-19-16 = 72.
+			// Below MaxLocalpartLength (80) but still usable, so no error.
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRunDir(test.runDir)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("ValidateRunDir(%q) = %v, want nil", test.runDir, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateRunDir(%q) = nil, want error containing %q", test.runDir, test.wantErr)
+				} else if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("ValidateRunDir(%q) = %v, want error containing %q", test.runDir, err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestMaxLocalpartAvailable(t *testing.T) {
+	tests := []struct {
+		name   string
+		runDir string
+		want   int
+	}{
+		{
+			name:   "default run dir",
+			runDir: DefaultRunDir, // "/run/bureau" = 11 bytes
+			want:   80,            // 107 - 11 - 16 = 80
+		},
+		{
+			name:   "longer run dir reduces budget",
+			runDir: "/tmp/bureau-testing", // 19 bytes
+			want:   72,                    // 107 - 19 - 16 = 72
+		},
+		{
+			name:   "impossibly long run dir returns zero",
+			runDir: strings.Repeat("a", 100),
+			want:   0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := MaxLocalpartAvailable(test.runDir)
+			if got != test.want {
+				t.Errorf("MaxLocalpartAvailable(%q) = %d, want %d", test.runDir, got, test.want)
+			}
+		})
+	}
+}

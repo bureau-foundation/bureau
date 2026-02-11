@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -407,6 +408,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	})
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,

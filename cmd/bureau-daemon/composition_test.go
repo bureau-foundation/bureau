@@ -70,12 +70,10 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		t.Fatalf("writing public key: %v", err)
 	}
 
-	// Socket paths — all under a short temp directory to stay within the
-	// Unix domain socket 108-byte path limit.
-	socketDir := testutil.SocketDir(t)
-	launcherSocket := filepath.Join(socketDir, "launcher.sock")
-	socketBase := filepath.Join(socketDir, "principal") + "/"
-	adminBase := filepath.Join(socketDir, "admin") + "/"
+	// All runtime sockets live under a short temp directory (--run-dir)
+	// to stay within the Unix domain socket 108-byte path limit.
+	runDir := testutil.SocketDir(t)
+	launcherSocket := principal.LauncherSocketPath(runDir)
 
 	// Set up the mock Matrix server.
 	matrixState := newMockMatrixState()
@@ -152,14 +150,11 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	launcherCmd := exec.Command(launcherBinary,
 		"--machine-name", "machine/test",
+		"--run-dir", runDir,
 		"--state-dir", stateDir,
-		"--socket", launcherSocket,
 		"--proxy-binary", proxyBinary,
-		"--socket-base-path", socketBase,
-		"--admin-base-path", adminBase,
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
-		"--tmux-socket", "", // Disable tmux session management in this test (no tmux binary needed)
 		"--workspace-root", workspaceRoot,
 	)
 	launcherCmd.Stderr = os.Stderr
@@ -198,6 +193,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	// Construct the daemon directly (not via run()) so we control the lifecycle
 	// and avoid signal handling, polling loops, etc.
 	daemon := &Daemon{
+		runDir:         runDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -217,7 +213,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		peerAddresses:  make(map[string]string),
 		peerTransports: make(map[string]http.RoundTripper),
 		adminSocketPathFunc: func(localpart string) string {
-			return adminBase + localpart + principal.SocketSuffix
+			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
 		layoutWatchers: make(map[string]*layoutWatcher),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -226,8 +222,8 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	ctx := context.Background()
-	agentSocket := socketBase + principalLocalpart + principal.SocketSuffix
-	adminSocket := adminBase + principalLocalpart + principal.SocketSuffix
+	agentSocket := principal.RunDirSocketPath(runDir, principalLocalpart)
+	adminSocket := principal.RunDirAdminSocketPath(runDir, principalLocalpart)
 
 	// --- Phase 1: Reconcile should create a sandbox for test/echo. ---
 
@@ -357,6 +353,7 @@ func TestReconcileNoConfig(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",

@@ -37,13 +37,9 @@ func run() error {
 		homeserverURL      string
 		machineName        string
 		serverName         string
+		runDir             string
 		stateDir           string
-		launcherSocket     string
 		adminUser          string
-		adminBasePath      string
-		relaySocket        string
-		observeSocket      string
-		tmuxSocket         string
 		observeRelayBinary string
 		statusInterval     time.Duration
 		showVersion        bool
@@ -52,13 +48,9 @@ func run() error {
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-	flag.StringVar(&stateDir, "state-dir", "/var/lib/bureau", "directory containing session.json from the launcher")
-	flag.StringVar(&launcherSocket, "launcher-socket", "/run/bureau/launcher.sock", "path to the launcher IPC socket")
+	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (must match the launcher's --run-dir)")
+	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory containing session.json from the launcher")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
-	flag.StringVar(&adminBasePath, "admin-base-path", principal.AdminSocketBasePath, "base directory for proxy admin sockets (daemon connects here to configure service routing)")
-	flag.StringVar(&relaySocket, "relay-socket", "/run/bureau/relay.sock", "Unix socket path for the transport relay (consumer proxies connect here for remote services)")
-	flag.StringVar(&observeSocket, "observe-socket", "/run/bureau/observe.sock", "Unix socket for observation requests from clients")
-	flag.StringVar(&tmuxSocket, "tmux-socket", "/run/bureau/tmux.sock", "tmux server socket for Bureau-managed sessions")
 	flag.StringVar(&observeRelayBinary, "observe-relay-binary", "bureau-observe-relay", "path to the observation relay binary")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -76,10 +68,22 @@ func run() error {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
 
+	if err := principal.ValidateRunDir(runDir); err != nil {
+		return fmt.Errorf("run directory validation: %w", err)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	if maxLocalpart := principal.MaxLocalpartAvailable(runDir); maxLocalpart < principal.MaxLocalpartLength {
+		logger.Warn("--run-dir limits maximum localpart length",
+			"run_dir", runDir,
+			"max_localpart", maxLocalpart,
+			"default_max", principal.MaxLocalpartLength,
+		)
+	}
 
 	// Compute the daemon's binary hash and resolve its filesystem path.
 	// Done early since it's pure filesystem I/O with no dependencies.
@@ -177,7 +181,8 @@ func run() error {
 		configRoomID:     configRoomID,
 		machinesRoomID:   machinesRoomID,
 		servicesRoomID:   servicesRoomID,
-		launcherSocket:   launcherSocket,
+		runDir:           runDir,
+		launcherSocket:   principal.LauncherSocketPath(runDir),
 		statusInterval:   statusInterval,
 		daemonBinaryHash: daemonBinaryHash,
 		daemonBinaryPath: daemonBinaryPath,
@@ -193,10 +198,10 @@ func run() error {
 		peerAddresses:    make(map[string]string),
 		peerTransports:   make(map[string]http.RoundTripper),
 		adminSocketPathFunc: func(localpart string) string {
-			return adminBasePath + localpart + principal.SocketSuffix
+			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
-		observeSocketPath:  observeSocket,
-		tmuxServerSocket:   tmuxSocket,
+		observeSocketPath:  principal.ObserveSocketPath(runDir),
+		tmuxServerSocket:   principal.TmuxSocketPath(runDir),
 		observeRelayBinary: observeRelayBinary,
 		layoutWatchers:     make(map[string]*layoutWatcher),
 		logger:             logger,
@@ -209,7 +214,7 @@ func run() error {
 	}
 
 	// Start WebRTC transport and relay socket.
-	if err := daemon.startTransport(ctx, relaySocket); err != nil {
+	if err := daemon.startTransport(ctx, principal.RelaySocketPath(runDir)); err != nil {
 		return fmt.Errorf("starting transport: %w", err)
 	}
 	defer daemon.stopTransport()
@@ -272,6 +277,7 @@ type Daemon struct {
 	configRoomID   string
 	machinesRoomID string
 	servicesRoomID string
+	runDir         string // runtime directory for sockets (e.g., /run/bureau)
 	launcherSocket string
 	statusInterval time.Duration
 

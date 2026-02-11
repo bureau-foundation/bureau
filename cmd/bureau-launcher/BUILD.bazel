@@ -41,6 +41,7 @@ go_test(
     embed = [":bureau-launcher_lib"],
     env = {"BUREAU_PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)"},
     deps = [
+        "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
         "//lib/testutil",

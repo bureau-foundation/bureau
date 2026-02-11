@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -28,6 +29,7 @@ func TestPrefetchEnvironment_ExistingPath(t *testing.T) {
 	existingPath := t.TempDir()
 	called := false
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			called = true
@@ -49,6 +51,7 @@ func TestPrefetchEnvironment_MissingPathSuccess(t *testing.T) {
 
 	var capturedPath string
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			capturedPath = storePath
@@ -70,6 +73,7 @@ func TestPrefetchEnvironment_MissingPathFailure(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return fmt.Errorf("substituter unreachable")
@@ -92,6 +96,7 @@ func TestPrefetchEnvironment_ContextCancellation(t *testing.T) {
 	cancel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return ctx.Err()
@@ -115,6 +120,7 @@ func TestPrefetchBureauVersion_AllPaths(t *testing.T) {
 
 	called := false
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			called = true
@@ -145,6 +151,7 @@ func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
 
 	var prefetchedPaths []string
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			prefetchedPaths = append(prefetchedPaths, storePath)
@@ -170,6 +177,7 @@ func TestPrefetchBureauVersion_PrefetchFailure(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return fmt.Errorf("substituter unavailable")
@@ -194,6 +202,7 @@ func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
 
 	var fetchedPaths []string
 	daemon := &Daemon{
+		runDir: principal.DefaultRunDir,
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			fetchedPaths = append(fetchedPaths, storePath)
@@ -304,6 +313,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	// Start with prefetch that always fails.
 	prefetchError := fmt.Errorf("connection to attic refused")
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,
@@ -423,6 +433,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 
 	prefetchCalled := false
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,

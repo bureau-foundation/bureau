@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -90,6 +91,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusOK)
 
 		daemon := &Daemon{
+			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		}
@@ -105,6 +107,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusServiceUnavailable)
 
 		daemon := &Daemon{
+			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		}
@@ -117,6 +120,7 @@ func TestCheckHealth(t *testing.T) {
 	t.Run("missing socket returns false", func(t *testing.T) {
 		t.Parallel()
 		daemon := &Daemon{
+			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return "/nonexistent/proxy.sock" },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		}
@@ -132,6 +136,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusOK)
 
 		daemon := &Daemon{
+			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		}
@@ -149,6 +154,7 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -197,6 +203,7 @@ func TestHealthMonitorIdempotentStart(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -228,6 +235,7 @@ func TestHealthMonitorStopNonexistent(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -240,6 +248,7 @@ func TestStopAllHealthMonitors(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -362,6 +371,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
 		serverName:     serverName,
@@ -551,6 +561,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
 		serverName:     serverName,
@@ -620,6 +631,7 @@ func TestRollbackPrincipalAlreadyStopped(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		running:        make(map[string]bool),
 		lastSpecs:      make(map[string]*schema.SandboxSpec),
 		previousSpecs:  make(map[string]*schema.SandboxSpec),
@@ -694,6 +706,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,
@@ -785,6 +798,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,
@@ -866,6 +880,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
 		serverName:          serverName,
@@ -962,6 +977,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	})
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
 		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -1032,6 +1048,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	})
 
 	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
 		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -1165,6 +1182,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
 		serverName:     serverName,
@@ -1307,6 +1325,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
 		serverName:     serverName,
@@ -1426,6 +1445,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// config), the destroy-extras pass should clean up all associated
 	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
 		serverName:     serverName,

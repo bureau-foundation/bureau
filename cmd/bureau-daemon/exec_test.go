@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
@@ -252,6 +253,7 @@ func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
 	)
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		daemonBinaryHash: "abcd1234",
 		stateDir:         stateDir,
@@ -310,6 +312,7 @@ func TestExecDaemon_WatchdogWrittenBeforeExec(t *testing.T) {
 	var watchdogExistedAtExecTime bool
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         stateDir,
 		failedExecPaths:  make(map[string]bool),
@@ -370,6 +373,7 @@ func TestExecDaemon_ExecFailure(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         stateDir,
 		failedExecPaths:  make(map[string]bool),
@@ -408,6 +412,7 @@ func TestExecDaemon_RetryProtection(t *testing.T) {
 
 	execCalled := false
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         t.TempDir(),
 		failedExecPaths: map[string]bool{
@@ -436,6 +441,7 @@ func TestExecDaemon_EmptyBinaryPath(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "", // unknown
 		stateDir:         t.TempDir(),
 		failedExecPaths:  make(map[string]bool),
@@ -527,6 +533,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	)
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		session:          session,
 		machineName:      machineName,
 		serverName:       serverName,

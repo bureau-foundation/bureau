@@ -9,27 +9,47 @@ import (
 )
 
 const (
+	// DefaultRunDir is the default runtime directory for Bureau sockets
+	// and ephemeral state. All runtime socket paths derive from this root.
+	// Typically a tmpfs mount (/run), so everything is discarded on reboot.
+	DefaultRunDir = "/run/bureau"
+
+	// DefaultStateDir is the default directory for persistent state
+	// (keypair, Matrix session). Survives reboots.
+	DefaultStateDir = "/var/lib/bureau"
+
+	// DefaultWorkspaceRoot is the default root for project workspaces.
+	DefaultWorkspaceRoot = "/var/bureau/workspace"
+
 	// MaxLocalpartLength is the maximum allowed length for a Bureau
-	// principal localpart. Derived from the unix socket path limit:
-	//   108 (sun_path) - 21 ("/run/bureau/principal/") - 5 (".sock") = 82
+	// principal localpart. Derived from the unix socket path limit with
+	// the default run directory:
+	//   108 (sun_path) - len("/run/bureau/principal/") - len(".sock") = 82
 	// We use 80 for a clean limit with 2 bytes of margin.
 	MaxLocalpartLength = 80
 
 	// SocketBasePath is the base directory under which principal sockets
-	// are created. The localpart maps directly to the path under this.
-	SocketBasePath = "/run/bureau/principal/"
+	// are created with the default run directory. The localpart maps
+	// directly to the path under this.
+	SocketBasePath = DefaultRunDir + "/principal/"
 
-	// AdminSocketBasePath is the base directory for proxy admin sockets.
-	// These are daemon-only — never bind-mounted into sandboxes. Separate
-	// from SocketBasePath so the security boundary is visible at the
-	// filesystem level: agents see /run/bureau/principal/, the daemon
-	// also sees /run/bureau/admin/.
-	//
-	// Path budget: 18 (base) + 80 (max localpart) + 5 (.sock) = 103 < 108.
-	AdminSocketBasePath = "/run/bureau/admin/"
+	// AdminSocketBasePath is the base directory for proxy admin sockets
+	// with the default run directory. These are daemon-only — never
+	// bind-mounted into sandboxes. Separate from SocketBasePath so the
+	// security boundary is visible at the filesystem level: agents see
+	// <run-dir>/principal/, the daemon also sees <run-dir>/admin/.
+	AdminSocketBasePath = DefaultRunDir + "/admin/"
 
 	// SocketSuffix is the file extension for principal sockets.
 	SocketSuffix = ".sock"
+
+	// principalSubdir is the subdirectory under the run directory for
+	// agent-facing principal sockets.
+	principalSubdir = "/principal/"
+
+	// adminSubdir is the subdirectory under the run directory for
+	// daemon-only admin sockets.
+	adminSubdir = "/admin/"
 )
 
 // allowedChars is the set of characters permitted in Matrix localparts
@@ -138,8 +158,8 @@ func RoomAliasLocalpart(fullAlias string) string {
 	return localpart
 }
 
-// SocketPath returns the unix socket path for a principal's localpart.
-// The localpart maps directly to the filesystem — no encoding or escaping.
+// SocketPath returns the unix socket path for a principal's localpart
+// using the default run directory.
 //
 //	SocketPath("iree/amdgpu/pm") → "/run/bureau/principal/iree/amdgpu/pm.sock"
 //
@@ -149,13 +169,91 @@ func SocketPath(localpart string) string {
 	return SocketBasePath + localpart + SocketSuffix
 }
 
-// AdminSocketPath returns the unix socket path for a principal's proxy admin
-// socket. The daemon connects here to configure service routing; agents never
-// see these sockets (they live under AdminSocketBasePath, not SocketBasePath).
+// AdminSocketPath returns the admin socket path for a principal using the
+// default run directory. The daemon connects here to configure service routing;
+// agents never see these sockets.
 //
 //	AdminSocketPath("iree/amdgpu/pm") → "/run/bureau/admin/iree/amdgpu/pm.sock"
 func AdminSocketPath(localpart string) string {
 	return AdminSocketBasePath + localpart + SocketSuffix
+}
+
+// RunDirSocketPath returns the principal socket path for a custom run directory.
+//
+//	RunDirSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/principal/iree/amdgpu/pm.sock"
+func RunDirSocketPath(runDir, localpart string) string {
+	return runDir + principalSubdir + localpart + SocketSuffix
+}
+
+// RunDirAdminSocketPath returns the admin socket path for a custom run directory.
+//
+//	RunDirAdminSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/admin/iree/amdgpu/pm.sock"
+func RunDirAdminSocketPath(runDir, localpart string) string {
+	return runDir + adminSubdir + localpart + SocketSuffix
+}
+
+// LauncherSocketPath returns the launcher IPC socket path for a run directory.
+//
+//	LauncherSocketPath("/run/bureau") → "/run/bureau/launcher.sock"
+func LauncherSocketPath(runDir string) string {
+	return runDir + "/launcher.sock"
+}
+
+// TmuxSocketPath returns the Bureau tmux server socket path for a run directory.
+//
+//	TmuxSocketPath("/run/bureau") → "/run/bureau/tmux.sock"
+func TmuxSocketPath(runDir string) string {
+	return runDir + "/tmux.sock"
+}
+
+// RelaySocketPath returns the transport relay socket path for a run directory.
+//
+//	RelaySocketPath("/run/bureau") → "/run/bureau/relay.sock"
+func RelaySocketPath(runDir string) string {
+	return runDir + "/relay.sock"
+}
+
+// ObserveSocketPath returns the observation request socket path for a run directory.
+//
+//	ObserveSocketPath("/run/bureau") → "/run/bureau/observe.sock"
+func ObserveSocketPath(runDir string) string {
+	return runDir + "/observe.sock"
+}
+
+// ValidateRunDir checks that a run directory path is short enough for unix
+// socket path limits. The longest subpath under run-dir is
+// /principal/<localpart>.sock, where the overhead is len("/principal/") +
+// len(".sock") = 16 characters. The total path must fit in 108 bytes
+// (sun_path limit).
+//
+// Returns an error only if the run directory is too long for any localpart
+// at all (zero usable characters). Returns nil otherwise. The maximum
+// localpart length for a given run-dir is 107 - len(runDir) - 16.
+//
+// MaxLocalpartAvailable returns the actual limit for callers that want to
+// check or log the effective localpart budget.
+func ValidateRunDir(runDir string) error {
+	available := MaxLocalpartAvailable(runDir)
+	if available < 1 {
+		overhead := len(principalSubdir) + len(SocketSuffix)
+		return fmt.Errorf("--run-dir %q is %d bytes, too long for any localpart "+
+			"(unix socket path limit is 108 bytes, overhead is %d bytes)",
+			runDir, len(runDir), overhead+1)
+	}
+	return nil
+}
+
+// MaxLocalpartAvailable returns the maximum localpart length supported by
+// the given run directory, accounting for the unix socket 108-byte sun_path
+// limit. The longest socket subpath is /principal/<localpart>.sock.
+// Returns 0 if the run directory is too long for any localpart.
+func MaxLocalpartAvailable(runDir string) int {
+	overhead := len(principalSubdir) + len(SocketSuffix) // 11 + 5 = 16
+	available := 107 - len(runDir) - overhead
+	if available < 0 {
+		return 0
+	}
+	return available
 }
 
 // ProxyServiceName converts a hierarchical service localpart to a flat name

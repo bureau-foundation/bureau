@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -109,6 +110,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -202,6 +204,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -296,6 +299,7 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -369,6 +373,7 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -467,6 +472,7 @@ func TestInitialSync(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -567,6 +573,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -648,6 +655,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
@@ -730,6 +738,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",

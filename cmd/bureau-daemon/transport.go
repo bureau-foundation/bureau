@@ -339,7 +339,7 @@ func (d *Daemon) localProviderSocket(proxyName string) (string, bool) {
 			)
 			return "", false
 		}
-		return principal.SocketPath(providerLocalpart), true
+		return principal.RunDirSocketPath(d.runDir, providerLocalpart), true
 	}
 	return "", false
 }

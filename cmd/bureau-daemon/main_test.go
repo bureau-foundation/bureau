@@ -175,6 +175,7 @@ func TestUptimeSeconds(t *testing.T) {
 func TestPublishStatus_SandboxCount(t *testing.T) {
 	// Verify that the running map count is correctly calculated.
 	daemon := &Daemon{
+		runDir:      principal.DefaultRunDir,
 		machineName: "machine/test",
 		serverName:  "bureau.local",
 		running: map[string]bool{

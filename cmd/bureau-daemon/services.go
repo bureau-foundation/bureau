@@ -189,7 +189,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 				)
 				continue
 			}
-			providerSocket := principal.SocketPath(providerLocalpart)
+			providerSocket := principal.RunDirSocketPath(d.runDir, providerLocalpart)
 
 			d.logger.Info("local service registered, configuring proxy routes",
 				"service", localpart,
@@ -245,7 +245,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 				)
 				continue
 			}
-			providerSocket := principal.SocketPath(providerLocalpart)
+			providerSocket := principal.RunDirSocketPath(d.runDir, providerLocalpart)
 
 			d.logger.Info("local service updated, reconfiguring proxy routes",
 				"service", localpart,

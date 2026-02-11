@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -47,6 +48,7 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		runDir:           principal.DefaultRunDir,
 		session:          session,
 		machineName:      "machine/test",
 		machineUserID:    "@machine/test:bureau.local",

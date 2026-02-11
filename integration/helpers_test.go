@@ -400,6 +400,22 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	}
 }
 
+// waitForFileGone polls until a file no longer exists on disk. Used to
+// verify that a proxy socket has been cleaned up after sandbox destruction.
+func waitForFileGone(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for file to disappear: %s", timeout, path)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // waitForStateEvent polls a Matrix room for a state event until it appears
 // or the timeout expires. Returns the raw JSON content of the event.
 func waitForStateEvent(t *testing.T, session *messaging.Session, roomID, eventType, stateKey string, timeout time.Duration) json.RawMessage {

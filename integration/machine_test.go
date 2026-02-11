@@ -236,49 +236,51 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 	}
 }
 
-// deployPrincipals encrypts credentials for each principal, pushes
-// Credentials and MachineConfig state events to the machine's config room,
-// and waits for all proxy sockets to appear. Returns a map from localpart
-// to proxy socket path.
-func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) map[string]string {
+// pushCredentials encrypts a principal's Matrix credentials with the
+// machine's public key and pushes them as an m.bureau.credentials state
+// event to the machine's config room. The credentials are encrypted so
+// only the machine's launcher can decrypt them.
+func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachine, account principalAccount) {
 	t.Helper()
 
-	ctx := t.Context()
-	adminUserID := "@bureau-admin:" + testServerName
-
-	// Push encrypted credentials for each principal.
-	for _, spec := range config.Principals {
-		credentialBundle := map[string]string{
-			"MATRIX_TOKEN":          spec.Account.Token,
-			"MATRIX_USER_ID":        spec.Account.UserID,
-			"MATRIX_HOMESERVER_URL": testHomeserverURL,
-		}
-		credentialJSON, err := json.Marshal(credentialBundle)
-		if err != nil {
-			t.Fatalf("marshal credentials for %s: %v", spec.Account.Localpart, err)
-		}
-
-		ciphertext, err := sealed.Encrypt(credentialJSON, []string{machine.PublicKey})
-		if err != nil {
-			t.Fatalf("encrypt credentials for %s: %v", spec.Account.Localpart, err)
-		}
-
-		_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-			"m.bureau.credentials", spec.Account.Localpart, map[string]any{
-				"version":        1,
-				"principal":      spec.Account.UserID,
-				"encrypted_for":  []string{machine.UserID},
-				"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
-				"ciphertext":     ciphertext,
-				"provisioned_by": adminUserID,
-				"provisioned_at": time.Now().UTC().Format(time.RFC3339),
-			})
-		if err != nil {
-			t.Fatalf("push credentials for %s: %v", spec.Account.Localpart, err)
-		}
+	credentialBundle := map[string]string{
+		"MATRIX_TOKEN":          account.Token,
+		"MATRIX_USER_ID":        account.UserID,
+		"MATRIX_HOMESERVER_URL": testHomeserverURL,
+	}
+	credentialJSON, err := json.Marshal(credentialBundle)
+	if err != nil {
+		t.Fatalf("marshal credentials for %s: %v", account.Localpart, err)
 	}
 
-	// Build the principals array for the MachineConfig state event.
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machine.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypt credentials for %s: %v", account.Localpart, err)
+	}
+
+	adminUserID := "@bureau-admin:" + testServerName
+	_, err = admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+		"m.bureau.credentials", account.Localpart, map[string]any{
+			"version":        1,
+			"principal":      account.UserID,
+			"encrypted_for":  []string{machine.UserID},
+			"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
+			"ciphertext":     ciphertext,
+			"provisioned_by": adminUserID,
+			"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+		})
+	if err != nil {
+		t.Fatalf("push credentials for %s: %v", account.Localpart, err)
+	}
+}
+
+// pushMachineConfig builds and pushes an m.bureau.machine_config state event
+// to the machine's config room. The daemon detects this via /sync and
+// reconciles: creating proxies for new principals and destroying proxies
+// for removed ones.
+func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) {
+	t.Helper()
+
 	principalConfigs := make([]map[string]any, len(config.Principals))
 	for i, spec := range config.Principals {
 		entry := map[string]any{
@@ -299,13 +301,27 @@ func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachi
 		machineConfig["default_observe_policy"] = config.DefaultObservePolicy
 	}
 
-	_, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
 		"m.bureau.machine_config", machine.Name, machineConfig)
 	if err != nil {
 		t.Fatalf("push machine config: %v", err)
 	}
+}
 
-	// Wait for all proxy sockets to appear.
+// deployPrincipals encrypts credentials for each principal, pushes
+// Credentials and MachineConfig state events to the machine's config room,
+// and waits for all proxy sockets to appear. Returns a map from localpart
+// to proxy socket path. This is a convenience wrapper around pushCredentials
+// and pushMachineConfig for the common case of deploying from scratch.
+func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) map[string]string {
+	t.Helper()
+
+	for _, spec := range config.Principals {
+		pushCredentials(t, admin, machine, spec.Account)
+	}
+
+	pushMachineConfig(t, admin, machine, config)
+
 	proxySockets := make(map[string]string, len(config.Principals))
 	for _, spec := range config.Principals {
 		socketPath := machine.PrincipalSocketPath(spec.Account.Localpart)

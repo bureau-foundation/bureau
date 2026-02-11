@@ -348,3 +348,128 @@ func TestOperatorFlow(t *testing.T) {
 		}
 	})
 }
+
+// TestConfigReconciliation verifies the daemon's core reconciliation loop:
+// detecting MachineConfig changes via /sync, creating and destroying
+// sandboxes through launcher IPC, and correctly tracking running state.
+// Each phase pushes a new config and verifies the daemon converges:
+//   - Add one principal → proxy appears with correct identity
+//   - Add a second principal → new proxy appears, first still running
+//   - Remove the first → its proxy is destroyed, second still running
+//   - Remove all → all proxies destroyed, sandbox count returns to zero
+func TestConfigReconciliation(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	machine := newTestMachine(t, "machine/reconcile")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+
+	// Register both principals upfront (Matrix account creation only —
+	// no sandboxes until credentials and config are pushed).
+	alpha := registerPrincipal(t, "test/alpha", "alpha-password")
+	beta := registerPrincipal(t, "test/beta", "beta-password")
+
+	// Push encrypted credentials for both principals. Credentials are
+	// inert until a MachineConfig references the principal — the daemon
+	// only acts on principals listed in the config with auto_start=true.
+	pushCredentials(t, admin, machine, alpha)
+	pushCredentials(t, admin, machine, beta)
+
+	alphaSocket := machine.PrincipalSocketPath(alpha.Localpart)
+	betaSocket := machine.PrincipalSocketPath(beta.Localpart)
+
+	// --- Phase 1: deploy alpha ---
+	t.Run("AddFirstPrincipal", func(t *testing.T) {
+		pushMachineConfig(t, admin, machine, deploymentConfig{
+			Principals: []principalSpec{{Account: alpha}},
+		})
+		waitForFile(t, alphaSocket, 15*time.Second)
+
+		alphaClient := proxyHTTPClient(alphaSocket)
+		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID {
+			t.Errorf("alpha whoami = %q, want %q", whoami, alpha.UserID)
+		}
+
+		// Beta should not be running — no config references it yet.
+		if _, err := os.Stat(betaSocket); err == nil {
+			t.Error("beta proxy socket exists before being configured")
+		}
+	})
+
+	// --- Phase 2: add beta alongside alpha ---
+	t.Run("AddSecondPrincipal", func(t *testing.T) {
+		pushMachineConfig(t, admin, machine, deploymentConfig{
+			Principals: []principalSpec{
+				{Account: alpha},
+				{Account: beta},
+			},
+		})
+		waitForFile(t, betaSocket, 15*time.Second)
+
+		// Beta should now be reachable with the correct identity.
+		betaClient := proxyHTTPClient(betaSocket)
+		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID {
+			t.Errorf("beta whoami = %q, want %q", whoami, beta.UserID)
+		}
+
+		// Alpha should still be running and unaffected by the config update.
+		alphaClient := proxyHTTPClient(alphaSocket)
+		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID {
+			t.Errorf("alpha whoami = %q, want %q (should survive config update)", whoami, alpha.UserID)
+		}
+	})
+
+	// --- Phase 3: remove alpha, keep beta ---
+	t.Run("RemoveFirstPrincipal", func(t *testing.T) {
+		pushMachineConfig(t, admin, machine, deploymentConfig{
+			Principals: []principalSpec{{Account: beta}},
+		})
+
+		// Alpha's proxy should be torn down: launcher sends SIGTERM, proxy
+		// cleans up and removes its socket.
+		waitForFileGone(t, alphaSocket, 15*time.Second)
+
+		// Beta should still be running and unaffected.
+		betaClient := proxyHTTPClient(betaSocket)
+		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID {
+			t.Errorf("beta whoami = %q, want %q (should survive alpha removal)", whoami, beta.UserID)
+		}
+	})
+
+	// --- Phase 4: remove all principals ---
+	t.Run("RemoveAllPrincipals", func(t *testing.T) {
+		pushMachineConfig(t, admin, machine, deploymentConfig{})
+
+		waitForFileGone(t, betaSocket, 15*time.Second)
+
+		// Verify MachineStatus reflects zero running sandboxes. The daemon
+		// publishes a heartbeat on each status tick, so poll until the
+		// count reaches zero (the previous heartbeat may still show 1).
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			statusJSON, err := admin.GetStateEvent(t.Context(), machine.MachinesRoomID,
+				"m.bureau.machine_status", machine.Name)
+			if err == nil {
+				var status struct {
+					Sandboxes struct {
+						Running int `json:"running"`
+					} `json:"sandboxes"`
+				}
+				if err := json.Unmarshal(statusJSON, &status); err == nil && status.Sandboxes.Running == 0 {
+					t.Logf("machine status shows 0 running sandboxes")
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for MachineStatus to show 0 running sandboxes")
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	})
+}

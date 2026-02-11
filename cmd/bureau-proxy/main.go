@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
+	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/proxy"
 )
 
@@ -200,6 +201,13 @@ func run() error {
 		server.SetMatrixPolicy(pipeSource.MatrixPolicy())
 	}
 
+	// Accept any pending room invites before starting the server. The
+	// daemon invites principals to workspace rooms during reconciliation
+	// (before create-sandbox), so by the time the proxy starts, the invite
+	// is already pending. This one-time sync-and-join makes the principal
+	// a full room member, enabling it to publish state events via the proxy.
+	acceptPendingInvites(credentialSource, logger)
+
 	// Start server
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
@@ -360,6 +368,69 @@ func createHTTPService(name string, config proxy.ServiceConfig, credentials prox
 		Credential:    credentials,
 		Logger:        logger,
 	})
+}
+
+// acceptPendingInvites performs a one-time initial sync to discover rooms
+// the principal has been invited to, and joins each one. This bridges the
+// gap between the daemon's invite (ensurePrincipalRoomAccess) and the
+// sandboxed agent's inability to call JoinRoom (MatrixPolicy.AllowJoin is
+// default-deny). The daemon invites before create-sandbox, so the invite
+// is already pending when the proxy starts.
+//
+// Best-effort: failures are logged but do not block proxy startup. The
+// proxy can still serve other services, and the agent can still publish
+// state events through the structured proxy endpoints.
+func acceptPendingInvites(credentials proxy.CredentialSource, logger *slog.Logger) {
+	homeserverURLBuffer := credentials.Get("MATRIX_HOMESERVER_URL")
+	tokenBuffer := credentials.Get("MATRIX_TOKEN")
+	userIDBuffer := credentials.Get("MATRIX_USER_ID")
+	if homeserverURLBuffer == nil || tokenBuffer == nil || userIDBuffer == nil {
+		return // Matrix credentials not available — nothing to join.
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURLBuffer.String(),
+	})
+	if err != nil {
+		logger.Warn("failed to create messaging client for invite acceptance", "error", err)
+		return
+	}
+
+	session, err := client.SessionFromToken(userIDBuffer.String(), tokenBuffer.String())
+	if err != nil {
+		logger.Warn("failed to create session for invite acceptance", "error", err)
+		return
+	}
+	defer session.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Non-blocking initial sync: timeout=0 returns immediately with
+	// current state, including any pending invites.
+	response, err := session.Sync(ctx, messaging.SyncOptions{
+		Timeout:    0,
+		SetTimeout: true,
+	})
+	if err != nil {
+		logger.Warn("initial sync for invite acceptance failed", "error", err)
+		return
+	}
+
+	if len(response.Rooms.Invite) == 0 {
+		return
+	}
+
+	for roomID := range response.Rooms.Invite {
+		if _, err := session.JoinRoom(ctx, roomID); err != nil {
+			logger.Warn("failed to accept room invite",
+				"room_id", roomID,
+				"error", err,
+			)
+			continue
+		}
+		logger.Info("accepted room invite", "room_id", roomID)
+	}
 }
 
 // bufferStringOrEmpty returns the string value of a secret buffer, or an

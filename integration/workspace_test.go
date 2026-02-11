@@ -325,17 +325,6 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 	agentAccount := registerPrincipal(t, "wsp/pipeline/agent/0", "test-password")
 	teardownAccount := registerPrincipal(t, "wsp/pipeline/teardown", "test-password")
 
-	// Setup and teardown principals need membership in the workspace room
-	// to publish state events via their proxy. The daemon invites them
-	// during reconciliation (ensurePrincipalRoomAccess), but the proxy
-	// doesn't auto-join invited rooms yet — the principal must call
-	// JoinRoom, which requires a session outside the sandbox. For now,
-	// the test pre-joins them using their tokens. The daemon's invite
-	// is redundant but harmless (idempotent).
-	for _, account := range []principalAccount{setupAccount, teardownAccount} {
-		inviteAndJoinRoom(t, admin, workspaceRoomID, account)
-	}
-
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
 	pushCredentials(t, admin, machine, agentAccount)
@@ -536,42 +525,6 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 	}
 
 	return response.RoomID
-}
-
-// inviteAndJoinRoom invites a principal to a room and has the principal
-// join using their own Matrix session. The daemon invites principals
-// during reconciliation (ensurePrincipalRoomAccess), but the proxy
-// doesn't auto-join invited rooms yet, so this helper provides the JOIN
-// step that the proxy will eventually handle.
-func inviteAndJoinRoom(t *testing.T, admin *messaging.Session, roomID string, account principalAccount) {
-	t.Helper()
-
-	ctx := t.Context()
-
-	// Admin invites the principal.
-	if err := admin.InviteUser(ctx, roomID, account.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite %s to room %s: %v", account.Localpart, roomID, err)
-		}
-	}
-
-	// Principal joins using their own session.
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: testHomeserverURL,
-	})
-	if err != nil {
-		t.Fatalf("create client for %s: %v", account.Localpart, err)
-	}
-
-	session, err := client.SessionFromToken(account.UserID, account.Token)
-	if err != nil {
-		t.Fatalf("session for %s: %v", account.Localpart, err)
-	}
-	defer session.Close()
-
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		t.Fatalf("%s join room %s: %v", account.Localpart, roomID, err)
-	}
 }
 
 // waitForWorkspaceStatus polls the workspace room for the

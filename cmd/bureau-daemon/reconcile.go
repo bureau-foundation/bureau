@@ -47,12 +47,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.reconcileBureauVersion(ctx, config.BureauVersion)
 	}
 
-	// Determine the desired set of principals.
+	// Determine the desired set of principals. Conditions are evaluated
+	// here (not in the "create missing" pass) so that running principals
+	// whose conditions become false are excluded from the desired set.
+	// The "destroy unneeded" pass then naturally stops them. This enables
+	// state-driven lifecycle orchestration: when a workspace status
+	// changes from "active" to "teardown", agents gated on "active"
+	// stop, and a teardown principal gated on "teardown" starts.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
 	for _, assignment := range config.Principals {
-		if assignment.AutoStart {
-			desired[assignment.Localpart] = assignment
+		if !assignment.AutoStart {
+			continue
 		}
+		if !d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition) {
+			continue
+		}
+		desired[assignment.Localpart] = assignment
 	}
 
 	// Check for credential rotation on running principals. When the
@@ -198,15 +208,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	}
 
 	// Create sandboxes for principals that should be running but aren't.
+	// StartConditions were already evaluated when building the desired
+	// set above — only principals with satisfied conditions are here.
 	for localpart, assignment := range desired {
 		if d.running[localpart] {
-			continue
-		}
-
-		// Check if the principal's start condition is satisfied. When a
-		// StartCondition references a state event that doesn't exist yet,
-		// the principal is deferred until a subsequent /sync delivers it.
-		if !d.evaluateStartCondition(ctx, localpart, assignment.StartCondition) {
 			continue
 		}
 

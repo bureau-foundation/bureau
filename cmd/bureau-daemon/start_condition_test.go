@@ -63,18 +63,18 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "iree/amdgpu/pm" {
-		t.Errorf("expected create-sandbox for iree/amdgpu/pm, got %v", createdPrincipals.names)
+	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
+		t.Errorf("expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
 	if !daemon.running["iree/amdgpu/pm"] {
 		t.Error("principal should be running after start condition is met")
@@ -118,18 +118,18 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 0 {
-		t.Errorf("expected no create-sandbox calls (condition not met), got %v", createdPrincipals.names)
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (condition not met), got %v", tracker.created)
 	}
 	if daemon.running["iree/amdgpu/pm"] {
 		t.Error("principal should not be running when start condition is not met")
@@ -172,7 +172,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	// First reconcile: event missing → deferred.
@@ -180,11 +180,11 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		t.Fatalf("first reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	if len(createdPrincipals.names) != 0 {
-		t.Errorf("first reconcile: expected no create-sandbox calls, got %v", createdPrincipals.names)
+	tracker.mu.Lock()
+	if len(tracker.created) != 0 {
+		t.Errorf("first reconcile: expected no create-sandbox calls, got %v", tracker.created)
 	}
-	createdPrincipals.mu.Unlock()
+	tracker.mu.Unlock()
 
 	// Simulate the setup principal publishing workspace active status.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
@@ -199,11 +199,11 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		t.Fatalf("second reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "iree/amdgpu/pm" {
-		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", createdPrincipals.names)
+	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
 	if !daemon.running["iree/amdgpu/pm"] {
 		t.Error("principal should be running after start condition becomes satisfied")
@@ -238,18 +238,18 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "agent/test" {
-		t.Errorf("expected create-sandbox for agent/test, got %v", createdPrincipals.names)
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/test" {
+		t.Errorf("expected create-sandbox for agent/test, got %v", tracker.created)
 	}
 }
 
@@ -291,18 +291,18 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 		"approved_by": "bureau-admin",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "agent/gated" {
-		t.Errorf("expected create-sandbox for agent/gated, got %v", createdPrincipals.names)
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/gated" {
+		t.Errorf("expected create-sandbox for agent/gated, got %v", tracker.created)
 	}
 }
 
@@ -339,18 +339,18 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 0 {
-		t.Errorf("expected no create-sandbox calls (alias unresolvable), got %v", createdPrincipals.names)
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (alias unresolvable), got %v", tracker.created)
 	}
 	if daemon.running["agent/orphan"] {
 		t.Error("principal should not be running when room alias is unresolvable")
@@ -403,7 +403,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
 	defer cleanup()
 
 	// First reconcile: event exists but status is "pending" → deferred.
@@ -411,11 +411,11 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 		t.Fatalf("first reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	if len(createdPrincipals.names) != 0 {
-		t.Errorf("first reconcile: expected no create-sandbox calls (content mismatch), got %v", createdPrincipals.names)
+	tracker.mu.Lock()
+	if len(tracker.created) != 0 {
+		t.Errorf("first reconcile: expected no create-sandbox calls (content mismatch), got %v", tracker.created)
 	}
-	createdPrincipals.mu.Unlock()
+	tracker.mu.Unlock()
 
 	// Update the workspace event to "active".
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
@@ -430,24 +430,212 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 		t.Fatalf("second reconcile() error: %v", err)
 	}
 
-	createdPrincipals.mu.Lock()
-	defer createdPrincipals.mu.Unlock()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "iree/amdgpu/pm" {
-		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", createdPrincipals.names)
+	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
 	if !daemon.running["iree/amdgpu/pm"] {
 		t.Error("principal should be running after content matches")
 	}
 }
 
+// TestReconcile_RunningPrincipalStoppedWhenConditionFails verifies continuous
+// enforcement: a principal that was running because its StartCondition was
+// satisfied gets stopped when the condition becomes false. This is the core
+// lifecycle mechanism — when a workspace status changes from "active" to
+// "teardown", agents gated on "active" are excluded from the desired set
+// and the "destroy unneeded" pass stops them.
+func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID    = "!config:test.local"
+		templateRoomID  = "!template:test.local"
+		workspaceRoomID = "!workspace:test.local"
+		serverName      = "test.local"
+		machineName     = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Workspace is initially active — condition is met.
+	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T00:00:00Z",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: condition met → principal starts.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
+		t.Fatalf("first reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
+	}
+	if !daemon.running["iree/amdgpu/pm"] {
+		t.Fatal("first reconcile: principal should be running")
+	}
+	tracker.mu.Unlock()
+
+	// Simulate workspace transitioning to teardown.
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "teardown",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T02:00:00Z",
+	})
+
+	// Second reconcile: condition no longer met → principal stopped.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm, got %v", tracker.destroyed)
+	}
+	if daemon.running["iree/amdgpu/pm"] {
+		t.Error("second reconcile: principal should no longer be running")
+	}
+}
+
+// TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal verifies that
+// when a conditioned principal's StartCondition becomes false, only that
+// principal is stopped — unconditioned principals on the same machine continue
+// running undisturbed.
+func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID    = "!config:test.local"
+		templateRoomID  = "!template:test.local"
+		workspaceRoomID = "!workspace:test.local"
+		serverName      = "test.local"
+		machineName     = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Workspace is initially active.
+	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T00:00:00Z",
+	})
+
+	// Two principals: one gated on workspace active, one unconditional.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
+				},
+			},
+			{
+				Localpart: "sysadmin/test",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				// No StartCondition — always runs.
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "sysadmin/test", schema.Credentials{
+		Ciphertext: "encrypted-sysadmin-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: both principals start.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if len(tracker.created) != 2 {
+		t.Fatalf("first reconcile: expected 2 create-sandbox calls, got %v", tracker.created)
+	}
+	if !daemon.running["iree/amdgpu/pm"] || !daemon.running["sysadmin/test"] {
+		t.Fatalf("first reconcile: both principals should be running, got %v", daemon.running)
+	}
+	tracker.mu.Unlock()
+
+	// Workspace transitions to teardown — conditioned principal loses its condition.
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "teardown",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T02:00:00Z",
+	})
+
+	// Second reconcile: conditioned principal stops, unconditioned survives.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm only, got %v", tracker.destroyed)
+	}
+	if daemon.running["iree/amdgpu/pm"] {
+		t.Error("conditioned principal should have been stopped")
+	}
+	if !daemon.running["sysadmin/test"] {
+		t.Error("unconditioned principal should still be running")
+	}
+}
+
 // --- Test helpers ---
 
-// createdPrincipalTracker is a thread-safe tracker for principals passed
-// to create-sandbox IPC calls.
-type createdPrincipalTracker struct {
-	mu    sync.Mutex
-	names []string
+// principalTracker is a thread-safe tracker for principals passed to
+// create-sandbox and destroy-sandbox IPC calls.
+type principalTracker struct {
+	mu        sync.Mutex
+	created   []string
+	destroyed []string
 }
 
 // newStartConditionTestState creates a mock Matrix state with a base template.
@@ -468,7 +656,7 @@ func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID, mach
 // newStartConditionTestDaemon creates a Daemon backed by a mock Matrix server
 // and a mock launcher. Returns the daemon, a tracker for created principals,
 // and a cleanup function.
-func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, configRoomID, serverName, machineName string) (*Daemon, *createdPrincipalTracker, func()) {
+func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, configRoomID, serverName, machineName string) (*Daemon, *principalTracker, func()) {
 	t.Helper()
 
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -487,15 +675,20 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 
-	tracker := &createdPrincipalTracker{}
+	tracker := &principalTracker{}
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action == "create-sandbox" {
-			tracker.mu.Lock()
-			tracker.names = append(tracker.names, request.Principal)
-			tracker.mu.Unlock()
+		tracker.mu.Lock()
+		defer tracker.mu.Unlock()
+		switch request.Action {
+		case "create-sandbox":
+			tracker.created = append(tracker.created, request.Principal)
 			return launcherIPCResponse{OK: true, ProxyPID: 99999}
+		case "destroy-sandbox":
+			tracker.destroyed = append(tracker.destroyed, request.Principal)
+			return launcherIPCResponse{OK: true}
+		default:
+			return launcherIPCResponse{OK: true}
 		}
-		return launcherIPCResponse{OK: true}
 	})
 
 	daemon := &Daemon{

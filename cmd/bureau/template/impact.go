@@ -47,11 +47,11 @@ With a file argument, also classifies each change:
 		Examples: []cli.Example{
 			{
 				Description: "Show all principals that use a template (directly or via inheritance)",
-				Command:     "bureau template impact bureau/templates:base",
+				Command:     "bureau template impact bureau/template:base",
 			},
 			{
 				Description: "Classify what would change if you pushed a modified template",
-				Command:     "bureau template impact bureau/templates:llm-agent llm-agent.json",
+				Command:     "bureau template impact bureau/template:llm-agent llm-agent.json",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

@@ -204,11 +204,11 @@ var standardRooms = []standardRoom{
 		memberSettableEventTypes: []string{schema.EventTypeService},
 	},
 	{
-		alias:         "bureau/templates",
-		displayName:   "Bureau Templates",
+		alias:         "bureau/template",
+		displayName:   "Bureau Template",
 		topic:         "Sandbox templates",
-		name:          "templates room",
-		credentialKey: "MATRIX_TEMPLATES_ROOM",
+		name:          "template room",
+		credentialKey: "MATRIX_TEMPLATE_ROOM",
 	},
 }
 
@@ -348,8 +348,8 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	results = append(results, checkMachineMembership(ctx, session, serverName, roomIDs)...)
 
 	// Section 8: Base templates published.
-	if templatesRoomID, ok := roomIDs["bureau/templates"]; ok {
-		results = append(results, checkBaseTemplates(ctx, session, templatesRoomID)...)
+	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
+		results = append(results, checkBaseTemplates(ctx, session, templateRoomID)...)
 	}
 
 	return results
@@ -684,17 +684,17 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and
 // "base-networked") are published as m.bureau.template state events in the
-// templates room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session *messaging.Session, templatesRoomID string) []checkResult {
+// template room. Missing templates are fixable by re-publishing them.
+func checkBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string) []checkResult {
 	var results []checkResult
 
 	for _, template := range baseTemplates() {
 		checkName := fmt.Sprintf("template %q", template.name)
-		_, err := session.GetStateEvent(ctx, templatesRoomID, schema.EventTypeTemplate, template.name)
+		_, err := session.GetStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				capturedTemplate := template
-				capturedRoomID := templatesRoomID
+				capturedRoomID := templateRoomID
 				results = append(results, failWithFix(
 					checkName,
 					fmt.Sprintf("template %q not published", template.name),

@@ -246,7 +246,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
@@ -398,7 +398,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
@@ -482,7 +482,7 @@ func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, mach
 
 	state := newMockMatrixState()
 
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:     []string{"/bin/echo", "hello"},
@@ -493,7 +493,7 @@ func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, mach
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/test",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},

@@ -44,7 +44,7 @@ func TestRoomsExistViaAPI(t *testing.T) {
 		"#bureau/system:" + testServerName,
 		"#bureau/machines:" + testServerName,
 		"#bureau/services:" + testServerName,
-		"#bureau/templates:" + testServerName,
+		"#bureau/template:" + testServerName,
 	}
 
 	for _, alias := range expectedAliases {
@@ -86,7 +86,7 @@ func TestSpaceHierarchy(t *testing.T) {
 		"#bureau/system:" + testServerName,
 		"#bureau/machines:" + testServerName,
 		"#bureau/services:" + testServerName,
-		"#bureau/templates:" + testServerName,
+		"#bureau/template:" + testServerName,
 	}
 
 	for _, alias := range childRooms {
@@ -105,13 +105,13 @@ func TestTemplatesPublished(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	templatesRoomID, err := session.ResolveAlias(t.Context(), "#bureau/templates:"+testServerName)
+	templateRoomID, err := session.ResolveAlias(t.Context(), "#bureau/template:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve templates alias: %v", err)
+		t.Fatalf("resolve template alias: %v", err)
 	}
 
 	// Read base template state event.
-	content, err := session.GetStateEvent(t.Context(), templatesRoomID, "m.bureau.template", "base")
+	content, err := session.GetStateEvent(t.Context(), templateRoomID, "m.bureau.template", "base")
 	if err != nil {
 		t.Fatalf("get base template: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestTemplatesPublished(t *testing.T) {
 	}
 
 	// Verify base-networked template exists and inherits from base.
-	content, err = session.GetStateEvent(t.Context(), templatesRoomID, "m.bureau.template", "base-networked")
+	content, err = session.GetStateEvent(t.Context(), templateRoomID, "m.bureau.template", "base-networked")
 	if err != nil {
 		t.Fatalf("get base-networked template: %v", err)
 	}
@@ -137,8 +137,8 @@ func TestTemplatesPublished(t *testing.T) {
 	}
 
 	inherits, ok := template["inherits"].(string)
-	if !ok || inherits != "bureau/templates:base" {
-		t.Errorf("expected base-networked to inherit from bureau/templates:base, got %q", inherits)
+	if !ok || inherits != "bureau/template:base" {
+		t.Errorf("expected base-networked to inherit from bureau/template:base, got %q", inherits)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 		"#bureau/system:" + testServerName,
 		"#bureau/machines:" + testServerName,
 		"#bureau/services:" + testServerName,
-		"#bureau/templates:" + testServerName,
+		"#bureau/template:" + testServerName,
 	}
 
 	for _, alias := range rooms {

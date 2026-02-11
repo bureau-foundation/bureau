@@ -33,7 +33,7 @@ func TestValidateTemplateContent(t *testing.T) {
 			name: "valid child template",
 			content: &schema.TemplateContent{
 				Description: "A valid child template",
-				Inherits:    "bureau/templates:base",
+				Inherits:    "bureau/template:base",
 			},
 			expectedIssues: 0,
 		},
@@ -240,7 +240,7 @@ func TestReadTemplateFile(t *testing.T) {
 		err := os.WriteFile(path, []byte(`{
   // GPU agent with IREE runtime support
   "description": "AMDGPU developer agent",
-  "inherits": "bureau/templates:llm-agent",
+  "inherits": "bureau/template:llm-agent",
   "command": ["/usr/local/bin/agent", "--gpu"],
 
   /* Device access for ROCm/HIP */
@@ -264,8 +264,8 @@ func TestReadTemplateFile(t *testing.T) {
 		if content.Description != "AMDGPU developer agent" {
 			t.Errorf("Description = %q, want %q", content.Description, "AMDGPU developer agent")
 		}
-		if content.Inherits != "bureau/templates:llm-agent" {
-			t.Errorf("Inherits = %q, want %q", content.Inherits, "bureau/templates:llm-agent")
+		if content.Inherits != "bureau/template:llm-agent" {
+			t.Errorf("Inherits = %q, want %q", content.Inherits, "bureau/template:llm-agent")
 		}
 		if len(content.Command) != 2 {
 			t.Fatalf("Command length = %d, want 2", len(content.Command))
@@ -310,7 +310,7 @@ func TestReadTemplateFile(t *testing.T) {
 		path := filepath.Join(directory, "child.json")
 		err := os.WriteFile(path, []byte(`{
   "description": "Child template",
-  "inherits": "bureau/templates:base",
+  "inherits": "bureau/template:base",
   "environment_variables": {
     "EXTRA": "value"
   }
@@ -324,8 +324,8 @@ func TestReadTemplateFile(t *testing.T) {
 			t.Fatalf("readTemplateFile: %v", err)
 		}
 
-		if content.Inherits != "bureau/templates:base" {
-			t.Errorf("Inherits = %q, want %q", content.Inherits, "bureau/templates:base")
+		if content.Inherits != "bureau/template:base" {
+			t.Errorf("Inherits = %q, want %q", content.Inherits, "bureau/template:base")
 		}
 		if content.EnvironmentVariables["EXTRA"] != "value" {
 			t.Errorf("EnvironmentVariables[EXTRA] = %q, want %q", content.EnvironmentVariables["EXTRA"], "value")

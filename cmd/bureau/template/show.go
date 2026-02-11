@@ -33,11 +33,11 @@ template overrides versus what it inherits.`,
 		Examples: []cli.Example{
 			{
 				Description: "Show the fully resolved base-networked template",
-				Command:     "bureau template show bureau/templates:base-networked",
+				Command:     "bureau template show bureau/template:base-networked",
 			},
 			{
 				Description: "Show the raw template (without inheritance resolution)",
-				Command:     "bureau template show --raw bureau/templates:base-networked",
+				Command:     "bureau template show --raw bureau/template:base-networked",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

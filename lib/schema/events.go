@@ -81,11 +81,11 @@ const (
 	// EventTypeTemplate defines a sandbox template — the complete
 	// specification for how to create a sandboxed environment. Templates
 	// are stored as state events in template rooms (e.g.,
-	// #bureau/templates for built-ins, #iree/templates for project
+	// #bureau/template for built-ins, #iree/template for project
 	// templates). Room power levels control who can edit templates.
 	//
 	// State key: template name (e.g., "base", "llm-agent", "amdgpu-developer")
-	// Room: template room (e.g., #bureau/templates:<server>, #iree/templates:<server>)
+	// Room: template room (e.g., #bureau/template:<server>, #iree/template:<server>)
 	//
 	// Templates can inherit from other templates across rooms. The daemon
 	// resolves the full inheritance chain and merges fields before sending
@@ -258,14 +258,14 @@ type PrincipalAssignment struct {
 	//   <room-alias-localpart>:<template-name>
 	//
 	// Examples:
-	//   - "bureau/templates:base" — built-in base template
-	//   - "bureau/templates:llm-agent" — built-in agent template
-	//   - "iree/templates:amdgpu-developer" — project-specific template
+	//   - "bureau/template:base" — built-in base template
+	//   - "bureau/template:llm-agent" — built-in agent template
+	//   - "iree/template:amdgpu-developer" — project-specific template
 	//
 	// For federated deployments, an optional @server suffix on the room
 	// reference specifies the homeserver:
 	//
-	//   "iree/templates@other.example:amdgpu-developer"
+	//   "iree/template@other.example:amdgpu-developer"
 	//
 	// The daemon resolves this reference to a room alias and state event,
 	// walks the inheritance chain, and produces a fully-resolved SandboxSpec.

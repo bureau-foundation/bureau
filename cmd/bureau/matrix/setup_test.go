@@ -92,8 +92,8 @@ func TestBaseTemplates(t *testing.T) {
 	if ref.Template != "base" {
 		t.Errorf("base-networked should inherit from 'base', got template name %q", ref.Template)
 	}
-	if ref.Room != "bureau/templates" {
-		t.Errorf("base-networked should inherit from 'bureau/templates' room, got %q", ref.Room)
+	if ref.Room != "bureau/template" {
+		t.Errorf("base-networked should inherit from 'bureau/template' room, got %q", ref.Room)
 	}
 
 	// Should disable network namespace.

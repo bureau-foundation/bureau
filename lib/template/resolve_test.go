@@ -146,8 +146,8 @@ func TestFetchSimple(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base template",
 		Command:     []string{"/bin/bash"},
 	})
@@ -155,7 +155,7 @@ func TestFetchSimple(t *testing.T) {
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	ref, err := schema.ParseTemplateRef("bureau/templates:base")
+	ref, err := schema.ParseTemplateRef("bureau/template:base")
 	if err != nil {
 		t.Fatalf("ParseTemplateRef: %v", err)
 	}
@@ -176,8 +176,8 @@ func TestResolveSimple(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base sandbox template",
 		Command:     []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
@@ -191,7 +191,7 @@ func TestResolveSimple(t *testing.T) {
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := Resolve(ctx, session, "bureau/templates:base", testServerName)
+	template, err := Resolve(ctx, session, "bureau/template:base", testServerName)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -208,9 +208,9 @@ func TestResolveSingleInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base template",
 		Filesystem: []schema.TemplateMount{
 			{Source: "/usr", Dest: "/usr", Mode: "ro"},
@@ -220,9 +220,9 @@ func TestResolveSingleInheritance(t *testing.T) {
 		CreateDirs:           []string{"/tmp"},
 	})
 
-	state.setTemplate("!templates:test", "child", schema.TemplateContent{
+	state.setTemplate("!template:test", "child", schema.TemplateContent{
 		Description: "Child template",
-		Inherits:    "bureau/templates:base",
+		Inherits:    "bureau/template:base",
 		Command:     []string{"/usr/local/bin/agent"},
 		EnvironmentVariables: map[string]string{
 			"PATH":  "/usr/local/bin:/usr/bin:/bin",
@@ -235,7 +235,7 @@ func TestResolveSingleInheritance(t *testing.T) {
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := Resolve(ctx, session, "bureau/templates:child", testServerName)
+	template, err := Resolve(ctx, session, "bureau/template:child", testServerName)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -270,16 +270,16 @@ func TestResolveCrossRoomInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
-	state.setRoomAlias("#project/templates:test.local", "!project-templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias("#project/template:test.local", "!project-template:test")
 
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Command:    []string{"/bin/bash"},
 		Namespaces: &schema.TemplateNamespaces{PID: true},
 	})
 
-	state.setTemplate("!project-templates:test", "custom", schema.TemplateContent{
-		Inherits:    "bureau/templates:base",
+	state.setTemplate("!project-template:test", "custom", schema.TemplateContent{
+		Inherits:    "bureau/template:base",
 		Description: "Cross-room child",
 		DefaultPayload: map[string]any{
 			"project": "test-project",
@@ -289,7 +289,7 @@ func TestResolveCrossRoomInheritance(t *testing.T) {
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := Resolve(ctx, session, "project/templates:custom", testServerName)
+	template, err := Resolve(ctx, session, "project/template:custom", testServerName)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -309,21 +309,21 @@ func TestResolveCycleDetection(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
-	state.setTemplate("!templates:test", "a", schema.TemplateContent{
-		Inherits: "bureau/templates:b",
+	state.setTemplate("!template:test", "a", schema.TemplateContent{
+		Inherits: "bureau/template:b",
 		Command:  []string{"/bin/a"},
 	})
-	state.setTemplate("!templates:test", "b", schema.TemplateContent{
-		Inherits: "bureau/templates:a",
+	state.setTemplate("!template:test", "b", schema.TemplateContent{
+		Inherits: "bureau/template:a",
 		Command:  []string{"/bin/b"},
 	})
 
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	_, err := Resolve(ctx, session, "bureau/templates:a", testServerName)
+	_, err := Resolve(ctx, session, "bureau/template:a", testServerName)
 	if err == nil {
 		t.Fatal("expected cycle detection error")
 	}
@@ -336,17 +336,17 @@ func TestResolveMissingParent(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
-	state.setTemplate("!templates:test", "child", schema.TemplateContent{
-		Inherits: "bureau/templates:nonexistent",
+	state.setTemplate("!template:test", "child", schema.TemplateContent{
+		Inherits: "bureau/template:nonexistent",
 		Command:  []string{"/bin/child"},
 	})
 
 	session := newTestSession(t, state)
 	ctx := context.Background()
 
-	_, err := Resolve(ctx, session, "bureau/templates:child", testServerName)
+	_, err := Resolve(ctx, session, "bureau/template:child", testServerName)
 	if err == nil {
 		t.Fatal("expected error for missing parent template")
 	}

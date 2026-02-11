@@ -19,40 +19,40 @@ func TestParseTemplateRef(t *testing.T) {
 	}{
 		{
 			name:     "built-in base template",
-			input:    "bureau/templates:base",
-			wantRoom: "bureau/templates",
+			input:    "bureau/template:base",
+			wantRoom: "bureau/template",
 			wantTmpl: "base",
 		},
 		{
 			name:     "project-specific template",
-			input:    "iree/templates:amdgpu-developer",
-			wantRoom: "iree/templates",
+			input:    "iree/template:amdgpu-developer",
+			wantRoom: "iree/template",
 			wantTmpl: "amdgpu-developer",
 		},
 		{
 			name:     "federated without port",
-			input:    "iree/templates@other.example:foo",
-			wantRoom: "iree/templates",
+			input:    "iree/template@other.example:foo",
+			wantRoom: "iree/template",
 			wantTmpl: "foo",
 			wantSrv:  "other.example",
 		},
 		{
 			name:     "federated with port",
-			input:    "iree/templates@other.example:8448:versioned-agent",
-			wantRoom: "iree/templates",
+			input:    "iree/template@other.example:8448:versioned-agent",
+			wantRoom: "iree/template",
 			wantTmpl: "versioned-agent",
 			wantSrv:  "other.example:8448",
 		},
 		{
 			name:     "single-segment room",
-			input:    "templates:minimal",
-			wantRoom: "templates",
+			input:    "template:minimal",
+			wantRoom: "template",
 			wantTmpl: "minimal",
 		},
 		{
 			name:     "deep room hierarchy",
-			input:    "org/team/project/templates:agent-v2",
-			wantRoom: "org/team/project/templates",
+			input:    "org/team/project/template:agent-v2",
+			wantRoom: "org/team/project/template",
 			wantTmpl: "agent-v2",
 		},
 	}
@@ -86,11 +86,11 @@ func TestParseTemplateRefErrors(t *testing.T) {
 		input string
 	}{
 		{"empty string", ""},
-		{"no colon", "bureau/templates"},
-		{"empty template name", "bureau/templates:"},
+		{"no colon", "bureau/template"},
+		{"empty template name", "bureau/template:"},
 		{"empty room", ":base"},
 		{"empty room localpart with server", "@server:base"},
-		{"empty server after at", "bureau/templates@:base"},
+		{"empty server after at", "bureau/template@:base"},
 	}
 
 	for _, test := range tests {
@@ -115,18 +115,18 @@ func TestTemplateRefString(t *testing.T) {
 	}{
 		{
 			name: "local reference",
-			ref:  TemplateRef{Room: "bureau/templates", Template: "base"},
-			want: "bureau/templates:base",
+			ref:  TemplateRef{Room: "bureau/template", Template: "base"},
+			want: "bureau/template:base",
 		},
 		{
 			name: "federated reference",
-			ref:  TemplateRef{Room: "iree/templates", Template: "foo", Server: "other.example"},
-			want: "iree/templates@other.example:foo",
+			ref:  TemplateRef{Room: "iree/template", Template: "foo", Server: "other.example"},
+			want: "iree/template@other.example:foo",
 		},
 		{
 			name: "federated with port",
-			ref:  TemplateRef{Room: "iree/templates", Template: "agent", Server: "other.example:8448"},
-			want: "iree/templates@other.example:8448:agent",
+			ref:  TemplateRef{Room: "iree/template", Template: "agent", Server: "other.example:8448"},
+			want: "iree/template@other.example:8448:agent",
 		},
 	}
 
@@ -146,10 +146,10 @@ func TestTemplateRefRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	inputs := []string{
-		"bureau/templates:base",
-		"iree/templates:amdgpu-developer",
-		"iree/templates@other.example:foo",
-		"iree/templates@other.example:8448:versioned-agent",
+		"bureau/template:base",
+		"iree/template:amdgpu-developer",
+		"iree/template@other.example:foo",
+		"iree/template@other.example:8448:versioned-agent",
 	}
 
 	for _, input := range inputs {
@@ -179,21 +179,21 @@ func TestTemplateRefRoomAlias(t *testing.T) {
 	}{
 		{
 			name:          "local uses default server",
-			ref:           TemplateRef{Room: "bureau/templates", Template: "base"},
+			ref:           TemplateRef{Room: "bureau/template", Template: "base"},
 			defaultServer: "bureau.local",
-			want:          "#bureau/templates:bureau.local",
+			want:          "#bureau/template:bureau.local",
 		},
 		{
 			name:          "federated uses explicit server",
-			ref:           TemplateRef{Room: "iree/templates", Template: "foo", Server: "other.example"},
+			ref:           TemplateRef{Room: "iree/template", Template: "foo", Server: "other.example"},
 			defaultServer: "bureau.local",
-			want:          "#iree/templates:other.example",
+			want:          "#iree/template:other.example",
 		},
 		{
 			name:          "federated with port",
-			ref:           TemplateRef{Room: "iree/templates", Template: "agent", Server: "other.example:8448"},
+			ref:           TemplateRef{Room: "iree/template", Template: "agent", Server: "other.example:8448"},
 			defaultServer: "bureau.local",
-			want:          "#iree/templates:other.example:8448",
+			want:          "#iree/template:other.example:8448",
 		},
 	}
 

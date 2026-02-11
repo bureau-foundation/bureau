@@ -80,7 +80,7 @@ observation, and structured messaging via Matrix.`,
 			},
 			{
 				Description: "List available sandbox templates",
-				Command:     "bureau template list bureau/templates",
+				Command:     "bureau template list bureau/template",
 			},
 			{
 				Description: "Build and deploy an environment profile",

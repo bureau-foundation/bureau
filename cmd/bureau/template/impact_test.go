@@ -87,7 +87,7 @@ func (s *impactTestState) addNonConfigRoom(roomID string) {
 	s.roomEvents[roomID] = []messaging.Event{
 		{
 			Type:    "m.room.canonical_alias",
-			Content: map[string]any{"alias": "#bureau/templates:test.local"},
+			Content: map[string]any{"alias": "#bureau/template:test.local"},
 		},
 	}
 }
@@ -244,7 +244,7 @@ func TestImpactDirectReference(t *testing.T) {
 
 	// Template that the principal uses directly.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -256,7 +256,7 @@ func TestImpactDirectReference(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "test/agent",
-				Template:  "bureau/templates:agent",
+				Template:  "bureau/template:agent",
 			},
 		},
 	})
@@ -280,7 +280,7 @@ func TestImpactDirectReference(t *testing.T) {
 		t.Errorf("machine = %q, want machine/workstation", configs[0].machine)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 
 	// Base template.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"base", schema.TemplateContent{
 			Description: "Base template",
 			Command:     []string{"/bin/bash"},
@@ -315,9 +315,9 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 
 	// Child template inherits from base.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
-			Inherits:    "bureau/templates:base",
+			Inherits:    "bureau/template:base",
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
 		},
@@ -325,9 +325,9 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 
 	// Grandchild template inherits from child.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"llm-agent", schema.TemplateContent{
-			Inherits:    "bureau/templates:agent",
+			Inherits:    "bureau/template:agent",
 			Description: "LLM agent template",
 			EnvironmentVariables: map[string]string{
 				"MODEL": "gpt-4",
@@ -338,8 +338,8 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	// Principal uses the grandchild template. Impact analysis targets the base.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/llm", Template: "bureau/templates:llm-agent"},
-			{Localpart: "test/plain", Template: "bureau/templates:agent"},
+			{Localpart: "test/llm", Template: "bureau/template:llm-agent"},
+			{Localpart: "test/plain", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -356,7 +356,7 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:base", configs)
+	affected, err := analyzer.findAffected("bureau/template:base", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 
 	// Template that exists but no principal references.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"unused", schema.TemplateContent{
 			Description: "Nobody uses this",
 		},
@@ -405,7 +405,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 
 	// Template that the principal actually uses.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -414,7 +414,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -431,7 +431,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:unused", configs)
+	affected, err := analyzer.findAffected("bureau/template:unused", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestImpactMultipleMachines(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"base", schema.TemplateContent{
 			Description: "Base template",
 			Command:     []string{"/bin/bash"},
@@ -456,19 +456,19 @@ func TestImpactMultipleMachines(t *testing.T) {
 	// Two machines, each with principals referencing the same template.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "ws/agent-a", Template: "bureau/templates:base"},
-			{Localpart: "ws/agent-b", Template: "bureau/templates:base"},
+			{Localpart: "ws/agent-a", Template: "bureau/template:base"},
+			{Localpart: "ws/agent-b", Template: "bureau/template:base"},
 		},
 	})
 
 	state.addConfigRoom("!config-gpu:test", "machine/gpu-server", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "gpu/training", Template: "bureau/templates:base"},
+			{Localpart: "gpu/training", Template: "bureau/template:base"},
 		},
 	})
 
 	// Also a non-config room to verify it gets filtered out.
-	state.addNonConfigRoom("!templates:test")
+	state.addNonConfigRoom("!template:test")
 
 	session := newImpactTestSession(t, state)
 	analyzer := &impactAnalyzer{
@@ -486,7 +486,7 @@ func TestImpactMultipleMachines(t *testing.T) {
 		t.Fatalf("configs count = %d, want 2", len(configs))
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:base", configs)
+	affected, err := analyzer.findAffected("bureau/template:base", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -524,7 +524,7 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart:       "test/overridden",
-				Template:        "bureau/templates:agent",
+				Template:        "bureau/template:agent",
 				CommandOverride: []string{"/usr/bin/custom-agent"},
 				ExtraEnvironmentVariables: map[string]string{
 					"CUSTOM": "true",
@@ -535,12 +535,12 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 			},
 			{
 				Localpart:           "test/env-override",
-				Template:            "bureau/templates:agent",
+				Template:            "bureau/template:agent",
 				EnvironmentOverride: "/nix/store/custom-env",
 			},
 			{
 				Localpart: "test/no-overrides",
-				Template:  "bureau/templates:agent",
+				Template:  "bureau/template:agent",
 			},
 		},
 	})
@@ -558,7 +558,7 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 
 	// Current template in Matrix.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -624,7 +624,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -641,7 +641,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 		Namespaces:  &schema.TemplateNamespaces{PID: true, Net: true},
 	}
 
-	if err := analyzer.classifyChanges(affected, "bureau/templates:agent", proposed); err != nil {
+	if err := analyzer.classifyChanges(affected, "bureau/template:agent", proposed); err != nil {
 		t.Fatalf("classifyChanges: %v", err)
 	}
 
@@ -674,7 +674,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description:    "Agent template",
 			Command:        []string{"/usr/bin/agent"},
@@ -684,7 +684,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -700,7 +700,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -712,7 +712,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 		DefaultPayload: map[string]any{"model": "gpt-4"},
 	}
 
-	if err := analyzer.classifyChanges(affected, "bureau/templates:agent", proposed); err != nil {
+	if err := analyzer.classifyChanges(affected, "bureau/template:agent", proposed); err != nil {
 		t.Fatalf("classifyChanges: %v", err)
 	}
 
@@ -727,7 +727,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -736,7 +736,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -752,7 +752,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 		Command:     []string{"/usr/bin/agent"},
 	}
 
-	if err := analyzer.classifyChanges(affected, "bureau/templates:agent", proposed); err != nil {
+	if err := analyzer.classifyChanges(affected, "bureau/template:agent", proposed); err != nil {
 		t.Fatalf("classifyChanges: %v", err)
 	}
 
@@ -781,7 +781,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -790,7 +790,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -806,7 +806,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -817,7 +817,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 		Command:     []string{"/usr/bin/agent"},
 	}
 
-	if err := analyzer.classifyChanges(affected, "bureau/templates:agent", proposed); err != nil {
+	if err := analyzer.classifyChanges(affected, "bureau/template:agent", proposed); err != nil {
 		t.Fatalf("classifyChanges: %v", err)
 	}
 
@@ -836,7 +836,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 
 	// Base template provides namespaces and filesystem.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"base", schema.TemplateContent{
 			Description: "Base template",
 			Command:     []string{"/bin/bash"},
@@ -849,9 +849,9 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 
 	// Child inherits from base, adds its own command.
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
-			Inherits:    "bureau/templates:base",
+			Inherits:    "bureau/template:base",
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
 			EnvironmentVariables: map[string]string{
@@ -863,7 +863,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 	// Principal uses the child template. Impact targets the base.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 		},
 	})
 
@@ -879,7 +879,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
-	affected, err := analyzer.findAffected("bureau/templates:base", configs)
+	affected, err := analyzer.findAffected("bureau/template:base", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}
@@ -898,7 +898,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 		},
 	}
 
-	if err := analyzer.classifyChanges(affected, "bureau/templates:base", proposed); err != nil {
+	if err := analyzer.classifyChanges(affected, "bureau/template:base", proposed); err != nil {
 		t.Fatalf("classifyChanges: %v", err)
 	}
 
@@ -922,7 +922,7 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 	state := newImpactTestState()
 
 	state.addTemplate(
-		"#bureau/templates:test.local", "!templates:test",
+		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
@@ -931,7 +931,7 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/templates:agent"},
+			{Localpart: "test/agent", Template: "bureau/template:agent"},
 			{Localpart: "test/no-template", Template: ""},
 		},
 	})
@@ -949,7 +949,7 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 		t.Fatalf("discoverMachineConfigs: %v", err)
 	}
 
-	affected, err := analyzer.findAffected("bureau/templates:agent", configs)
+	affected, err := analyzer.findAffected("bureau/template:agent", configs)
 	if err != nil {
 		t.Fatalf("findAffected: %v", err)
 	}

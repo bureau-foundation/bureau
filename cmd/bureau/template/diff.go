@@ -35,7 +35,7 @@ content, not the resolved inheritance chain — use "bureau template show
 		Examples: []cli.Example{
 			{
 				Description: "Compare the Matrix version of a template against a local file",
-				Command:     "bureau template diff iree/templates:amdgpu-developer agent.json",
+				Command:     "bureau template diff iree/template:amdgpu-developer agent.json",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

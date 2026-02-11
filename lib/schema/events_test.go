@@ -384,7 +384,7 @@ func TestBureauVersionOnMachineConfig(t *testing.T) {
 		Principals: []PrincipalAssignment{
 			{
 				Localpart: "service/stt/whisper",
-				Template:  "bureau/templates:whisper-stt",
+				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 			},
 		},
@@ -439,7 +439,7 @@ func TestBureauVersionOmittedWhenNil(t *testing.T) {
 		Principals: []PrincipalAssignment{
 			{
 				Localpart: "service/stt/whisper",
-				Template:  "bureau/templates:whisper-stt",
+				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 			},
 		},
@@ -1097,7 +1097,7 @@ func TestLayoutContentOmitsEmptyFields(t *testing.T) {
 func TestTemplateContentRoundTrip(t *testing.T) {
 	original := TemplateContent{
 		Description: "GPU-accelerated LLM agent with IREE runtime",
-		Inherits:    "bureau/templates:base",
+		Inherits:    "bureau/template:base",
 		Command:     []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
 		Environment: "/nix/store/abc123-bureau-agent-env",
 		EnvironmentVariables: map[string]string{
@@ -1146,7 +1146,7 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "description", "GPU-accelerated LLM agent with IREE runtime")
-	assertField(t, raw, "inherits", "bureau/templates:base")
+	assertField(t, raw, "inherits", "bureau/template:base")
 	assertField(t, raw, "environment", "/nix/store/abc123-bureau-agent-env")
 
 	// Verify command is an array.
@@ -1456,7 +1456,7 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 	// round-trip correctly through JSON.
 	original := PrincipalAssignment{
 		Localpart:           "iree/amdgpu/pm",
-		Template:            "iree/templates:amdgpu-developer",
+		Template:            "iree/template:amdgpu-developer",
 		AutoStart:           true,
 		CommandOverride:     []string{"/usr/local/bin/custom-agent", "--mode=gpu"},
 		EnvironmentOverride: "/nix/store/xyz789-custom-env",
@@ -1510,8 +1510,8 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if decoded.Template != "iree/templates:amdgpu-developer" {
-		t.Errorf("Template: got %q, want %q", decoded.Template, "iree/templates:amdgpu-developer")
+	if decoded.Template != "iree/template:amdgpu-developer" {
+		t.Errorf("Template: got %q, want %q", decoded.Template, "iree/template:amdgpu-developer")
 	}
 	if len(decoded.CommandOverride) != 2 || decoded.CommandOverride[0] != "/usr/local/bin/custom-agent" {
 		t.Errorf("CommandOverride: got %v, want [/usr/local/bin/custom-agent --mode=gpu]", decoded.CommandOverride)
@@ -1530,7 +1530,7 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 	// them in the wire format (backward compatibility).
 	assignment := PrincipalAssignment{
 		Localpart: "service/stt/whisper",
-		Template:  "bureau/templates:whisper-stt",
+		Template:  "bureau/template:whisper-stt",
 		AutoStart: true,
 	}
 
@@ -1556,7 +1556,7 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 
 	// Existing fields should still be present.
 	assertField(t, raw, "localpart", "service/stt/whisper")
-	assertField(t, raw, "template", "bureau/templates:whisper-stt")
+	assertField(t, raw, "template", "bureau/template:whisper-stt")
 	assertField(t, raw, "auto_start", true)
 }
 
@@ -1728,7 +1728,7 @@ func TestWorktreeConfigOmitsEmptyDescription(t *testing.T) {
 func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	original := PrincipalAssignment{
 		Localpart: "iree/amdgpu/pm",
-		Template:  "iree/templates:llm-agent",
+		Template:  "iree/template:llm-agent",
 		AutoStart: true,
 		StartCondition: &StartCondition{
 			EventType: "m.bureau.workspace.ready",
@@ -1778,7 +1778,7 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 func TestStartConditionOmittedWhenNil(t *testing.T) {
 	assignment := PrincipalAssignment{
 		Localpart: "service/stt/whisper",
-		Template:  "bureau/templates:whisper-stt",
+		Template:  "bureau/template:whisper-stt",
 		AutoStart: true,
 	}
 

@@ -15,10 +15,10 @@ import (
 //
 // Examples:
 //
-//	bureau/templates:base
-//	iree/templates:amdgpu-developer
-//	iree/templates@other.example:foo
-//	iree/templates@other.example:8448:versioned-agent
+//	bureau/template:base
+//	iree/template:amdgpu-developer
+//	iree/template@other.example:foo
+//	iree/template@other.example:8448:versioned-agent
 //
 // The last colon is the separator between the room reference and the template
 // name. This handles server addresses that include port numbers (e.g.,
@@ -26,8 +26,8 @@ import (
 // template names cannot contain colons, so the last colon is always
 // unambiguous.
 type TemplateRef struct {
-	// Room is the room alias localpart (e.g., "bureau/templates",
-	// "iree/templates"). This maps to the Matrix room alias
+	// Room is the room alias localpart (e.g., "bureau/template",
+	// "iree/template"). This maps to the Matrix room alias
 	// #<Room>:<server>.
 	Room string
 

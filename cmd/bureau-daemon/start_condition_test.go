@@ -26,7 +26,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 
 	const (
 		configRoomID    = "!config:test.local"
-		templateRoomID  = "!templates:test.local"
+		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
 		serverName      = "test.local"
 		machineName     = "machine/test"
@@ -46,7 +46,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
 					EventType: schema.EventTypeWorkspaceReady,
@@ -85,7 +85,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 
 	const (
 		configRoomID    = "!config:test.local"
-		templateRoomID  = "!templates:test.local"
+		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
 		serverName      = "test.local"
 		machineName     = "machine/test"
@@ -100,7 +100,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
 					EventType: schema.EventTypeWorkspaceReady,
@@ -140,7 +140,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 
 	const (
 		configRoomID    = "!config:test.local"
-		templateRoomID  = "!templates:test.local"
+		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
 		serverName      = "test.local"
 		machineName     = "machine/test"
@@ -153,7 +153,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
 					EventType: schema.EventTypeWorkspaceReady,
@@ -210,7 +210,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
@@ -222,7 +222,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/test",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
@@ -253,7 +253,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
@@ -265,7 +265,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/gated",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
 					EventType: "m.bureau.approval",
@@ -306,7 +306,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
@@ -318,7 +318,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/orphan",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
 					EventType: schema.EventTypeWorkspaceReady,
@@ -366,7 +366,7 @@ func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID, mach
 
 	state := newMockMatrixState()
 
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/echo", "hello"},
 	})

@@ -40,11 +40,11 @@ exist without actually publishing.`,
 		Examples: []cli.Example{
 			{
 				Description: "Push a template to Matrix",
-				Command:     "bureau template push iree/templates:amdgpu-developer agent.json",
+				Command:     "bureau template push iree/template:amdgpu-developer agent.json",
 			},
 			{
 				Description: "Dry-run: validate and check inheritance without publishing",
-				Command:     "bureau template push --dry-run iree/templates:amdgpu-developer agent.json",
+				Command:     "bureau template push --dry-run iree/template:amdgpu-developer agent.json",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

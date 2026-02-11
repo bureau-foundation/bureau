@@ -43,7 +43,7 @@ m.bureau.workspace.ready.
 The alias becomes both the Matrix room alias and filesystem path:
 
   bureau workspace create iree/amdgpu/inference --machine machine/workstation \
-    --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git
+    --template bureau/template:base --param repository=https://github.com/iree-org/iree.git
 
 creates room #iree/amdgpu/inference:bureau.local, publishes project
 config, adds setup + agent principals to the workstation's MachineConfig,
@@ -57,26 +57,26 @@ All worktrees in a project share a single bare git object store at
 		Examples: []cli.Example{
 			{
 				Description: "Create a workspace with a git repository",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace with multiple agents",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --agent-count 3 --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --agent-count 3 --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace on a specific branch",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --param branch=develop --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --param branch=develop --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace on the local machine (auto-detect identity)",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine local --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine local --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("workspace create", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
 			flagSet.StringVar(&machine, "machine", "", "machine localpart to host the workspace (required; use \"local\" to auto-detect from launcher session)")
-			flagSet.StringVar(&template, "template", "", "sandbox template ref for agent principals (required, e.g., bureau/templates:base)")
+			flagSet.StringVar(&template, "template", "", "sandbox template ref for agent principals (required, e.g., bureau/template:base)")
 			flagSet.StringArrayVar(&params, "param", nil, "key=value parameter (repeatable; recognized: repository, branch)")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
 			flagSet.IntVar(&agentCount, "agent-count", 1, "number of agent principals to create")
@@ -297,7 +297,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	assignments := []schema.PrincipalAssignment{
 		{
 			Localpart: setupLocalpart,
-			Template:  "bureau/templates:base",
+			Template:  "bureau/template:base",
 			AutoStart: true,
 			Labels:    map[string]string{"role": "setup"},
 			Payload: map[string]any{

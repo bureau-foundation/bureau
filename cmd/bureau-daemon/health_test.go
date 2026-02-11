@@ -655,13 +655,13 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
 
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		HealthCheck: &schema.HealthCheck{
@@ -672,7 +672,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "agent/test",
-			Template:  "bureau/templates:test-template",
+			Template:  "bureau/template:test-template",
 			AutoStart: true,
 		}},
 	})
@@ -758,13 +758,13 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
 
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		// No HealthCheck
@@ -772,7 +772,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "agent/test",
-			Template:  "bureau/templates:test-template",
+			Template:  "bureau/template:test-template",
 			AutoStart: true,
 		}},
 	})

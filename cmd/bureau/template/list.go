@@ -29,17 +29,17 @@ func listCommand() *cli.Command {
 		Description: `List all sandbox templates in a Matrix room. Shows each template's name,
 description, and inheritance reference (if any).
 
-The room argument is a room alias localpart (e.g., "bureau/templates").
+The room argument is a room alias localpart (e.g., "bureau/template").
 It is resolved to a full Matrix alias using the --server-name flag.`,
 		Usage: "bureau template list [flags] <room-alias-localpart>",
 		Examples: []cli.Example{
 			{
 				Description: "List built-in templates",
-				Command:     "bureau template list bureau/templates",
+				Command:     "bureau template list bureau/template",
 			},
 			{
 				Description: "List project templates as JSON",
-				Command:     "bureau template list --json iree/templates",
+				Command:     "bureau template list --json iree/template",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

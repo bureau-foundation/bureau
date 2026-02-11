@@ -8,7 +8,7 @@
 // produce a fully-merged [schema.TemplateContent].
 //
 // [Resolve] is the primary entry point: given a template reference
-// string (e.g., "bureau/templates:base"), it follows the Inherits
+// string (e.g., "bureau/template:base"), it follows the Inherits
 // chain to the root and merges from base to leaf. Cycle detection
 // prevents infinite loops.
 //

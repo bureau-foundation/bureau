@@ -21,8 +21,8 @@ import (
 // resolution tests. It supports room alias resolution and state event
 // fetching — the two operations needed for template resolution.
 type templateTestState struct {
-	// roomAliases maps full room alias (e.g., "#bureau/templates:test.local")
-	// to room ID (e.g., "!templates:test").
+	// roomAliases maps full room alias (e.g., "#bureau/template:test.local")
+	// to room ID (e.g., "!template:test").
 	roomAliases map[string]string
 
 	// stateEvents maps "roomID\x00eventType\x00stateKey" to raw JSON content.
@@ -159,8 +159,8 @@ func TestResolveTemplateSimple(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base sandbox template",
 		Command:     []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
@@ -179,7 +179,7 @@ func TestResolveTemplateSimple(t *testing.T) {
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := resolveTemplate(ctx, session, "bureau/templates:base", testServerName)
+	template, err := resolveTemplate(ctx, session, "bureau/template:base", testServerName)
 	if err != nil {
 		t.Fatalf("resolveTemplate: %v", err)
 	}
@@ -205,10 +205,10 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
 	// Base template: provides filesystem, namespaces, security.
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base template",
 		Filesystem: []schema.TemplateMount{
 			{Source: "/usr", Dest: "/usr", Mode: "ro"},
@@ -226,9 +226,9 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	})
 
 	// Child template: inherits from base, adds command, env, workspace mount.
-	state.setTemplate("!templates:test", "llm-agent", schema.TemplateContent{
+	state.setTemplate("!template:test", "llm-agent", schema.TemplateContent{
 		Description: "LLM agent template",
-		Inherits:    "bureau/templates:base",
+		Inherits:    "bureau/template:base",
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc123-agent-env",
 		Filesystem: []schema.TemplateMount{
@@ -247,7 +247,7 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := resolveTemplate(ctx, session, "bureau/templates:llm-agent", testServerName)
+	template, err := resolveTemplate(ctx, session, "bureau/template:llm-agent", testServerName)
 	if err != nil {
 		t.Fatalf("resolveTemplate: %v", err)
 	}
@@ -310,11 +310,11 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
-	state.setRoomAlias("#iree/templates:test.local", "!iree-templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias("#iree/template:test.local", "!iree-template:test")
 
 	// Level 0 (root): base
-	state.setTemplate("!templates:test", "base", schema.TemplateContent{
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Filesystem: []schema.TemplateMount{
 			{Source: "/usr", Dest: "/usr", Mode: "ro"},
 			{Source: "/bin", Dest: "/bin", Mode: "ro"},
@@ -328,8 +328,8 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	})
 
 	// Level 1: llm-agent inherits base
-	state.setTemplate("!templates:test", "llm-agent", schema.TemplateContent{
-		Inherits:    "bureau/templates:base",
+	state.setTemplate("!template:test", "llm-agent", schema.TemplateContent{
+		Inherits:    "bureau/template:base",
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc-agent-env",
 		EnvironmentVariables: map[string]string{
@@ -339,9 +339,9 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	})
 
 	// Level 2: amdgpu-developer inherits llm-agent (cross-room!)
-	state.setTemplate("!iree-templates:test", "amdgpu-developer", schema.TemplateContent{
+	state.setTemplate("!iree-template:test", "amdgpu-developer", schema.TemplateContent{
 		Description: "AMDGPU developer agent",
-		Inherits:    "bureau/templates:llm-agent",
+		Inherits:    "bureau/template:llm-agent",
 		Filesystem: []schema.TemplateMount{
 			{Source: "/dev/kfd", Dest: "/dev/kfd", Mode: "rw"},
 		},
@@ -357,7 +357,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	template, err := resolveTemplate(ctx, session, "iree/templates:amdgpu-developer", testServerName)
+	template, err := resolveTemplate(ctx, session, "iree/template:amdgpu-developer", testServerName)
 	if err != nil {
 		t.Fatalf("resolveTemplate: %v", err)
 	}
@@ -411,22 +411,22 @@ func TestResolveTemplateCycleDetection(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
 	// A inherits B, B inherits A.
-	state.setTemplate("!templates:test", "a", schema.TemplateContent{
-		Inherits: "bureau/templates:b",
+	state.setTemplate("!template:test", "a", schema.TemplateContent{
+		Inherits: "bureau/template:b",
 		Command:  []string{"/bin/a"},
 	})
-	state.setTemplate("!templates:test", "b", schema.TemplateContent{
-		Inherits: "bureau/templates:a",
+	state.setTemplate("!template:test", "b", schema.TemplateContent{
+		Inherits: "bureau/template:a",
 		Command:  []string{"/bin/b"},
 	})
 
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	_, err := resolveTemplate(ctx, session, "bureau/templates:a", testServerName)
+	_, err := resolveTemplate(ctx, session, "bureau/template:a", testServerName)
 	if err == nil {
 		t.Fatal("expected cycle detection error")
 	}
@@ -439,17 +439,17 @@ func TestResolveTemplateMissingParent(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
-	state.setTemplate("!templates:test", "child", schema.TemplateContent{
-		Inherits: "bureau/templates:nonexistent",
+	state.setTemplate("!template:test", "child", schema.TemplateContent{
+		Inherits: "bureau/template:nonexistent",
 		Command:  []string{"/bin/child"},
 	})
 
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	_, err := resolveTemplate(ctx, session, "bureau/templates:child", testServerName)
+	_, err := resolveTemplate(ctx, session, "bureau/template:child", testServerName)
 	if err == nil {
 		t.Fatal("expected error for missing parent template")
 	}
@@ -462,13 +462,13 @@ func TestResolveTemplateNotFound(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/templates:test.local", "!templates:test")
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 	// Room exists but template doesn't.
 
 	session := newTemplateTestSession(t, state)
 	ctx := context.Background()
 
-	_, err := resolveTemplate(ctx, session, "bureau/templates:ghost", testServerName)
+	_, err := resolveTemplate(ctx, session, "bureau/template:ghost", testServerName)
 	if err == nil {
 		t.Fatal("expected error for missing template")
 	}
@@ -516,7 +516,7 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 
 	assignment := &schema.PrincipalAssignment{
 		Localpart:           "iree/amdgpu/pm",
-		Template:            "bureau/templates:llm-agent",
+		Template:            "bureau/template:llm-agent",
 		CommandOverride:     []string{"/usr/local/bin/custom-agent", "--gpu"},
 		EnvironmentOverride: "/nix/store/xyz-custom-env",
 		ExtraEnvironmentVariables: map[string]string{
@@ -594,7 +594,7 @@ func TestResolveInstanceConfigNoOverrides(t *testing.T) {
 
 	assignment := &schema.PrincipalAssignment{
 		Localpart: "test/agent",
-		Template:  "bureau/templates:bash",
+		Template:  "bureau/template:bash",
 	}
 
 	spec := resolveInstanceConfig(template, assignment)

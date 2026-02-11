@@ -658,14 +658,14 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -673,7 +673,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/test",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
@@ -818,14 +818,14 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -833,7 +833,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/test",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
@@ -931,14 +931,14 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	const (
 		configRoomID   = "!config:test.local"
-		templateRoomID = "!templates:test.local"
+		templateRoomID = "!template:test.local"
 		serverName     = "test.local"
 		machineName    = "machine/test"
 	)
 
 	// Template with same command but different payload.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/templates:test.local", templateRoomID)
+	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:        []string{"/bin/agent", "--mode=v1"},
 		DefaultPayload: map[string]any{"model": "claude-4"},
@@ -947,7 +947,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "agent/test",
-				Template:  "bureau/templates:test-template",
+				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},

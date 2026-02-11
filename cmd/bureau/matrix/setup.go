@@ -53,7 +53,7 @@ Standard rooms created:
   bureau/system      Operational messages
   bureau/machines    Machine keys and status
   bureau/services    Service directory
-  bureau/templates   Sandbox templates (base, base-networked)`,
+  bureau/template    Sandbox templates (base, base-networked)`,
 		Usage: "bureau matrix setup [flags]",
 		Examples: []cli.Example{
 			{
@@ -181,15 +181,15 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 	logger.Info("services room ready", "room_id", servicesRoomID)
 
-	templatesRoomID, err := ensureRoom(ctx, session, "bureau/templates", "Bureau Templates", "Sandbox templates",
+	templateRoomID, err := ensureRoom(ctx, session, "bureau/template", "Bureau Template", "Sandbox templates",
 		spaceRoomID, config.serverName, nil, logger)
 	if err != nil {
-		return fmt.Errorf("create templates room: %w", err)
+		return fmt.Errorf("create template room: %w", err)
 	}
-	logger.Info("templates room ready", "room_id", templatesRoomID)
+	logger.Info("template room ready", "room_id", templateRoomID)
 
-	// Step 3b: Publish base templates into the templates room.
-	if err := publishBaseTemplates(ctx, session, templatesRoomID, logger); err != nil {
+	// Step 3b: Publish base templates into the template room.
+	if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
 		return fmt.Errorf("publish base templates: %w", err)
 	}
 
@@ -203,7 +203,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			{"bureau/system", systemRoomID},
 			{"bureau/machines", machinesRoomID},
 			{"bureau/services", servicesRoomID},
-			{"bureau/templates", templatesRoomID},
+			{"bureau/template", templateRoomID},
 		}
 		for _, userID := range config.inviteUsers {
 			for _, room := range allRooms {
@@ -228,7 +228,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templatesRoomID); err != nil {
+		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -239,7 +239,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		"system_room", systemRoomID,
 		"machines_room", machinesRoomID,
 		"services_room", servicesRoomID,
-		"templates_room", templatesRoomID,
+		"template_room", templateRoomID,
 	)
 	return nil
 }
@@ -334,7 +334,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templatesRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -347,21 +347,21 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
 	fmt.Fprintf(&builder, "MATRIX_MACHINES_ROOM=%s\n", machinesRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SERVICES_ROOM=%s\n", servicesRoomID)
-	fmt.Fprintf(&builder, "MATRIX_TEMPLATES_ROOM=%s\n", templatesRoomID)
+	fmt.Fprintf(&builder, "MATRIX_TEMPLATE_ROOM=%s\n", templateRoomID)
 
 	return os.WriteFile(path, []byte(builder.String()), 0600)
 }
 
 // publishBaseTemplates publishes the built-in sandbox templates to the
-// templates room as m.bureau.template state events. Idempotent: re-publishing
+// template room as m.bureau.template state events. Idempotent: re-publishing
 // overwrites the existing state event with the same content.
-func publishBaseTemplates(ctx context.Context, session *messaging.Session, templatesRoomID string, logger *slog.Logger) error {
+func publishBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string, logger *slog.Logger) error {
 	for _, template := range baseTemplates() {
-		_, err := session.SendStateEvent(ctx, templatesRoomID, schema.EventTypeTemplate, template.name, template.content)
+		_, err := session.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name, template.content)
 		if err != nil {
 			return fmt.Errorf("publishing template %q: %w", template.name, err)
 		}
-		logger.Info("published template", "name", template.name, "room_id", templatesRoomID)
+		logger.Info("published template", "name", template.name, "room_id", templateRoomID)
 	}
 	return nil
 }
@@ -419,7 +419,7 @@ func baseTemplates() []namedTemplate {
 			name: "base-networked",
 			content: schema.TemplateContent{
 				Description: "Base sandbox with host network access (no network namespace isolation)",
-				Inherits:    "bureau/templates:base",
+				Inherits:    "bureau/template:base",
 				Namespaces: &schema.TemplateNamespaces{
 					PID: true,
 					Net: false,

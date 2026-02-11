@@ -150,6 +150,13 @@ jobs:
           nix shell nixpkgs#awscli2 --command \
             aws configure set region auto --profile bureau
 
+          echo "=== Diagnostic: verifying R2 credentials ==="
+          nix shell nixpkgs#awscli2 --command \
+            aws s3 ls "s3://bureau-cache" \
+              --profile bureau \
+              --endpoint-url "https://${{ secrets.R2_ENDPOINT }}" 2>&1 || true
+          echo "=== End diagnostic ==="
+
           CACHE="s3://bureau-cache?profile=bureau&endpoint=${{ secrets.R2_ENDPOINT }}"
 
           nix build --no-link .#devShells.x86_64-linux.default

@@ -28,6 +28,9 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/binhash",
+        "//lib/hwinfo",
+        "//lib/hwinfo/amdgpu",
+        "//lib/hwinfo/nvidia",
         "//lib/principal",
         "//lib/schema",
         "//lib/template",

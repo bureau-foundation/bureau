@@ -18,6 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/hwinfo"
+	"github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu"
+	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -234,6 +237,20 @@ func run() error {
 		defer daemon.stopObserveListener()
 	}
 
+	// Initialize GPU metric collectors. Each vendor collector opens
+	// device nodes (render nodes for AMD, etc.) and holds them open
+	// for the daemon's lifetime. Collectors that find no devices for
+	// their vendor are no-ops.
+	amdCollector := amdgpu.NewCollector(logger)
+	nvidiaCollector := nvidia.NewCollector(logger)
+	daemon.gpuCollectors = []hwinfo.GPUCollector{amdCollector, nvidiaCollector}
+	defer daemon.closeGPUCollectors()
+
+	// Publish static hardware inventory. This is idempotent — Matrix
+	// deduplicates state events with identical content, so restarts
+	// without hardware changes produce no new events.
+	daemon.publishMachineInfo(ctx)
+
 	// Layout watchers and health monitors are started during reconciliation
 	// for each running principal. Ensure they all stop on shutdown.
 	defer daemon.stopAllLayoutWatchers()
@@ -388,6 +405,11 @@ type Daemon struct {
 	// previousCPU stores the last /proc/stat reading for CPU utilization
 	// delta computation. First heartbeat after startup reports 0%.
 	previousCPU *cpuReading
+
+	// gpuCollectors holds per-vendor GPU metric collectors. Each collector
+	// keeps render node file descriptors open for the daemon's lifetime
+	// to avoid per-heartbeat open/close overhead. Closed on shutdown.
+	gpuCollectors []hwinfo.GPUCollector
 
 	// services is the cached service directory, built from m.bureau.service
 	// state events in #bureau/services. Keyed by service localpart (the
@@ -545,6 +567,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		},
 		CPUPercent:       int(cpuUtilization),
 		MemoryUsedMB:     memoryUsedMB(),
+		GPUStats:         d.collectGPUStats(),
 		UptimeSeconds:    uptimeSeconds(),
 		LastActivityAt:   lastActivity,
 		TransportAddress: transportAddress,
@@ -556,6 +579,53 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		return
 	}
 	d.logger.Debug("published machine status", "running_sandboxes", runningCount)
+}
+
+// publishMachineInfo probes system hardware and publishes the static
+// inventory as an m.bureau.machine_info state event. Called once at
+// startup. The state event is idempotent — if the hardware inventory
+// hasn't changed since the last daemon run, the homeserver deduplicates
+// the event (Matrix state events with identical content are no-ops).
+func (d *Daemon) publishMachineInfo(ctx context.Context) {
+	amdProber := amdgpu.NewProber()
+	nvidiaProber := nvidia.NewProber()
+	info := hwinfo.Probe(d.machineUserID, amdProber, nvidiaProber)
+	info.DaemonVersion = version.Info()
+
+	_, err := d.session.SendStateEvent(ctx, d.machinesRoomID, schema.EventTypeMachineInfo, d.machineName, info)
+	if err != nil {
+		d.logger.Error("publishing machine info", "error", err)
+		return
+	}
+
+	gpuCount := len(info.GPUs)
+	d.logger.Info("published machine info",
+		"hostname", info.Hostname,
+		"cpu_model", info.CPU.Model,
+		"memory_mb", info.MemoryTotalMB,
+		"gpu_count", gpuCount,
+	)
+}
+
+// collectGPUStats gathers dynamic GPU metrics from all collectors and
+// returns them as a single GPUStats slice for the heartbeat.
+func (d *Daemon) collectGPUStats() []schema.GPUStatus {
+	var stats []schema.GPUStatus
+	for _, collector := range d.gpuCollectors {
+		if results := collector.Collect(); len(results) > 0 {
+			stats = append(stats, results...)
+		}
+	}
+	return stats
+}
+
+// closeGPUCollectors releases all GPU collector resources (open render
+// node file descriptors, etc.). Called on daemon shutdown.
+func (d *Daemon) closeGPUCollectors() {
+	for _, collector := range d.gpuCollectors {
+		collector.Close()
+	}
+	d.gpuCollectors = nil
 }
 
 // uptimeSeconds returns the system uptime in seconds, or 0 if unavailable.

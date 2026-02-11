@@ -1,12 +1,6 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package hwinfo probes system hardware and produces static inventory
-// data for Bureau's m.bureau.machine_info state events. It reads CPU
-// topology, memory, NUMA, board identity, and kernel version from
-// /proc and /sys on Linux. GPU enumeration is delegated to per-vendor
-// subpackages (hwinfo/amdgpu, hwinfo/nvidia) that implement the
-// GPUProber interface.
 package hwinfo
 
 import "github.com/bureau-foundation/bureau/lib/schema"

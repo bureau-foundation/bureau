@@ -28,6 +28,13 @@ jobs:
         with:
           use-flakehub: false
 
+      # Evaluate and fetch the dev shell closure. This is the slow part
+      # (compiling Go, downloading tools) and runs once per cache miss.
+      # Isolating it keeps the Pre-commit and Build steps showing only
+      # our actual work in the GitHub Actions UI.
+      - name: Warm Nix dev shell
+        run: nix develop --command true
+
       # Gazelle (check-gazelle) runs `bazel run //:gazelle` to verify
       # BUILD files are current. It detects CI=true and passes --config=ci
       # for disk cache and output formatting.
@@ -58,8 +65,7 @@ jobs:
             pre-commit-${{ runner.os }}-
 
       # Run all pre-commit hooks except the Bazel build/test gates, which
-      # are redundant with the dedicated build job below. Keeping them
-      # separate lets lint and build run in parallel.
+      # are redundant with the dedicated build job below.
       - name: Pre-commit checks
         run: >
           nix develop --command bash -c
@@ -74,6 +80,7 @@ jobs:
 
   build:
     name: Build and test
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +89,9 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
           use-flakehub: false
+
+      - name: Warm Nix dev shell
+        run: nix develop --command true
 
       # Bazel's disk cache is separate from the Nix store. The --disk_cache
       # flag is set in .bazelrc under the "ci" config.

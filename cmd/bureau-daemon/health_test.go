@@ -371,15 +371,16 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{localpart: true},
-		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
-		previousSpecs:  map[string]*schema.SandboxSpec{localpart: previousSpec},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{localpart: true},
+		lastCredentials: make(map[string]string),
+		lastSpecs:       map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
+		previousSpecs:   map[string]*schema.SandboxSpec{localpart: previousSpec},
 		lastTemplates: map[string]*schema.TemplateContent{localpart: {
 			HealthCheck: &schema.HealthCheck{
 				Endpoint:        "/health",
@@ -561,19 +562,20 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{localpart: true},
-		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
-		previousSpecs:  make(map[string]*schema.SandboxSpec), // No previous spec!
-		lastTemplates:  make(map[string]*schema.TemplateContent),
-		healthMonitors: make(map[string]*healthMonitor),
-		services:       make(map[string]*schema.Service),
-		proxyRoutes:    make(map[string]string),
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{localpart: true},
+		lastCredentials: make(map[string]string),
+		lastSpecs:       map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
+		previousSpecs:   make(map[string]*schema.SandboxSpec), // No previous spec!
+		lastTemplates:   make(map[string]*schema.TemplateContent),
+		healthMonitors:  make(map[string]*healthMonitor),
+		services:        make(map[string]*schema.Service),
+		proxyRoutes:     make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(socketDir, localpart+".admin.sock")
 		},
@@ -631,14 +633,15 @@ func TestRollbackPrincipalAlreadyStopped(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		running:        make(map[string]bool),
-		lastSpecs:      make(map[string]*schema.SandboxSpec),
-		previousSpecs:  make(map[string]*schema.SandboxSpec),
-		lastTemplates:  make(map[string]*schema.TemplateContent),
-		healthMonitors: make(map[string]*healthMonitor),
-		layoutWatchers: make(map[string]*layoutWatcher),
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:          principal.DefaultRunDir,
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
+		lastSpecs:       make(map[string]*schema.SandboxSpec),
+		previousSpecs:   make(map[string]*schema.SandboxSpec),
+		lastTemplates:   make(map[string]*schema.TemplateContent),
+		healthMonitors:  make(map[string]*healthMonitor),
+		layoutWatchers:  make(map[string]*layoutWatcher),
+		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Principal is not running — rollback should be a no-op.
@@ -713,6 +716,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 		configRoomID:        configRoomID,
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -805,6 +809,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 		configRoomID:        configRoomID,
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -887,6 +892,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 		configRoomID:        configRoomID,
 		launcherSocket:      launcherSocket,
 		running:             map[string]bool{"agent/test": true},
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent"}}},
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -979,6 +985,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	daemon := &Daemon{
 		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -1050,6 +1057,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	daemon := &Daemon{
 		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/agent"}}},
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -1182,15 +1190,16 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{localpart: true},
-		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
-		previousSpecs:  map[string]*schema.SandboxSpec{localpart: previousSpec},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{localpart: true},
+		lastCredentials: make(map[string]string),
+		lastSpecs:       map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
+		previousSpecs:   map[string]*schema.SandboxSpec{localpart: previousSpec},
 		lastTemplates: map[string]*schema.TemplateContent{localpart: {
 			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 		}},
@@ -1325,15 +1334,16 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{localpart: true},
-		lastSpecs:      map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
-		previousSpecs:  map[string]*schema.SandboxSpec{localpart: previousSpec},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{localpart: true},
+		lastCredentials: make(map[string]string),
+		lastSpecs:       map[string]*schema.SandboxSpec{localpart: {Command: []string{"/bin/new-agent"}}},
+		previousSpecs:   map[string]*schema.SandboxSpec{localpart: previousSpec},
 		lastTemplates: map[string]*schema.TemplateContent{localpart: {
 			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 		}},
@@ -1445,15 +1455,16 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// config), the destroy-extras pass should clean up all associated
 	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
-		lastSpecs:      map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v2"}}},
-		previousSpecs:  map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v1"}}},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{"agent/test": true},
+		lastCredentials: make(map[string]string),
+		lastSpecs:       map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v2"}}},
+		previousSpecs:   map[string]*schema.SandboxSpec{"agent/test": {Command: []string{"/bin/agent-v1"}}},
 		lastTemplates: map[string]*schema.TemplateContent{"agent/test": {
 			HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 		}},

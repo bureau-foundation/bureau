@@ -189,6 +189,7 @@ func run() error {
 		stateDir:         stateDir,
 		failedExecPaths:  make(map[string]bool),
 		running:          make(map[string]bool),
+		lastCredentials:  make(map[string]string),
 		lastSpecs:        make(map[string]*schema.SandboxSpec),
 		previousSpecs:    make(map[string]*schema.SandboxSpec),
 		lastTemplates:    make(map[string]*schema.TemplateContent),
@@ -320,6 +321,13 @@ type Daemon struct {
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.
 	running map[string]bool
+
+	// lastCredentials stores the ciphertext from the most recently
+	// deployed m.bureau.credentials state event for each running
+	// principal. On each reconcile cycle, the daemon compares the
+	// current ciphertext against this stored value — a mismatch
+	// triggers a destroy+create cycle to rotate the proxy's credentials.
+	lastCredentials map[string]string
 
 	// lastSpecs stores the SandboxSpec sent to the launcher for each
 	// running principal. Used to detect payload-only changes that can

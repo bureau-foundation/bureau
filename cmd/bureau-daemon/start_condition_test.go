@@ -415,6 +415,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 		configRoomID:        configRoomID,
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),

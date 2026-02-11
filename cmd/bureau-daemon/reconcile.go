@@ -54,6 +54,70 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 	}
 
+	// Check for credential rotation on running principals. When the
+	// ciphertext in the m.bureau.credentials state event changes,
+	// destroy the sandbox so the "create missing" pass below recreates
+	// it with the new credentials. This handles API key rotation, token
+	// refresh, and any other credential update without manual intervention.
+	for localpart := range d.running {
+		if _, shouldRun := desired[localpart]; !shouldRun {
+			continue // Will be destroyed in the "remove" pass below.
+		}
+
+		credentials, err := d.readCredentials(ctx, localpart)
+		if err != nil {
+			d.logger.Error("reading credentials for rotation check",
+				"principal", localpart, "error", err)
+			continue
+		}
+
+		previousCiphertext, tracked := d.lastCredentials[localpart]
+		if !tracked {
+			// First reconcile after daemon (re)start for this principal.
+			// Record the current ciphertext for future comparisons.
+			d.lastCredentials[localpart] = credentials.Ciphertext
+			continue
+		}
+
+		if credentials.Ciphertext == previousCiphertext {
+			continue
+		}
+
+		d.logger.Info("credentials changed, restarting principal",
+			"principal", localpart)
+
+		d.stopHealthMonitor(localpart)
+		d.stopLayoutWatcher(localpart)
+
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:    "destroy-sandbox",
+			Principal: localpart,
+		})
+		if err != nil {
+			d.logger.Error("destroy-sandbox IPC failed during credential rotation",
+				"principal", localpart, "error", err)
+			continue
+		}
+		if !response.OK {
+			d.logger.Error("destroy-sandbox rejected during credential rotation",
+				"principal", localpart, "error", response.Error)
+			continue
+		}
+
+		delete(d.running, localpart)
+		delete(d.lastSpecs, localpart)
+		delete(d.previousSpecs, localpart)
+		delete(d.lastTemplates, localpart)
+		delete(d.lastCredentials, localpart)
+		d.lastActivityAt = time.Now()
+		d.logger.Info("principal stopped for credential rotation (will recreate)",
+			"principal", localpart)
+
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("Restarting %s: credentials updated", localpart),
+		))
+	}
+
 	// Check for hot-reloadable changes on already-running principals.
 	for localpart, assignment := range desired {
 		if !d.running[localpart] {
@@ -145,6 +209,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.running[localpart] = true
+		d.lastCredentials[localpart] = credentials.Ciphertext
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastActivityAt = time.Now()
@@ -218,6 +283,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		delete(d.running, localpart)
+		delete(d.lastCredentials, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)

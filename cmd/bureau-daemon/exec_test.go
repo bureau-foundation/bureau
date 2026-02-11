@@ -544,6 +544,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		stateDir:         t.TempDir(),
 		failedExecPaths:  make(map[string]bool),
 		running:          make(map[string]bool),
+		lastCredentials:  make(map[string]string),
 		lastSpecs:        make(map[string]*schema.SandboxSpec),
 		previousSpecs:    make(map[string]*schema.SandboxSpec),
 		lastTemplates:    make(map[string]*schema.TemplateContent),

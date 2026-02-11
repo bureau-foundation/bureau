@@ -477,6 +477,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		configRoomID:        configRoomID,
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -609,6 +610,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		daemonBinaryHash:    daemonHash,
 		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
 		lastTemplates:       make(map[string]*schema.TemplateContent),
@@ -732,13 +734,14 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{"agent/test": true},
+		lastCredentials: make(map[string]string),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},
@@ -876,13 +879,14 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	// Payload is nil in both old and new spec — only command differs.
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{"agent/test": true},
+		lastCredentials: make(map[string]string),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},
@@ -982,13 +986,14 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	// Old spec has same command but different payload.
 	daemon := &Daemon{
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
+		runDir:          principal.DefaultRunDir,
+		session:         session,
+		machineName:     machineName,
+		serverName:      serverName,
+		configRoomID:    configRoomID,
+		launcherSocket:  launcherSocket,
+		running:         map[string]bool{"agent/test": true},
+		lastCredentials: make(map[string]string),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
 				Command: []string{"/bin/agent", "--mode=v1"},

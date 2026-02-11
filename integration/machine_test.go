@@ -206,6 +206,34 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	machine.ConfigRoomID = configRoomID
 }
 
+// loginPrincipal logs in to an existing Matrix account and returns a fresh
+// principalAccount with a new access token. Use this after registerPrincipal
+// to obtain a second token for the same account (e.g., for testing credential
+// rotation). Each call creates a new device/session on the homeserver.
+func loginPrincipal(t *testing.T, localpart, password string) principalAccount {
+	t.Helper()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal login: %v", err)
+	}
+
+	session, err := client.Login(t.Context(), localpart, password)
+	if err != nil {
+		t.Fatalf("login principal %q: %v", localpart, err)
+	}
+	token := session.AccessToken()
+	session.Close()
+
+	return principalAccount{
+		Localpart: localpart,
+		UserID:    "@" + localpart + ":" + testServerName,
+		Token:     token,
+	}
+}
+
 // registerPrincipal creates a Matrix account for a principal on the test
 // homeserver and returns the account details including the access token.
 func registerPrincipal(t *testing.T, localpart, password string) principalAccount {

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -347,6 +348,102 @@ func TestOperatorFlow(t *testing.T) {
 			t.Logf("observe error (expected auth failure): %v", err)
 		}
 	})
+}
+
+// TestCredentialRotation verifies that the daemon detects credential changes
+// and restarts the affected principal's sandbox. The flow:
+//   - Deploy a principal with the original registration token
+//   - Verify the proxy serves the correct identity
+//   - Log in again to obtain a new access token
+//   - Push new encrypted credentials with the new token
+//   - Verify the proxy socket disappears (old sandbox destroyed) and
+//     reappears (new sandbox created with updated credentials)
+//   - Verify the restarted proxy still serves the correct identity
+func TestCredentialRotation(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	machine := newTestMachine(t, "machine/rotate")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+
+	// Register and deploy the principal with its initial token.
+	password := "rotate-test-password"
+	agent := registerPrincipal(t, "test/rotate", password)
+	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Account: agent}},
+	})
+
+	// Verify the proxy serves the correct identity with the original token.
+	proxySocket := proxySockets[agent.Localpart]
+	proxyClient := proxyHTTPClient(proxySocket)
+	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID {
+		t.Fatalf("initial whoami = %q, want %q", whoami, agent.UserID)
+	}
+
+	// Log in again to get a fresh access token. This creates a new device
+	// on the homeserver — the original token remains valid but the new one
+	// is what we'll push as updated credentials.
+	rotated := loginPrincipal(t, agent.Localpart, password)
+	if rotated.Token == agent.Token {
+		t.Fatal("login returned the same token as registration (expected a new device token)")
+	}
+
+	// Record the proxy socket's inode before rotation. After the daemon
+	// destroys and recreates the proxy, the new socket file will have a
+	// different inode — this is how we detect that rotation completed.
+	// We can't use waitForFileGone+waitForFile because the destroy+create
+	// cycle runs within a single reconcile call and completes in ~5ms,
+	// too fast for any practical poll interval to catch the gap.
+	originalInfo, err := os.Stat(proxySocket)
+	if err != nil {
+		t.Fatalf("stat original proxy socket: %v", err)
+	}
+	originalInode := originalInfo.Sys().(*syscall.Stat_t).Ino
+
+	// Push new credentials. The ciphertext will differ because:
+	//   (a) the token payload is different, and
+	//   (b) age encryption uses a fresh ephemeral key per Encrypt call.
+	// The daemon compares ciphertext on each reconcile cycle and triggers
+	// a destroy+create when it changes.
+	pushCredentials(t, admin, machine, rotated)
+
+	// Poll until the proxy socket's inode changes, meaning the old proxy
+	// was destroyed and a new one was created at the same path.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		info, statError := os.Stat(proxySocket)
+		if statError != nil {
+			// Socket briefly absent during the destroy→create transition.
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for proxy socket to be recreated after credential rotation")
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		currentInode := info.Sys().(*syscall.Stat_t).Ino
+		if currentInode != originalInode {
+			t.Logf("proxy socket inode changed: %d → %d (credential rotation complete)", originalInode, currentInode)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for proxy socket inode to change after credential push")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Verify the restarted proxy serves the correct identity. The new proxy
+	// process holds the rotated token, so whoami still returns the same
+	// user_id (the account didn't change, only its access token).
+	newProxyClient := proxyHTTPClient(proxySocket)
+	if whoami := proxyWhoami(t, newProxyClient); whoami != agent.UserID {
+		t.Fatalf("post-rotation whoami = %q, want %q", whoami, agent.UserID)
+	}
 }
 
 // TestConfigReconciliation verifies the daemon's core reconciliation loop:

@@ -169,8 +169,9 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 				Protocol:  "http",
 			},
 		},
-		running:     make(map[string]bool),
-		proxyRoutes: make(map[string]string),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
+		proxyRoutes:     make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
@@ -205,11 +206,12 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 func TestReconcileServices_NoChanges(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services:      make(map[string]*schema.Service),
-		running:       make(map[string]bool),
-		proxyRoutes:   make(map[string]string),
+		runDir:          principal.DefaultRunDir,
+		machineUserID:   "@machine/workstation:bureau.local",
+		services:        make(map[string]*schema.Service),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
+		proxyRoutes:     make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
@@ -227,10 +229,11 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 func TestReconcileServices_Removal(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services:      make(map[string]*schema.Service),
-		running:       make(map[string]bool),
+		runDir:          principal.DefaultRunDir,
+		machineUserID:   "@machine/workstation:bureau.local",
+		services:        make(map[string]*schema.Service),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
 		},
@@ -265,7 +268,8 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 				Protocol:  "http",
 			},
 		},
-		running: make(map[string]bool),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
 		},
@@ -350,7 +354,8 @@ func TestProxyRouteRegistration(t *testing.T) {
 		running: map[string]bool{
 			"agent/alice": true,
 		},
-		proxyRoutes: make(map[string]string),
+		lastCredentials: make(map[string]string),
+		proxyRoutes:     make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
 		},
@@ -537,8 +542,9 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 				Protocol:  "http",
 			},
 		},
-		running:     make(map[string]bool),
-		proxyRoutes: make(map[string]string),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
+		proxyRoutes:     make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(adminDir, localpart+".admin.sock")
 		},
@@ -800,6 +806,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 			"agent/alice": true,
 			"agent/bob":   true,
 		},
+		lastCredentials: make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
 		},
@@ -831,8 +838,9 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 				Protocol:  "http",
 			},
 		},
-		running: make(map[string]bool),
-		logger:  slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
+		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Should not panic or error — just return immediately.
@@ -990,7 +998,8 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 				Protocol:  "http",
 			},
 		},
-		running: make(map[string]bool),
+		running:         make(map[string]bool),
+		lastCredentials: make(map[string]string),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": relaySocket, // was remote
 		},

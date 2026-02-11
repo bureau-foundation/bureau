@@ -90,6 +90,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 		serverName:        "bureau.local",
 		configRoomID:      "!config:test",
 		running:           make(map[string]bool),
+		lastCredentials:   make(map[string]string),
 		services:          make(map[string]*schema.Service),
 		proxyRoutes:       make(map[string]string),
 		peerAddresses:     make(map[string]string),

@@ -55,6 +55,7 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, string) {
 		serverName:       "bureau.local",
 		configRoomID:     "!config:test",
 		running:          make(map[string]bool),
+		lastCredentials:  make(map[string]string),
 		services:         make(map[string]*schema.Service),
 		proxyRoutes:      make(map[string]string),
 		peerAddresses:    make(map[string]string),

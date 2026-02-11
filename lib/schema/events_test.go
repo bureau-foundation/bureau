@@ -2302,10 +2302,10 @@ func TestPipelineStepRunOnly(t *testing.T) {
 	}
 	assertField(t, env, "KEY", "value")
 
-	// Publish and interactive should be absent.
-	for _, field := range []string{"publish", "interactive"} {
+	// Publish, interactive, and grace_period should be absent.
+	for _, field := range []string{"publish", "interactive", "grace_period"} {
 		if _, exists := raw[field]; exists {
-			t.Errorf("%s should be omitted on a run-only step", field)
+			t.Errorf("%s should be omitted on a run-only step without it set", field)
 		}
 	}
 }
@@ -2349,7 +2349,7 @@ func TestPipelineStepPublishOnly(t *testing.T) {
 	assertField(t, content, "status", "ready")
 
 	// Run-related fields should be absent.
-	for _, field := range []string{"run", "check", "when", "optional", "timeout", "env", "interactive"} {
+	for _, field := range []string{"run", "check", "when", "optional", "timeout", "grace_period", "env", "interactive"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("%s should be omitted on a publish-only step", field)
 		}
@@ -2377,7 +2377,7 @@ func TestPipelineStepOmitsEmptyFields(t *testing.T) {
 	assertField(t, raw, "name", "simple")
 	assertField(t, raw, "run", "echo done")
 
-	for _, field := range []string{"check", "when", "optional", "publish", "timeout", "env", "interactive"} {
+	for _, field := range []string{"check", "when", "optional", "publish", "timeout", "grace_period", "env", "interactive"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("%s should be omitted when zero-value", field)
 		}
@@ -2410,6 +2410,36 @@ func TestPipelineStepInteractive(t *testing.T) {
 	}
 	if !decoded.Interactive {
 		t.Error("Interactive should be true after round-trip")
+	}
+}
+
+func TestPipelineStepGracePeriod(t *testing.T) {
+	step := PipelineStep{
+		Name:        "db-migration",
+		Run:         "python manage.py migrate",
+		Timeout:     "10m",
+		GracePeriod: "30s",
+	}
+
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "grace_period", "30s")
+	assertField(t, raw, "timeout", "10m")
+
+	var decoded PipelineStep
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.GracePeriod != "30s" {
+		t.Errorf("GracePeriod = %q after round-trip, want %q", decoded.GracePeriod, "30s")
 	}
 }
 

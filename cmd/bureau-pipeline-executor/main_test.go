@@ -758,3 +758,341 @@ func TestSandboxGuardRejectsOutsideSandbox(t *testing.T) {
 		t.Errorf("expected sandbox guard error, got: %v", err)
 	}
 }
+
+func TestResultLogSuccess(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+
+	pipelinePath := writePipeline(t, "result-ok", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{Name: "step-one", Run: "true"},
+			{Name: "step-two", Run: "true"},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	t.Setenv("BUREAU_RESULT_PATH", resultPath)
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	entries := readResultLog(t, resultPath)
+
+	// Expected: start, step (ok), step (ok), complete.
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 JSONL entries, got %d", len(entries))
+	}
+
+	assertResultField(t, entries[0], "type", "start")
+	assertResultField(t, entries[0], "pipeline", "result-ok")
+	assertResultFieldFloat(t, entries[0], "step_count", 2)
+
+	assertResultField(t, entries[1], "type", "step")
+	assertResultField(t, entries[1], "name", "step-one")
+	assertResultField(t, entries[1], "status", "ok")
+
+	assertResultField(t, entries[2], "type", "step")
+	assertResultField(t, entries[2], "name", "step-two")
+	assertResultField(t, entries[2], "status", "ok")
+
+	assertResultField(t, entries[3], "type", "complete")
+	assertResultField(t, entries[3], "status", "ok")
+}
+
+func TestResultLogFailure(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+
+	pipelinePath := writePipeline(t, "result-fail", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{Name: "passes", Run: "true"},
+			{Name: "fails", Run: "false"},
+			{Name: "never-reached", Run: "true"},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	t.Setenv("BUREAU_RESULT_PATH", resultPath)
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	err := run()
+	if err == nil {
+		t.Fatal("expected error from step failure")
+	}
+
+	entries := readResultLog(t, resultPath)
+
+	// Expected: start, step (ok), step (failed), failed.
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 JSONL entries, got %d", len(entries))
+	}
+
+	assertResultField(t, entries[0], "type", "start")
+	assertResultField(t, entries[1], "type", "step")
+	assertResultField(t, entries[1], "name", "passes")
+	assertResultField(t, entries[1], "status", "ok")
+
+	assertResultField(t, entries[2], "type", "step")
+	assertResultField(t, entries[2], "name", "fails")
+	assertResultField(t, entries[2], "status", "failed")
+	if _, exists := entries[2]["error"]; !exists {
+		t.Error("failed step entry should have an error field")
+	}
+
+	assertResultField(t, entries[3], "type", "failed")
+	assertResultField(t, entries[3], "status", "failed")
+	assertResultField(t, entries[3], "failed_step", "fails")
+}
+
+func TestResultLogSkippedAndOptional(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+
+	pipelinePath := writePipeline(t, "result-mixed", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{Name: "skipped-step", Run: "true", When: "false"},
+			{Name: "optional-fail", Run: "false", Optional: true},
+			{Name: "passes", Run: "true"},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	t.Setenv("BUREAU_RESULT_PATH", resultPath)
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	entries := readResultLog(t, resultPath)
+
+	// Expected: start, step (skipped), step (failed optional), step (ok), complete.
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 JSONL entries, got %d", len(entries))
+	}
+
+	assertResultField(t, entries[1], "name", "skipped-step")
+	assertResultField(t, entries[1], "status", "skipped")
+
+	assertResultField(t, entries[2], "name", "optional-fail")
+	assertResultField(t, entries[2], "status", "failed (optional)")
+
+	assertResultField(t, entries[3], "name", "passes")
+	assertResultField(t, entries[3], "status", "ok")
+
+	assertResultField(t, entries[4], "type", "complete")
+}
+
+func TestResultLogNotCreatedWithoutEnvVar(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+
+	pipelinePath := writePipeline(t, "no-result", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{Name: "step-one", Run: "true"},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	// BUREAU_RESULT_PATH intentionally not set.
+	t.Setenv("BUREAU_RESULT_PATH", "")
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	// No file should be created.
+	// (We can't easily verify this without a known path, but the point is
+	// run() succeeds without BUREAU_RESULT_PATH.)
+}
+
+func TestResultLogWithThreadLogging(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+
+	pipelinePath := writePipeline(t, "result-with-log", &schema.PipelineContent{
+		Log: &schema.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []schema.PipelineStep{
+			{Name: "step-one", Run: "true"},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	t.Setenv("BUREAU_RESULT_PATH", resultPath)
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	entries := readResultLog(t, resultPath)
+	if len(entries) < 3 {
+		t.Fatalf("expected at least 3 entries, got %d", len(entries))
+	}
+
+	// The complete entry should include the log event ID from the thread.
+	lastEntry := entries[len(entries)-1]
+	assertResultField(t, lastEntry, "type", "complete")
+	logEventID, ok := lastEntry["log_event_id"].(string)
+	if !ok {
+		t.Fatal("complete entry missing log_event_id")
+	}
+	// The mock proxy returns "$msg_1" as the event ID for all messages.
+	if logEventID != "$msg_1" {
+		t.Errorf("log_event_id = %q, want %q", logEventID, "$msg_1")
+	}
+}
+
+func TestGracefulTerminationSendsSIGTERM(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+	markerDir := t.TempDir()
+	markerFile := filepath.Join(markerDir, "got_sigterm")
+
+	// This command traps SIGTERM and writes a marker file before exiting.
+	// Without grace_period, the process would receive SIGKILL (no chance
+	// to run the trap handler). With grace_period, it receives SIGTERM
+	// first and the trap fires.
+	trapCommand := fmt.Sprintf(
+		"trap 'touch %s; exit 0' TERM; sleep 30",
+		markerFile,
+	)
+
+	pipelinePath := writePipeline(t, "graceful-test", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{
+				Name:        "graceful-step",
+				Run:         trapCommand,
+				Timeout:     "500ms",
+				GracePeriod: "5s",
+			},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	startTime := time.Now()
+	err := run()
+	elapsed := time.Since(startTime)
+
+	// The step should fail (timeout exceeded), but the process got SIGTERM.
+	if err == nil {
+		t.Fatal("expected error from timeout")
+	}
+
+	// Should complete relatively quickly (the trap handler exits immediately).
+	if elapsed > 5*time.Second {
+		t.Errorf("took too long: %v (grace period should not have been exhausted)", elapsed)
+	}
+
+	// The marker file should exist, proving SIGTERM was delivered (not SIGKILL).
+	if _, statError := os.Stat(markerFile); os.IsNotExist(statError) {
+		t.Error("marker file not created: process received SIGKILL instead of SIGTERM")
+	}
+}
+
+func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
+	socketPath, _ := startMockProxy(t)
+
+	// This command traps SIGTERM but does NOT exit — it ignores the signal
+	// and continues sleeping. The grace period should expire and SIGKILL
+	// should terminate it.
+	pipelinePath := writePipeline(t, "escalation-test", &schema.PipelineContent{
+		Steps: []schema.PipelineStep{
+			{
+				Name:        "stubborn-step",
+				Run:         "trap '' TERM; sleep 30",
+				Timeout:     "200ms",
+				GracePeriod: "500ms",
+			},
+		},
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
+	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+
+	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	startTime := time.Now()
+	err := run()
+	elapsed := time.Since(startTime)
+
+	if err == nil {
+		t.Fatal("expected error from timeout")
+	}
+
+	// Should take roughly timeout + grace_period (200ms + 500ms = 700ms),
+	// not the full 30s sleep. Allow generous upper bound for CI.
+	if elapsed > 5*time.Second {
+		t.Errorf("took too long: %v (SIGKILL escalation should have fired)", elapsed)
+	}
+
+	// The step should have taken at least the grace period (the process
+	// ignores SIGTERM, so it survives until SIGKILL).
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("completed too quickly: %v (grace period should have been waited out)", elapsed)
+	}
+}
+
+// readResultLog reads a JSONL file and returns each line as a parsed map.
+func readResultLog(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading result log: %v", err)
+	}
+	var entries []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("parsing JSONL line %q: %v", line, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// assertResultField checks that a JSONL entry has a string field with the
+// expected value.
+func assertResultField(t *testing.T, entry map[string]any, key, expected string) {
+	t.Helper()
+	value, ok := entry[key].(string)
+	if !ok {
+		t.Errorf("entry missing string field %q (entry: %v)", key, entry)
+		return
+	}
+	if value != expected {
+		t.Errorf("entry[%q] = %q, want %q", key, value, expected)
+	}
+}
+
+// assertResultFieldFloat checks that a JSONL entry has a numeric field with
+// the expected value (JSON numbers decode as float64).
+func assertResultFieldFloat(t *testing.T, entry map[string]any, key string, expected float64) {
+	t.Helper()
+	value, ok := entry[key].(float64)
+	if !ok {
+		t.Errorf("entry missing numeric field %q (entry: %v)", key, entry)
+		return
+	}
+	if value != expected {
+		t.Errorf("entry[%q] = %v, want %v", key, value, expected)
+	}
+}

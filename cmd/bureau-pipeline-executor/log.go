@@ -57,6 +57,16 @@ func newThreadLogger(ctx context.Context, proxy *proxyClient, room string, pipel
 	}, nil
 }
 
+// logEventID returns the root event ID of the pipeline thread, or
+// empty string if thread logging is not configured. The daemon uses
+// this to link command results to the detailed execution log thread.
+func (l *threadLogger) logEventID() string {
+	if l == nil {
+		return ""
+	}
+	return l.rootEventID
+}
+
 // logStep posts a step status update as a thread reply.
 func (l *threadLogger) logStep(ctx context.Context, index, total int, name, status string, duration time.Duration) {
 	if l == nil {

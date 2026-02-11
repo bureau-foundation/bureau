@@ -59,6 +59,9 @@ func Validate(content *schema.PipelineContent) []string {
 			if step.Interactive {
 				issues = append(issues, fmt.Sprintf("%s: interactive is only valid on run steps", prefix))
 			}
+			if step.GracePeriod != "" {
+				issues = append(issues, fmt.Sprintf("%s: grace_period is only valid on run steps", prefix))
+			}
 		}
 
 		// Publish step must have event_type and content.
@@ -78,6 +81,13 @@ func Validate(content *schema.PipelineContent) []string {
 		if step.Timeout != "" {
 			if _, err := time.ParseDuration(step.Timeout); err != nil {
 				issues = append(issues, fmt.Sprintf("%s: invalid timeout %q: %v", prefix, step.Timeout, err))
+			}
+		}
+
+		// GracePeriod must be parseable when present.
+		if step.GracePeriod != "" {
+			if _, err := time.ParseDuration(step.GracePeriod); err != nil {
+				issues = append(issues, fmt.Sprintf("%s: invalid grace_period %q: %v", prefix, step.GracePeriod, err))
 			}
 		}
 	}

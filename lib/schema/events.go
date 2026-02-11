@@ -1077,6 +1077,21 @@ type PipelineStep struct {
 	// defaults to 5 minutes at runtime.
 	Timeout string `json:"timeout,omitempty"`
 
+	// GracePeriod is the duration between SIGTERM and SIGKILL when
+	// a step's timeout expires. When set, the executor sends SIGTERM
+	// to the process group first, waits up to this duration for the
+	// process to exit gracefully, then escalates to SIGKILL. When
+	// empty, the executor sends SIGKILL immediately on timeout.
+	//
+	// Use this for steps that perform irreversible operations
+	// (database writes, external API calls with side effects) where
+	// abrupt termination could leave state inconsistent. Most sandbox
+	// steps should use the default (immediate SIGKILL) since sandbox
+	// processes are ephemeral and hold no durable state.
+	//
+	// Parsed by time.ParseDuration. Only valid on run steps.
+	GracePeriod string `json:"grace_period,omitempty"`
+
 	// Env sets additional environment variables for this step
 	// only. Merged with pipeline-level variables; step values
 	// take precedence on conflict.

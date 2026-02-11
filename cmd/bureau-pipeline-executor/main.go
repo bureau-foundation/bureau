@@ -107,13 +107,29 @@ func run() error {
 		}
 	}
 
+	// Set up JSONL result log. The daemon reads this for structured
+	// pipeline outcomes (step-level detail, duration, log thread link).
+	// Controlled by BUREAU_RESULT_PATH — when not set, result logging
+	// is disabled. The launcher sets this when spawning executor sandboxes.
+	var results *resultLog
+	if resultPath := os.Getenv("BUREAU_RESULT_PATH"); resultPath != "" {
+		results, err = newResultLog(resultPath)
+		if err != nil {
+			return fmt.Errorf("creating result log: %w", err)
+		}
+		defer results.Close()
+	}
+
 	// Execute steps.
 	fmt.Printf("[pipeline] %s: starting (%d steps)\n", name, len(content.Steps))
 	pipelineStart := time.Now()
+	results.writeStart(name, len(content.Steps))
 
 	for index, step := range content.Steps {
 		expandedStep, err := pipeline.ExpandStep(step, variables)
 		if err != nil {
+			results.writeFailed(step.Name, err.Error(),
+				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
 			logger.logFailed(ctx, name, step.Name, err)
 			return fmt.Errorf("expanding step %q: %w", step.Name, err)
 		}
@@ -126,18 +142,28 @@ func run() error {
 					index+1, len(content.Steps), expandedStep.Name, result.err)
 				logger.logStep(ctx, index, len(content.Steps), expandedStep.Name,
 					"failed (optional)", result.duration)
+				results.writeStep(index, expandedStep.Name, "failed (optional)",
+					result.duration.Milliseconds(), result.err.Error())
 			} else {
 				fmt.Printf("[pipeline] step %d/%d: %s... failed: %v\n",
 					index+1, len(content.Steps), expandedStep.Name, result.err)
 				logger.logFailed(ctx, name, expandedStep.Name, result.err)
+				results.writeStep(index, expandedStep.Name, "failed",
+					result.duration.Milliseconds(), result.err.Error())
+				results.writeFailed(expandedStep.Name, result.err.Error(),
+					time.Since(pipelineStart).Milliseconds(), logger.logEventID())
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
 			}
+		} else {
+			results.writeStep(index, expandedStep.Name, result.status,
+				result.duration.Milliseconds(), "")
 		}
 	}
 
 	totalDuration := time.Since(pipelineStart)
 	fmt.Printf("[pipeline] %s: complete (%s)\n", name, formatDuration(totalDuration))
 	logger.logComplete(ctx, name, totalDuration)
+	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID())
 	return nil
 }
 

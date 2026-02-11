@@ -239,6 +239,43 @@ func TestValidate(t *testing.T) {
 			wantSubstrings: []string{"invalid timeout"},
 		},
 		{
+			name: "valid grace_period on run step",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "graceful", Run: "echo hello", Timeout: "5m", GracePeriod: "30s"},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "invalid grace_period",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "bad-grace", Run: "echo hello", GracePeriod: "thirty seconds"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"invalid grace_period"},
+		},
+		{
+			name: "grace_period on publish step",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name:        "bad-publish",
+						GracePeriod: "30s",
+						Publish: &schema.PipelinePublish{
+							EventType: "m.test",
+							Room:      "!room:test",
+							Content:   map[string]any{},
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"grace_period is only valid on run steps"},
+		},
+		{
 			name: "log without room",
 			content: &schema.PipelineContent{
 				Steps: []schema.PipelineStep{

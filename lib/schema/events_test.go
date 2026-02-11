@@ -28,6 +28,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"project", EventTypeProject, "m.bureau.project"},
 		{"workspace_ready", EventTypeWorkspaceReady, "m.bureau.workspace.ready"},
 		{"workspace_teardown", EventTypeWorkspaceTeardown, "m.bureau.workspace.teardown"},
+		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1897,6 +1898,486 @@ func TestWorkspaceTeardownOmitsEmptyArchivePath(t *testing.T) {
 	assertField(t, raw, "action", "delete")
 	if _, exists := raw["archive_path"]; exists {
 		t.Error("archive_path should be omitted when empty")
+	}
+}
+
+func TestPipelineContentRoundTrip(t *testing.T) {
+	original := PipelineContent{
+		Description: "Clone repository and prepare project workspace",
+		Variables: map[string]PipelineVariable{
+			"REPOSITORY": {
+				Description: "Git clone URL",
+				Required:    true,
+			},
+			"BRANCH": {
+				Description: "Git branch to check out",
+				Default:     "main",
+			},
+			"PROJECT": {
+				Description: "Project name",
+				Required:    true,
+			},
+		},
+		Steps: []PipelineStep{
+			{
+				Name: "create-project-directory",
+				Run:  "mkdir -p /workspace/${PROJECT}",
+			},
+			{
+				Name:    "clone-repository",
+				Run:     "git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare",
+				Check:   "test -d /workspace/${PROJECT}/.bare/objects",
+				When:    "test -n '${REPOSITORY}'",
+				Timeout: "10m",
+			},
+			{
+				Name:     "run-project-init",
+				Run:      "/workspace/${PROJECT}/.bureau/pipeline/init",
+				Optional: true,
+				Env:      map[string]string{"INIT_MODE": "full"},
+			},
+			{
+				Name: "publish-ready",
+				Publish: &PipelinePublish{
+					EventType: "m.bureau.workspace.ready",
+					Room:      "${WORKSPACE_ROOM_ID}",
+					Content: map[string]any{
+						"setup_principal": "${PRINCIPAL}",
+						"completed_at":    "2026-02-10T12:00:00Z",
+					},
+				},
+			},
+		},
+		Log: &PipelineLog{
+			Room: "${WORKSPACE_ROOM_ID}",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON field names match the wire format.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "description", "Clone repository and prepare project workspace")
+
+	// Verify variables.
+	variables, ok := raw["variables"].(map[string]any)
+	if !ok {
+		t.Fatal("variables field missing or wrong type")
+	}
+	if len(variables) != 3 {
+		t.Fatalf("variables count = %d, want 3", len(variables))
+	}
+	repoVar, ok := variables["REPOSITORY"].(map[string]any)
+	if !ok {
+		t.Fatal("variables[REPOSITORY] missing or wrong type")
+	}
+	assertField(t, repoVar, "description", "Git clone URL")
+	assertField(t, repoVar, "required", true)
+
+	branchVar, ok := variables["BRANCH"].(map[string]any)
+	if !ok {
+		t.Fatal("variables[BRANCH] missing or wrong type")
+	}
+	assertField(t, branchVar, "default", "main")
+
+	// Verify steps array.
+	steps, ok := raw["steps"].([]any)
+	if !ok {
+		t.Fatal("steps field missing or wrong type")
+	}
+	if len(steps) != 4 {
+		t.Fatalf("steps count = %d, want 4", len(steps))
+	}
+
+	// First step: simple run.
+	firstStep := steps[0].(map[string]any)
+	assertField(t, firstStep, "name", "create-project-directory")
+	assertField(t, firstStep, "run", "mkdir -p /workspace/${PROJECT}")
+
+	// Second step: run with check, when, timeout.
+	secondStep := steps[1].(map[string]any)
+	assertField(t, secondStep, "name", "clone-repository")
+	assertField(t, secondStep, "check", "test -d /workspace/${PROJECT}/.bare/objects")
+	assertField(t, secondStep, "when", "test -n '${REPOSITORY}'")
+	assertField(t, secondStep, "timeout", "10m")
+
+	// Third step: optional with env.
+	thirdStep := steps[2].(map[string]any)
+	assertField(t, thirdStep, "optional", true)
+	stepEnv, ok := thirdStep["env"].(map[string]any)
+	if !ok {
+		t.Fatal("step env field missing or wrong type")
+	}
+	assertField(t, stepEnv, "INIT_MODE", "full")
+
+	// Fourth step: publish.
+	fourthStep := steps[3].(map[string]any)
+	assertField(t, fourthStep, "name", "publish-ready")
+	publish, ok := fourthStep["publish"].(map[string]any)
+	if !ok {
+		t.Fatal("publish field missing or wrong type")
+	}
+	assertField(t, publish, "event_type", "m.bureau.workspace.ready")
+	assertField(t, publish, "room", "${WORKSPACE_ROOM_ID}")
+	publishContent, ok := publish["content"].(map[string]any)
+	if !ok {
+		t.Fatal("publish content field missing or wrong type")
+	}
+	assertField(t, publishContent, "setup_principal", "${PRINCIPAL}")
+
+	// Verify log.
+	logField, ok := raw["log"].(map[string]any)
+	if !ok {
+		t.Fatal("log field missing or wrong type")
+	}
+	assertField(t, logField, "room", "${WORKSPACE_ROOM_ID}")
+
+	// Round-trip back to struct.
+	var decoded PipelineContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Description != original.Description {
+		t.Errorf("Description: got %q, want %q", decoded.Description, original.Description)
+	}
+	if len(decoded.Variables) != 3 {
+		t.Fatalf("Variables count = %d, want 3", len(decoded.Variables))
+	}
+	if !decoded.Variables["REPOSITORY"].Required {
+		t.Error("Variables[REPOSITORY].Required should be true")
+	}
+	if decoded.Variables["BRANCH"].Default != "main" {
+		t.Errorf("Variables[BRANCH].Default: got %q, want %q", decoded.Variables["BRANCH"].Default, "main")
+	}
+	if len(decoded.Steps) != 4 {
+		t.Fatalf("Steps count = %d, want 4", len(decoded.Steps))
+	}
+	if decoded.Steps[0].Run != "mkdir -p /workspace/${PROJECT}" {
+		t.Errorf("Steps[0].Run: got %q, want %q", decoded.Steps[0].Run, "mkdir -p /workspace/${PROJECT}")
+	}
+	if decoded.Steps[1].Check != "test -d /workspace/${PROJECT}/.bare/objects" {
+		t.Errorf("Steps[1].Check: got %q, want %q", decoded.Steps[1].Check, "test -d /workspace/${PROJECT}/.bare/objects")
+	}
+	if decoded.Steps[2].Optional != true {
+		t.Error("Steps[2].Optional should be true")
+	}
+	if decoded.Steps[3].Publish == nil {
+		t.Fatal("Steps[3].Publish should not be nil after round-trip")
+	}
+	if decoded.Steps[3].Publish.EventType != "m.bureau.workspace.ready" {
+		t.Errorf("Steps[3].Publish.EventType: got %q, want %q",
+			decoded.Steps[3].Publish.EventType, "m.bureau.workspace.ready")
+	}
+	if decoded.Log == nil {
+		t.Fatal("Log should not be nil after round-trip")
+	}
+	if decoded.Log.Room != "${WORKSPACE_ROOM_ID}" {
+		t.Errorf("Log.Room: got %q, want %q", decoded.Log.Room, "${WORKSPACE_ROOM_ID}")
+	}
+}
+
+func TestPipelineContentMinimal(t *testing.T) {
+	// Pipeline with only the required field (steps) — all optional
+	// fields should be omitted from the wire format.
+	pipeline := PipelineContent{
+		Steps: []PipelineStep{
+			{Name: "hello", Run: "echo hello"},
+		},
+	}
+
+	data, err := json.Marshal(pipeline)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	for _, field := range []string{"description", "variables", "log"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty/nil", field)
+		}
+	}
+
+	// Steps should be present.
+	steps, ok := raw["steps"].([]any)
+	if !ok {
+		t.Fatal("steps field missing or wrong type")
+	}
+	if len(steps) != 1 {
+		t.Fatalf("steps count = %d, want 1", len(steps))
+	}
+}
+
+func TestPipelineStepRunOnly(t *testing.T) {
+	// A step with all run-related fields set; publish and interactive
+	// should be omitted.
+	step := PipelineStep{
+		Name:     "full-run-step",
+		Run:      "some-command --flag",
+		Check:    "test -f /expected/file",
+		When:     "test -n '${CONDITION}'",
+		Optional: true,
+		Timeout:  "30s",
+		Env:      map[string]string{"KEY": "value"},
+	}
+
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Run-related fields should be present.
+	assertField(t, raw, "name", "full-run-step")
+	assertField(t, raw, "run", "some-command --flag")
+	assertField(t, raw, "check", "test -f /expected/file")
+	assertField(t, raw, "when", "test -n '${CONDITION}'")
+	assertField(t, raw, "optional", true)
+	assertField(t, raw, "timeout", "30s")
+
+	env, ok := raw["env"].(map[string]any)
+	if !ok {
+		t.Fatal("env field missing or wrong type")
+	}
+	assertField(t, env, "KEY", "value")
+
+	// Publish and interactive should be absent.
+	for _, field := range []string{"publish", "interactive"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted on a run-only step", field)
+		}
+	}
+}
+
+func TestPipelineStepPublishOnly(t *testing.T) {
+	// A step with only publish set; run-related fields should be omitted.
+	step := PipelineStep{
+		Name: "publish-state",
+		Publish: &PipelinePublish{
+			EventType: "m.bureau.workspace.ready",
+			Room:      "!abc123:bureau.local",
+			StateKey:  "custom-key",
+			Content: map[string]any{
+				"status": "ready",
+			},
+		},
+	}
+
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Publish should be present with all fields.
+	publish, ok := raw["publish"].(map[string]any)
+	if !ok {
+		t.Fatal("publish field missing or wrong type")
+	}
+	assertField(t, publish, "event_type", "m.bureau.workspace.ready")
+	assertField(t, publish, "room", "!abc123:bureau.local")
+	assertField(t, publish, "state_key", "custom-key")
+	content, ok := publish["content"].(map[string]any)
+	if !ok {
+		t.Fatal("publish content field missing or wrong type")
+	}
+	assertField(t, content, "status", "ready")
+
+	// Run-related fields should be absent.
+	for _, field := range []string{"run", "check", "when", "optional", "timeout", "env", "interactive"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted on a publish-only step", field)
+		}
+	}
+}
+
+func TestPipelineStepOmitsEmptyFields(t *testing.T) {
+	// Minimal step (name + run only) — all optional fields should be
+	// omitted from the wire format.
+	step := PipelineStep{
+		Name: "simple",
+		Run:  "echo done",
+	}
+
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "name", "simple")
+	assertField(t, raw, "run", "echo done")
+
+	for _, field := range []string{"check", "when", "optional", "publish", "timeout", "env", "interactive"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when zero-value", field)
+		}
+	}
+}
+
+func TestPipelineStepInteractive(t *testing.T) {
+	step := PipelineStep{
+		Name:        "guided-setup",
+		Run:         "claude --prompt 'Set up the workspace'",
+		Interactive: true,
+		Timeout:     "30m",
+	}
+
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "interactive", true)
+	assertField(t, raw, "timeout", "30m")
+
+	var decoded PipelineStep
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !decoded.Interactive {
+		t.Error("Interactive should be true after round-trip")
+	}
+}
+
+func TestPipelinePublishOmitsEmptyStateKey(t *testing.T) {
+	publish := PipelinePublish{
+		EventType: "m.bureau.workspace.ready",
+		Room:      "${WORKSPACE_ROOM_ID}",
+		Content:   map[string]any{"status": "ready"},
+	}
+
+	data, err := json.Marshal(publish)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "event_type", "m.bureau.workspace.ready")
+	assertField(t, raw, "room", "${WORKSPACE_ROOM_ID}")
+	if _, exists := raw["state_key"]; exists {
+		t.Error("state_key should be omitted when empty")
+	}
+}
+
+func TestPipelineVariableOmitsEmptyFields(t *testing.T) {
+	// A variable with only Required set should omit description and default.
+	variable := PipelineVariable{
+		Required: true,
+	}
+
+	data, err := json.Marshal(variable)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "required", true)
+	for _, field := range []string{"description", "default"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty", field)
+		}
+	}
+}
+
+func TestPipelineLogOmittedWhenNil(t *testing.T) {
+	pipeline := PipelineContent{
+		Steps: []PipelineStep{
+			{Name: "test", Run: "echo test"},
+		},
+	}
+
+	data, err := json.Marshal(pipeline)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["log"]; exists {
+		t.Error("log should be omitted when nil")
+	}
+}
+
+func TestPipelineRoomPowerLevels(t *testing.T) {
+	adminUserID := "@bureau-admin:bureau.local"
+	levels := PipelineRoomPowerLevels(adminUserID)
+
+	// Admin should have power level 100.
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	}
+	if len(users) != 1 {
+		t.Errorf("users map should have exactly 1 entry, got %d", len(users))
+	}
+
+	// Default user power level should be 0 (other members can read).
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	// Pipeline events require power level 100 (admin-only writes).
+	events, ok := levels["events"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+	if events[EventTypePipeline] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypePipeline, events[EventTypePipeline])
+	}
+
+	// Default event power level should be 100 (admin-only room).
+	if levels["events_default"] != 100 {
+		t.Errorf("events_default = %v, want 100", levels["events_default"])
+	}
+
+	// Administrative actions all require power level 100.
+	for _, field := range []string{"state_default", "ban", "kick", "invite", "redact"} {
+		if levels[field] != 100 {
+			t.Errorf("%s = %v, want 100", field, levels[field])
+		}
+	}
+
+	// Invite is 100 (unlike config/workspace rooms where machine can
+	// invite at PL 50 — pipeline rooms have no machine tier).
+	if levels["invite"] != 100 {
+		t.Errorf("invite = %v, want 100", levels["invite"])
 	}
 }
 

@@ -120,6 +120,16 @@ const (
 	// State key: "" (singleton per room)
 	// Room: the workspace room
 	EventTypeWorkspaceTeardown = "m.bureau.workspace.teardown"
+
+	// EventTypePipeline defines a pipeline — a structured sequence of
+	// steps that run inside a Bureau sandbox. Pipelines are stored as
+	// state events in pipeline rooms (e.g., #bureau/pipeline for
+	// built-ins, #iree/pipeline for project pipelines). Room power
+	// levels control who can edit pipelines.
+	//
+	// State key: pipeline name (e.g., "dev-workspace-init", "dev-worktree-teardown")
+	// Room: pipeline room (e.g., #bureau/pipeline:<server>)
+	EventTypePipeline = "m.bureau.pipeline"
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -767,6 +777,153 @@ type WorkspaceTeardown struct {
 	ArchivePath string `json:"archive_path,omitempty"`
 }
 
+// PipelineContent is the content of an EventTypePipeline state event.
+// It defines a reusable automation sequence: a list of steps executed
+// in order by the pipeline executor inside a sandbox. Steps can run
+// shell commands, publish Matrix state events, or launch interactive
+// sessions.
+//
+// Pipelines are the automation primitive for Bureau operations:
+// workspace setup, service lifecycle, maintenance, deployment, and
+// any structured task that benefits from observability, idempotency,
+// and Matrix-native logging.
+//
+// Variable substitution (${NAME}) is applied to all string fields in
+// steps before execution. Variables are resolved from step-level env,
+// pipeline payload, Bureau runtime variables, and process environment.
+type PipelineContent struct {
+	// Description is a human-readable summary of what this pipeline
+	// does (e.g., "Clone repository and prepare project workspace").
+	Description string `json:"description,omitempty"`
+
+	// Variables declares the variables this pipeline expects, with
+	// optional defaults and required flags. The executor validates
+	// required variables before starting execution. This is the
+	// declaration — actual values come from payload, environment,
+	// and step-level overrides at runtime.
+	Variables map[string]PipelineVariable `json:"variables,omitempty"`
+
+	// Steps is the ordered list of steps to execute. At least one
+	// step is required. Steps run sequentially; the executor does
+	// not support parallel steps (use shell backgrounding if needed).
+	Steps []PipelineStep `json:"steps"`
+
+	// Log configures Matrix thread logging for pipeline executions.
+	// When set, the executor creates a thread in the specified room
+	// at pipeline start and posts step progress as thread replies.
+	// When nil, the executor logs only to stdout (visible via
+	// bureau observe).
+	Log *PipelineLog `json:"log,omitempty"`
+}
+
+// PipelineVariable declares an expected variable for a pipeline.
+// Variables are informational for documentation and validation —
+// the executor resolves actual values from payload, environment,
+// and step-level overrides.
+type PipelineVariable struct {
+	// Description explains what this variable is for (shown by
+	// bureau pipeline show).
+	Description string `json:"description,omitempty"`
+
+	// Default is the fallback value when the variable is not
+	// provided in any source. Empty string is a valid default.
+	Default string `json:"default,omitempty"`
+
+	// Required means the executor must fail if this variable has
+	// no value from any source (including Default). A variable
+	// with both Required and Default set uses the default only
+	// when no explicit value is provided.
+	Required bool `json:"required,omitempty"`
+}
+
+// PipelineStep is a single step in a pipeline. Exactly one of Run or
+// Publish must be set — Run for shell commands, Publish for Matrix
+// state events.
+type PipelineStep struct {
+	// Name is a human-readable identifier for this step, used in
+	// log output and status messages (e.g., "clone-repository",
+	// "publish-ready"). Required.
+	Name string `json:"name"`
+
+	// Run is a shell command executed via /bin/sh -c. Multi-line
+	// strings are supported. Variable substitution (${NAME}) is
+	// applied before execution. Mutually exclusive with Publish.
+	Run string `json:"run,omitempty"`
+
+	// Check is a post-step health check command. Runs after Run
+	// succeeds; if Check exits non-zero, the step is treated as
+	// failed. Catches cases where a command "succeeds" but
+	// doesn't produce the expected result. Only valid with Run.
+	Check string `json:"check,omitempty"`
+
+	// When is a guard condition command. Runs before Run; if it
+	// exits non-zero, the step is skipped (not failed). Use for
+	// conditional steps: when: "test -n '${REPOSITORY}'" skips
+	// clone for non-git workspaces.
+	When string `json:"when,omitempty"`
+
+	// Optional means step failure doesn't abort the pipeline.
+	// The failure is logged but execution continues. Use for
+	// best-effort steps like project-specific init scripts that
+	// may not exist.
+	Optional bool `json:"optional,omitempty"`
+
+	// Publish sends a Matrix state event instead of running a
+	// shell command. The executor connects to the proxy Unix
+	// socket directly. Mutually exclusive with Run.
+	Publish *PipelinePublish `json:"publish,omitempty"`
+
+	// Timeout is the maximum duration for this step (e.g., "5m",
+	// "30s", "1h"). Parsed by time.ParseDuration. The executor
+	// kills the step if it exceeds this duration. When empty,
+	// defaults to 5 minutes at runtime.
+	Timeout string `json:"timeout,omitempty"`
+
+	// Env sets additional environment variables for this step
+	// only. Merged with pipeline-level variables; step values
+	// take precedence on conflict.
+	Env map[string]string `json:"env,omitempty"`
+
+	// Interactive means this step expects terminal interaction.
+	// The executor allocates a PTY and does not capture stdout.
+	// The operator interacts via bureau observe (readwrite mode).
+	// Only valid with Run.
+	Interactive bool `json:"interactive,omitempty"`
+}
+
+// PipelinePublish describes a Matrix state event to publish as a
+// pipeline step. The executor connects to the proxy Unix socket
+// and PUTs the event directly (same mechanism as bureau-proxy-call).
+// All string fields support variable substitution (${NAME}).
+type PipelinePublish struct {
+	// EventType is the Matrix state event type (e.g.,
+	// "m.bureau.workspace.ready").
+	EventType string `json:"event_type"`
+
+	// Room is the target room alias or ID. Supports variable
+	// substitution (e.g., "${WORKSPACE_ROOM_ID}").
+	Room string `json:"room"`
+
+	// StateKey is the state key for the event. Empty string is
+	// valid (singleton events like workspace.ready).
+	StateKey string `json:"state_key,omitempty"`
+
+	// Content is the event content as a JSON-compatible map.
+	// String values support variable substitution.
+	Content map[string]any `json:"content"`
+}
+
+// PipelineLog configures Matrix thread logging for a pipeline.
+// When present on a PipelineContent, the executor creates a thread
+// in the specified room and logs step progress as thread replies.
+type PipelineLog struct {
+	// Room is the Matrix room alias or ID where execution threads
+	// are created. Supports variable substitution (e.g.,
+	// "${WORKSPACE_ROOM_ID}"). The executor resolves aliases via
+	// the proxy.
+	Room string `json:"room"`
+}
+
 // Credentials is the content of an EventTypeCredentials state event.
 // Contains an age-encrypted credential bundle for a specific principal
 // on a specific machine. See CREDENTIALS.md for the full lifecycle.
@@ -1035,6 +1192,43 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 		"ban":            100,
 		"kick":           100,
 		"invite":         50,
+		"redact":         100,
+		"notifications": map[string]any{
+			"room": 100,
+		},
+	}
+}
+
+// PipelineRoomPowerLevels returns the power level structure for pipeline
+// content rooms (e.g., #bureau/pipeline). Pipeline rooms are content
+// repositories: only the admin publishes pipeline definitions, everyone
+// else reads.
+//
+// Unlike workspace rooms (events_default: 0 for collaboration) or config
+// rooms (machine at PL 50 for layouts), pipeline rooms are admin-only
+// for writes. No machine tier is needed — machines read pipelines via
+// their proxy, they don't write them.
+func PipelineRoomPowerLevels(adminUserID string) map[string]any {
+	return map[string]any{
+		"users": map[string]any{
+			adminUserID: 100,
+		},
+		"users_default": 0,
+		"events": map[string]any{
+			EventTypePipeline:           100,
+			"m.room.name":               100,
+			"m.room.topic":              100,
+			"m.room.avatar":             100,
+			"m.room.canonical_alias":    100,
+			"m.room.history_visibility": 100,
+			"m.room.power_levels":       100,
+			"m.room.join_rules":         100,
+		},
+		"events_default": 100,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         100,
 		"redact":         100,
 		"notifications": map[string]any{
 			"room": 100,

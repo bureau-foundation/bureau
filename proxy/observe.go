@@ -34,6 +34,23 @@ type observeProxy struct {
 	// listener is the proxy's observation unix socket.
 	listener net.Listener
 
+	// mu protects connections. Held briefly during register/unregister
+	// and during stop's close sweep.
+	mu sync.Mutex
+
+	// connections tracks agent-side connections with active bridges so
+	// stop() can force-close them to unblock bridgeReaders. Without this,
+	// stop() would block indefinitely waiting for observation sessions to
+	// end naturally.
+	connections map[net.Conn]struct{}
+
+	// activeConnections tracks in-flight handleConnection goroutines so
+	// stop() can wait for them to drain before returning. The caller
+	// (Server.Shutdown) closes the credential source after stop() returns;
+	// without the wait, goroutines holding borrowed *secret.Buffer pointers
+	// would panic on String() after the buffers are closed.
+	activeConnections sync.WaitGroup
+
 	logger *slog.Logger
 }
 
@@ -91,6 +108,7 @@ func startObserveProxy(config observeProxyConfig) (*observeProxy, error) {
 		daemonSocket: config.DaemonSocket,
 		credential:   config.Credential,
 		listener:     listener,
+		connections:  make(map[net.Conn]struct{}),
 		logger:       logger,
 	}
 
@@ -109,7 +127,30 @@ func (proxy *observeProxy) acceptLoop() {
 			// Listener closed during shutdown — normal exit.
 			return
 		}
+		proxy.activeConnections.Add(1)
 		go proxy.handleConnection(connection)
+	}
+}
+
+// trackConnection registers a connection for force-close during shutdown.
+// Returns false if the proxy is already stopping (connections map is nil),
+// in which case the caller should abort.
+func (proxy *observeProxy) trackConnection(connection net.Conn) bool {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if proxy.connections == nil {
+		return false
+	}
+	proxy.connections[connection] = struct{}{}
+	return true
+}
+
+// untrackConnection removes a connection from the active set.
+func (proxy *observeProxy) untrackConnection(connection net.Conn) {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if proxy.connections != nil {
+		delete(proxy.connections, connection)
 	}
 }
 
@@ -117,6 +158,7 @@ func (proxy *observeProxy) acceptLoop() {
 // It reads the agent's request, injects credentials, forwards to the daemon,
 // and bridges bytes bidirectionally on success.
 func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
+	defer proxy.activeConnections.Done()
 	defer agentConnection.Close()
 
 	// Read the agent's JSON request line.
@@ -210,6 +252,19 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 		"observer", userIDBuffer.String(),
 	)
 
+	// Register both connections so stop() can force-close them to unblock
+	// the bridge during shutdown. If tracking fails, the proxy is already
+	// stopping — abort rather than enter a bridge that can't be interrupted.
+	if !proxy.trackConnection(agentConnection) {
+		return
+	}
+	if !proxy.trackConnection(daemonConnection) {
+		proxy.untrackConnection(agentConnection)
+		return
+	}
+	defer proxy.untrackConnection(agentConnection)
+	defer proxy.untrackConnection(daemonConnection)
+
 	// Bridge all subsequent bytes bidirectionally. The daemon switches
 	// to the binary observation protocol after the JSON handshake; we
 	// pass everything through transparently.
@@ -239,11 +294,30 @@ func (proxy *observeProxy) sendError(connection net.Conn, format string, args ..
 	connection.Write(data)
 }
 
-// stop shuts down the observation proxy listener and cleans up the socket.
+// stop shuts down the observation proxy. It closes the listener to stop
+// accepting new connections, force-closes all active bridged connections
+// to unblock in-flight goroutines, then waits for all goroutines to finish.
+// After stop returns, no goroutines hold references to borrowed credentials.
 func (proxy *observeProxy) stop() {
 	if proxy.listener != nil {
 		proxy.listener.Close()
 	}
+
+	// Force-close all tracked connections. This unblocks any io.Copy calls
+	// inside bridgeReaders, allowing handleConnection goroutines to run
+	// their deferred cleanup and exit. Set connections to nil so concurrent
+	// trackConnection calls from late-arriving goroutines return false.
+	proxy.mu.Lock()
+	for connection := range proxy.connections {
+		connection.Close()
+	}
+	proxy.connections = nil
+	proxy.mu.Unlock()
+
+	// Wait for all handleConnection goroutines to finish. After this returns,
+	// no goroutine holds borrowed *secret.Buffer pointers from the credential
+	// source, so the caller can safely close the credential source.
+	proxy.activeConnections.Wait()
 }
 
 // bridgeReaders copies data bidirectionally between two connections using

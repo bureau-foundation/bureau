@@ -584,6 +584,93 @@ func TestObserveProxyInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestObserveProxyStopDrainsActiveBridges verifies that stop() waits for
+// in-flight bridged connections to finish before returning. This is the
+// exact scenario that caused a CI panic: stop() returned, the credential
+// source was closed, and a handleConnection goroutine still in flight
+// called userIDBuffer.String() on a closed *secret.Buffer.
+func TestObserveProxyStopDrainsActiveBridges(t *testing.T) {
+	t.Parallel()
+
+	credentials := testCredentials(t, map[string]string{
+		"MATRIX_USER_ID": "@test/agent:bureau.local",
+		"MATRIX_TOKEN":   "test-token",
+	})
+
+	daemonSocket := mockDaemonObserve(t, "@test/agent:bureau.local", "test-token")
+	observeSocket := filepath.Join(t.TempDir(), "observe.sock")
+
+	proxy, err := startObserveProxy(observeProxyConfig{
+		SocketPath:   observeSocket,
+		DaemonSocket: daemonSocket,
+		Credential:   credentials,
+		Logger:       slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	})
+	if err != nil {
+		t.Fatalf("startObserveProxy: %v", err)
+	}
+
+	// Establish a bridged session (handshake completes, now in binary bridge).
+	connection, err := net.DialTimeout("unix", observeSocket, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer connection.Close()
+	connection.SetDeadline(time.Now().Add(10 * time.Second))
+
+	json.NewEncoder(connection).Encode(map[string]string{
+		"principal": "test/agent",
+		"mode":      "readwrite",
+	})
+	reader := bufio.NewReader(connection)
+	responseLine, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	var response map[string]any
+	json.Unmarshal(responseLine, &response)
+	if response["ok"] != true {
+		t.Fatalf("handshake failed: %v", response["error"])
+	}
+
+	// Bridge is now active. Verify data flows.
+	testData := []byte("pre-stop data")
+	if _, err := connection.Write(testData); err != nil {
+		t.Fatalf("write pre-stop data: %v", err)
+	}
+	received := make([]byte, len(testData))
+	if _, err := reader.Read(received); err != nil {
+		t.Fatalf("read pre-stop echo: %v", err)
+	}
+
+	// Stop the proxy while the bridge is active. This must force-close
+	// the connections and wait for the goroutine to drain. If it doesn't
+	// wait, closing the credential source afterward would panic.
+	stopDone := make(chan struct{})
+	go func() {
+		proxy.stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// stop() returned — goroutines have drained.
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop() did not return within 5 seconds — goroutines not draining")
+	}
+
+	// Close the credential source AFTER stop(). Before the fix, this
+	// would cause a panic in a handleConnection goroutine that was still
+	// running. With the fix, all goroutines have exited by now.
+	credentials.Close()
+
+	// Verify the connection was force-closed by stop().
+	_, err = connection.Read(make([]byte, 1))
+	if err == nil {
+		t.Error("expected read error after stop(), connection should be closed")
+	}
+}
+
 func TestStartObserveProxyValidation(t *testing.T) {
 	t.Parallel()
 

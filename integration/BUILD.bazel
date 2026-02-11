@@ -19,6 +19,7 @@ go_test(
         "fleet_test.go",
         "helpers_test.go",
         "lifecycle_test.go",
+        "machine_test.go",
         "messaging_test.go",
         "setup_test.go",
     ],
@@ -41,6 +42,7 @@ go_test(
     tags = ["manual"],
     deps = [
         "//lib/bootstrap",
+        "//lib/principal",
         "//lib/sealed",
         "//messaging",
         "//observe",

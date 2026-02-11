@@ -41,6 +41,7 @@ func run() error {
 		stateDir           string
 		adminUser          string
 		observeRelayBinary string
+		workspaceRoot      string
 		statusInterval     time.Duration
 		showVersion        bool
 	)
@@ -52,6 +53,7 @@ func run() error {
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory containing session.json from the launcher")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
 	flag.StringVar(&observeRelayBinary, "observe-relay-binary", "bureau-observe-relay", "path to the observation relay binary")
+	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
@@ -208,6 +210,7 @@ func run() error {
 		tmuxServerSocket:   principal.TmuxSocketPath(runDir),
 		observeRelayBinary: observeRelayBinary,
 		layoutWatchers:     make(map[string]*layoutWatcher),
+		workspaceRoot:      workspaceRoot,
 		logger:             logger,
 	}
 
@@ -487,6 +490,11 @@ type Daemon struct {
 	// principal localpart. Protected by layoutWatchersMu.
 	layoutWatchers   map[string]*layoutWatcher
 	layoutWatchersMu sync.Mutex
+
+	// workspaceRoot is the root directory for project workspaces
+	// (e.g., /var/bureau/workspace). Command handlers use this to
+	// locate workspace directories for status, du, and git operations.
+	workspaceRoot string
 
 	logger *slog.Logger
 }

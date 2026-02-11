@@ -37,14 +37,14 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// syncFilter restricts the /sync response to state events the daemon cares
-// about. This avoids downloading timeline messages, presence, account data,
-// typing notifications, and other event types that the daemon doesn't use.
+// syncFilter restricts the /sync response to event types the daemon cares
+// about. This avoids downloading presence, account data, typing notifications,
+// and other event types that the daemon doesn't use.
 //
-// The timeline section is included (with the same type filter) because on
-// incremental syncs, state events can appear as timeline events with a
-// non-nil state_key. The limit is kept small since the daemon only checks
-// for the presence of state events, not their content.
+// The timeline section includes both state event types and m.room.message.
+// State events can appear as timeline events with a non-nil state_key on
+// incremental syncs. m.room.message is needed for command messages
+// (m.bureau.command msgtype) posted by the CLI for remote workspace operations.
 //
 // Workspace event types (project, workspace.ready, workspace.teardown) are
 // included so that state changes in workspace rooms trigger re-reconciliation.
@@ -74,7 +74,8 @@ const syncFilter = `{
 				"m.bureau.layout",
 				"m.bureau.project",
 				"m.bureau.workspace.ready",
-				"m.bureau.workspace.teardown"
+				"m.bureau.workspace.teardown",
+				"m.room.message"
 			],
 			"limit": 50
 		},
@@ -278,6 +279,13 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.reconcileServices(ctx, added, removed, updated)
 			d.pushServiceDirectory(ctx)
 		}
+	}
+
+	// Process command messages from all rooms. Commands can arrive in
+	// workspace rooms, config rooms, or any room the daemon is joined to.
+	// Authorization is checked per-command via room power levels.
+	for roomID, room := range response.Rooms.Join {
+		d.processCommandMessages(ctx, roomID, room.Timeline.Events)
 	}
 }
 

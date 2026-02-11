@@ -2381,6 +2381,132 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	}
 }
 
+func TestMsgTypeConstants(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		constant string
+		want     string
+	}{
+		{"command", MsgTypeCommand, "m.bureau.command"},
+		{"command_result", MsgTypeCommandResult, "m.bureau.command_result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if test.constant != test.want {
+				t.Errorf("%s = %q, want %q", test.name, test.constant, test.want)
+			}
+		})
+	}
+}
+
+func TestPowerLevelConstants(t *testing.T) {
+	t.Parallel()
+	if PowerLevelReadOnly != 0 {
+		t.Errorf("PowerLevelReadOnly = %d, want 0", PowerLevelReadOnly)
+	}
+	if PowerLevelOperator != 50 {
+		t.Errorf("PowerLevelOperator = %d, want 50", PowerLevelOperator)
+	}
+	if PowerLevelAdmin != 100 {
+		t.Errorf("PowerLevelAdmin = %d, want 100", PowerLevelAdmin)
+	}
+}
+
+func TestCommandMessageRoundTrip(t *testing.T) {
+	t.Parallel()
+	original := CommandMessage{
+		MsgType:       MsgTypeCommand,
+		Body:          "workspace status iree/amdgpu/inference",
+		Command:       "workspace.status",
+		Workspace:     "iree/amdgpu/inference",
+		RequestID:     "req-a7f3",
+		SenderMachine: "machine/workstation",
+		Parameters: map[string]any{
+			"verbose": true,
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON field names match the wire format (snake_case).
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "msgtype", MsgTypeCommand)
+	assertField(t, raw, "body", "workspace status iree/amdgpu/inference")
+	assertField(t, raw, "command", "workspace.status")
+	assertField(t, raw, "workspace", "iree/amdgpu/inference")
+	assertField(t, raw, "request_id", "req-a7f3")
+	assertField(t, raw, "sender_machine", "machine/workstation")
+
+	// Verify parameters round-trip.
+	params, ok := raw["parameters"].(map[string]any)
+	if !ok {
+		t.Fatal("parameters missing or wrong type")
+	}
+	assertField(t, params, "verbose", true)
+
+	var decoded CommandMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.MsgType != original.MsgType ||
+		decoded.Body != original.Body ||
+		decoded.Command != original.Command ||
+		decoded.Workspace != original.Workspace ||
+		decoded.RequestID != original.RequestID ||
+		decoded.SenderMachine != original.SenderMachine {
+		t.Errorf("round-trip string field mismatch: got %+v", decoded)
+	}
+	if len(decoded.Parameters) != len(original.Parameters) {
+		t.Errorf("parameters length = %d, want %d", len(decoded.Parameters), len(original.Parameters))
+	}
+}
+
+func TestCommandMessageMinimal(t *testing.T) {
+	t.Parallel()
+	original := CommandMessage{
+		MsgType: MsgTypeCommand,
+		Body:    "workspace list",
+		Command: "workspace.list",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Required fields present.
+	assertField(t, raw, "msgtype", MsgTypeCommand)
+	assertField(t, raw, "command", "workspace.list")
+
+	// Optional fields omitted from JSON.
+	for _, field := range []string{"workspace", "request_id", "sender_machine", "parameters"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("field %q should be omitted from minimal CommandMessage", field)
+		}
+	}
+
+	var decoded CommandMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, original) {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
 // assertField checks that a JSON object has a field with the expected value.
 func assertField(t *testing.T, object map[string]any, key string, want any) {
 	t.Helper()

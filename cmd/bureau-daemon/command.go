@@ -1,0 +1,476 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+// Command handler for m.bureau.command messages. The daemon receives
+// commands via /sync timeline events, authorizes them via room power
+// levels, dispatches to built-in handlers, and posts threaded
+// m.bureau.command_result replies.
+//
+// Built-in commands execute directly in the daemon process (fast,
+// read-only or read-mostly, no sandbox needed). Principal-delegated
+// commands (workspace.setup, workspace.backup, principal.spawn) will be
+// added once the pipeline executor lands.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// commandDefinition describes a single built-in command: the minimum
+// power level required to execute it, whether it requires a workspace
+// target, and the handler function.
+type commandDefinition struct {
+	requiredPowerLevel int
+	needsWorkspace     bool
+	handler            func(ctx context.Context, d *Daemon, roomID string,
+		command schema.CommandMessage) (any, error)
+}
+
+// builtinCommands maps command names to their definitions. Commands not
+// in this map are rejected with an "unknown command" error.
+var builtinCommands = map[string]commandDefinition{
+	"workspace.list":          {schema.PowerLevelReadOnly, false, handleWorkspaceList},
+	"workspace.status":        {schema.PowerLevelReadOnly, true, handleWorkspaceStatus},
+	"workspace.du":            {schema.PowerLevelReadOnly, true, handleWorkspaceDu},
+	"workspace.worktree.list": {schema.PowerLevelOperator, true, handleWorkspaceWorktreeList},
+	"workspace.fetch":         {schema.PowerLevelOperator, true, handleWorkspaceFetch},
+}
+
+// processCommandMessages scans timeline events for m.bureau.command
+// messages and dispatches each to handleCommand. Called from
+// processSyncResponse for every joined room that has timeline events.
+func (d *Daemon) processCommandMessages(ctx context.Context, roomID string, events []messaging.Event) {
+	for _, event := range events {
+		// Only process m.room.message events.
+		if event.Type != "m.room.message" {
+			continue
+		}
+
+		// Extract msgtype from the event content map.
+		msgtype, _ := event.Content["msgtype"].(string)
+		if msgtype != schema.MsgTypeCommand {
+			continue
+		}
+
+		// Skip messages sent by the daemon itself. This prevents
+		// self-processing loops if the daemon's own messages appear
+		// in the sync response (e.g., echoed command results).
+		if event.Sender == d.machineUserID {
+			continue
+		}
+
+		// Parse the event content into a CommandMessage. Re-marshal
+		// to JSON and unmarshal into the struct to handle type
+		// coercion (float64 numbers, nested maps) correctly.
+		contentJSON, err := json.Marshal(event.Content)
+		if err != nil {
+			d.logger.Error("failed to marshal command event content",
+				"room_id", roomID, "event_id", event.EventID, "error", err)
+			continue
+		}
+
+		var command schema.CommandMessage
+		if err := json.Unmarshal(contentJSON, &command); err != nil {
+			d.logger.Error("failed to parse command message",
+				"room_id", roomID, "event_id", event.EventID, "error", err)
+			continue
+		}
+
+		d.handleCommand(ctx, roomID, event.EventID, event.Sender, command)
+	}
+}
+
+// handleCommand is the per-command lifecycle: look up, validate,
+// authorize, execute, and post the result.
+func (d *Daemon) handleCommand(ctx context.Context, roomID, eventID, sender string, command schema.CommandMessage) {
+	start := time.Now()
+
+	d.logger.Info("processing command",
+		"room_id", roomID,
+		"event_id", eventID,
+		"sender", sender,
+		"command", command.Command,
+		"workspace", command.Workspace,
+		"request_id", command.RequestID,
+	)
+
+	// Look up the command in the registry.
+	definition, exists := builtinCommands[command.Command]
+	if !exists {
+		d.postCommandError(ctx, roomID, eventID, command, start,
+			fmt.Sprintf("unknown command %q", command.Command))
+		return
+	}
+
+	// Validate workspace target if required.
+	if definition.needsWorkspace && command.Workspace == "" {
+		d.postCommandError(ctx, roomID, eventID, command, start,
+			fmt.Sprintf("command %q requires a workspace target", command.Command))
+		return
+	}
+
+	// Validate workspace path to prevent path traversal.
+	if command.Workspace != "" {
+		if err := d.validateWorkspacePath(command.Workspace); err != nil {
+			d.postCommandError(ctx, roomID, eventID, command, start, err.Error())
+			return
+		}
+	}
+
+	// Authorize the sender.
+	if err := d.authorizeCommand(ctx, roomID, sender, definition.requiredPowerLevel); err != nil {
+		d.postCommandError(ctx, roomID, eventID, command, start,
+			fmt.Sprintf("authorization denied: %v", err))
+		return
+	}
+
+	// Execute the handler.
+	result, err := definition.handler(ctx, d, roomID, command)
+	if err != nil {
+		d.postCommandError(ctx, roomID, eventID, command, start, err.Error())
+		return
+	}
+
+	d.postCommandResult(ctx, roomID, eventID, command, start, result)
+}
+
+// validateWorkspacePath checks that a workspace name is safe for
+// filesystem operations. Rejects path traversal attempts (.. segments,
+// absolute paths, leading dots) and verifies the resolved path would
+// fall under workspaceRoot.
+func (d *Daemon) validateWorkspacePath(workspace string) error {
+	if strings.Contains(workspace, "..") {
+		return fmt.Errorf("workspace name must not contain '..' segments: %q", workspace)
+	}
+	if filepath.IsAbs(workspace) {
+		return fmt.Errorf("workspace name must not be an absolute path: %q", workspace)
+	}
+	if strings.HasPrefix(workspace, ".") {
+		return fmt.Errorf("workspace name must not start with '.': %q", workspace)
+	}
+
+	// Verify containment: the resolved path must be under workspaceRoot.
+	resolved := filepath.Join(d.workspaceRoot, workspace)
+	relative, err := filepath.Rel(d.workspaceRoot, resolved)
+	if err != nil {
+		return fmt.Errorf("invalid workspace path: %w", err)
+	}
+	if strings.HasPrefix(relative, "..") {
+		return fmt.Errorf("workspace path escapes root: %q", workspace)
+	}
+
+	return nil
+}
+
+// workspacePath returns the full filesystem path for a workspace name
+// under the daemon's workspaceRoot. Caller must have already validated
+// the workspace name via validateWorkspacePath.
+func (d *Daemon) workspacePath(workspace string) string {
+	return filepath.Join(d.workspaceRoot, workspace)
+}
+
+// authorizeCommand reads the room's m.room.power_levels state event and
+// checks that the sender's power level meets the required threshold.
+// Returns an error if authorization fails or power levels cannot be read.
+func (d *Daemon) authorizeCommand(ctx context.Context, roomID, sender string, requiredLevel int) error {
+	raw, err := d.session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
+	if err != nil {
+		// If the room has no power levels event (unlikely but possible),
+		// treat as denied rather than defaulting to open.
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return fmt.Errorf("room %s has no power levels configured", roomID)
+		}
+		return fmt.Errorf("reading power levels for room %s: %w", roomID, err)
+	}
+
+	var powerLevels map[string]any
+	if err := json.Unmarshal(raw, &powerLevels); err != nil {
+		return fmt.Errorf("parsing power levels for room %s: %w", roomID, err)
+	}
+
+	senderLevel := getUserPowerLevel(powerLevels, sender)
+	if int(senderLevel) < requiredLevel {
+		return fmt.Errorf("sender %s has power level %d, command requires %d",
+			sender, int(senderLevel), requiredLevel)
+	}
+
+	return nil
+}
+
+// getUserPowerLevel extracts a user's power level from a parsed
+// m.room.power_levels event content. Returns users_default if the user
+// has no explicit entry.
+func getUserPowerLevel(powerLevels map[string]any, userID string) float64 {
+	usersDefault := getNumericField(powerLevels, "users_default")
+
+	users, ok := powerLevels["users"].(map[string]any)
+	if !ok {
+		return usersDefault
+	}
+
+	level, ok := users[userID].(float64)
+	if !ok {
+		return usersDefault
+	}
+	return level
+}
+
+// getNumericField extracts a float64 field from a JSON-decoded map.
+// Returns 0 if the field is missing or not a number.
+func getNumericField(data map[string]any, key string) float64 {
+	value, ok := data[key].(float64)
+	if !ok {
+		return 0
+	}
+	return value
+}
+
+// threadRelation builds the m.relates_to structure for a threaded reply
+// to the given event ID.
+func threadRelation(eventID string) map[string]any {
+	return map[string]any{
+		"rel_type":        "m.thread",
+		"event_id":        eventID,
+		"is_falling_back": true,
+		"m.in_reply_to": map[string]any{
+			"event_id": eventID,
+		},
+	}
+}
+
+// postCommandResult posts a successful command result as a threaded
+// reply to the original command message.
+func (d *Daemon) postCommandResult(ctx context.Context, roomID, commandEventID string, command schema.CommandMessage, start time.Time, result any) {
+	durationMilliseconds := time.Since(start).Milliseconds()
+
+	body := fmt.Sprintf("%s: completed in %dms", command.Command, durationMilliseconds)
+
+	content := map[string]any{
+		"msgtype":      schema.MsgTypeCommandResult,
+		"body":         body,
+		"status":       "success",
+		"result":       result,
+		"duration_ms":  durationMilliseconds,
+		"m.relates_to": threadRelation(commandEventID),
+	}
+
+	if command.RequestID != "" {
+		content["request_id"] = command.RequestID
+	}
+
+	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+		d.logger.Error("failed to post command result",
+			"room_id", roomID,
+			"command", command.Command,
+			"error", err,
+		)
+	}
+}
+
+// postCommandError posts a command error as a threaded reply to the
+// original command message.
+func (d *Daemon) postCommandError(ctx context.Context, roomID, commandEventID string, command schema.CommandMessage, start time.Time, errorMessage string) {
+	durationMilliseconds := time.Since(start).Milliseconds()
+
+	d.logger.Warn("command failed",
+		"room_id", roomID,
+		"command", command.Command,
+		"error", errorMessage,
+	)
+
+	body := fmt.Sprintf("%s: error: %s", command.Command, errorMessage)
+
+	content := map[string]any{
+		"msgtype":      schema.MsgTypeCommandResult,
+		"body":         body,
+		"status":       "error",
+		"error":        errorMessage,
+		"duration_ms":  durationMilliseconds,
+		"m.relates_to": threadRelation(commandEventID),
+	}
+
+	if command.RequestID != "" {
+		content["request_id"] = command.RequestID
+	}
+
+	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+		d.logger.Error("failed to post command error",
+			"room_id", roomID,
+			"command", command.Command,
+			"error", err,
+		)
+	}
+}
+
+// --- Built-in command handlers ---
+
+// handleWorkspaceList lists local workspace directories under the
+// daemon's workspaceRoot (e.g., /var/bureau/workspace/).
+func handleWorkspaceList(ctx context.Context, d *Daemon, roomID string, command schema.CommandMessage) (any, error) {
+	entries, err := os.ReadDir(d.workspaceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{
+				"workspaces": []string{},
+			}, nil
+		}
+		return nil, fmt.Errorf("reading workspace root %s: %w", d.workspaceRoot, err)
+	}
+
+	var workspaces []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			workspaces = append(workspaces, entry.Name())
+		}
+	}
+
+	// Ensure the JSON output has an empty array, not null.
+	if workspaces == nil {
+		workspaces = []string{}
+	}
+
+	return map[string]any{
+		"workspaces": workspaces,
+	}, nil
+}
+
+// handleWorkspaceStatus reports the existence and basic metadata of a
+// workspace directory.
+func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID string, command schema.CommandMessage) (any, error) {
+	path := d.workspacePath(command.Workspace)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{
+				"workspace": command.Workspace,
+				"exists":    false,
+			}, nil
+		}
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	result := map[string]any{
+		"workspace": command.Workspace,
+		"exists":    true,
+		"is_dir":    info.IsDir(),
+	}
+
+	// Check for .bare directory (indicates git workspace).
+	bareDir := filepath.Join(path, ".bare")
+	if _, err := os.Stat(bareDir); err == nil {
+		result["has_bare_repo"] = true
+	}
+
+	return result, nil
+}
+
+// handleWorkspaceDu runs du -sh on the workspace directory and returns
+// the output.
+func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID string, command schema.CommandMessage) (any, error) {
+	path := d.workspacePath(command.Workspace)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("workspace %q does not exist", command.Workspace)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "du", "-sh", path)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("du -sh %s: %w (stderr: %s)", path, err, strings.TrimSpace(stderr.String()))
+	}
+
+	output := strings.TrimSpace(stdout.String())
+
+	// Parse the du output: "123M\t/path/to/workspace"
+	parts := strings.SplitN(output, "\t", 2)
+	size := output
+	if len(parts) >= 1 {
+		size = parts[0]
+	}
+
+	return map[string]any{
+		"workspace": command.Workspace,
+		"size":      size,
+		"raw":       output,
+	}, nil
+}
+
+// handleWorkspaceWorktreeList runs git worktree list on the workspace's
+// .bare directory and returns the output.
+func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID string, command schema.CommandMessage) (any, error) {
+	path := d.workspacePath(command.Workspace)
+	bareDir := filepath.Join(path, ".bare")
+
+	if _, err := os.Stat(bareDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("workspace %q has no .bare directory (not a git workspace)", command.Workspace)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "git", "-C", bareDir, "worktree", "list")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git worktree list in %s: %w (stderr: %s)", bareDir, err, strings.TrimSpace(stderr.String()))
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	var worktrees []string
+	if output != "" {
+		worktrees = strings.Split(output, "\n")
+	}
+
+	// Ensure the JSON output has an empty array, not null.
+	if worktrees == nil {
+		worktrees = []string{}
+	}
+
+	return map[string]any{
+		"workspace": command.Workspace,
+		"worktrees": worktrees,
+		"raw":       output,
+	}, nil
+}
+
+// handleWorkspaceFetch runs git fetch --all in the workspace's .bare
+// directory, using flock to serialize concurrent fetches.
+func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID string, command schema.CommandMessage) (any, error) {
+	path := d.workspacePath(command.Workspace)
+	bareDir := filepath.Join(path, ".bare")
+
+	if _, err := os.Stat(bareDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("workspace %q has no .bare directory (not a git workspace)", command.Workspace)
+	}
+
+	lockPath := filepath.Join(bareDir, "bureau.lock")
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "flock", lockPath, "git", "-C", bareDir, "fetch", "--all")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git fetch --all in %s: %w (stderr: %s)", bareDir, err, strings.TrimSpace(stderr.String()))
+	}
+
+	return map[string]any{
+		"workspace": command.Workspace,
+		"output":    strings.TrimSpace(stdout.String() + stderr.String()),
+	}, nil
+}

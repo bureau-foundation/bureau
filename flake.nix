@@ -4,6 +4,13 @@
 {
   description = "Bureau - AI agent orchestration platform";
 
+  nixConfig = {
+    extra-substituters = [ "https://cache.infra.bureau.foundation" ];
+    extra-trusted-public-keys = [
+      "cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";

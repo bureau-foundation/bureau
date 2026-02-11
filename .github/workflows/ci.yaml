@@ -28,6 +28,16 @@ jobs:
         with:
           use-flakehub: false
 
+      # Trust the project's binary cache so the dev shell can pull our
+      # custom Go 1.25.6 derivation instead of compiling from source.
+      - name: Configure Nix binary cache
+        run: |
+          sudo tee -a /etc/nix/nix.conf <<EOF
+          extra-substituters = https://cache.infra.bureau.foundation
+          extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
+          EOF
+          sudo systemctl restart nix-daemon
+
       # Evaluate and fetch the dev shell closure. This is the slow part
       # (compiling Go, downloading tools) and runs once per cache miss.
       # Isolating it keeps the Pre-commit and Build steps showing only
@@ -90,6 +100,14 @@ jobs:
         with:
           use-flakehub: false
 
+      - name: Configure Nix binary cache
+        run: |
+          sudo tee -a /etc/nix/nix.conf <<EOF
+          extra-substituters = https://cache.infra.bureau.foundation
+          extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
+          EOF
+          sudo systemctl restart nix-daemon
+
       - name: Warm Nix dev shell
         run: nix develop --command true
 
@@ -112,6 +130,30 @@ jobs:
 
       - name: Build Nix packages
         run: nix build
+
+      # Push store paths to our R2 binary cache so subsequent runs
+      # (and local dev) can skip building Go 1.25.6 from source.
+      # Only runs on main — PRs don't have access to secrets.
+      - name: Push to Nix binary cache
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
+          trap 'rm -f /tmp/nix-signing-key' EXIT
+
+          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
+
+          # Sign and push the dev shell closure (the expensive part:
+          # includes our custom Go 1.25.6 and all dev tools).
+          nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
+          nix copy --to "$CACHE" .#devShells.x86_64-linux.default
+
+          # Sign and push the release binary closure.
+          nix store sign --key-file /tmp/nix-signing-key -r .#default
+          nix copy --to "$CACHE" .#default
 
       - name: Prune Bazel cache
         if: always()

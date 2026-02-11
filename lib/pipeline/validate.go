@@ -18,8 +18,9 @@ import (
 //   - At least one step is required
 //   - Each step must have a non-empty Name
 //   - Each step must set exactly one of Run or Publish (not both, not neither)
-//   - Check, When, and Interactive are only valid on Run steps
-//   - Publish steps must have EventType and Content
+//   - Check, Interactive, and GracePeriod are only valid on Run steps
+//   - When is valid on both Run and Publish steps (conditional guard)
+//   - Publish steps must have EventType, Room, and Content
 //   - Timeout (when present) must be parseable by time.ParseDuration
 //   - Log.Room must be non-empty when Log is set
 func Validate(content *schema.PipelineContent) []string {
@@ -48,13 +49,13 @@ func Validate(content *schema.PipelineContent) []string {
 			issues = append(issues, fmt.Sprintf("%s: must set either run or publish", prefix))
 		}
 
-		// Fields that are only meaningful for Run steps.
+		// Fields that are only meaningful for Run steps. When is a
+		// general-purpose conditional guard and is valid on both Run
+		// and Publish steps (e.g., conditional state publication based
+		// on a variable).
 		if !hasRun {
 			if step.Check != "" {
 				issues = append(issues, fmt.Sprintf("%s: check is only valid on run steps", prefix))
-			}
-			if step.When != "" {
-				issues = append(issues, fmt.Sprintf("%s: when is only valid on run steps", prefix))
 			}
 			if step.Interactive {
 				issues = append(issues, fmt.Sprintf("%s: interactive is only valid on run steps", prefix))

@@ -415,7 +415,7 @@ func TestExpandStep(t *testing.T) {
 		step := schema.PipelineStep{
 			Name: "publish-ready",
 			Publish: &schema.PipelinePublish{
-				EventType: "m.bureau.workspace.ready",
+				EventType: "m.bureau.workspace",
 				Room:      "${WORKSPACE_ROOM}",
 				StateKey:  "${MACHINE}",
 				Content: map[string]any{

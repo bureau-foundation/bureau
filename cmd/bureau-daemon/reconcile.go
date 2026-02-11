@@ -550,7 +550,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		roomID = resolved
 	}
 
-	_, err := d.session.GetStateEvent(ctx, roomID, condition.EventType, condition.StateKey)
+	content, err := d.session.GetStateEvent(ctx, roomID, condition.EventType, condition.StateKey)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			d.logger.Info("start condition not met, deferring principal",
@@ -569,6 +569,46 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 			"error", err,
 		)
 		return false
+	}
+
+	// Event exists. If ContentMatch is specified, verify all key-value
+	// pairs match the event content.
+	if len(condition.ContentMatch) > 0 {
+		var contentMap map[string]any
+		if err := json.Unmarshal(content, &contentMap); err != nil {
+			d.logger.Info("start condition content not a JSON object, deferring principal",
+				"principal", localpart,
+				"event_type", condition.EventType,
+				"room_id", roomID,
+				"error", err,
+			)
+			return false
+		}
+		for matchKey, matchValue := range condition.ContentMatch {
+			actual, exists := contentMap[matchKey]
+			if !exists {
+				d.logger.Info("start condition content_match key missing, deferring principal",
+					"principal", localpart,
+					"event_type", condition.EventType,
+					"room_id", roomID,
+					"key", matchKey,
+					"expected", matchValue,
+				)
+				return false
+			}
+			actualString, ok := actual.(string)
+			if !ok || actualString != matchValue {
+				d.logger.Info("start condition content_match value mismatch, deferring principal",
+					"principal", localpart,
+					"event_type", condition.EventType,
+					"room_id", roomID,
+					"key", matchKey,
+					"expected", matchValue,
+					"actual", actual,
+				)
+				return false
+			}
+		}
 	}
 
 	return true

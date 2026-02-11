@@ -113,14 +113,18 @@ const (
 	// Room: the project's workspace room
 	EventTypeProject = "m.bureau.project"
 
-	// EventTypeWorkspaceReady is published by the setup principal after
-	// it finishes creating the workspace (clone, worktrees, config files).
-	// Other principals use this as a gate via StartCondition — they don't
-	// start until this event exists in the workspace room.
+	// EventTypeWorkspace tracks the lifecycle of a workspace. Published
+	// to the workspace room with an empty state key (one workspace per
+	// room). The status field progresses through the lifecycle:
+	// pending → active → archived | removed.
+	//
+	// Principals gate on this via StartCondition with ContentMatch
+	// {"status": "active"} — they don't start until the setup principal
+	// finishes and updates the status from "pending" to "active".
 	//
 	// State key: "" (singleton per room)
 	// Room: the workspace room
-	EventTypeWorkspaceReady = "m.bureau.workspace.ready"
+	EventTypeWorkspace = "m.bureau.workspace"
 
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
@@ -587,21 +591,24 @@ type PrincipalAssignment struct {
 	// is deferred until a subsequent /sync delivers it.
 	//
 	// The primary use case is workspace lifecycle sequencing: agent
-	// principals gate on EventTypeWorkspaceReady so they don't start
-	// until the setup principal has finished creating the workspace.
-	// Other uses include service dependencies, staged rollouts, and
-	// manual approval gates.
+	// principals gate on EventTypeWorkspace (with ContentMatch
+	// {"status": "active"}) so they don't start until the setup
+	// principal has finished creating the workspace. Other uses
+	// include service dependencies, staged rollouts, and manual
+	// approval gates.
 	//
 	// When nil, the principal starts normally (subject to AutoStart).
 	StartCondition *StartCondition `json:"start_condition,omitempty"`
 }
 
-// StartCondition specifies a state event that must exist before a principal
-// can launch. The daemon checks this during reconciliation: resolve the room
-// alias, fetch the state event, and proceed only if it exists.
+// StartCondition specifies a state event that must exist (and optionally
+// match specific content) before a principal can launch. The daemon checks
+// this during reconciliation: resolve the room alias, fetch the state event,
+// and proceed only if the event exists and all ContentMatch entries are
+// satisfied.
 type StartCondition struct {
 	// EventType is the Matrix state event type to check for (e.g.,
-	// "m.bureau.workspace.ready"). Must be a valid Matrix event type.
+	// "m.bureau.workspace"). Must be a valid Matrix event type.
 	EventType string `json:"event_type"`
 
 	// StateKey is the state key to look up. Empty string is valid and
@@ -613,6 +620,16 @@ type StartCondition struct {
 	// resolves this to a room ID (cached) before fetching the event.
 	// When empty, the daemon checks the principal's own config room.
 	RoomAlias string `json:"room_alias,omitempty"`
+
+	// ContentMatch specifies key-value pairs that must all match in
+	// the event content for the condition to be satisfied. This is a
+	// flat string equality check: every key must appear in the event
+	// content with the exact same string value. When nil or empty,
+	// only event existence is checked.
+	//
+	// Example: {"status": "active"} matches only when the workspace
+	// state event has status "active", not "pending" or "archived".
+	ContentMatch map[string]string `json:"content_match,omitempty"`
 }
 
 // MatrixPolicy controls which self-service Matrix operations an agent can
@@ -962,17 +979,32 @@ type DirectoryConfig struct {
 	Description string `json:"description,omitempty"`
 }
 
-// WorkspaceReady is the content of an EventTypeWorkspaceReady state event.
-// Published by the setup principal after the workspace is fully initialized.
-// Principals with StartCondition referencing this event will start only
-// after it appears.
-type WorkspaceReady struct {
-	// SetupPrincipal is the localpart of the setup principal that
-	// completed the workspace initialization (e.g., "iree/setup").
-	SetupPrincipal string `json:"setup_principal"`
+// WorkspaceState is the content of an EventTypeWorkspace state event.
+// It tracks the full lifecycle of a workspace as a status field that
+// progresses one-directionally: pending → active → archived | removed.
+type WorkspaceState struct {
+	// Status is the current lifecycle state. Valid values:
+	//   - "pending": room created, setup not yet started or in progress.
+	//   - "active": setup complete, workspace is usable.
+	//   - "archived": teardown completed in archive mode.
+	//   - "removed": teardown completed in delete mode.
+	Status string `json:"status"`
 
-	// CompletedAt is an ISO 8601 timestamp of when setup finished.
-	CompletedAt string `json:"completed_at"`
+	// Project is the project name (first path segment of the workspace
+	// alias). Matches the directory under /var/bureau/workspace/.
+	Project string `json:"project"`
+
+	// Machine is the machine localpart identifying which host the
+	// workspace data lives on.
+	Machine string `json:"machine"`
+
+	// UpdatedAt is an ISO 8601 timestamp of the last status transition.
+	UpdatedAt string `json:"updated_at"`
+
+	// ArchivePath is the path under /workspace/.archive/ where the
+	// project was moved when status is "archived". Empty for all other
+	// statuses.
+	ArchivePath string `json:"archive_path,omitempty"`
 }
 
 // PipelineContent is the content of an EventTypePipeline state event.
@@ -1110,7 +1142,7 @@ type PipelineStep struct {
 // All string fields support variable substitution (${NAME}).
 type PipelinePublish struct {
 	// EventType is the Matrix state event type (e.g.,
-	// "m.bureau.workspace.ready").
+	// "m.bureau.workspace").
 	EventType string `json:"event_type"`
 
 	// Room is the target room alias or ID. Supports variable
@@ -1118,7 +1150,7 @@ type PipelinePublish struct {
 	Room string `json:"room"`
 
 	// StateKey is the state key for the event. Empty string is
-	// valid (singleton events like workspace.ready).
+	// valid (singleton events like m.bureau.workspace).
 	StateKey string `json:"state_key,omitempty"`
 
 	// Content is the event content as a JSON-compatible map.
@@ -1335,7 +1367,7 @@ type LayoutMemberFilter struct {
 //
 // Three tiers:
 //   - Admin (100): project config, teardown, room metadata, power levels
-//   - Machine/daemon (50): workspace.ready, layout, invite
+//   - Machine/daemon (50): workspace state, layout, invite
 //   - Default (0): messages, read state
 //
 // The admin creates workspace rooms via "bureau workspace create", so using
@@ -1354,7 +1386,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 		"users_default": 0,
 		"events": map[string]any{
 			EventTypeProject:            100,
-			EventTypeWorkspaceReady:     50,
+			EventTypeWorkspace:          50,
 			EventTypeLayout:             0,
 			"m.room.name":               100,
 			"m.room.topic":              100,

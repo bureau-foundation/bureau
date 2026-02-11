@@ -11,7 +11,7 @@ package main
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
-//   - Workspace rooms: m.bureau.workspace.ready, m.bureau.project → reconcile
+//   - Workspace rooms: m.bureau.workspace, m.bureau.project → reconcile
 //     (joined dynamically when the daemon accepts invites)
 //
 // The sync loop is purely a notification mechanism: when state changes are
@@ -46,7 +46,7 @@ import (
 // incremental syncs. m.room.message is needed for command messages
 // (m.bureau.command msgtype) posted by the CLI for remote workspace operations.
 //
-// Workspace event types (project, workspace.ready) are included so that
+// Workspace event types (project, workspace) are included so that
 // state changes in workspace rooms trigger re-reconciliation. The daemon
 // uses evaluateStartCondition with direct GetStateEvent calls to check
 // whether conditions are met — the sync filter just ensures the room
@@ -61,7 +61,7 @@ const syncFilter = `{
 				"m.bureau.service",
 				"m.bureau.layout",
 				"m.bureau.project",
-				"m.bureau.workspace.ready"
+				"m.bureau.workspace"
 			]
 		},
 		"timeline": {
@@ -72,7 +72,7 @@ const syncFilter = `{
 				"m.bureau.service",
 				"m.bureau.layout",
 				"m.bureau.project",
-				"m.bureau.workspace.ready",
+				"m.bureau.workspace",
 				"m.room.message"
 			],
 			"limit": 50

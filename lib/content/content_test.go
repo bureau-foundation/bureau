@@ -50,7 +50,7 @@ func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
 	}
 
 	// Verify required variables are declared.
-	requiredVariables := []string{"REPOSITORY", "PROJECT", "WORKSPACE_ROOM_ID"}
+	requiredVariables := []string{"REPOSITORY", "PROJECT", "WORKSPACE_ROOM_ID", "MACHINE"}
 	for _, name := range requiredVariables {
 		variable, exists := p.Content.Variables[name]
 		if !exists {
@@ -72,14 +72,14 @@ func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
 		t.Errorf("first step name = %q, want %q", p.Content.Steps[0].Name, "create-project-directory")
 	}
 
-	// Last step should publish workspace ready.
+	// Last step should publish workspace active state.
 	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
-	if lastStep.Name != "publish-ready" {
-		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-ready")
+	if lastStep.Name != "publish-active" {
+		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-active")
 	}
 	if lastStep.Publish == nil {
 		t.Error("last step should be a publish step")
-	} else if lastStep.Publish.EventType != "m.bureau.workspace.ready" {
+	} else if lastStep.Publish.EventType != "m.bureau.workspace" {
 		t.Errorf("last step publish event_type = %q", lastStep.Publish.EventType)
 	}
 
@@ -107,7 +107,7 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 	}
 
 	// Verify required variables.
-	requiredVariables := []string{"PROJECT", "WORKSPACE_ROOM_ID"}
+	requiredVariables := []string{"PROJECT", "WORKSPACE_ROOM_ID", "MACHINE"}
 	for _, name := range requiredVariables {
 		variable, exists := p.Content.Variables[name]
 		if !exists {
@@ -127,9 +127,9 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 		t.Errorf("MODE default = %q, want %q", modeVariable.Default, "archive")
 	}
 
-	// Should have enough steps for validate + check + cleanup + publish.
-	if len(p.Content.Steps) < 4 {
-		t.Fatalf("expected at least 4 steps, got %d", len(p.Content.Steps))
+	// Should have enough steps for validate + check + cleanup + publish (x2).
+	if len(p.Content.Steps) < 5 {
+		t.Fatalf("expected at least 5 steps, got %d", len(p.Content.Steps))
 	}
 
 	// First step should validate the MODE variable.
@@ -137,15 +137,27 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 		t.Errorf("first step name = %q, want %q", p.Content.Steps[0].Name, "validate-mode")
 	}
 
-	// Last step should publish removal status.
+	// Last two steps should be conditional publish steps (archive/delete).
 	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
+	secondLastStep := p.Content.Steps[len(p.Content.Steps)-2]
+	if secondLastStep.Name != "publish-archived" {
+		t.Errorf("second-to-last step name = %q, want %q", secondLastStep.Name, "publish-archived")
+	}
 	if lastStep.Name != "publish-removed" {
 		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-removed")
 	}
+	// Both should publish to the unified workspace event type.
+	if secondLastStep.Publish == nil {
+		t.Error("publish-archived should be a publish step")
+	} else if secondLastStep.Publish.EventType != "m.bureau.workspace" {
+		t.Errorf("publish-archived event_type = %q, want %q",
+			secondLastStep.Publish.EventType, "m.bureau.workspace")
+	}
 	if lastStep.Publish == nil {
-		t.Error("last step should be a publish step")
-	} else if lastStep.Publish.EventType != "m.bureau.workspace.ready" {
-		t.Errorf("last step publish event_type = %q", lastStep.Publish.EventType)
+		t.Error("publish-removed should be a publish step")
+	} else if lastStep.Publish.EventType != "m.bureau.workspace" {
+		t.Errorf("publish-removed event_type = %q, want %q",
+			lastStep.Publish.EventType, "m.bureau.workspace")
 	}
 
 	// Log should point to the workspace room.

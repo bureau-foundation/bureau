@@ -27,7 +27,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"layout", EventTypeLayout, "m.bureau.layout"},
 		{"template", EventTypeTemplate, "m.bureau.template"},
 		{"project", EventTypeProject, "m.bureau.project"},
-		{"workspace_ready", EventTypeWorkspaceReady, "m.bureau.workspace.ready"},
+		{"workspace", EventTypeWorkspace, "m.bureau.workspace"},
 		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
 	}
 	for _, test := range tests {
@@ -891,7 +891,7 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 		t.Errorf("admin power level = %v, want 100", users[adminUserID])
 	}
 
-	// Machine should have power level 50 (can publish workspace.ready and
+	// Machine should have power level 50 (can publish workspace state and
 	// invite, but cannot change project config or initiate teardown).
 	if users[machineUserID] != 50 {
 		t.Errorf("machine power level = %v, want 50", users[machineUserID])
@@ -923,8 +923,8 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	}
 
 	// Machine-level events (PL 50).
-	if events[EventTypeWorkspaceReady] != 50 {
-		t.Errorf("%s power level = %v, want 50", EventTypeWorkspaceReady, events[EventTypeWorkspaceReady])
+	if events[EventTypeWorkspace] != 50 {
+		t.Errorf("%s power level = %v, want 50", EventTypeWorkspace, events[EventTypeWorkspace])
 	}
 
 	// Default-level events (PL 0).
@@ -1933,9 +1933,10 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 		Template:  "iree/template:llm-agent",
 		AutoStart: true,
 		StartCondition: &StartCondition{
-			EventType: "m.bureau.workspace.ready",
-			StateKey:  "",
-			RoomAlias: "#iree/amdgpu/inference:bureau.local",
+			EventType:    "m.bureau.workspace",
+			StateKey:     "",
+			RoomAlias:    "#iree/amdgpu/inference:bureau.local",
+			ContentMatch: map[string]string{"status": "active"},
 		},
 	}
 
@@ -1953,9 +1954,15 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	if !ok {
 		t.Fatal("start_condition field missing or wrong type")
 	}
-	assertField(t, startCondition, "event_type", "m.bureau.workspace.ready")
+	assertField(t, startCondition, "event_type", "m.bureau.workspace")
 	assertField(t, startCondition, "state_key", "")
 	assertField(t, startCondition, "room_alias", "#iree/amdgpu/inference:bureau.local")
+
+	contentMatch, ok := startCondition["content_match"].(map[string]any)
+	if !ok {
+		t.Fatal("content_match field missing or wrong type")
+	}
+	assertField(t, contentMatch, "status", "active")
 
 	var decoded PrincipalAssignment
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -1964,9 +1971,9 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	if decoded.StartCondition == nil {
 		t.Fatal("StartCondition should not be nil after round-trip")
 	}
-	if decoded.StartCondition.EventType != "m.bureau.workspace.ready" {
+	if decoded.StartCondition.EventType != "m.bureau.workspace" {
 		t.Errorf("StartCondition.EventType: got %q, want %q",
-			decoded.StartCondition.EventType, "m.bureau.workspace.ready")
+			decoded.StartCondition.EventType, "m.bureau.workspace")
 	}
 	if decoded.StartCondition.StateKey != "" {
 		t.Errorf("StartCondition.StateKey: got %q, want empty", decoded.StartCondition.StateKey)
@@ -1974,6 +1981,10 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	if decoded.StartCondition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
 		t.Errorf("StartCondition.RoomAlias: got %q, want %q",
 			decoded.StartCondition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
+	}
+	if decoded.StartCondition.ContentMatch["status"] != "active" {
+		t.Errorf("StartCondition.ContentMatch[status]: got %q, want %q",
+			decoded.StartCondition.ContentMatch["status"], "active")
 	}
 }
 
@@ -2002,7 +2013,7 @@ func TestStartConditionOmitsEmptyRoomAlias(t *testing.T) {
 	// When RoomAlias is empty (check principal's own config room),
 	// it should be omitted from the wire format.
 	condition := StartCondition{
-		EventType: "m.bureau.workspace.ready",
+		EventType: "m.bureau.workspace",
 		StateKey:  "",
 	}
 
@@ -2015,17 +2026,77 @@ func TestStartConditionOmitsEmptyRoomAlias(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "event_type", "m.bureau.workspace.ready")
+	assertField(t, raw, "event_type", "m.bureau.workspace")
 	assertField(t, raw, "state_key", "")
 	if _, exists := raw["room_alias"]; exists {
 		t.Error("room_alias should be omitted when empty")
 	}
+	if _, exists := raw["content_match"]; exists {
+		t.Error("content_match should be omitted when nil")
+	}
 }
 
-func TestWorkspaceReadyRoundTrip(t *testing.T) {
-	original := WorkspaceReady{
-		SetupPrincipal: "iree/setup",
-		CompletedAt:    "2026-02-10T12:00:00Z",
+func TestStartConditionContentMatchRoundTrip(t *testing.T) {
+	condition := StartCondition{
+		EventType:    "m.bureau.workspace",
+		StateKey:     "",
+		RoomAlias:    "#iree/amdgpu/inference:bureau.local",
+		ContentMatch: map[string]string{"status": "active"},
+	}
+
+	data, err := json.Marshal(condition)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded StartCondition
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.ContentMatch) != 1 {
+		t.Fatalf("ContentMatch length = %d, want 1", len(decoded.ContentMatch))
+	}
+	if decoded.ContentMatch["status"] != "active" {
+		t.Errorf("ContentMatch[status] = %q, want %q", decoded.ContentMatch["status"], "active")
+	}
+}
+
+func TestStartConditionMultipleContentMatch(t *testing.T) {
+	// ContentMatch with multiple keys — all must match.
+	condition := StartCondition{
+		EventType: "m.bureau.service",
+		StateKey:  "stt/whisper",
+		ContentMatch: map[string]string{
+			"status": "healthy",
+			"stage":  "canary",
+		},
+	}
+
+	data, err := json.Marshal(condition)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	contentMatch, ok := raw["content_match"].(map[string]any)
+	if !ok {
+		t.Fatal("content_match field missing or wrong type")
+	}
+	assertField(t, contentMatch, "status", "healthy")
+	assertField(t, contentMatch, "stage", "canary")
+}
+
+func TestWorkspaceStateRoundTrip(t *testing.T) {
+	original := WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "workstation",
+		UpdatedAt: "2026-02-10T12:00:00Z",
 	}
 
 	data, err := json.Marshal(original)
@@ -2037,10 +2108,45 @@ func TestWorkspaceReadyRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "setup_principal", "iree/setup")
-	assertField(t, raw, "completed_at", "2026-02-10T12:00:00Z")
+	assertField(t, raw, "status", "active")
+	assertField(t, raw, "project", "iree")
+	assertField(t, raw, "machine", "workstation")
+	assertField(t, raw, "updated_at", "2026-02-10T12:00:00Z")
+	if _, exists := raw["archive_path"]; exists {
+		t.Error("archive_path should be omitted when empty")
+	}
 
-	var decoded WorkspaceReady
+	var decoded WorkspaceState
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestWorkspaceStateArchived(t *testing.T) {
+	original := WorkspaceState{
+		Status:      "archived",
+		Project:     "iree",
+		Machine:     "workstation",
+		UpdatedAt:   "2026-02-10T14:30:00Z",
+		ArchivePath: "/workspace/.archive/iree-20260210T143000",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "status", "archived")
+	assertField(t, raw, "archive_path", "/workspace/.archive/iree-20260210T143000")
+
+	var decoded WorkspaceState
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -2085,13 +2191,15 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 				Env:      map[string]string{"INIT_MODE": "full"},
 			},
 			{
-				Name: "publish-ready",
+				Name: "publish-active",
 				Publish: &PipelinePublish{
-					EventType: "m.bureau.workspace.ready",
+					EventType: "m.bureau.workspace",
 					Room:      "${WORKSPACE_ROOM_ID}",
 					Content: map[string]any{
-						"setup_principal": "${PRINCIPAL}",
-						"completed_at":    "2026-02-10T12:00:00Z",
+						"status":     "active",
+						"project":    "${PROJECT}",
+						"machine":    "${MACHINE}",
+						"updated_at": "2026-02-10T12:00:00Z",
 					},
 				},
 			},
@@ -2166,18 +2274,20 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 
 	// Fourth step: publish.
 	fourthStep := steps[3].(map[string]any)
-	assertField(t, fourthStep, "name", "publish-ready")
+	assertField(t, fourthStep, "name", "publish-active")
 	publish, ok := fourthStep["publish"].(map[string]any)
 	if !ok {
 		t.Fatal("publish field missing or wrong type")
 	}
-	assertField(t, publish, "event_type", "m.bureau.workspace.ready")
+	assertField(t, publish, "event_type", "m.bureau.workspace")
 	assertField(t, publish, "room", "${WORKSPACE_ROOM_ID}")
 	publishContent, ok := publish["content"].(map[string]any)
 	if !ok {
 		t.Fatal("publish content field missing or wrong type")
 	}
-	assertField(t, publishContent, "setup_principal", "${PRINCIPAL}")
+	assertField(t, publishContent, "status", "active")
+	assertField(t, publishContent, "project", "${PROJECT}")
+	assertField(t, publishContent, "machine", "${MACHINE}")
 
 	// Verify log.
 	logField, ok := raw["log"].(map[string]any)
@@ -2218,9 +2328,9 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 	if decoded.Steps[3].Publish == nil {
 		t.Fatal("Steps[3].Publish should not be nil after round-trip")
 	}
-	if decoded.Steps[3].Publish.EventType != "m.bureau.workspace.ready" {
+	if decoded.Steps[3].Publish.EventType != "m.bureau.workspace" {
 		t.Errorf("Steps[3].Publish.EventType: got %q, want %q",
-			decoded.Steps[3].Publish.EventType, "m.bureau.workspace.ready")
+			decoded.Steps[3].Publish.EventType, "m.bureau.workspace")
 	}
 	if decoded.Log == nil {
 		t.Fatal("Log should not be nil after round-trip")
@@ -2315,11 +2425,11 @@ func TestPipelineStepPublishOnly(t *testing.T) {
 	step := PipelineStep{
 		Name: "publish-state",
 		Publish: &PipelinePublish{
-			EventType: "m.bureau.workspace.ready",
+			EventType: "m.bureau.workspace",
 			Room:      "!abc123:bureau.local",
 			StateKey:  "custom-key",
 			Content: map[string]any{
-				"status": "ready",
+				"status": "active",
 			},
 		},
 	}
@@ -2339,14 +2449,14 @@ func TestPipelineStepPublishOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("publish field missing or wrong type")
 	}
-	assertField(t, publish, "event_type", "m.bureau.workspace.ready")
+	assertField(t, publish, "event_type", "m.bureau.workspace")
 	assertField(t, publish, "room", "!abc123:bureau.local")
 	assertField(t, publish, "state_key", "custom-key")
 	content, ok := publish["content"].(map[string]any)
 	if !ok {
 		t.Fatal("publish content field missing or wrong type")
 	}
-	assertField(t, content, "status", "ready")
+	assertField(t, content, "status", "active")
 
 	// Run-related fields should be absent.
 	for _, field := range []string{"run", "check", "when", "optional", "timeout", "grace_period", "env", "interactive"} {
@@ -2445,7 +2555,7 @@ func TestPipelineStepGracePeriod(t *testing.T) {
 
 func TestPipelinePublishOmitsEmptyStateKey(t *testing.T) {
 	publish := PipelinePublish{
-		EventType: "m.bureau.workspace.ready",
+		EventType: "m.bureau.workspace",
 		Room:      "${WORKSPACE_ROOM_ID}",
 		Content:   map[string]any{"status": "ready"},
 	}
@@ -2459,7 +2569,7 @@ func TestPipelinePublishOmitsEmptyStateKey(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "event_type", "m.bureau.workspace.ready")
+	assertField(t, raw, "event_type", "m.bureau.workspace")
 	assertField(t, raw, "room", "${WORKSPACE_ROOM_ID}")
 	if _, exists := raw["state_key"]; exists {
 		t.Error("state_key should be omitted when empty")

@@ -12,7 +12,7 @@
 //     [EventTypeMachineConfig] -- machine lifecycle
 //   - [EventTypeCredentials] -- age-encrypted credential bundles
 //   - [EventTypeTemplate] -- sandbox templates with inheritance
-//   - [EventTypeProject], [EventTypeWorkspaceReady] -- workspace lifecycle
+//   - [EventTypeProject], [EventTypeWorkspace] -- workspace lifecycle
 //   - [EventTypeService] -- service directory
 //   - [EventTypeWebRTCOffer], [EventTypeWebRTCAnswer] -- signaling
 //   - [EventTypeLayout] -- tmux session structure for observation

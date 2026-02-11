@@ -34,14 +34,16 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
 
-	// Set up the workspace room with a ready event (condition is met).
+	// Set up the workspace room with an active workspace event (condition is met).
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspaceReady, "", schema.WorkspaceReady{
-		SetupPrincipal: "iree/setup",
-		CompletedAt:    "2026-02-10T00:00:00Z",
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T00:00:00Z",
 	})
 
-	// Configure a principal that gates on workspace.ready.
+	// Configure a principal that gates on workspace status "active".
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
@@ -49,9 +51,10 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType: schema.EventTypeWorkspaceReady,
-					StateKey:  "",
-					RoomAlias: "#iree/amdgpu/inference:test.local",
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
 				},
 			},
 		},
@@ -93,7 +96,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
 
-	// Set up the workspace room alias but do NOT publish the ready event.
+	// Set up the workspace room alias but do NOT publish the workspace event.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -103,9 +106,10 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType: schema.EventTypeWorkspaceReady,
-					StateKey:  "",
-					RoomAlias: "#iree/amdgpu/inference:test.local",
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
 				},
 			},
 		},
@@ -156,9 +160,10 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType: schema.EventTypeWorkspaceReady,
-					StateKey:  "",
-					RoomAlias: "#iree/amdgpu/inference:test.local",
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
 				},
 			},
 		},
@@ -181,10 +186,12 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	}
 	createdPrincipals.mu.Unlock()
 
-	// Simulate the setup principal publishing workspace.ready.
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspaceReady, "", schema.WorkspaceReady{
-		SetupPrincipal: "iree/setup",
-		CompletedAt:    "2026-02-10T01:00:00Z",
+	// Simulate the setup principal publishing workspace active status.
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T01:00:00Z",
 	})
 
 	// Second reconcile: event now exists → launches.
@@ -321,7 +328,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType: schema.EventTypeWorkspaceReady,
+					EventType: schema.EventTypeWorkspace,
 					StateKey:  "",
 					RoomAlias: "#nonexistent/room:test.local",
 				},
@@ -347,6 +354,90 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	}
 	if daemon.running["agent/orphan"] {
 		t.Error("principal should not be running when room alias is unresolvable")
+	}
+}
+
+// TestReconcile_StartConditionContentMismatch verifies that a principal is
+// deferred when the state event exists but the content doesn't match the
+// ContentMatch criteria. This is the key workspace lifecycle scenario:
+// the event exists from "bureau workspace create" with status "pending",
+// but agents should only launch when status becomes "active".
+func TestReconcile_StartConditionContentMismatch(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID    = "!config:test.local"
+		templateRoomID  = "!template:test.local"
+		workspaceRoomID = "!workspace:test.local"
+		serverName      = "test.local"
+		machineName     = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Workspace event exists but with "pending" status (not "active").
+	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "pending",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T00:00:00Z",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    schema.EventTypeWorkspace,
+					StateKey:     "",
+					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					ContentMatch: map[string]string{"status": "active"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	daemon, createdPrincipals, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: event exists but status is "pending" → deferred.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	createdPrincipals.mu.Lock()
+	if len(createdPrincipals.names) != 0 {
+		t.Errorf("first reconcile: expected no create-sandbox calls (content mismatch), got %v", createdPrincipals.names)
+	}
+	createdPrincipals.mu.Unlock()
+
+	// Update the workspace event to "active".
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "active",
+		Project:   "iree",
+		Machine:   "machine/test",
+		UpdatedAt: "2026-02-10T01:00:00Z",
+	})
+
+	// Second reconcile: content now matches → launches.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	createdPrincipals.mu.Lock()
+	defer createdPrincipals.mu.Unlock()
+
+	if len(createdPrincipals.names) != 1 || createdPrincipals.names[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", createdPrincipals.names)
+	}
+	if !daemon.running["iree/amdgpu/pm"] {
+		t.Error("principal should be running after content matches")
 	}
 }
 

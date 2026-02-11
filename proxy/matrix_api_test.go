@@ -366,7 +366,7 @@ func TestMatrixPutState(t *testing.T) {
 	t.Run("put state event with room ID", func(t *testing.T) {
 		request := MatrixStateRequest{
 			Room:      "!room1:bureau.local",
-			EventType: "m.bureau.workspace.ready",
+			EventType: "m.bureau.workspace",
 			StateKey:  "",
 			Content: map[string]any{
 				"version": "1.0",
@@ -412,7 +412,7 @@ func TestMatrixPutState(t *testing.T) {
 
 		request := MatrixStateRequest{
 			Room:      "#iree/amdgpu/inference:bureau.local",
-			EventType: "m.bureau.workspace.ready",
+			EventType: "m.bureau.workspace",
 			StateKey:  "",
 			Content:   map[string]any{"ready": true},
 		}

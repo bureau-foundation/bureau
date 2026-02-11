@@ -59,7 +59,7 @@ func TestParse(t *testing.T) {
     {
       "name": "publish-ready",
       "publish": {
-        "event_type": "m.bureau.workspace.ready",
+        "event_type": "m.bureau.workspace",
         "room": "${WORKSPACE_ROOM_ID}",
         "state_key": "",
         "content": {"status": "ready"}
@@ -94,7 +94,7 @@ func TestParse(t *testing.T) {
 		if content.Steps[1].Publish == nil {
 			t.Fatal("Steps[1].Publish is nil")
 		}
-		if content.Steps[1].Publish.EventType != "m.bureau.workspace.ready" {
+		if content.Steps[1].Publish.EventType != "m.bureau.workspace" {
 			t.Errorf("Steps[1].Publish.EventType = %q", content.Steps[1].Publish.EventType)
 		}
 		if content.Log == nil {

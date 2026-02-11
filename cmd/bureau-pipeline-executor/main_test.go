@@ -307,7 +307,7 @@ func TestPublishStep(t *testing.T) {
 			{
 				Name: "publish-ready",
 				Publish: &schema.PipelinePublish{
-					EventType: "m.bureau.workspace.ready",
+					EventType: "m.bureau.workspace",
 					Room:      "!room1:bureau.local",
 					StateKey:  "",
 					Content:   map[string]any{"version": "1.0"},
@@ -342,8 +342,8 @@ func TestPublishStep(t *testing.T) {
 	if err := json.Unmarshal([]byte(mock.recordedPuts[0].Body), &putBody); err != nil {
 		t.Fatalf("unmarshal PUT body: %v", err)
 	}
-	if putBody.EventType != "m.bureau.workspace.ready" {
-		t.Errorf("expected event_type m.bureau.workspace.ready, got %q", putBody.EventType)
+	if putBody.EventType != "m.bureau.workspace" {
+		t.Errorf("expected event_type m.bureau.workspace, got %q", putBody.EventType)
 	}
 	if putBody.Room != "!room1:bureau.local" {
 		t.Errorf("expected room !room1:bureau.local, got %q", putBody.Room)

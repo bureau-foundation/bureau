@@ -785,7 +785,7 @@ func TestInitialSync(t *testing.T) {
 // TestProcessSyncResponse_WorkspaceRoomTriggersReconcile verifies that state
 // changes in non-core rooms (workspace rooms joined via invite) trigger
 // reconcile. This is essential for the workspace flow: when a setup principal
-// publishes m.bureau.workspace.ready, the daemon sees the state change via
+// publishes m.bureau.workspace, the daemon sees the state change via
 // /sync and re-reconciles, unblocking deferred agent principals whose
 // StartCondition references that event.
 func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
@@ -843,7 +843,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Sync response with a workspace.ready event in a workspace room
+	// Sync response with a workspace state event in a workspace room
 	// (not one of the three core rooms).
 	stateKey := ""
 	response := &messaging.SyncResponse{
@@ -853,7 +853,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 				"!workspace/iree:test": {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
-							{Type: schema.EventTypeWorkspaceReady, StateKey: &stateKey},
+							{Type: schema.EventTypeWorkspace, StateKey: &stateKey},
 						},
 					},
 				},

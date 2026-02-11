@@ -38,7 +38,7 @@ events, and configuring principals on the target machine. The daemon
 picks up the configuration via /sync and spawns a setup principal to
 clone the repo, create worktrees, and prepare the workspace. Agent
 principals start only after the setup principal publishes
-m.bureau.workspace.ready.
+m.bureau.workspace with status "active".
 
 The alias becomes both the Matrix room alias and filesystem path:
 
@@ -224,7 +224,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	for _, assignment := range assignments {
 		suffix := ""
 		if assignment.StartCondition != nil {
-			suffix = " (waits for workspace.ready)"
+			suffix = " (waits for workspace active)"
 		}
 		fmt.Fprintf(os.Stderr, "    %s (template=%s)%s\n", assignment.Localpart, assignment.Template, suffix)
 	}
@@ -288,11 +288,11 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 
 // buildPrincipalAssignments constructs the PrincipalAssignment slice for a
 // workspace: one setup principal (no StartCondition, runs immediately) and
-// N agent principals (gated on workspace.ready).
+// N agent principals (gated on workspace status "active").
 func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, params map[string]string) []schema.PrincipalAssignment {
 	workspaceRoomAlias := principal.RoomAlias(alias, serverName)
 
-	// Setup principal: clones repo, creates worktrees, publishes workspace.ready.
+	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
 	setupLocalpart := alias + "/setup"
 	assignments := []schema.PrincipalAssignment{
 		{
@@ -308,7 +308,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		},
 	}
 
-	// Agent principals: wait for workspace.ready before starting.
+	// Agent principals: wait for workspace to become active before starting.
 	for index := 0; index < agentCount; index++ {
 		agentLocalpart := alias + "/agent/" + strconv.Itoa(index)
 		assignments = append(assignments, schema.PrincipalAssignment{
@@ -320,9 +320,10 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 				"WORKSPACE_ALIAS": alias,
 			},
 			StartCondition: &schema.StartCondition{
-				EventType: schema.EventTypeWorkspaceReady,
-				StateKey:  "",
-				RoomAlias: workspaceRoomAlias,
+				EventType:    schema.EventTypeWorkspace,
+				StateKey:     "",
+				RoomAlias:    workspaceRoomAlias,
+				ContentMatch: map[string]string{"status": "active"},
 			},
 		})
 	}

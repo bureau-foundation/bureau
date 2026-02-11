@@ -35,7 +35,7 @@ func TestValidate(t *testing.T) {
 					{
 						Name: "publish-ready",
 						Publish: &schema.PipelinePublish{
-							EventType: "m.bureau.workspace.ready",
+							EventType: "m.bureau.workspace",
 							Room:      "!room:bureau.local",
 							Content:   map[string]any{"status": "ready"},
 						},
@@ -70,7 +70,7 @@ func TestValidate(t *testing.T) {
 					{
 						Name: "mark-ready",
 						Publish: &schema.PipelinePublish{
-							EventType: "m.bureau.workspace.ready",
+							EventType: "m.bureau.workspace",
 							Room:      "!room:bureau.local",
 							Content:   map[string]any{"status": "ready"},
 						},
@@ -145,22 +145,21 @@ func TestValidate(t *testing.T) {
 			wantSubstrings: []string{"check is only valid on run steps"},
 		},
 		{
-			name: "when on publish step",
+			name: "when on publish step is valid",
 			content: &schema.PipelineContent{
 				Steps: []schema.PipelineStep{
 					{
-						Name: "bad-publish",
-						When: "test -n '${REPO}'",
+						Name: "conditional-publish",
+						When: "test \"${MODE}\" = archive",
 						Publish: &schema.PipelinePublish{
-							EventType: "m.test",
-							Room:      "!room:test",
-							Content:   map[string]any{},
+							EventType: "m.bureau.workspace",
+							Room:      "!room:bureau.local",
+							Content:   map[string]any{"status": "archived"},
 						},
 					},
 				},
 			},
-			expectedIssues: 1,
-			wantSubstrings: []string{"when is only valid on run steps"},
+			expectedIssues: 0,
 		},
 		{
 			name: "interactive on publish step",

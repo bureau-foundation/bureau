@@ -11,7 +11,7 @@
   //   - Create the project directory under /workspace
   //   - Clone the repository as a bare repo (.bare/)
   //   - Run the project-level init script if the repository provides one
-  //   - Publish m.bureau.workspace.ready to signal completion
+  //   - Publish m.bureau.workspace with status "active"
   //
   // Project-specific init scripts live in .bureau/pipeline/ within the
   // repository. They are optional — if absent, the pipeline continues
@@ -30,6 +30,10 @@
     },
     "WORKSPACE_ROOM_ID": {
       "description": "Matrix room ID for the workspace (for status events and logging)",
+      "required": true
+    },
+    "MACHINE": {
+      "description": "Machine localpart identifying the host (set by the daemon)",
       "required": true
     }
   },
@@ -57,12 +61,14 @@
       "timeout": "10m"
     },
     {
-      "name": "publish-ready",
+      "name": "publish-active",
       "publish": {
-        "event_type": "m.bureau.workspace.ready",
+        "event_type": "m.bureau.workspace",
         "room": "${WORKSPACE_ROOM_ID}",
         "content": {
-          "project": "${PROJECT}"
+          "status": "active",
+          "project": "${PROJECT}",
+          "machine": "${MACHINE}"
         }
       }
     }

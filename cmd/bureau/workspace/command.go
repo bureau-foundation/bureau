@@ -80,10 +80,11 @@ func destroyCommand() *cli.Command {
 		Name:    "destroy",
 		Summary: "Tear down a workspace",
 		Description: `Tear down a workspace on the hosting machine. Executes the
-dev-workspace-teardown pipeline, which checks for uncommitted changes,
-archives the data (with --archive), and removes the workspace directory.
-The workspace.ready state event is tombstoned to signal that the
-workspace is no longer active.
+dev-workspace-deinit pipeline, which checks for uncommitted changes,
+archives the data (with --mode archive, the default), or removes
+everything (with --mode delete). The workspace state event is updated
+to "archived" or "removed" to signal that the workspace is no longer
+active.
 
 The Matrix room is preserved by default — its message history remains
 accessible. Use "bureau matrix room leave" separately to remove the
@@ -186,7 +187,7 @@ func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomI
 	var project *schema.ProjectConfig
 	var projectKey string
 	var alias string
-	var hasReady bool
+	var workspaceStatus string
 
 	for _, event := range events {
 		switch event.Type {
@@ -211,8 +212,10 @@ func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomI
 				alias = aliasValue
 			}
 
-		case schema.EventTypeWorkspaceReady:
-			hasReady = true
+		case schema.EventTypeWorkspace:
+			if statusValue, ok := event.Content["status"].(string); ok {
+				workspaceStatus = statusValue
+			}
 		}
 	}
 
@@ -220,9 +223,9 @@ func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomI
 		return nil, nil
 	}
 
-	status := "pending"
-	if hasReady {
-		status = "ready"
+	status := workspaceStatus
+	if status == "" {
+		status = "pending"
 	}
 
 	// Use the canonical alias (stripped of # and :server) for display.

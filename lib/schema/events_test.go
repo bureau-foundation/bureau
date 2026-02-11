@@ -111,6 +111,16 @@ func TestMachineInfoRoundTrip(t *testing.T) {
 				ThermalLimitEmergencyMillidegrees: 105000,
 				Driver:                            "amdgpu",
 			},
+			{
+				Vendor:        "NVIDIA",
+				ModelName:     "NVIDIA GeForce RTX 4090",
+				PCIDeviceID:   "0x2684",
+				PCISlot:       "0000:01:00.0",
+				UniqueID:      "GPU-12345678-abcd-efgh-ijkl-123456789abc",
+				VBIOSVersion:  "95.02.3c.80.b8",
+				PCIeLinkWidth: 16,
+				Driver:        "nvidia",
+			},
 		},
 		DaemonVersion: "v0.1.0-dev",
 	}
@@ -150,8 +160,8 @@ func TestMachineInfoRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("gpus field missing or wrong type")
 	}
-	if len(gpus) != 2 {
-		t.Fatalf("gpus count = %d, want 2", len(gpus))
+	if len(gpus) != 3 {
+		t.Fatalf("gpus count = %d, want 3", len(gpus))
 	}
 	firstGPU := gpus[0].(map[string]any)
 	assertField(t, firstGPU, "vendor", "AMD")
@@ -165,6 +175,14 @@ func TestMachineInfoRoundTrip(t *testing.T) {
 	assertField(t, firstGPU, "thermal_limit_critical_millidegrees", float64(100000))
 	assertField(t, firstGPU, "thermal_limit_emergency_millidegrees", float64(105000))
 	assertField(t, firstGPU, "driver", "amdgpu")
+
+	// Verify NVIDIA GPU wire format (third entry).
+	nvidiaGPU := gpus[2].(map[string]any)
+	assertField(t, nvidiaGPU, "vendor", "NVIDIA")
+	assertField(t, nvidiaGPU, "model_name", "NVIDIA GeForce RTX 4090")
+	assertField(t, nvidiaGPU, "pci_device_id", "0x2684")
+	assertField(t, nvidiaGPU, "driver", "nvidia")
+	assertField(t, nvidiaGPU, "unique_id", "GPU-12345678-abcd-efgh-ijkl-123456789abc")
 
 	var decoded MachineInfo
 	if err := json.Unmarshal(data, &decoded); err != nil {

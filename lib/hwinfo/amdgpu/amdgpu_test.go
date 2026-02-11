@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/hwinfo"
 )
 
 // writeSyntheticFile creates a file at the given path within root,
@@ -222,8 +224,8 @@ func TestIsCardDevice(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := isCardDevice(test.name); got != test.want {
-				t.Errorf("isCardDevice(%q) = %v, want %v", test.name, got, test.want)
+			if got := hwinfo.IsCardDevice(test.name); got != test.want {
+				t.Errorf("IsCardDevice(%q) = %v, want %v", test.name, got, test.want)
 			}
 		})
 	}
@@ -242,8 +244,8 @@ func TestPCIVendorName(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.vendorID, func(t *testing.T) {
-			if got := pciVendorName(test.vendorID); got != test.want {
-				t.Errorf("pciVendorName(%q) = %q, want %q", test.vendorID, got, test.want)
+			if got := hwinfo.PCIVendorName(test.vendorID); got != test.want {
+				t.Errorf("PCIVendorName(%q) = %q, want %q", test.vendorID, got, test.want)
 			}
 		})
 	}

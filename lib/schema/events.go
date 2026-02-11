@@ -358,6 +358,12 @@ type GPUInfo struct {
 	// Mapped from PCI vendor ID (0x1002, 0x10de, 0x8086).
 	Vendor string `json:"vendor"`
 
+	// ModelName is the human-readable GPU model name (e.g., "NVIDIA
+	// GeForce RTX 4090", "NVIDIA A100-SXM4-80GB"). On NVIDIA, read
+	// from /proc/driver/nvidia/gpus/<slot>/information. Empty when
+	// the driver does not provide a marketing name.
+	ModelName string `json:"model_name,omitempty"`
+
 	// PCIDeviceID is the PCI device ID (e.g., "0x744a" for MI300X).
 	// Combined with vendor ID, this uniquely identifies the GPU model.
 	PCIDeviceID string `json:"pci_device_id"`

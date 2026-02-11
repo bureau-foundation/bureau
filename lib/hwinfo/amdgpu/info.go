@@ -15,12 +15,11 @@
 package amdgpu
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
+	"github.com/bureau-foundation/bureau/lib/hwinfo"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -57,7 +56,7 @@ func (p *Prober) Enumerate() []schema.GPUInfo {
 	for _, entry := range entries {
 		name := entry.Name()
 		// Match card0, card1, ... but not card0-DP-1, renderD128, etc.
-		if !isCardDevice(name) {
+		if !hwinfo.IsCardDevice(name) {
 			continue
 		}
 
@@ -65,7 +64,7 @@ func (p *Prober) Enumerate() []schema.GPUInfo {
 		devicePath := filepath.Join(cardPath, "device")
 
 		// Check that this card uses the amdgpu driver.
-		driver := readDriverName(devicePath)
+		driver := hwinfo.ReadDriverName(devicePath)
 		if driver != "amdgpu" {
 			continue
 		}
@@ -77,35 +76,6 @@ func (p *Prober) Enumerate() []schema.GPUInfo {
 	return gpus
 }
 
-// isCardDevice returns true for DRM card device names (card0, card1, ...)
-// but not connectors (card0-DP-1) or render nodes (renderD128).
-func isCardDevice(name string) bool {
-	if !strings.HasPrefix(name, "card") {
-		return false
-	}
-	suffix := name[4:]
-	if len(suffix) == 0 {
-		return false
-	}
-	// All remaining characters must be digits.
-	for _, character := range suffix {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// readDriverName returns the kernel driver name for a PCI device by
-// reading the basename of the "driver" symlink in the device directory.
-func readDriverName(devicePath string) string {
-	link, err := os.Readlink(filepath.Join(devicePath, "driver"))
-	if err != nil {
-		return ""
-	}
-	return filepath.Base(link)
-}
-
 // readGPUInfo reads static GPU attributes from sysfs for a single card.
 func readGPUInfo(devicePath, driver string) schema.GPUInfo {
 	gpu := schema.GPUInfo{
@@ -113,109 +83,28 @@ func readGPUInfo(devicePath, driver string) schema.GPUInfo {
 	}
 
 	// PCI identity from uevent.
-	gpu.Vendor, gpu.PCIDeviceID, gpu.PCISlot = parsePCIUevent(devicePath)
+	gpu.Vendor, gpu.PCIDeviceID, gpu.PCISlot = hwinfo.ParsePCIUevent(devicePath)
 
 	// VRAM total (bytes).
-	gpu.VRAMTotalBytes = readSysfsInt64(filepath.Join(devicePath, "mem_info_vram_total"))
+	gpu.VRAMTotalBytes = hwinfo.ReadSysfsInt64(filepath.Join(devicePath, "mem_info_vram_total"))
 
 	// Hardware serial number.
-	gpu.UniqueID = readSysfsString(filepath.Join(devicePath, "unique_id"))
+	gpu.UniqueID = hwinfo.ReadSysfsString(filepath.Join(devicePath, "unique_id"))
 
 	// Firmware version.
-	gpu.VBIOSVersion = readSysfsString(filepath.Join(devicePath, "vbios_version"))
+	gpu.VBIOSVersion = hwinfo.ReadSysfsString(filepath.Join(devicePath, "vbios_version"))
 
 	// VRAM manufacturer.
-	gpu.VRAMVendor = readSysfsString(filepath.Join(devicePath, "mem_info_vram_vendor"))
+	gpu.VRAMVendor = hwinfo.ReadSysfsString(filepath.Join(devicePath, "mem_info_vram_vendor"))
 
 	// PCIe link width.
-	gpu.PCIeLinkWidth = readSysfsInt(filepath.Join(devicePath, "current_link_width"))
+	gpu.PCIeLinkWidth = hwinfo.ReadSysfsInt(filepath.Join(devicePath, "current_link_width"))
 
 	// Thermal limits from hwmon.
 	gpu.ThermalLimitCriticalMillidegrees, gpu.ThermalLimitEmergencyMillidegrees =
-		readThermalLimits(devicePath)
+		hwinfo.ReadThermalLimits(devicePath)
 
 	return gpu
-}
-
-// parsePCIUevent extracts vendor name, device ID, and PCI slot from
-// the device's uevent file. The uevent file contains lines like:
-//
-//	PCI_ID=1002:744A
-//	PCI_SLOT_NAME=0000:c3:00.0
-func parsePCIUevent(devicePath string) (vendor, deviceID, pciSlot string) {
-	data, err := os.ReadFile(filepath.Join(devicePath, "uevent"))
-	if err != nil {
-		return "", "", ""
-	}
-
-	var rawVendorID, rawDeviceID string
-
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key, value := parts[0], parts[1]
-		switch key {
-		case "PCI_ID":
-			// Format: "1002:744A" (vendor:device, uppercase hex).
-			ids := strings.SplitN(value, ":", 2)
-			if len(ids) == 2 {
-				rawVendorID = strings.ToLower(ids[0])
-				rawDeviceID = strings.ToLower(ids[1])
-			}
-		case "PCI_SLOT_NAME":
-			pciSlot = value
-		}
-	}
-
-	vendor = pciVendorName(rawVendorID)
-	if rawDeviceID != "" {
-		deviceID = "0x" + rawDeviceID
-	}
-	return vendor, deviceID, pciSlot
-}
-
-// pciVendorName maps a PCI vendor ID to a human-readable name.
-func pciVendorName(vendorID string) string {
-	switch vendorID {
-	case "1002":
-		return "AMD"
-	case "10de":
-		return "NVIDIA"
-	case "8086":
-		return "Intel"
-	default:
-		if vendorID != "" {
-			return fmt.Sprintf("0x%s", vendorID)
-		}
-		return ""
-	}
-}
-
-// readThermalLimits reads the critical and emergency temperature
-// thresholds from the GPU's hwmon directory. Looks for temp1_crit
-// and temp1_emergency (the "edge" sensor). Values are in millidegrees
-// Celsius.
-func readThermalLimits(devicePath string) (critical, emergency int) {
-	hwmonBase := filepath.Join(devicePath, "hwmon")
-	entries, err := os.ReadDir(hwmonBase)
-	if err != nil {
-		return 0, 0
-	}
-
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "hwmon") {
-			continue
-		}
-		hwmonDir := filepath.Join(hwmonBase, entry.Name())
-		critical = readSysfsInt(filepath.Join(hwmonDir, "temp1_crit"))
-		emergency = readSysfsInt(filepath.Join(hwmonDir, "temp1_emergency"))
-		if critical != 0 || emergency != 0 {
-			return critical, emergency
-		}
-	}
-	return 0, 0
 }
 
 // renderNodeForDevice finds the /dev/dri/renderD* path that
@@ -250,40 +139,4 @@ func renderNodeForDevice(devicePath, sysRoot string) string {
 		}
 	}
 	return ""
-}
-
-// readSysfsString reads a single-line sysfs file and returns its
-// trimmed content. Returns "" on any error.
-func readSysfsString(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// readSysfsInt reads an integer from a sysfs file. Returns 0 on error.
-func readSysfsInt(path string) int {
-	value := readSysfsString(path)
-	if value == "" {
-		return 0
-	}
-	result, err := strconv.Atoi(value)
-	if err != nil {
-		return 0
-	}
-	return result
-}
-
-// readSysfsInt64 reads a 64-bit integer from a sysfs file. Returns 0 on error.
-func readSysfsInt64(path string) int64 {
-	value := readSysfsString(path)
-	if value == "" {
-		return 0
-	}
-	result, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return result
 }

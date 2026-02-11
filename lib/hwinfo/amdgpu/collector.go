@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bureau-foundation/bureau/lib/hwinfo"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -61,18 +62,18 @@ func newCollectorFrom(sysRoot string, logger *slog.Logger) *Collector {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if !isCardDevice(name) {
+		if !hwinfo.IsCardDevice(name) {
 			continue
 		}
 
 		devicePath := filepath.Join(drmBase, name, "device")
-		driver := readDriverName(devicePath)
+		driver := hwinfo.ReadDriverName(devicePath)
 		if driver != "amdgpu" {
 			continue
 		}
 
 		// Read PCI slot for this GPU (join key with GPUInfo).
-		_, _, pciSlot := parsePCIUevent(devicePath)
+		_, _, pciSlot := hwinfo.ParsePCIUevent(devicePath)
 		if pciSlot == "" {
 			continue
 		}
@@ -136,7 +137,7 @@ func (c *Collector) Collect() []schema.GPUStatus {
 		}
 
 		// VRAM usage from sysfs (not available via ioctl).
-		status.VRAMUsedBytes = readSysfsInt64(filepath.Join(device.devicePath, "mem_info_vram_used"))
+		status.VRAMUsedBytes = hwinfo.ReadSysfsInt64(filepath.Join(device.devicePath, "mem_info_vram_used"))
 
 		// Sensor queries via ioctl (requires open render node).
 		if device.renderFile != nil {

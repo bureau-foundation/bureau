@@ -40,8 +40,8 @@ func probeFrom(principal, procRoot, sysRoot string, gpuProbers ...GPUProber) sch
 
 	info.Hostname, _ = os.Hostname()
 	info.KernelVersion = readKernelVersion()
-	info.BoardVendor = readSysfsString(filepath.Join(sysRoot, "class/dmi/id/sys_vendor"))
-	info.BoardName = readSysfsString(filepath.Join(sysRoot, "class/dmi/id/board_name"))
+	info.BoardVendor = ReadSysfsString(filepath.Join(sysRoot, "class/dmi/id/sys_vendor"))
+	info.BoardName = ReadSysfsString(filepath.Join(sysRoot, "class/dmi/id/board_name"))
 	info.CPU = probeCPU(procRoot, sysRoot)
 	info.MemoryTotalMB, info.SwapTotalMB = probeMemory()
 	info.NUMANodes = countNUMANodes(sysRoot)
@@ -150,7 +150,7 @@ func countUniqueTopologyValues(cpuBase, field string) int {
 			continue
 		}
 
-		value := readSysfsString(filepath.Join(cpuBase, name, "topology", field))
+		value := ReadSysfsString(filepath.Join(cpuBase, name, "topology", field))
 		if value != "" {
 			unique[value] = struct{}{}
 		}
@@ -184,8 +184,8 @@ func countUniqueCoreIDs(cpuBase string) int {
 		}
 
 		topologyDir := filepath.Join(cpuBase, name, "topology")
-		packageID := readSysfsString(filepath.Join(topologyDir, "physical_package_id"))
-		coreID := readSysfsString(filepath.Join(topologyDir, "core_id"))
+		packageID := ReadSysfsString(filepath.Join(topologyDir, "physical_package_id"))
+		coreID := ReadSysfsString(filepath.Join(topologyDir, "core_id"))
 		if packageID != "" && coreID != "" {
 			unique[coreKey{packageID, coreID}] = struct{}{}
 		}
@@ -197,7 +197,7 @@ func countUniqueCoreIDs(cpuBase string) int {
 // thread_siblings_list. The format is "0,96" meaning CPUs 0 and 96
 // share a core — so 2 threads per core. A value of "0" alone means 1.
 func probeThreadsPerCore(cpuBase string) int {
-	siblings := readSysfsString(filepath.Join(cpuBase, "cpu0/topology/thread_siblings_list"))
+	siblings := ReadSysfsString(filepath.Join(cpuBase, "cpu0/topology/thread_siblings_list"))
 	if siblings == "" {
 		return 1
 	}
@@ -212,7 +212,7 @@ func probeThreadsPerCore(cpuBase string) int {
 // readCacheSize parses a cache size file (e.g., "32768K") and returns
 // the value in kilobytes.
 func readCacheSize(path string) int {
-	value := readSysfsString(path)
+	value := ReadSysfsString(path)
 	if value == "" {
 		return 0
 	}
@@ -254,14 +254,4 @@ func countNUMANodes(sysRoot string) int {
 		}
 	}
 	return count
-}
-
-// readSysfsString reads a single-line sysfs file and returns its
-// trimmed content. Returns "" on any error.
-func readSysfsString(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }

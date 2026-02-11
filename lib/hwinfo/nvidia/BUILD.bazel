@@ -4,24 +4,22 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "amdgpu",
+    name = "nvidia",
     srcs = [
         "collector.go",
         "info.go",
-        "ioctl.go",
     ],
-    importpath = "github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu",
+    importpath = "github.com/bureau-foundation/bureau/lib/hwinfo/nvidia",
     visibility = ["//visibility:public"],
     deps = [
         "//lib/hwinfo",
         "//lib/schema",
-        "@org_golang_x_sys//unix",
     ],
 )
 
 go_test(
-    name = "amdgpu_test",
-    srcs = ["amdgpu_test.go"],
-    embed = [":amdgpu"],
+    name = "nvidia_test",
+    srcs = ["nvidia_test.go"],
+    embed = [":nvidia"],
     deps = ["//lib/hwinfo"],
 )

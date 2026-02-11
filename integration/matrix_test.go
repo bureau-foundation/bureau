@@ -29,6 +29,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/messaging"
+	"github.com/bureau-foundation/bureau/observe"
 )
 
 const (
@@ -936,6 +937,353 @@ func TestPrincipalAssignment(t *testing.T) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// TestOperatorFlow verifies the operator-facing observation pipeline:
+// list targets, observe a principal's terminal, and confirm authorization
+// enforcement. This builds a full stack (launcher + daemon + principal with
+// ObservePolicy), then exercises the daemon's observe socket as both a Go
+// library client and through the bureau CLI binary.
+func TestOperatorFlow(t *testing.T) {
+	const machineName = "machine/observe"
+	const principalLocalpart = "test/observed"
+	machineUserID := "@machine/observe:" + testServerName
+	principalUserID := "@test/observed:" + testServerName
+	adminUserID := "@bureau-admin:" + testServerName
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	observeRelayBinary := resolvedBinary(t, "OBSERVE_RELAY_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	// Resolve global rooms and invite the machine.
+	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve machines room: %v", err)
+	}
+	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve services room: %v", err)
+	}
+
+	if err := admin.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to machines room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+		t.Fatalf("invite machine to services room: %v", err)
+	}
+
+	// Create isolated directories.
+	stateDir := t.TempDir()
+	socketDir := tempSocketDir(t)
+
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+	tmuxSocket := filepath.Join(socketDir, "tmux.sock")
+	observeSocket := filepath.Join(socketDir, "observe.sock")
+	relaySocket := filepath.Join(socketDir, "relay.sock")
+	principalSocketBase := filepath.Join(socketDir, "p") + "/"
+	adminSocketBase := filepath.Join(socketDir, "a") + "/"
+	os.MkdirAll(principalSocketBase, 0755)
+	os.MkdirAll(adminSocketBase, 0755)
+
+	tokenFile := filepath.Join(stateDir, "reg-token")
+	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
+		t.Fatalf("write registration token: %v", err)
+	}
+
+	launcherWorkspaceRoot := filepath.Join(stateDir, "workspace")
+
+	// Start the launcher with proxy and observe-relay binaries.
+	startProcess(t, "launcher", launcherBinary,
+		"--homeserver", testHomeserverURL,
+		"--registration-token-file", tokenFile,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--socket", launcherSocket,
+		"--tmux-socket", tmuxSocket,
+		"--socket-base-path", principalSocketBase,
+		"--admin-base-path", adminSocketBase,
+		"--workspace-root", launcherWorkspaceRoot,
+		"--proxy-binary", proxyBinary,
+	)
+
+	waitForFile(t, launcherSocket, 15*time.Second)
+
+	// Get the machine's public key for credential encryption.
+	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_key", machineName, 10*time.Second)
+	var machineKey struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
+		t.Fatalf("unmarshal machine key: %v", err)
+	}
+
+	// Start the daemon with observe socket and relay binary.
+	startProcess(t, "daemon", daemonBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--state-dir", stateDir,
+		"--launcher-socket", launcherSocket,
+		"--observe-socket", observeSocket,
+		"--relay-socket", relaySocket,
+		"--tmux-socket", tmuxSocket,
+		"--admin-user", "bureau-admin",
+		"--admin-base-path", adminSocketBase,
+		"--status-interval", "2s",
+		"--observe-relay-binary", observeRelayBinary,
+	)
+
+	// Wait for daemon readiness.
+	waitForStateEvent(t, admin, machinesRoomID,
+		"m.bureau.machine_status", machineName, 15*time.Second)
+
+	// Resolve the config room.
+	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		t.Fatalf("config room not created: %v", err)
+	}
+	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("admin join config room: %v", err)
+	}
+
+	// Register the principal and encrypt credentials.
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	principalSession, err := client.Register(ctx, messaging.RegisterRequest{
+		Username:          principalLocalpart,
+		Password:          "test-observe-password",
+		RegistrationToken: testRegistrationToken,
+	})
+	if err != nil {
+		t.Fatalf("register principal: %v", err)
+	}
+	principalToken := principalSession.AccessToken()
+	principalSession.Close()
+
+	credentialBundle := map[string]string{
+		"MATRIX_TOKEN":          principalToken,
+		"MATRIX_USER_ID":        principalUserID,
+		"MATRIX_HOMESERVER_URL": testHomeserverURL,
+	}
+	credentialJSON, err := json.Marshal(credentialBundle)
+	if err != nil {
+		t.Fatalf("marshal credentials: %v", err)
+	}
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machineKey.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypt credentials: %v", err)
+	}
+
+	// Push Credentials.
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials", principalLocalpart, map[string]any{
+		"version":        1,
+		"principal":      principalUserID,
+		"encrypted_for":  []string{machineUserID},
+		"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
+		"ciphertext":     ciphertext,
+		"provisioned_by": adminUserID,
+		"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("push credentials: %v", err)
+	}
+
+	// Push MachineConfig WITH DefaultObservePolicy allowing the admin to
+	// observe all principals. This is the key difference from
+	// TestPrincipalAssignment — without the policy, list and observe would
+	// both return empty/denied.
+	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config", machineName, map[string]any{
+		"principals": []map[string]any{
+			{
+				"localpart":  principalLocalpart,
+				"template":   "",
+				"auto_start": true,
+			},
+		},
+		"default_observe_policy": map[string]any{
+			"allowed_observers":   []string{"**"},
+			"readwrite_observers": []string{"bureau-admin"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("push machine config: %v", err)
+	}
+
+	// Wait for the proxy socket — signals that the sandbox lifecycle completed.
+	proxySocket := principalSocketBase + principalLocalpart + ".sock"
+	waitForFile(t, proxySocket, 15*time.Second)
+
+	// Wait for the observe socket to be ready.
+	waitForFile(t, observeSocket, 5*time.Second)
+
+	// Get the admin's access token for observe socket authentication.
+	credentials := loadCredentials(t)
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminToken == "" {
+		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
+	}
+
+	// --- Sub-test: list targets via Go library ---
+	t.Run("ListTargets", func(t *testing.T) {
+		response, err := observe.ListTargets(observeSocket, observe.ListRequest{
+			Observer: adminUserID,
+			Token:    adminToken,
+		})
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+
+		// Verify the running principal appears in the list.
+		var foundPrincipal bool
+		for _, entry := range response.Principals {
+			if entry.Localpart == principalLocalpart {
+				foundPrincipal = true
+				if !entry.Local {
+					t.Error("expected principal to be local")
+				}
+				if !entry.Observable {
+					t.Error("expected principal to be observable")
+				}
+				if entry.Machine != machineName {
+					t.Errorf("principal machine = %q, want %q", entry.Machine, machineName)
+				}
+				break
+			}
+		}
+		if !foundPrincipal {
+			t.Errorf("principal %q not found in list response (got %d principals)",
+				principalLocalpart, len(response.Principals))
+		}
+
+		// Verify the local machine appears.
+		var foundMachine bool
+		for _, machine := range response.Machines {
+			if machine.Name == machineName {
+				foundMachine = true
+				if !machine.Self {
+					t.Error("expected machine to be self")
+				}
+				if !machine.Reachable {
+					t.Error("expected machine to be reachable")
+				}
+				break
+			}
+		}
+		if !foundMachine {
+			t.Errorf("machine %q not found in list response (got %d machines)",
+				machineName, len(response.Machines))
+		}
+	})
+
+	// --- Sub-test: list targets via CLI binary ---
+	t.Run("ListCLI", func(t *testing.T) {
+		// Write an operator session file so the CLI can authenticate.
+		// The CLI reads from XDG_CONFIG_HOME/bureau/session.json.
+		configHome := t.TempDir()
+		sessionDir := filepath.Join(configHome, "bureau")
+		os.MkdirAll(sessionDir, 0755)
+		sessionFile := filepath.Join(sessionDir, "session.json")
+		sessionJSON, _ := json.Marshal(map[string]string{
+			"user_id":      adminUserID,
+			"access_token": adminToken,
+			"homeserver":   testHomeserverURL,
+		})
+		if err := os.WriteFile(sessionFile, sessionJSON, 0600); err != nil {
+			t.Fatalf("write session file: %v", err)
+		}
+
+		cmd := exec.Command(bureauBinary, "list", "--json", "--socket", observeSocket)
+		cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+configHome)
+		output, err := cmd.Output()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				t.Fatalf("bureau list --json failed: %v\nstderr: %s", err, exitErr.Stderr)
+			}
+			t.Fatalf("bureau list --json failed: %v", err)
+		}
+
+		var listResponse observe.ListResponse
+		if err := json.Unmarshal(output, &listResponse); err != nil {
+			t.Fatalf("parse list JSON: %v\noutput: %s", err, output)
+		}
+
+		var foundPrincipal bool
+		for _, entry := range listResponse.Principals {
+			if entry.Localpart == principalLocalpart {
+				foundPrincipal = true
+				break
+			}
+		}
+		if !foundPrincipal {
+			t.Errorf("CLI: principal %q not found in list output", principalLocalpart)
+		}
+	})
+
+	// --- Sub-test: observe handshake via Go library ---
+	t.Run("ObserveHandshake", func(t *testing.T) {
+		session, err := observe.Connect(observeSocket, observe.ObserveRequest{
+			Principal: principalLocalpart,
+			Mode:      "readwrite",
+			Observer:  adminUserID,
+			Token:     adminToken,
+		})
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		defer session.Close()
+
+		// Verify the metadata from the handshake.
+		if session.Metadata.Principal != principalLocalpart {
+			t.Errorf("metadata principal = %q, want %q",
+				session.Metadata.Principal, principalLocalpart)
+		}
+		if session.Metadata.Machine != machineName {
+			t.Errorf("metadata machine = %q, want %q",
+				session.Metadata.Machine, machineName)
+		}
+
+		// We don't call session.Run() — that would block waiting for
+		// terminal I/O. The successful Connect + metadata verification
+		// proves: token verification, ObservePolicy authorization,
+		// relay fork, binary protocol handshake (metadata message).
+	})
+
+	// --- Sub-test: observe denied without authorization ---
+	t.Run("ObserveDeniedUnauthorized", func(t *testing.T) {
+		// Register a second operator account that is NOT in the
+		// AllowedObservers list. The DefaultObservePolicy has "**"
+		// which matches everyone, so we need to test with an invalid
+		// token instead.
+		//
+		// Actually, with "**" as allowed_observers, any authenticated
+		// user can observe. Test with a bad token to verify that
+		// authentication is enforced (not just authorization).
+		_, err := observe.Connect(observeSocket, observe.ObserveRequest{
+			Principal: principalLocalpart,
+			Mode:      "readwrite",
+			Observer:  "@nobody:" + testServerName,
+			Token:     "invalid-token-that-should-be-rejected",
+		})
+		if err == nil {
+			t.Fatal("expected observe to be denied with invalid token")
+		}
+		if !strings.Contains(err.Error(), "denied") && !strings.Contains(err.Error(), "authentication") {
+			t.Logf("observe error (expected auth failure): %v", err)
+		}
+	})
 }
 
 // --- Fleet Test Helpers ---

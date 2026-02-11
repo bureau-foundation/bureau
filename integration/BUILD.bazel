@@ -21,12 +21,14 @@ go_test(
         "//cmd/bureau",
         "//cmd/bureau-daemon",
         "//cmd/bureau-launcher",
+        "//cmd/bureau-observe-relay",
         "//cmd/bureau-proxy",
     ],
     env = {
         "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",
         "LAUNCHER_BINARY": "$(rlocationpath //cmd/bureau-launcher:bureau-launcher)",
+        "OBSERVE_RELAY_BINARY": "$(rlocationpath //cmd/bureau-observe-relay:bureau-observe-relay)",
         "PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
     },
     local = True,
@@ -34,5 +36,6 @@ go_test(
     deps = [
         "//lib/sealed",
         "//messaging",
+        "//observe",
     ],
 )

@@ -14,8 +14,8 @@ import (
 // VersionDiff describes which Bureau core binaries have changed between
 // the currently running versions and the desired versions from a
 // BureauVersion config. The daemon uses this to decide which components
-// to restart: daemon via exec(), launcher via signal, proxy by updating
-// the launcher's binary path for future sandbox creation.
+// to restart: daemon via exec(), launcher via exec-update IPC, proxy by
+// updating the launcher's binary path for future sandbox creation.
 type VersionDiff struct {
 	// DaemonChanged is true when the binary at the desired daemon
 	// store path has different content (SHA256) than the running daemon.

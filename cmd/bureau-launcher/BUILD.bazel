@@ -7,6 +7,7 @@ go_library(
     name = "bureau-launcher_lib",
     srcs = [
         "doc.go",
+        "exec.go",
         "main.go",
         "sandbox.go",
     ],
@@ -20,6 +21,7 @@ go_library(
         "//lib/sealed",
         "//lib/secret",
         "//lib/version",
+        "//lib/watchdog",
         "//messaging",
         "//sandbox",
     ],
@@ -34,6 +36,7 @@ go_binary(
 go_test(
     name = "bureau-launcher_test",
     srcs = [
+        "exec_test.go",
         "main_test.go",
         "sandbox_test.go",
     ],
@@ -45,6 +48,7 @@ go_test(
         "//lib/schema",
         "//lib/sealed",
         "//lib/testutil",
+        "//lib/watchdog",
         "//sandbox",
     ],
 )

@@ -180,21 +180,46 @@ func run() error {
 		proxyBinaryPath: proxyBinaryPath,
 		workspaceRoot:   workspaceRoot,
 		sandboxes:       make(map[string]*managedSandbox),
+		failedExecPaths: make(map[string]bool),
 		logger:          logger,
 	}
 
-	// Compute the launcher's own binary hash for version comparison.
-	// The daemon queries this via "status" IPC to determine whether
+	// Resolve the launcher's own binary path and hash. The path is
+	// needed for the exec() watchdog (PreviousBinary field). The hash
+	// is queried by the daemon via "status" IPC to determine whether
 	// the launcher binary needs updating.
 	if executablePath, execErr := os.Executable(); execErr == nil {
+		launcher.binaryPath = executablePath
 		if digest, hashErr := binhash.HashFile(executablePath); hashErr == nil {
 			launcher.binaryHash = binhash.FormatDigest(digest)
-			logger.Info("launcher binary hash computed", "hash", launcher.binaryHash)
+			logger.Info("launcher binary identity resolved",
+				"path", launcher.binaryPath,
+				"hash", launcher.binaryHash)
 		} else {
 			logger.Warn("failed to hash launcher binary", "error", hashErr)
 		}
 	} else {
 		logger.Warn("failed to resolve launcher executable path", "error", execErr)
+	}
+
+	// Reconnect sandboxes from a previous exec() transition. If a
+	// state file exists, the launcher was recently exec()'d and the
+	// proxy processes from the previous incarnation are still running.
+	if err := launcher.reconnectSandboxes(); err != nil {
+		logger.Error("reconnecting sandboxes after exec", "error", err)
+		// Non-fatal: the daemon will recreate any missing sandboxes
+		// on its next reconcile cycle.
+	}
+
+	// Check the watchdog to determine if a previous exec() transition
+	// succeeded or failed. Seeds failedExecPaths to prevent retrying a
+	// broken binary that the system reverted from.
+	if failedPath := checkLauncherWatchdog(
+		launcher.launcherWatchdogPath(),
+		launcher.binaryPath,
+		logger,
+	); failedPath != "" {
+		launcher.failedExecPaths[failedPath] = true
 	}
 
 	listener, err := listenSocket(socketPath)
@@ -609,10 +634,21 @@ type Launcher struct {
 	runDir          string // runtime directory for sockets (e.g., /run/bureau)
 	stateDir        string // persistent state directory (e.g., /var/lib/bureau)
 	proxyBinaryPath string
-	workspaceRoot   string // root directory for project workspaces (e.g., /var/bureau/workspace/)
+	workspaceRoot   string // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
 	binaryHash      string // SHA256 hex digest of the launcher binary, computed at startup
+	binaryPath      string // absolute filesystem path of the running binary (for watchdog PreviousBinary)
 	sandboxes       map[string]*managedSandbox
 	logger          *slog.Logger
+
+	// failedExecPaths tracks binary paths where exec() has been attempted
+	// and failed during this process lifetime. Prevents retry loops where
+	// the daemon repeatedly sends exec-update for a broken binary.
+	failedExecPaths map[string]bool
+
+	// execFunc is the function called to replace the process image. Nil
+	// means use syscall.Exec. Injectable for testing — the test can
+	// capture the arguments without actually exec'ing.
+	execFunc func(argv0 string, argv []string, envv []string) error
 }
 
 // serve accepts connections on the IPC socket and handles requests.
@@ -734,6 +770,30 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	case "update-proxy-binary":
 		response = l.handleUpdateProxyBinary(ctx, &request)
 
+	case "exec-update":
+		response = l.handleExecUpdate(ctx, &request)
+		// Send the response before a potential exec() — the daemon
+		// needs to know the request was accepted before the process
+		// image is replaced. On exec() success, this function never
+		// returns. On exec() failure, we return normally and the
+		// launcher continues serving.
+		if err := encoder.Encode(response); err != nil {
+			l.logger.Error("encoding IPC response", "error", err)
+			return
+		}
+		if response.OK {
+			// Explicitly close the connection to flush the response
+			// before exec() replaces the process. The deferred
+			// conn.Close() will see an already-closed connection and
+			// return a harmless error.
+			conn.Close()
+			l.performExec(request.BinaryPath)
+			// exec() failed if we reach here. performExec already
+			// cleaned up state file, watchdog, and recorded the
+			// failure. Continue serving.
+		}
+		return
+
 	default:
 		response = IPCResponse{OK: false, Error: fmt.Sprintf("unknown action: %q", request.Action)}
 	}
@@ -745,8 +805,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 // handleCreateSandbox validates a create-sandbox request, spawns a bureau-proxy
 // process for the principal, and waits for it to become ready. The proxy's
-// agent-facing socket and admin socket are placed under socketBasePath and
-// adminBasePath respectively, mirroring the principal's localpart hierarchy.
+// agent-facing socket and admin socket are placed under
+// <run-dir>/principal/ and <run-dir>/admin/ respectively, mirroring the
+// principal's localpart hierarchy.
 func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}

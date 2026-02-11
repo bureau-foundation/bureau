@@ -584,12 +584,28 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		}
 	}
 
-	// Launcher exec() is not yet implemented — requires process
-	// reconnection (rediscovering managed proxies and tmux sessions).
+	// Launcher self-update via exec(). The launcher writes its sandbox
+	// state to disk, sends the OK response, and calls syscall.Exec().
+	// The new launcher reconnects to surviving proxy processes on startup.
+	// If exec fails, the launcher records the failure and rejects future
+	// retries for the same path.
 	if diff.LauncherChanged {
-		d.logger.Warn("launcher binary update available (not yet implemented)",
-			"desired_store_path", desired.LauncherStorePath,
-		)
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:     "exec-update",
+			BinaryPath: desired.LauncherStorePath,
+		})
+		if err != nil {
+			d.logger.Error("launcher exec-update IPC failed", "error", err)
+		} else if !response.OK {
+			d.logger.Warn("launcher exec-update rejected",
+				"error", response.Error,
+				"store_path", desired.LauncherStorePath,
+			)
+		} else {
+			d.logger.Info("launcher exec-update accepted, exec() imminent",
+				"store_path", desired.LauncherStorePath,
+			)
+		}
 	}
 
 	// Report non-daemon version changes to the config room. Daemon
@@ -600,7 +616,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		summaryParts = append(summaryParts, "proxy binary updated for future sandbox creation")
 	}
 	if diff.LauncherChanged {
-		summaryParts = append(summaryParts, "launcher update detected (not yet implemented)")
+		summaryParts = append(summaryParts, "launcher exec() initiated")
 	}
 	if len(summaryParts) > 0 {
 		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(

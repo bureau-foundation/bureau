@@ -38,20 +38,21 @@ func (d *VersionDiff) NeedsUpdate() bool {
 	return d.DaemonChanged || d.LauncherChanged || d.ProxyChanged
 }
 
-// computeSelfHash returns the SHA256 hex digest of the currently running
-// binary (the daemon). Uses os.Executable() to resolve the binary path,
-// which on Linux reads /proc/self/exe — always pointing to the original
-// binary even if it has been replaced on disk since the process started.
-func computeSelfHash() (string, error) {
+// computeSelfHash returns the SHA256 hex digest and absolute filesystem
+// path of the currently running binary (the daemon). Uses os.Executable()
+// to resolve the binary path, which on Linux reads /proc/self/exe —
+// always pointing to the original binary even if it has been replaced on
+// disk since the process started.
+func computeSelfHash() (hash string, binaryPath string, err error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolving own executable path: %w", err)
+		return "", "", fmt.Errorf("resolving own executable path: %w", err)
 	}
 	digest, err := binhash.HashFile(executable)
 	if err != nil {
-		return "", fmt.Errorf("hashing own binary at %s: %w", executable, err)
+		return "", "", fmt.Errorf("hashing own binary at %s: %w", executable, err)
 	}
-	return binhash.FormatDigest(digest), nil
+	return binhash.FormatDigest(digest), executable, nil
 }
 
 // CompareBureauVersion compares desired BureauVersion store paths against

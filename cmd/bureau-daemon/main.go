@@ -98,14 +98,16 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	// Compute the daemon's binary hash for BureauVersion comparison.
+	// Compute the daemon's binary hash and resolve its filesystem path.
 	// Done early since it's pure filesystem I/O with no dependencies.
-	// The hash is stable for the lifetime of this process — the binary
-	// doesn't change while it's running (exec() creates a new process).
-	daemonBinaryHash := ""
-	if selfHash, hashErr := computeSelfHash(); hashErr == nil {
+	// Both values are stable for the lifetime of this process — the
+	// binary doesn't change while it's running (exec() creates a new
+	// process with its own hash and path).
+	var daemonBinaryHash, daemonBinaryPath string
+	if selfHash, selfPath, hashErr := computeSelfHash(); hashErr == nil {
 		daemonBinaryHash = selfHash
-		logger.Info("daemon binary hash computed", "hash", daemonBinaryHash)
+		daemonBinaryPath = selfPath
+		logger.Info("daemon binary hash computed", "hash", daemonBinaryHash, "path", daemonBinaryPath)
 	} else {
 		logger.Warn("failed to compute daemon binary hash", "error", hashErr)
 	}
@@ -166,6 +168,20 @@ func run() error {
 		"services_room", servicesRoomID,
 	)
 
+	// Check the watchdog from a previous exec() attempt. This detects
+	// whether a prior daemon self-update succeeded (we're the new binary)
+	// or failed (we're the old binary restarted after a crash).
+	var failedExecPath string
+	if daemonBinaryPath != "" {
+		failedExecPath = checkDaemonWatchdog(
+			filepath.Join(stateDir, "daemon-watchdog.json"),
+			daemonBinaryPath,
+			session,
+			configRoomID,
+			logger,
+		)
+	}
+
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 
 	daemon := &Daemon{
@@ -181,6 +197,9 @@ func run() error {
 		launcherSocket:   launcherSocket,
 		statusInterval:   statusInterval,
 		daemonBinaryHash: daemonBinaryHash,
+		daemonBinaryPath: daemonBinaryPath,
+		stateDir:         stateDir,
+		failedExecPaths:  make(map[string]bool),
 		running:          make(map[string]bool),
 		lastSpecs:        make(map[string]*schema.SandboxSpec),
 		services:         make(map[string]*schema.Service),
@@ -195,6 +214,12 @@ func run() error {
 		observeRelayBinary: observeRelayBinary,
 		layoutWatchers:     make(map[string]*layoutWatcher),
 		logger:             logger,
+	}
+
+	// Seed failed exec paths from watchdog check so the reconcile loop
+	// doesn't immediately retry a binary that just crashed.
+	if failedExecPath != "" {
+		daemon.failedExecPaths[failedExecPath] = true
 	}
 
 	// Start WebRTC transport and relay socket.
@@ -269,6 +294,28 @@ type Daemon struct {
 	// requires a daemon restart (via exec()). Empty if the hash could
 	// not be computed (treated as always-changed by CompareBureauVersion).
 	daemonBinaryHash string
+
+	// daemonBinaryPath is the absolute filesystem path of the running
+	// daemon binary, resolved once at startup via os.Executable(). Used
+	// by the exec watchdog to record which binary was running before
+	// a transition. On Linux this is the resolved /proc/self/exe target.
+	daemonBinaryPath string
+
+	// stateDir is the directory for persistent daemon state (session.json,
+	// watchdog files). The exec watchdog is written here so it survives
+	// both exec() transitions and process restarts.
+	stateDir string
+
+	// failedExecPaths tracks store paths where exec() has already been
+	// attempted and failed during this process lifetime. Prevents retry
+	// loops where the daemon repeatedly tries to exec a broken binary on
+	// every reconcile cycle. Keyed by desired daemon store path.
+	failedExecPaths map[string]bool
+
+	// execFunc replaces the current process with a new binary. Defaults
+	// to syscall.Exec. Tests override this to capture the exec call
+	// without replacing the test process.
+	execFunc func(binary string, argv []string, env []string) error
 
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.

@@ -297,21 +297,27 @@ func TestCompareBureauVersionPartialConfig(t *testing.T) {
 }
 
 func TestComputeSelfHash(t *testing.T) {
-	hash, err := computeSelfHash()
+	hash, binaryPath, err := computeSelfHash()
 	if err != nil {
 		t.Fatalf("computeSelfHash: %v", err)
 	}
 	if length := len(hash); length != 64 {
 		t.Errorf("hash length = %d, want 64 (hex-encoded SHA256)", length)
 	}
+	if binaryPath == "" {
+		t.Error("binaryPath should not be empty")
+	}
 
 	// Deterministic: hashing the same running binary twice.
-	hash2, err := computeSelfHash()
+	hash2, binaryPath2, err := computeSelfHash()
 	if err != nil {
 		t.Fatalf("computeSelfHash (second): %v", err)
 	}
 	if hash != hash2 {
-		t.Error("computeSelfHash should be deterministic")
+		t.Error("computeSelfHash hash should be deterministic")
+	}
+	if binaryPath != binaryPath2 {
+		t.Error("computeSelfHash path should be deterministic")
 	}
 }
 

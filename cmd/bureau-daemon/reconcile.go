@@ -548,48 +548,38 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		}
 	}
 
-	// Daemon and launcher exec() updates are detected but deferred.
-	// The self-update flow (watchdog + exec + recovery) is a separate
-	// capability — for now, log the change so operators can see it.
+	// Daemon self-update via exec(). On success, this call does not
+	// return — the process is replaced by the new binary. On failure
+	// (or retry skip), execution continues with the current binary.
+	// execDaemon handles its own Matrix reporting for both outcomes.
 	if diff.DaemonChanged {
-		d.logger.Warn("daemon binary update available (exec not yet implemented)",
-			"desired_store_path", desired.DaemonStorePath,
-		)
+		if err := d.execDaemon(ctx, desired.DaemonStorePath); err != nil {
+			d.logger.Error("daemon self-update failed", "error", err)
+		}
 	}
+
+	// Launcher exec() is not yet implemented — requires process
+	// reconnection (rediscovering managed proxies and tmux sessions).
 	if diff.LauncherChanged {
-		d.logger.Warn("launcher binary update available (exec not yet implemented)",
+		d.logger.Warn("launcher binary update available (not yet implemented)",
 			"desired_store_path", desired.LauncherStorePath,
 		)
 	}
 
-	// Report the version comparison result to the config room.
-	var summary string
-	switch {
-	case diff.DaemonChanged && diff.LauncherChanged && diff.ProxyChanged:
-		summary = "BureauVersion: all three binaries changed (daemon, launcher, proxy). Proxy updated; daemon and launcher exec() pending."
-	case diff.ProxyChanged && (diff.DaemonChanged || diff.LauncherChanged):
-		summary = "BureauVersion: proxy binary updated."
-		if diff.DaemonChanged {
-			summary += " Daemon update detected (exec() pending)."
-		}
-		if diff.LauncherChanged {
-			summary += " Launcher update detected (exec() pending)."
-		}
-	case diff.ProxyChanged:
-		summary = "BureauVersion: proxy binary updated for future sandbox creation."
-	default:
-		// Only daemon/launcher changed, no proxy.
-		parts := []string{}
-		if diff.DaemonChanged {
-			parts = append(parts, "daemon")
-		}
-		if diff.LauncherChanged {
-			parts = append(parts, "launcher")
-		}
-		summary = fmt.Sprintf("BureauVersion: %s update detected (exec() pending).",
-			strings.Join(parts, " and "))
+	// Report non-daemon version changes to the config room. Daemon
+	// changes are reported by execDaemon (pre-exec message) and
+	// checkDaemonWatchdog (post-exec success/failure).
+	var summaryParts []string
+	if diff.ProxyChanged {
+		summaryParts = append(summaryParts, "proxy binary updated for future sandbox creation")
 	}
-	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(summary))
+	if diff.LauncherChanged {
+		summaryParts = append(summaryParts, "launcher update detected (not yet implemented)")
+	}
+	if len(summaryParts) > 0 {
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			"BureauVersion: "+strings.Join(summaryParts, "; ")+"."))
+	}
 }
 
 // launcherRequest sends a request to the launcher and reads the response.

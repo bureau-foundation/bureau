@@ -7,16 +7,22 @@ package main
 // Matrix /sync long-poll. Instead of fetching all state every 30 seconds,
 // the daemon waits for the homeserver to push state changes as they happen.
 //
-// Three rooms are monitored:
+// Four categories of rooms are monitored:
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
+//   - Workspace rooms: m.bureau.workspace.ready, m.bureau.project → reconcile
+//     (joined dynamically when the daemon accepts invites)
 //
 // The sync loop is purely a notification mechanism: when state changes are
 // detected in a room, the existing handler (reconcile, syncPeerAddresses,
 // syncServiceDirectory) is called to re-read the current state. This avoids
 // coupling the sync response format to the handler logic — handlers continue
 // to work exactly as they did under polling.
+//
+// Invites are accepted automatically. The daemon is invited to workspace rooms
+// by "bureau workspace create" and must join to read workspace state events
+// (needed for StartCondition evaluation on deferred principals).
 //
 // Benefits over polling:
 //   - Latency: changes detected within milliseconds (vs up to 30 seconds)
@@ -39,6 +45,12 @@ import (
 // incremental syncs, state events can appear as timeline events with a
 // non-nil state_key. The limit is kept small since the daemon only checks
 // for the presence of state events, not their content.
+//
+// Workspace event types (project, workspace.ready, workspace.teardown) are
+// included so that state changes in workspace rooms trigger re-reconciliation.
+// The daemon uses evaluateStartCondition with direct GetStateEvent calls to
+// check whether conditions are met — the sync filter just ensures the room
+// appears in the response so the daemon knows to re-check.
 const syncFilter = `{
 	"room": {
 		"state": {
@@ -47,7 +59,10 @@ const syncFilter = `{
 				"m.bureau.credentials",
 				"m.bureau.machine_status",
 				"m.bureau.service",
-				"m.bureau.layout"
+				"m.bureau.layout",
+				"m.bureau.project",
+				"m.bureau.workspace.ready",
+				"m.bureau.workspace.teardown"
 			]
 		},
 		"timeline": {
@@ -56,7 +71,10 @@ const syncFilter = `{
 				"m.bureau.credentials",
 				"m.bureau.machine_status",
 				"m.bureau.service",
-				"m.bureau.layout"
+				"m.bureau.layout",
+				"m.bureau.project",
+				"m.bureau.workspace.ready",
+				"m.bureau.workspace.teardown"
 			],
 			"limit": 50
 		},
@@ -95,7 +113,19 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	d.logger.Info("initial sync complete",
 		"next_batch", response.NextBatch,
 		"joined_rooms", len(response.Rooms.Join),
+		"pending_invites", len(response.Rooms.Invite),
 	)
+
+	// Accept any pending invites before running handlers. The daemon may
+	// have been invited to workspace rooms while it was offline — joining
+	// them now ensures evaluateStartCondition can read workspace state
+	// events during the initial reconcile.
+	for roomID := range response.Rooms.Invite {
+		d.logger.Info("accepting pending invite", "room_id", roomID)
+		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
+			d.logger.Error("failed to accept pending invite", "room_id", roomID, "error", err)
+		}
+	}
 
 	// Run all handlers unconditionally to establish baseline state.
 	// These use their own GetStateEvent/GetRoomState calls, which is
@@ -175,18 +205,35 @@ func (d *Daemon) syncLoop(ctx context.Context, sinceToken string) {
 	}
 }
 
-// processSyncResponse inspects a /sync response for state changes in the
-// daemon's monitored rooms and triggers the appropriate handlers.
+// processSyncResponse inspects a /sync response for invites and state
+// changes, triggering the appropriate handlers.
+//
+// Invites are accepted first: the daemon auto-joins any room it's invited
+// to (workspace rooms are delivered via invite from "bureau workspace create").
 //
 // State events can appear in two places within a JoinedRoom:
 //   - State.Events: state present at the start of the sync window (gap fill)
 //   - Timeline.Events: events with a non-nil StateKey are state changes
 //
 // When a room has any state changes, the corresponding handler is called to
-// re-read the current state. The handlers are called in dependency order:
-// peer addresses before services (so relay routing has up-to-date addresses).
+// re-read the current state. Non-core rooms (workspace rooms joined via
+// invite) trigger reconcile so deferred principals can re-evaluate
+// StartConditions. Handlers are called in dependency order: peer addresses
+// before services (so relay routing has up-to-date addresses).
 func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.SyncResponse) {
 	var needsReconcile, needsPeerSync, needsServiceSync bool
+
+	// Accept any pending invites. The daemon is invited to workspace rooms
+	// by "bureau workspace create" and must join to read workspace state
+	// events needed for StartCondition evaluation on deferred principals.
+	for roomID := range response.Rooms.Invite {
+		d.logger.Info("accepting room invite", "room_id", roomID)
+		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
+			d.logger.Error("failed to accept room invite", "room_id", roomID, "error", err)
+			continue
+		}
+		needsReconcile = true
+	}
 
 	for roomID, room := range response.Rooms.Join {
 		if !roomHasStateChanges(room) {
@@ -200,11 +247,16 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			needsPeerSync = true
 		case d.servicesRoomID:
 			needsServiceSync = true
+		default:
+			// Non-core rooms (workspace rooms joined via invite) with
+			// state changes trigger reconcile so deferred principals
+			// can re-evaluate StartConditions.
+			needsReconcile = true
 		}
 	}
 
 	if needsReconcile {
-		d.logger.Info("config room state changed, reconciling")
+		d.logger.Info("state changed, reconciling")
 		if err := d.reconcile(ctx); err != nil {
 			d.logger.Error("reconciliation failed", "error", err)
 		}

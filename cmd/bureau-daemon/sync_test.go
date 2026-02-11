@@ -529,12 +529,30 @@ func TestInitialSync(t *testing.T) {
 	}
 }
 
-func TestProcessSyncResponse_UnknownRoomIgnored(t *testing.T) {
+// TestProcessSyncResponse_WorkspaceRoomTriggersReconcile verifies that state
+// changes in non-core rooms (workspace rooms joined via invite) trigger
+// reconcile. This is essential for the workspace flow: when a setup principal
+// publishes m.bureau.workspace.ready, the daemon sees the state change via
+// /sync and re-reconciles, unblocking deferred agent principals whose
+// StartCondition references that event.
+func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Parallel()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machinesRoomID = "!machines:test"
+	const servicesRoomID = "!services:test"
+
+	// Set up machine config so reconcile sets lastConfig.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: "test/agent",
+			AutoStart: true,
+		}},
+	})
 
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
@@ -553,9 +571,9 @@ func TestProcessSyncResponse_UnknownRoomIgnored(t *testing.T) {
 		machineName:    "machine/test",
 		machineUserID:  "@machine/test:bureau.local",
 		serverName:     "bureau.local",
-		configRoomID:   "!config:test",
-		machinesRoomID: "!machines:test",
-		servicesRoomID: "!services:test",
+		configRoomID:   configRoomID,
+		machinesRoomID: machinesRoomID,
+		servicesRoomID: servicesRoomID,
 		launcherSocket: "/nonexistent/launcher.sock",
 		running:        make(map[string]bool),
 		services:       make(map[string]*schema.Service),
@@ -567,16 +585,17 @@ func TestProcessSyncResponse_UnknownRoomIgnored(t *testing.T) {
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Sync response for a room the daemon doesn't care about.
+	// Sync response with a workspace.ready event in a workspace room
+	// (not one of the three core rooms).
 	stateKey := ""
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
 			Join: map[string]messaging.JoinedRoom{
-				"!unknown:test": {
+				"!workspace/iree:test": {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
-							{Type: "m.room.topic", StateKey: &stateKey},
+							{Type: schema.EventTypeWorkspaceReady, StateKey: &stateKey},
 						},
 					},
 				},
@@ -584,10 +603,170 @@ func TestProcessSyncResponse_UnknownRoomIgnored(t *testing.T) {
 		},
 	}
 
-	// Should complete without error or side effects.
 	daemon.processSyncResponse(context.Background(), response)
 
-	if daemon.lastConfig != nil {
-		t.Error("lastConfig should be nil (unknown room)")
+	// Workspace room state changes should trigger reconcile so deferred
+	// principals can re-evaluate StartConditions.
+	if daemon.lastConfig == nil {
+		t.Error("lastConfig should be set (workspace room state change triggers reconcile)")
+	}
+}
+
+// TestProcessSyncResponse_AcceptsInvites verifies that the daemon auto-joins
+// rooms it's invited to (workspace rooms from "bureau workspace create") and
+// triggers reconcile afterward.
+func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machinesRoomID = "!machines:test"
+	const servicesRoomID = "!services:test"
+	const workspaceRoomID = "!workspace:test"
+
+	// Set up machine config so reconcile has something to process.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: "test/agent",
+			AutoStart: true,
+		}},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon := &Daemon{
+		session:        session,
+		machineName:    "machine/test",
+		machineUserID:  "@machine/test:bureau.local",
+		serverName:     "bureau.local",
+		configRoomID:   configRoomID,
+		machinesRoomID: machinesRoomID,
+		servicesRoomID: servicesRoomID,
+		launcherSocket: "/nonexistent/launcher.sock",
+		running:        make(map[string]bool),
+		services:       make(map[string]*schema.Service),
+		proxyRoutes:    make(map[string]string),
+		peerAddresses:  make(map[string]string),
+		peerTransports: make(map[string]http.RoundTripper),
+		layoutWatchers: make(map[string]*layoutWatcher),
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// Sync response with an invite to a workspace room.
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Invite: map[string]messaging.InvitedRoom{
+				workspaceRoomID: {},
+			},
+		},
+	}
+
+	daemon.processSyncResponse(context.Background(), response)
+
+	// Verify the daemon called JoinRoom on the workspace room.
+	if !matrixState.hasJoined(workspaceRoomID) {
+		t.Error("daemon should have joined the workspace room after invite")
+	}
+
+	// Accepting an invite triggers reconcile so deferred principals
+	// can re-evaluate StartConditions against the newly joined room.
+	if daemon.lastConfig == nil {
+		t.Error("lastConfig should be set (invite acceptance triggers reconcile)")
+	}
+}
+
+// TestInitialSync_AcceptsInvites verifies that pending invites from before the
+// daemon started are accepted during the initial /sync. This handles the case
+// where "bureau workspace create" invited the daemon while it was offline.
+func TestInitialSync_AcceptsInvites(t *testing.T) {
+	t.Parallel()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machinesRoomID = "!machines:test"
+	const servicesRoomID = "!services:test"
+	const workspaceRoomID = "!workspace:test"
+
+	// Set up machine config.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: "test/agent",
+			AutoStart: true,
+		}},
+	})
+
+	// Add a pending invite to a workspace room. This simulates the daemon
+	// being invited while it was offline.
+	matrixState.addInvite(workspaceRoomID)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon := &Daemon{
+		session:        session,
+		machineName:    "machine/test",
+		machineUserID:  "@machine/test:bureau.local",
+		serverName:     "bureau.local",
+		configRoomID:   configRoomID,
+		machinesRoomID: machinesRoomID,
+		servicesRoomID: servicesRoomID,
+		launcherSocket: "/nonexistent/launcher.sock",
+		statusInterval: time.Hour,
+		running:        make(map[string]bool),
+		services:       make(map[string]*schema.Service),
+		proxyRoutes:    make(map[string]string),
+		peerAddresses:  make(map[string]string),
+		peerTransports: make(map[string]http.RoundTripper),
+		layoutWatchers: make(map[string]*layoutWatcher),
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	sinceToken, err := daemon.initialSync(ctx)
+	if err != nil {
+		t.Fatalf("initialSync: %v", err)
+	}
+	if sinceToken == "" {
+		t.Error("sinceToken should not be empty after initial sync")
+	}
+
+	// Verify the daemon joined the workspace room during initial sync.
+	if !matrixState.hasJoined(workspaceRoomID) {
+		t.Error("daemon should have joined workspace room from initial sync invite")
+	}
+
+	// Verify reconcile ran.
+	if daemon.lastConfig == nil {
+		t.Fatal("lastConfig should be set after initial sync")
 	}
 }

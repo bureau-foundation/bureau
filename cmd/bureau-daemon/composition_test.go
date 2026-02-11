@@ -507,6 +507,11 @@ type mockMatrixState struct {
 	// pendingSyncEvents holds events to include in the next incremental
 	// /sync response. Keyed by room ID. Cleared after each sync response.
 	pendingSyncEvents map[string][]mockRoomStateEvent
+
+	// invites tracks rooms with pending invites. Included in the /sync
+	// response's rooms.invite section. Cleared when handleJoinRoom is
+	// called for the room (accepting the invite moves it to joined).
+	invites map[string]bool
 }
 
 // mockRoomMember represents a member for the /members endpoint.
@@ -533,6 +538,7 @@ func newMockMatrixState() *mockMatrixState {
 		roomMembers:       make(map[string][]mockRoomMember),
 		joinedRooms:       make(map[string]map[string]bool),
 		pendingSyncEvents: make(map[string][]mockRoomStateEvent),
+		invites:           make(map[string]bool),
 	}
 }
 
@@ -543,6 +549,15 @@ func (m *mockMatrixState) enqueueSyncEvent(roomID string, event mockRoomStateEve
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pendingSyncEvents[roomID] = append(m.pendingSyncEvents[roomID], event)
+}
+
+// addInvite marks a room as having a pending invite. The room will appear
+// in the /sync response's rooms.invite section until the daemon calls
+// JoinRoom (which clears the invite).
+func (m *mockMatrixState) addInvite(roomID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.invites[roomID] = true
 }
 
 func (m *mockMatrixState) setStateEvent(roomID, eventType, stateKey string, content any) {
@@ -696,6 +711,8 @@ func (m *mockMatrixState) handleJoinRoom(w http.ResponseWriter, r *http.Request,
 	}
 	// Track by room ID. We use "any" since the mock doesn't verify tokens.
 	m.joinedRooms[roomID]["_joined"] = true
+	// Accepting an invite clears it from the pending set.
+	delete(m.invites, roomID)
 	m.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -864,11 +881,22 @@ func (m *mockMatrixState) handleSync(w http.ResponseWriter, since string) {
 		m.pendingSyncEvents = make(map[string][]mockRoomStateEvent)
 	}
 
+	// Build invite section from pending invites.
+	invitedRooms := make(map[string]any)
+	for roomID := range m.invites {
+		invitedRooms[roomID] = map[string]any{
+			"invite_state": map[string]any{
+				"events": []any{},
+			},
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"next_batch": nextBatch,
 		"rooms": map[string]any{
-			"join": joinedRooms,
+			"join":   joinedRooms,
+			"invite": invitedRooms,
 		},
 	})
 }

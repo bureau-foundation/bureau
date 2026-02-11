@@ -7,14 +7,17 @@ go_library(
     name = "cli",
     srcs = [
         "command.go",
+        "local_machine.go",
         "login.go",
-        "session.go",
+        "operator_session.go",
+        "session_config.go",
         "suggest.go",
         "whoami.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cli",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/principal",
         "//lib/secret",
         "//messaging",
         "@com_github_spf13_pflag//:pflag",
@@ -26,7 +29,8 @@ go_test(
     name = "cli_test",
     srcs = [
         "command_test.go",
-        "session_test.go",
+        "local_machine_test.go",
+        "operator_session_test.go",
         "suggest_test.go",
     ],
     embed = [":cli"],

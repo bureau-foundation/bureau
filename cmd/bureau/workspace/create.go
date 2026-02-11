@@ -67,11 +67,15 @@ All worktrees in a project share a single bare git object store at
 				Description: "Create a workspace on a specific branch",
 				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --param branch=develop --credential-file ./creds",
 			},
+			{
+				Description: "Create a workspace on the local machine (auto-detect identity)",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine local --template bureau/templates:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
+			},
 		},
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("workspace create", pflag.ContinueOnError)
 			session.AddFlags(flagSet)
-			flagSet.StringVar(&machine, "machine", "", "machine localpart to host the workspace (required, e.g., machine/workstation)")
+			flagSet.StringVar(&machine, "machine", "", "machine localpart to host the workspace (required; use \"local\" to auto-detect from launcher session)")
 			flagSet.StringVar(&template, "template", "", "sandbox template ref for agent principals (required, e.g., bureau/templates:base)")
 			flagSet.StringArrayVar(&params, "param", nil, "key=value parameter (repeatable; recognized: repository, branch)")
 			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
@@ -110,6 +114,18 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	project, worktreePath, hasWorktree := strings.Cut(alias, "/")
 	if !hasWorktree {
 		return fmt.Errorf("workspace alias must have at least two segments (project/path), got %q", alias)
+	}
+
+	// Resolve "local" to the actual machine localpart from the launcher's
+	// session file. This lets operators skip looking up the full machine name
+	// when running on the target machine itself.
+	if machine == "local" {
+		resolved, err := cli.ResolveLocalMachine()
+		if err != nil {
+			return fmt.Errorf("resolving local machine identity: %w", err)
+		}
+		machine = resolved
+		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machine)
 	}
 
 	// Validate the machine localpart.

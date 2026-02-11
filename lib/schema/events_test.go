@@ -19,6 +19,7 @@ func TestEventTypeConstants(t *testing.T) {
 		want     string
 	}{
 		{"machine_key", EventTypeMachineKey, "m.bureau.machine_key"},
+		{"machine_info", EventTypeMachineInfo, "m.bureau.machine_info"},
 		{"machine_status", EventTypeMachineStatus, "m.bureau.machine_status"},
 		{"machine_config", EventTypeMachineConfig, "m.bureau.machine_config"},
 		{"credentials", EventTypeCredentials, "m.bureau.credentials"},
@@ -66,14 +67,182 @@ func TestMachineKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMachineInfoRoundTrip(t *testing.T) {
+	original := MachineInfo{
+		Principal:     "@machine/workstation:bureau.local",
+		Hostname:      "workstation",
+		KernelVersion: "6.14.0-37-generic",
+		BoardVendor:   "ASUS",
+		BoardName:     "Pro WS WRX90E-SAGE SE",
+		CPU: CPUInfo{
+			Model:          "AMD Ryzen Threadripper PRO 7995WX 96-Cores",
+			Sockets:        1,
+			CoresPerSocket: 96,
+			ThreadsPerCore: 2,
+			L3CacheKB:      32768,
+		},
+		MemoryTotalMB: 515413,
+		SwapTotalMB:   8191,
+		NUMANodes:     4,
+		GPUs: []GPUInfo{
+			{
+				Vendor:                            "AMD",
+				PCIDeviceID:                       "0x744a",
+				PCISlot:                           "0000:c3:00.0",
+				VRAMTotalBytes:                    48301604864,
+				UniqueID:                          "30437a849c458574",
+				VBIOSVersion:                      "113-APM7489-DS2-100",
+				VRAMVendor:                        "samsung",
+				PCIeLinkWidth:                     16,
+				ThermalLimitCriticalMillidegrees:  100000,
+				ThermalLimitEmergencyMillidegrees: 105000,
+				Driver:                            "amdgpu",
+			},
+			{
+				Vendor:                            "AMD",
+				PCIDeviceID:                       "0x744a",
+				PCISlot:                           "0000:e3:00.0",
+				VRAMTotalBytes:                    48301604864,
+				UniqueID:                          "4939e1d93d24ff77",
+				VBIOSVersion:                      "113-APM7489-DS2-100",
+				VRAMVendor:                        "samsung",
+				PCIeLinkWidth:                     16,
+				ThermalLimitCriticalMillidegrees:  100000,
+				ThermalLimitEmergencyMillidegrees: 105000,
+				Driver:                            "amdgpu",
+			},
+		},
+		DaemonVersion: "v0.1.0-dev",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "principal", "@machine/workstation:bureau.local")
+	assertField(t, raw, "hostname", "workstation")
+	assertField(t, raw, "kernel_version", "6.14.0-37-generic")
+	assertField(t, raw, "board_vendor", "ASUS")
+	assertField(t, raw, "board_name", "Pro WS WRX90E-SAGE SE")
+	assertField(t, raw, "memory_total_mb", float64(515413))
+	assertField(t, raw, "swap_total_mb", float64(8191))
+	assertField(t, raw, "numa_nodes", float64(4))
+	assertField(t, raw, "daemon_version", "v0.1.0-dev")
+
+	// Verify CPU nested struct wire format.
+	cpu, ok := raw["cpu"].(map[string]any)
+	if !ok {
+		t.Fatal("cpu field missing or wrong type")
+	}
+	assertField(t, cpu, "model", "AMD Ryzen Threadripper PRO 7995WX 96-Cores")
+	assertField(t, cpu, "sockets", float64(1))
+	assertField(t, cpu, "cores_per_socket", float64(96))
+	assertField(t, cpu, "threads_per_core", float64(2))
+	assertField(t, cpu, "l3_cache_kb", float64(32768))
+
+	// Verify GPUs array wire format.
+	gpus, ok := raw["gpus"].([]any)
+	if !ok {
+		t.Fatal("gpus field missing or wrong type")
+	}
+	if len(gpus) != 2 {
+		t.Fatalf("gpus count = %d, want 2", len(gpus))
+	}
+	firstGPU := gpus[0].(map[string]any)
+	assertField(t, firstGPU, "vendor", "AMD")
+	assertField(t, firstGPU, "pci_device_id", "0x744a")
+	assertField(t, firstGPU, "pci_slot", "0000:c3:00.0")
+	assertField(t, firstGPU, "vram_total_bytes", float64(48301604864))
+	assertField(t, firstGPU, "unique_id", "30437a849c458574")
+	assertField(t, firstGPU, "vbios_version", "113-APM7489-DS2-100")
+	assertField(t, firstGPU, "vram_vendor", "samsung")
+	assertField(t, firstGPU, "pcie_link_width", float64(16))
+	assertField(t, firstGPU, "thermal_limit_critical_millidegrees", float64(100000))
+	assertField(t, firstGPU, "thermal_limit_emergency_millidegrees", float64(105000))
+	assertField(t, firstGPU, "driver", "amdgpu")
+
+	var decoded MachineInfo
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, original) {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestMachineInfoOmitsOptionalFields(t *testing.T) {
+	// Minimal MachineInfo: no board info, no GPUs, no swap, no NUMA.
+	// This is what a VM or container without DMI or GPUs would report.
+	info := MachineInfo{
+		Principal:     "@machine/cloud-vm:bureau.local",
+		Hostname:      "cloud-vm",
+		KernelVersion: "6.8.0-44-generic",
+		CPU: CPUInfo{
+			Model:          "Intel Xeon Platinum 8375C",
+			Sockets:        1,
+			CoresPerSocket: 8,
+			ThreadsPerCore: 2,
+		},
+		MemoryTotalMB: 32768,
+		DaemonVersion: "v0.1.0-dev",
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Optional fields should be omitted from the wire format.
+	for _, field := range []string{"board_vendor", "board_name", "swap_total_mb", "numa_nodes", "gpus"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when zero/empty", field)
+		}
+	}
+
+	// L3 cache should be omitted from the CPU sub-object.
+	cpu := raw["cpu"].(map[string]any)
+	if _, exists := cpu["l3_cache_kb"]; exists {
+		t.Error("l3_cache_kb should be omitted when zero")
+	}
+}
+
 func TestMachineStatusRoundTrip(t *testing.T) {
 	original := MachineStatus{
-		Principal:             "@machine/workstation:bureau.local",
-		CPUPercent:            42,
-		MemoryUsedMB:          12595,
-		GPUUtilizationPercent: 87,
-		Sandboxes:             SandboxCounts{Running: 5, Idle: 2},
-		UptimeSeconds:         86400,
+		Principal:    "@machine/workstation:bureau.local",
+		CPUPercent:   42,
+		MemoryUsedMB: 12595,
+		GPUStats: []GPUStatus{
+			{
+				PCISlot:                 "0000:c3:00.0",
+				UtilizationPercent:      79,
+				VRAMUsedBytes:           27860992,
+				TemperatureMillidegrees: 55000,
+				PowerDrawWatts:          74,
+				GraphicsClockMHz:        879,
+				MemoryClockMHz:          772,
+			},
+			{
+				PCISlot:                 "0000:e3:00.0",
+				UtilizationPercent:      0,
+				VRAMUsedBytes:           27860992,
+				TemperatureMillidegrees: 49000,
+				PowerDrawWatts:          28,
+				GraphicsClockMHz:        4,
+				MemoryClockMHz:          96,
+			},
+		},
+		Sandboxes:     SandboxCounts{Running: 5, Idle: 2},
+		UptimeSeconds: 86400,
 	}
 
 	data, err := json.Marshal(original)
@@ -88,26 +257,41 @@ func TestMachineStatusRoundTrip(t *testing.T) {
 	assertField(t, raw, "principal", "@machine/workstation:bureau.local")
 	assertField(t, raw, "cpu_percent", float64(42))
 	assertField(t, raw, "memory_used_mb", float64(12595))
-	assertField(t, raw, "gpu_utilization_percent", float64(87))
 	assertField(t, raw, "uptime_seconds", float64(86400))
+
+	// Verify gpu_stats array wire format.
+	gpuStats, ok := raw["gpu_stats"].([]any)
+	if !ok {
+		t.Fatal("gpu_stats field missing or wrong type")
+	}
+	if len(gpuStats) != 2 {
+		t.Fatalf("gpu_stats count = %d, want 2", len(gpuStats))
+	}
+	firstGPU := gpuStats[0].(map[string]any)
+	assertField(t, firstGPU, "pci_slot", "0000:c3:00.0")
+	assertField(t, firstGPU, "utilization_percent", float64(79))
+	assertField(t, firstGPU, "vram_used_bytes", float64(27860992))
+	assertField(t, firstGPU, "temperature_millidegrees", float64(55000))
+	assertField(t, firstGPU, "power_draw_watts", float64(74))
+	assertField(t, firstGPU, "graphics_clock_mhz", float64(879))
+	assertField(t, firstGPU, "memory_clock_mhz", float64(772))
 
 	var decoded MachineStatus
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if decoded != original {
+	if !reflect.DeepEqual(decoded, original) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
 	}
 }
 
-func TestMachineStatusOmitsZeroGPU(t *testing.T) {
+func TestMachineStatusOmitsGPUStatsWhenEmpty(t *testing.T) {
 	status := MachineStatus{
 		Principal:     "@machine/pi-kitchen:bureau.local",
 		CPUPercent:    15,
 		MemoryUsedMB:  819,
 		Sandboxes:     SandboxCounts{Running: 1, Idle: 0},
 		UptimeSeconds: 3600,
-		// GPUUtilizationPercent deliberately zero.
 	}
 
 	data, err := json.Marshal(status)
@@ -119,8 +303,8 @@ func TestMachineStatusOmitsZeroGPU(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	if _, exists := raw["gpu_utilization_percent"]; exists {
-		t.Error("gpu_utilization_percent should be omitted when zero")
+	if _, exists := raw["gpu_stats"]; exists {
+		t.Error("gpu_stats should be omitted when nil")
 	}
 }
 

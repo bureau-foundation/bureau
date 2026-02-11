@@ -169,6 +169,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		spaceRoomID, config.serverName,
 		[]string{
 			schema.EventTypeMachineKey,
+			schema.EventTypeMachineInfo,
 			schema.EventTypeMachineStatus,
 			schema.EventTypeWebRTCOffer,
 			schema.EventTypeWebRTCAnswer,
@@ -441,9 +442,9 @@ func baseTemplates() []namedTemplate {
 //
 // memberSettableEventTypes lists state event types that members at power level
 // 0 are allowed to set. This is used for Bureau-specific events: machines
-// publish m.bureau.machine_key and m.bureau.machine_status, daemons exchange
-// WebRTC signaling (m.bureau.webrtc_offer/answer), and services register
-// via m.bureau.service.
+// publish m.bureau.machine_key, m.bureau.machine_info, and
+// m.bureau.machine_status; daemons exchange WebRTC signaling
+// (m.bureau.webrtc_offer/answer); and services register via m.bureau.service.
 func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string) map[string]any {
 	events := map[string]any{
 		"m.room.avatar":             100,

@@ -309,6 +309,7 @@ func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID string) map[
 	switch roomID {
 	case machinesID:
 		events["m.bureau.machine_key"] = 0
+		events["m.bureau.machine_info"] = 0
 		events["m.bureau.machine_status"] = 0
 	case servicesID:
 		events["m.bureau.service"] = 0

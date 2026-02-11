@@ -14,6 +14,17 @@ const (
 	// Room: #bureau/machines:<server>
 	EventTypeMachineKey = "m.bureau.machine_key"
 
+	// EventTypeMachineInfo is published to #bureau/machines when a
+	// machine's daemon starts (or when hardware configuration changes).
+	// Contains static system inventory: CPU topology, total memory,
+	// GPU hardware, board identity. Unlike MachineStatus (periodic
+	// heartbeat with changing values), MachineInfo is published once
+	// and only updated if the hardware inventory changes.
+	//
+	// State key: machine localpart (e.g., "machine/workstation")
+	// Room: #bureau/machines:<server>
+	EventTypeMachineInfo = "m.bureau.machine_info"
+
 	// EventTypeMachineStatus is published to #bureau/machines by each
 	// machine's daemon as a periodic heartbeat with resource stats.
 	//
@@ -191,10 +202,12 @@ type MachineStatus struct {
 	// with Matrix canonical JSON (which forbids fractional numbers).
 	MemoryUsedMB int `json:"memory_used_mb"`
 
-	// GPUUtilizationPercent is the GPU utilization as an integer (0-100).
-	// Zero if no GPU or GPU monitoring is unavailable. Integer because
-	// Matrix canonical JSON forbids fractional numbers.
-	GPUUtilizationPercent int `json:"gpu_utilization_percent,omitempty"`
+	// GPUStats reports per-GPU dynamic metrics for each GPU on the
+	// machine. Each entry is identified by its PCI slot (matching
+	// GPUInfo.PCISlot in MachineInfo) for correlation between static
+	// inventory and dynamic stats. Empty when no GPUs are present or
+	// GPU monitoring is unavailable.
+	GPUStats []GPUStatus `json:"gpu_stats,omitempty"`
 
 	// Sandboxes reports counts of sandbox states on this machine.
 	Sandboxes SandboxCounts `json:"sandboxes"`
@@ -220,6 +233,178 @@ type MachineStatus struct {
 type SandboxCounts struct {
 	Running int `json:"running"`
 	Idle    int `json:"idle"`
+}
+
+// GPUStatus reports dynamic metrics for a single GPU in a MachineStatus
+// heartbeat. The PCISlot field correlates with GPUInfo.PCISlot in the
+// MachineInfo event for this machine, linking dynamic stats to static
+// inventory.
+type GPUStatus struct {
+	// PCISlot is the PCI slot address (e.g., "0000:c3:00.0"). Matches
+	// GPUInfo.PCISlot in the MachineInfo event for device correlation.
+	PCISlot string `json:"pci_slot"`
+
+	// UtilizationPercent is the GPU compute utilization (0-100).
+	// Sourced from AMDGPU_INFO_SENSOR_GPU_LOAD on AMD or NVML on
+	// NVIDIA. Zero when monitoring is unavailable.
+	UtilizationPercent int `json:"utilization_percent"`
+
+	// VRAMUsedBytes is the current VRAM consumption in bytes.
+	// Sourced from sysfs mem_info_vram_used on AMD.
+	VRAMUsedBytes int64 `json:"vram_used_bytes"`
+
+	// TemperatureMillidegrees is the GPU junction temperature in
+	// millidegrees Celsius (e.g., 55000 = 55.0C). Junction
+	// temperature is the hottest point on die — the most relevant
+	// metric for thermal throttling. Integer millidegrees comply
+	// with Matrix canonical JSON while giving 0.001C precision.
+	TemperatureMillidegrees int `json:"temperature_millidegrees"`
+
+	// PowerDrawWatts is the average GPU package power draw in whole
+	// watts. Sourced from AMDGPU_INFO_SENSOR_GPU_AVG_POWER on AMD.
+	PowerDrawWatts int `json:"power_draw_watts"`
+
+	// GraphicsClockMHz is the current graphics (shader) clock
+	// frequency in MHz. Sourced from AMDGPU_INFO_SENSOR_GFX_SCLK.
+	GraphicsClockMHz int `json:"graphics_clock_mhz"`
+
+	// MemoryClockMHz is the current memory clock frequency in MHz.
+	// Sourced from AMDGPU_INFO_SENSOR_GFX_MCLK.
+	MemoryClockMHz int `json:"memory_clock_mhz"`
+}
+
+// MachineInfo is the content of an EventTypeMachineInfo state event.
+// Published once at daemon startup to #bureau/machines. Contains static
+// system inventory that does not change between heartbeats: CPU topology,
+// total memory, GPU hardware, board identity. Consumers use this to
+// understand the fleet's hardware composition without requiring ssh access
+// or out-of-band inventory systems.
+type MachineInfo struct {
+	// Principal is the full Matrix user ID of the machine
+	// (e.g., "@machine/workstation:bureau.local").
+	Principal string `json:"principal"`
+
+	// Hostname is the machine's hostname from os.Hostname().
+	Hostname string `json:"hostname"`
+
+	// KernelVersion is the running kernel version string
+	// (e.g., "6.14.0-37-generic"). From syscall.Uname.
+	KernelVersion string `json:"kernel_version"`
+
+	// BoardVendor is the motherboard/system vendor from
+	// /sys/class/dmi/id/sys_vendor (e.g., "ASUS"). Empty in
+	// environments where DMI is unavailable (VMs, containers).
+	BoardVendor string `json:"board_vendor,omitempty"`
+
+	// BoardName is the motherboard model from
+	// /sys/class/dmi/id/board_name (e.g., "Pro WS WRX90E-SAGE SE").
+	// Empty in environments where DMI is unavailable.
+	BoardName string `json:"board_name,omitempty"`
+
+	// CPU describes the machine's CPU topology.
+	CPU CPUInfo `json:"cpu"`
+
+	// MemoryTotalMB is the total physical RAM in megabytes.
+	// From syscall.Sysinfo.
+	MemoryTotalMB int `json:"memory_total_mb"`
+
+	// SwapTotalMB is the total swap space in megabytes.
+	// From syscall.Sysinfo. Zero if no swap is configured.
+	SwapTotalMB int `json:"swap_total_mb,omitempty"`
+
+	// NUMANodes is the number of NUMA nodes on this machine.
+	// From counting /sys/devices/system/node/node* directories.
+	// Zero if NUMA information is unavailable.
+	NUMANodes int `json:"numa_nodes,omitempty"`
+
+	// GPUs lists the GPU hardware present on this machine. Each
+	// entry describes a single GPU. Empty if no GPUs are detected.
+	GPUs []GPUInfo `json:"gpus,omitempty"`
+
+	// DaemonVersion is the bureau-daemon version string
+	// (from lib/version at build time).
+	DaemonVersion string `json:"daemon_version"`
+}
+
+// CPUInfo describes the CPU topology of a machine.
+type CPUInfo struct {
+	// Model is the CPU model string from /proc/cpuinfo
+	// (e.g., "AMD Ryzen Threadripper PRO 7995WX 96-Cores").
+	Model string `json:"model"`
+
+	// Sockets is the number of physical CPU packages.
+	// From counting unique physical_package_id values in sysfs.
+	Sockets int `json:"sockets"`
+
+	// CoresPerSocket is the number of physical cores per socket.
+	// From counting unique core_id values per physical package.
+	CoresPerSocket int `json:"cores_per_socket"`
+
+	// ThreadsPerCore is the number of hardware threads per core
+	// (1 for no SMT, 2 for standard SMT/HyperThreading).
+	ThreadsPerCore int `json:"threads_per_core"`
+
+	// L3CacheKB is the L3 cache size per socket in kilobytes.
+	// From /sys/devices/system/cpu/cpu0/cache/index3/size.
+	// Zero if L3 cache information is unavailable.
+	L3CacheKB int `json:"l3_cache_kb,omitempty"`
+}
+
+// GPUInfo describes a single GPU's static hardware identity. Published
+// as part of MachineInfo. The PCISlot field serves as the join key with
+// GPUStatus entries in MachineStatus heartbeats.
+type GPUInfo struct {
+	// Vendor is the GPU vendor name: "AMD", "NVIDIA", or "Intel".
+	// Mapped from PCI vendor ID (0x1002, 0x10de, 0x8086).
+	Vendor string `json:"vendor"`
+
+	// PCIDeviceID is the PCI device ID (e.g., "0x744a" for MI300X).
+	// Combined with vendor ID, this uniquely identifies the GPU model.
+	PCIDeviceID string `json:"pci_device_id"`
+
+	// PCISlot is the PCI slot address (e.g., "0000:c3:00.0"). Unique
+	// per machine and stable across reboots. Used as the join key
+	// between GPUInfo and GPUStatus.
+	PCISlot string `json:"pci_slot"`
+
+	// VRAMTotalBytes is the total GPU video memory in bytes
+	// (e.g., 48301604864 for 48 GB). From sysfs mem_info_vram_total
+	// on AMD.
+	VRAMTotalBytes int64 `json:"vram_total_bytes"`
+
+	// UniqueID is a vendor-specific hardware serial number. From
+	// sysfs unique_id on AMD, GPU UUID on NVIDIA. Empty if the
+	// driver does not expose a unique identifier.
+	UniqueID string `json:"unique_id,omitempty"`
+
+	// VBIOSVersion is the GPU firmware/VBIOS version string
+	// (e.g., "113-APM7489-DS2-100"). From sysfs vbios_version.
+	VBIOSVersion string `json:"vbios_version,omitempty"`
+
+	// VRAMVendor is the VRAM chip manufacturer (e.g., "samsung",
+	// "micron", "sk_hynix"). From sysfs mem_info_vram_vendor on AMD.
+	// Empty if the driver does not expose this information.
+	VRAMVendor string `json:"vram_vendor,omitempty"`
+
+	// PCIeLinkWidth is the negotiated PCIe link width (e.g., 16 for
+	// x16). From sysfs current_link_width. Zero if unavailable.
+	PCIeLinkWidth int `json:"pcie_link_width,omitempty"`
+
+	// ThermalLimitCriticalMillidegrees is the critical temperature
+	// threshold in millidegrees Celsius. The GPU throttles at this
+	// temperature. From hwmon temp*_crit where the label is "edge".
+	// Zero if unavailable.
+	ThermalLimitCriticalMillidegrees int `json:"thermal_limit_critical_millidegrees,omitempty"`
+
+	// ThermalLimitEmergencyMillidegrees is the emergency shutdown
+	// temperature in millidegrees Celsius. The GPU powers off at
+	// this temperature. From hwmon temp*_emergency. Zero if
+	// unavailable.
+	ThermalLimitEmergencyMillidegrees int `json:"thermal_limit_emergency_millidegrees,omitempty"`
+
+	// Driver is the kernel driver name (e.g., "amdgpu", "nvidia",
+	// "nouveau", "i915", "xe"). From the driver symlink in sysfs.
+	Driver string `json:"driver"`
 }
 
 // MachineConfig is the content of an EventTypeMachineConfig state event.

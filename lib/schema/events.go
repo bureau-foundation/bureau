@@ -116,11 +116,16 @@ const (
 	// EventTypeWorkspace tracks the lifecycle of a workspace. Published
 	// to the workspace room with an empty state key (one workspace per
 	// room). The status field progresses through the lifecycle:
-	// pending → active → archived | removed.
+	// pending → active → teardown → archived | removed.
 	//
-	// Principals gate on this via StartCondition with ContentMatch
-	// {"status": "active"} — they don't start until the setup principal
-	// finishes and updates the status from "pending" to "active".
+	// Principals gate on this via StartCondition with ContentMatch.
+	// Agent principals match {"status": "active"} so they start when
+	// setup completes and stop when teardown begins. A teardown
+	// principal matches {"status": "teardown"} so it starts only when
+	// the workspace is being torn down. This is the continuous
+	// enforcement mechanism: the daemon re-evaluates conditions every
+	// reconcile cycle, so status transitions drive principal lifecycle
+	// automatically.
 	//
 	// State key: "" (singleton per room)
 	// Room: the workspace room
@@ -981,11 +986,19 @@ type DirectoryConfig struct {
 
 // WorkspaceState is the content of an EventTypeWorkspace state event.
 // It tracks the full lifecycle of a workspace as a status field that
-// progresses one-directionally: pending → active → archived | removed.
+// progresses one-directionally:
+//
+//	pending → active → teardown → archived | removed
+//
+// The teardown status triggers continuous enforcement: agent principals
+// gated on "active" stop, and the teardown principal gated on "teardown"
+// starts. The teardown principal performs cleanup (archive or delete)
+// and publishes the final status ("archived" or "removed").
 type WorkspaceState struct {
 	// Status is the current lifecycle state. Valid values:
 	//   - "pending": room created, setup not yet started or in progress.
 	//   - "active": setup complete, workspace is usable.
+	//   - "teardown": destroy requested, agents stopping, teardown running.
 	//   - "archived": teardown completed in archive mode.
 	//   - "removed": teardown completed in delete mode.
 	Status string `json:"status"`

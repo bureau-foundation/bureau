@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "workspace",
@@ -19,4 +19,11 @@ go_library(
         "//messaging",
         "@com_github_spf13_pflag//:pflag",
     ],
+)
+
+go_test(
+    name = "workspace_test",
+    srcs = ["create_test.go"],
+    embed = [":workspace"],
+    deps = ["//lib/schema"],
 )

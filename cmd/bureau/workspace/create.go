@@ -192,8 +192,22 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		return fmt.Errorf("publishing project config: %w", err)
 	}
 
-	// Build principal assignments (setup + agents).
-	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, paramMap)
+	// Publish the initial workspace lifecycle event. The setup principal
+	// updates this to "active" when setup completes, and "bureau workspace
+	// destroy" updates it to "teardown" to trigger agent shutdown and
+	// teardown principal launch.
+	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		Status:    "pending",
+		Project:   project,
+		Machine:   machine,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("publishing workspace state: %w", err)
+	}
+
+	// Build principal assignments (setup + agents + teardown).
+	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machine, paramMap)
 
 	// Update the machine's MachineConfig with the new principals.
 	err = updateMachineConfig(ctx, sess, machine, serverName, assignments)
@@ -224,7 +238,11 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	for _, assignment := range assignments {
 		suffix := ""
 		if assignment.StartCondition != nil {
-			suffix = " (waits for workspace active)"
+			if status, ok := assignment.StartCondition.ContentMatch["status"]; ok {
+				suffix = fmt.Sprintf(" (waits for workspace %s)", status)
+			} else {
+				suffix = " (conditional)"
+			}
 		}
 		fmt.Fprintf(os.Stderr, "    %s (template=%s)%s\n", assignment.Localpart, assignment.Template, suffix)
 	}
@@ -287,9 +305,16 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 }
 
 // buildPrincipalAssignments constructs the PrincipalAssignment slice for a
-// workspace: one setup principal (no StartCondition, runs immediately) and
-// N agent principals (gated on workspace status "active").
-func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, params map[string]string) []schema.PrincipalAssignment {
+// workspace: one setup principal (runs immediately), N agent principals
+// (gated on workspace status "active"), and one teardown principal (gated
+// on workspace status "teardown").
+//
+// The teardown principal starts only when "bureau workspace destroy" sets
+// the workspace status to "teardown". The daemon re-evaluates conditions
+// every reconcile cycle, so when status changes from "active" to "teardown",
+// agent principals stop (their condition becomes false) and the teardown
+// principal starts (its condition becomes true).
+func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine string, params map[string]string) []schema.PrincipalAssignment {
 	workspaceRoomAlias := principal.RoomAlias(alias, serverName)
 
 	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
@@ -327,6 +352,30 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 			},
 		})
 	}
+
+	// Teardown principal: starts when workspace status becomes "teardown".
+	// Archives or removes the workspace data, then publishes the final
+	// status ("archived" or "removed"). The pipeline_ref and MODE are
+	// read from payload by the teardown pipeline.
+	teardownLocalpart := alias + "/teardown"
+	assignments = append(assignments, schema.PrincipalAssignment{
+		Localpart: teardownLocalpart,
+		Template:  "bureau/template:base",
+		AutoStart: true,
+		Labels:    map[string]string{"role": "teardown"},
+		Payload: map[string]any{
+			"pipeline_ref":   "bureau/pipeline:dev-workspace-deinit",
+			"PROJECT":        params["repository"],
+			"WORKSPACE_ROOM": workspaceRoomAlias,
+			"MACHINE":        machine,
+		},
+		StartCondition: &schema.StartCondition{
+			EventType:    schema.EventTypeWorkspace,
+			StateKey:     "",
+			RoomAlias:    workspaceRoomAlias,
+			ContentMatch: map[string]string{"status": "teardown"},
+		},
+	})
 
 	return assignments
 }

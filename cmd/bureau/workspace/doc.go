@@ -19,13 +19,20 @@
 //
 //   - create: sets up the Matrix room, publishes ProjectConfig state
 //     and initial m.bureau.workspace event (status "pending"), builds
-//     PrincipalAssignment entries (one setup principal plus N agent
-//     principals gated on workspace status "active"), updates
-//     MachineConfig, and invites the target machine's daemon. Routes
-//     directly to Matrix via [cli.SessionConfig].
-//   - destroy, list, status, du, worktree, fetch: declared but not
-//     yet implemented (return [cli.ErrNotImplemented]).
+//     PrincipalAssignment entries (one setup principal, N agent
+//     principals gated on workspace status "active", one teardown
+//     principal gated on workspace status "teardown"), updates
+//     MachineConfig, and invites the target machine's daemon.
+//   - destroy: transitions a workspace to "teardown" status. Patches
+//     the teardown principal's payload with the requested mode
+//     (archive or delete), then publishes the status change. The
+//     daemon's continuous StartCondition enforcement handles the rest:
+//     agents stop, teardown principal starts.
+//   - list: queries Matrix for workspace rooms. Implemented.
+//   - status, du, worktree, fetch: declared but not yet implemented
+//     (return [cli.ErrNotImplemented]).
 //
+// Both create and destroy route directly to Matrix via [cli.SessionConfig].
 // The create command supports --machine=local, which reads the
 // launcher's session file via [cli.ResolveLocalMachine] to discover
 // the local machine's identity.

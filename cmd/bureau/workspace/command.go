@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -76,23 +79,171 @@ firewalls.`,
 }
 
 func destroyCommand() *cli.Command {
+	var (
+		session    cli.SessionConfig
+		mode       string
+		serverName string
+	)
+
 	return &cli.Command{
 		Name:    "destroy",
 		Summary: "Tear down a workspace",
-		Description: `Tear down a workspace on the hosting machine. Executes the
-dev-workspace-deinit pipeline, which checks for uncommitted changes,
-archives the data (with --mode archive, the default), or removes
-everything (with --mode delete). The workspace state event is updated
-to "archived" or "removed" to signal that the workspace is no longer
-active.
+		Description: `Tear down a workspace on the hosting machine. Sets the workspace
+status to "teardown", which triggers the daemon's continuous enforcement:
+agent principals gated on "active" stop, and the teardown principal
+gated on "teardown" starts.
 
-The Matrix room is preserved by default — its message history remains
-accessible. Use "bureau matrix room leave" separately to remove the
-room.`,
+The teardown principal executes the dev-workspace-deinit pipeline, which
+checks for uncommitted changes, archives the data (with --mode archive,
+the default), or removes everything (with --mode delete). The pipeline
+then publishes the final status ("archived" or "removed").
+
+The Matrix room is preserved — its message history remains accessible.
+Use "bureau matrix room leave" separately to remove the room.`,
+		Usage: "bureau workspace destroy <alias> [flags]",
+		Examples: []cli.Example{
+			{
+				Description: "Archive a workspace (default)",
+				Command:     "bureau workspace destroy iree/amdgpu/inference --credential-file ./creds",
+			},
+			{
+				Description: "Delete a workspace and all its data",
+				Command:     "bureau workspace destroy iree/amdgpu/inference --mode delete --credential-file ./creds",
+			},
+		},
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("workspace destroy", pflag.ContinueOnError)
+			session.AddFlags(flagSet)
+			flagSet.StringVar(&mode, "mode", "archive", "teardown mode: archive or delete")
+			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+			return flagSet
+		},
 		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace destroy")
+			if len(args) == 0 {
+				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected argument: %s", args[1])
+			}
+			if mode != "archive" && mode != "delete" {
+				return fmt.Errorf("--mode must be \"archive\" or \"delete\", got %q", mode)
+			}
+
+			return runDestroy(args[0], &session, mode, serverName)
 		},
 	}
+}
+
+// runDestroy transitions a workspace to "teardown" status. The daemon's
+// continuous enforcement handles the rest: agents gated on "active" stop,
+// and the teardown principal gated on "teardown" starts.
+//
+// The function patches the teardown principal's payload with the requested
+// mode BEFORE updating the workspace status. Both changes arrive in the
+// same /sync batch, so the daemon sees the correct payload when the
+// teardown principal's condition becomes true.
+func runDestroy(alias string, session *cli.SessionConfig, mode, serverName string) error {
+	if err := principal.ValidateLocalpart(alias); err != nil {
+		return fmt.Errorf("invalid workspace alias: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	sess, err := session.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer sess.Close()
+
+	// Resolve the workspace room.
+	fullAlias := principal.RoomAlias(alias, serverName)
+	workspaceRoomID, err := sess.ResolveAlias(ctx, fullAlias)
+	if err != nil {
+		return fmt.Errorf("resolve workspace room %s: %w", fullAlias, err)
+	}
+
+	// Read the current workspace state and verify status is "active".
+	workspaceContent, err := sess.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
+	if err != nil {
+		return fmt.Errorf("reading workspace state: %w", err)
+	}
+	var workspaceState schema.WorkspaceState
+	if err := json.Unmarshal(workspaceContent, &workspaceState); err != nil {
+		return fmt.Errorf("parsing workspace state: %w", err)
+	}
+	if workspaceState.Status != "active" {
+		return fmt.Errorf("workspace %s is in status %q, expected \"active\"", alias, workspaceState.Status)
+	}
+
+	// Patch the teardown principal's payload with the requested mode.
+	// This must happen before the status update so the daemon sees both
+	// changes on the same /sync cycle.
+	if err := patchTeardownPayload(ctx, sess, workspaceState.Machine, serverName, alias, mode); err != nil {
+		return fmt.Errorf("patching teardown payload: %w", err)
+	}
+
+	// Transition the workspace to "teardown". This triggers continuous
+	// enforcement: agents gated on "active" stop, teardown principal
+	// gated on "teardown" starts.
+	workspaceState.Status = "teardown"
+	workspaceState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
+	if err != nil {
+		return fmt.Errorf("publishing teardown status: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", alias, mode)
+	fmt.Fprintf(os.Stderr, "  Agents gated on \"active\" will stop on next reconcile cycle.\n")
+	fmt.Fprintf(os.Stderr, "  Teardown principal will start and run the deinit pipeline.\n")
+
+	return nil
+}
+
+// patchTeardownPayload performs a read-modify-write on the machine's
+// MachineConfig to set the MODE field in the teardown principal's payload.
+// The teardown principal reads MODE to decide whether to archive or delete.
+func patchTeardownPayload(ctx context.Context, sess *messaging.Session, machine, serverName, alias, mode string) error {
+	configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
+	configRoomID, err := sess.ResolveAlias(ctx, configRoomAlias)
+	if err != nil {
+		return fmt.Errorf("resolve config room %s: %w", configRoomAlias, err)
+	}
+
+	// Read existing MachineConfig.
+	existingContent, err := sess.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine)
+	if err != nil {
+		return fmt.Errorf("reading machine config: %w", err)
+	}
+	var config schema.MachineConfig
+	if err := json.Unmarshal(existingContent, &config); err != nil {
+		return fmt.Errorf("parsing machine config: %w", err)
+	}
+
+	// Find and patch the teardown principal.
+	teardownLocalpart := alias + "/teardown"
+	found := false
+	for index := range config.Principals {
+		if config.Principals[index].Localpart == teardownLocalpart {
+			if config.Principals[index].Payload == nil {
+				config.Principals[index].Payload = make(map[string]any)
+			}
+			config.Principals[index].Payload["MODE"] = mode
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("teardown principal %q not found in machine config for %s", teardownLocalpart, machine)
+	}
+
+	// Publish the updated config.
+	_, err = sess.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine, config)
+	if err != nil {
+		return fmt.Errorf("publishing updated machine config: %w", err)
+	}
+
+	return nil
 }
 
 func listCommand() *cli.Command {

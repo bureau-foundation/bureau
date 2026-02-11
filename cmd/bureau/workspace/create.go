@@ -207,7 +207,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 
 	// Build principal assignments (setup + agents + teardown).
-	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machine, paramMap)
+	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machine, workspaceRoomID, paramMap)
 
 	// Update the machine's MachineConfig with the new principals.
 	err = updateMachineConfig(ctx, sess, machine, serverName, assignments)
@@ -314,10 +314,16 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 // every reconcile cycle, so when status changes from "active" to "teardown",
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
-func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine string, params map[string]string) []schema.PrincipalAssignment {
+func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine, workspaceRoomID string, params map[string]string) []schema.PrincipalAssignment {
 	workspaceRoomAlias := principal.RoomAlias(alias, serverName)
 
+	// Derive the project name from the alias (first path segment).
+	project, _, _ := strings.Cut(alias, "/")
+
 	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
+	// Payload keys are UPPERCASE to match the pipeline variable declarations
+	// in dev-workspace-init.jsonc. The pipeline_ref tells the executor which
+	// pipeline to run; all other keys become pipeline variables.
 	setupLocalpart := alias + "/setup"
 	assignments := []schema.PrincipalAssignment{
 		{
@@ -326,9 +332,11 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 			AutoStart: true,
 			Labels:    map[string]string{"role": "setup"},
 			Payload: map[string]any{
-				"workspace_alias": alias,
-				"repository":      params["repository"],
-				"branch":          params["branch"],
+				"pipeline_ref":      "bureau/pipeline:dev-workspace-init",
+				"REPOSITORY":        params["repository"],
+				"PROJECT":           project,
+				"WORKSPACE_ROOM_ID": workspaceRoomID,
+				"MACHINE":           machine,
 			},
 		},
 	}
@@ -357,12 +365,13 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// Archives or removes the workspace data, then publishes the final
 	// status ("archived" or "removed").
 	//
-	// Payload carries static per-principal config (pipeline ref, workspace
-	// room alias). Dynamic per-invocation context (teardown mode, machine,
-	// project) comes from the trigger event — the daemon captures the
-	// workspace state event content when the StartCondition matches and
-	// delivers it as /run/bureau/trigger.json. The pipeline reads these
-	// via EVENT_* variables (e.g., ${EVENT_teardown_mode}, ${EVENT_machine}).
+	// Payload carries static per-principal config: pipeline ref, project,
+	// workspace room ID, and machine. These are known at create time and
+	// don't change. Dynamic per-invocation context (teardown mode) comes
+	// from the trigger event — the daemon captures the workspace state
+	// event content when the StartCondition matches and delivers it as
+	// /run/bureau/trigger.json. The pipeline reads the mode via the
+	// EVENT_teardown_mode variable.
 	teardownLocalpart := alias + "/teardown"
 	assignments = append(assignments, schema.PrincipalAssignment{
 		Localpart: teardownLocalpart,
@@ -370,8 +379,10 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		AutoStart: true,
 		Labels:    map[string]string{"role": "teardown"},
 		Payload: map[string]any{
-			"pipeline_ref":   "bureau/pipeline:dev-workspace-deinit",
-			"WORKSPACE_ROOM": workspaceRoomAlias,
+			"pipeline_ref":      "bureau/pipeline:dev-workspace-deinit",
+			"PROJECT":           project,
+			"WORKSPACE_ROOM_ID": workspaceRoomID,
+			"MACHINE":           machine,
 		},
 		StartCondition: &schema.StartCondition{
 			EventType:    schema.EventTypeWorkspace,

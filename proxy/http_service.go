@@ -346,11 +346,13 @@ func (s *HTTPService) ForwardRequest(ctx context.Context, method, path string, b
 		return nil, fmt.Errorf("missing credentials: %v", missingCredentials)
 	}
 
-	// Build upstream URL.
-	upstreamURL := *s.upstream
-	upstreamURL.Path = singleJoiningSlash(s.upstream.Path, path)
+	// Build upstream URL by string concatenation. The path argument
+	// contains percent-encoded segments (from url.PathEscape); using
+	// url.URL.String() would double-encode them because url.URL.Path
+	// expects unescaped values and re-encodes on serialization.
+	requestURL := strings.TrimRight(s.upstream.String(), "/") + path
 
-	request, err := http.NewRequestWithContext(ctx, method, upstreamURL.String(), body)
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}

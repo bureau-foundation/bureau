@@ -439,7 +439,7 @@ func TestMatrixPutState(t *testing.T) {
 		if putRequest == nil {
 			t.Fatal("expected a PUT request to a state path")
 		}
-		if !strings.Contains(putRequest.Path, url.PathEscape("!workspace_room:bureau.local")) {
+		if !strings.Contains(putRequest.Path, "!workspace_room:bureau.local") {
 			t.Errorf("expected resolved room ID in path, got %q", putRequest.Path)
 		}
 	})
@@ -597,7 +597,7 @@ func TestMatrixSendMessage(t *testing.T) {
 		if putRequest == nil {
 			t.Fatal("expected a PUT request to a send path")
 		}
-		if !strings.Contains(putRequest.Path, url.PathEscape("!workspace_room:bureau.local")) {
+		if !strings.Contains(putRequest.Path, "!workspace_room:bureau.local") {
 			t.Errorf("expected resolved room ID in path, got %q", putRequest.Path)
 		}
 	})

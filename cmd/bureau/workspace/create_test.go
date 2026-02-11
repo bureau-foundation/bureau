@@ -9,15 +9,72 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
+func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	t.Parallel()
 
+	const testRoomID = "!workspace123:bureau.local"
 	assignments := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
 		"bureau.local",
 		"machine/workstation",
+		testRoomID,
+		map[string]string{
+			"repository": "https://github.com/iree-org/iree.git",
+			"branch":     "main",
+		},
+	)
+
+	setup := assignments[0]
+	if setup.Localpart != "iree/amdgpu/inference/setup" {
+		t.Errorf("setup localpart = %q, want %q", setup.Localpart, "iree/amdgpu/inference/setup")
+	}
+	if setup.Labels["role"] != "setup" {
+		t.Errorf("setup role label = %q, want %q", setup.Labels["role"], "setup")
+	}
+	if setup.StartCondition != nil {
+		t.Error("setup principal should have no StartCondition")
+	}
+
+	// Verify the payload contains all pipeline variables needed by
+	// dev-workspace-init.jsonc, using UPPERCASE keys that match the
+	// pipeline's variable declarations.
+	if setup.Payload == nil {
+		t.Fatal("setup Payload is nil")
+	}
+	if setup.Payload["pipeline_ref"] != "bureau/pipeline:dev-workspace-init" {
+		t.Errorf("setup pipeline_ref = %v, want %q", setup.Payload["pipeline_ref"], "bureau/pipeline:dev-workspace-init")
+	}
+	if setup.Payload["REPOSITORY"] != "https://github.com/iree-org/iree.git" {
+		t.Errorf("setup REPOSITORY = %v, want %q", setup.Payload["REPOSITORY"], "https://github.com/iree-org/iree.git")
+	}
+	if setup.Payload["PROJECT"] != "iree" {
+		t.Errorf("setup PROJECT = %v, want %q", setup.Payload["PROJECT"], "iree")
+	}
+	if setup.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
+		t.Errorf("setup WORKSPACE_ROOM_ID = %v, want %q", setup.Payload["WORKSPACE_ROOM_ID"], testRoomID)
+	}
+	if setup.Payload["MACHINE"] != "machine/workstation" {
+		t.Errorf("setup MACHINE = %v, want %q", setup.Payload["MACHINE"], "machine/workstation")
+	}
+	if len(setup.Payload) != 5 {
+		t.Errorf("setup payload should have exactly 5 keys (pipeline_ref, REPOSITORY, PROJECT, WORKSPACE_ROOM_ID, MACHINE), got %d: %v",
+			len(setup.Payload), setup.Payload)
+	}
+}
+
+func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
+	t.Parallel()
+
+	const testRoomID = "!workspace456:bureau.local"
+	assignments := buildPrincipalAssignments(
+		"iree/amdgpu/inference",
+		"bureau/template:base",
+		1,
+		"bureau.local",
+		"machine/workstation",
+		testRoomID,
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
@@ -45,21 +102,26 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 		t.Errorf("teardown role label = %q, want %q", teardown.Labels["role"], "teardown")
 	}
 
-	// Verify the payload contains only static per-principal config.
-	// Dynamic context (machine, project, teardown mode) comes from the
-	// trigger event, not the payload.
+	// Verify the payload contains static per-principal config. Dynamic
+	// context (teardown mode) comes from the trigger event as
+	// EVENT_teardown_mode, not from the payload.
 	if teardown.Payload == nil {
 		t.Fatal("teardown Payload is nil")
 	}
 	if teardown.Payload["pipeline_ref"] != "bureau/pipeline:dev-workspace-deinit" {
 		t.Errorf("teardown pipeline_ref = %v, want %q", teardown.Payload["pipeline_ref"], "bureau/pipeline:dev-workspace-deinit")
 	}
-	workspaceRoom, ok := teardown.Payload["WORKSPACE_ROOM"].(string)
-	if !ok || workspaceRoom != "#iree/amdgpu/inference:bureau.local" {
-		t.Errorf("teardown WORKSPACE_ROOM = %v, want %q", teardown.Payload["WORKSPACE_ROOM"], "#iree/amdgpu/inference:bureau.local")
+	if teardown.Payload["PROJECT"] != "iree" {
+		t.Errorf("teardown PROJECT = %v, want %q", teardown.Payload["PROJECT"], "iree")
 	}
-	if len(teardown.Payload) != 2 {
-		t.Errorf("teardown payload should have exactly 2 keys (pipeline_ref, WORKSPACE_ROOM), got %d: %v",
+	if teardown.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
+		t.Errorf("teardown WORKSPACE_ROOM_ID = %v, want %q", teardown.Payload["WORKSPACE_ROOM_ID"], testRoomID)
+	}
+	if teardown.Payload["MACHINE"] != "machine/workstation" {
+		t.Errorf("teardown MACHINE = %v, want %q", teardown.Payload["MACHINE"], "machine/workstation")
+	}
+	if len(teardown.Payload) != 4 {
+		t.Errorf("teardown payload should have exactly 4 keys (pipeline_ref, PROJECT, WORKSPACE_ROOM_ID, MACHINE), got %d: %v",
 			len(teardown.Payload), teardown.Payload)
 	}
 }
@@ -73,6 +135,7 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 		1,
 		"bureau.local",
 		"machine/workstation",
+		"!room:bureau.local",
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
@@ -108,6 +171,7 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 		2,
 		"bureau.local",
 		"machine/workstation",
+		"!room:bureau.local",
 		map[string]string{"branch": "main"},
 	)
 
@@ -154,6 +218,7 @@ func TestBuildPrincipalAssignments_ZeroAgents(t *testing.T) {
 		0,
 		"bureau.local",
 		"machine/laptop",
+		"!room:bureau.local",
 		map[string]string{"branch": "main"},
 	)
 

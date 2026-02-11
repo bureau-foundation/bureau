@@ -23,6 +23,7 @@ go_test(
         "messaging_test.go",
         "pipeline_test.go",
         "setup_test.go",
+        "workspace_test.go",
     ],
     data = [
         "//:MODULE.bazel",

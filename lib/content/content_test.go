@@ -119,12 +119,14 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 		}
 	}
 
-	// MODE should have a default of "archive".
-	modeVariable, exists := p.Content.Variables["MODE"]
+	// EVENT_teardown_mode should have a default of "archive". This variable
+	// comes from the trigger event (workspace state with status "teardown"),
+	// but the declaration provides a fallback for manual execution.
+	modeVariable, exists := p.Content.Variables["EVENT_teardown_mode"]
 	if !exists {
-		t.Error("missing MODE variable declaration")
+		t.Error("missing EVENT_teardown_mode variable declaration")
 	} else if modeVariable.Default != "archive" {
-		t.Errorf("MODE default = %q, want %q", modeVariable.Default, "archive")
+		t.Errorf("EVENT_teardown_mode default = %q, want %q", modeVariable.Default, "archive")
 	}
 
 	// Should have enough steps for validate + check + cleanup + publish (x2).

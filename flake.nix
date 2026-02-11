@@ -36,6 +36,10 @@
 
         # Pin Go to the exact version required by go.mod. nixpkgs-unstable
         # may lag behind by a patch release; this overlay bumps it.
+        # This creates a custom derivation not in cache.nixos.org, so
+        # the first CI run compiles Go from source (~3 min). Subsequent
+        # runs hit the Nix binary cache (magic-nix-cache in CI, or a
+        # self-hosted Attic instance once deployed).
         go = pkgs.go_1_25.overrideAttrs (_: rec {
           version = "1.25.6";
           src = pkgs.fetchurl {

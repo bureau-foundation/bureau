@@ -417,6 +417,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
 		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),

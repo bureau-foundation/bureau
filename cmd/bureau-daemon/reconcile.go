@@ -111,6 +111,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
+		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
@@ -142,6 +143,25 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			d.lastVisibility[localpart] = newVisibility
+		}
+	}
+
+	// Hot-reload MatrixPolicy when it changes on a running principal.
+	for localpart, assignment := range desired {
+		if !d.running[localpart] {
+			continue
+		}
+		oldPolicy := d.lastMatrixPolicy[localpart]
+		newPolicy := assignment.MatrixPolicy
+		if !reflect.DeepEqual(oldPolicy, newPolicy) {
+			d.logger.Info("matrix policy changed, updating proxy",
+				"principal", localpart)
+			if err := d.pushMatrixPolicyToProxy(ctx, localpart, newPolicy); err != nil {
+				d.logger.Error("push matrix policy failed during hot-reload",
+					"principal", localpart, "error", err)
+				continue
+			}
+			d.lastMatrixPolicy[localpart] = newPolicy
 		}
 	}
 
@@ -262,6 +282,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.running[localpart] = true
 		d.lastCredentials[localpart] = credentials.Ciphertext
 		d.lastVisibility[localpart] = assignment.ServiceVisibility
+		d.lastMatrixPolicy[localpart] = assignment.MatrixPolicy
 		d.lastObservePolicy[localpart] = assignment.ObservePolicy
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
@@ -338,6 +359,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.running, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
+		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
@@ -421,6 +443,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		delete(d.running, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.lastVisibility, localpart)
+		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = time.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",

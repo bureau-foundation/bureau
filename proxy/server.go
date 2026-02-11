@@ -88,6 +88,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		adminMux.HandleFunc("DELETE /v1/admin/services/{name}", handler.HandleAdminUnregisterService)
 		adminMux.HandleFunc("PUT /v1/admin/directory", handler.HandleAdminSetDirectory)
 		adminMux.HandleFunc("PUT /v1/admin/visibility", handler.HandleAdminSetVisibility)
+		adminMux.HandleFunc("PUT /v1/admin/policy", handler.HandleAdminSetMatrixPolicy)
 		// Fall through to agent endpoints for all other paths.
 		adminMux.Handle("/", agentMux)
 

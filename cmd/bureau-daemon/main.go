@@ -191,6 +191,7 @@ func run() error {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs:         make(map[string]*schema.SandboxSpec),
 		previousSpecs:     make(map[string]*schema.SandboxSpec),
@@ -338,6 +339,12 @@ type Daemon struct {
 	// triggers a PUT /v1/admin/visibility call to hot-reload the
 	// proxy's service filtering without restarting the sandbox.
 	lastVisibility map[string][]string
+
+	// lastMatrixPolicy stores the per-principal MatrixPolicy from the
+	// most recent reconcile cycle. Used purely for change detection:
+	// when a principal's MatrixPolicy differs from the stored value,
+	// the daemon pushes the new policy to the proxy via the admin API.
+	lastMatrixPolicy map[string]*schema.MatrixPolicy
 
 	// lastObservePolicy stores the per-principal ObservePolicy from
 	// the most recent reconcile cycle. Used purely for change detection:

@@ -738,3 +738,28 @@ func (h *Handler) HandleAdminSetVisibility(w http.ResponseWriter, r *http.Reques
 		"patterns": len(patterns),
 	})
 }
+
+// HandleAdminSetMatrixPolicy updates the Matrix access policy for this proxy.
+// The daemon pushes policy changes via PUT /v1/admin/policy when the
+// PrincipalAssignment's MatrixPolicy is modified at runtime.
+func (h *Handler) HandleAdminSetMatrixPolicy(w http.ResponseWriter, r *http.Request) {
+	var policy *schema.MatrixPolicy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid policy payload: %v", err)
+		return
+	}
+
+	h.SetMatrixPolicy(policy)
+
+	allowJoin := policy != nil && policy.AllowJoin
+	allowInvite := policy != nil && policy.AllowInvite
+	allowRoomCreate := policy != nil && policy.AllowRoomCreate
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":            "ok",
+		"allow_join":        allowJoin,
+		"allow_invite":      allowInvite,
+		"allow_room_create": allowRoomCreate,
+	})
+}

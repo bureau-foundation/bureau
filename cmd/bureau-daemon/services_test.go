@@ -172,6 +172,7 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes:       make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
@@ -214,6 +215,7 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes:       make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
@@ -239,6 +241,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
@@ -277,6 +280,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
@@ -364,6 +368,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 		},
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes:       make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
@@ -555,6 +560,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes:       make(map[string]string),
 		adminSocketPathFunc: func(localpart string) string {
@@ -820,6 +826,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 		},
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
@@ -855,6 +862,7 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
@@ -1017,6 +1025,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": relaySocket, // was remote

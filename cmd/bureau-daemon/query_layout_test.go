@@ -92,6 +92,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		services:          make(map[string]*schema.Service),
 		proxyRoutes:       make(map[string]string),

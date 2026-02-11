@@ -2130,3 +2130,301 @@ func TestServiceVisibility(t *testing.T) {
 		}
 	})
 }
+
+func TestAdminSetMatrixPolicy(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	// Set up a Matrix HTTP service on the provider so we can test
+	// policy enforcement on the agent socket. The upstream doesn't
+	// need to exist for blocked requests (the proxy rejects before
+	// forwarding), but we need the service registered so the proxy
+	// routes /http/matrix/ paths to HandleHTTPProxy.
+	matrixService, err := NewHTTPService(HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: "http://localhost:6167",
+	})
+	if err != nil {
+		t.Fatalf("failed to create matrix service: %v", err)
+	}
+	server.RegisterHTTPService("matrix", matrixService)
+
+	t.Run("set policy with mixed permissions", func(t *testing.T) {
+		policy := schema.MatrixPolicy{
+			AllowJoin:       true,
+			AllowInvite:     false,
+			AllowRoomCreate: true,
+		}
+		body, _ := json.Marshal(&policy)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if result["status"] != "ok" {
+			t.Errorf("expected status ok, got %v", result["status"])
+		}
+		if result["allow_join"] != true {
+			t.Errorf("expected allow_join=true, got %v", result["allow_join"])
+		}
+		if result["allow_invite"] != false {
+			t.Errorf("expected allow_invite=false, got %v", result["allow_invite"])
+		}
+		if result["allow_room_create"] != true {
+			t.Errorf("expected allow_room_create=true, got %v", result["allow_room_create"])
+		}
+	})
+
+	t.Run("policy takes effect on agent socket", func(t *testing.T) {
+		// Join should be allowed (AllowJoin=true from previous subtest).
+		// The request will fail at the upstream level (no real Matrix
+		// server), but it should NOT be blocked by the policy — a 403
+		// with "matrix policy:" in the body means the policy blocked it.
+		joinResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/join/%23test:bureau.local",
+			"application/json", nil,
+		)
+		if err != nil {
+			t.Fatalf("join request failed: %v", err)
+		}
+		defer joinResp.Body.Close()
+
+		// Should NOT be 403 with policy reason — upstream errors are fine.
+		if joinResp.StatusCode == http.StatusForbidden {
+			respBody, _ := io.ReadAll(joinResp.Body)
+			bodyString := string(respBody)
+			if strings.Contains(bodyString, "matrix policy:") {
+				t.Errorf("join should be allowed by policy, but was blocked: %s", bodyString)
+			}
+		}
+
+		// Invite should be blocked (AllowInvite=false).
+		inviteResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite",
+			"application/json", bytes.NewReader([]byte(`{"user_id":"@other:bureau.local"}`)),
+		)
+		if err != nil {
+			t.Fatalf("invite request failed: %v", err)
+		}
+		defer inviteResp.Body.Close()
+
+		if inviteResp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected invite to be blocked (403), got %d", inviteResp.StatusCode)
+		}
+		inviteBody, _ := io.ReadAll(inviteResp.Body)
+		if !strings.Contains(string(inviteBody), "matrix policy:") {
+			t.Errorf("expected policy rejection reason, got %q", string(inviteBody))
+		}
+	})
+
+	t.Run("admin policy not on agent socket", func(t *testing.T) {
+		policy := schema.MatrixPolicy{AllowJoin: true}
+		body, _ := json.Marshal(&policy)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := agentClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			t.Error("admin policy endpoint should not be accessible on agent socket")
+		}
+	})
+
+	t.Run("push invalid body", func(t *testing.T) {
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader([]byte("not json")))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestAdminSetMatrixPolicy_Null(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	// Register a Matrix HTTP service so the proxy routes /http/matrix/
+	// paths through HandleHTTPProxy (which applies policy checks).
+	matrixService, err := NewHTTPService(HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: "http://localhost:6167",
+	})
+	if err != nil {
+		t.Fatalf("failed to create matrix service: %v", err)
+	}
+	server.RegisterHTTPService("matrix", matrixService)
+
+	// First, set a permissive policy so we have a known starting state.
+	permissive := schema.MatrixPolicy{
+		AllowJoin:       true,
+		AllowInvite:     true,
+		AllowRoomCreate: true,
+	}
+	body, _ := json.Marshal(&permissive)
+	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to set permissive policy: %v", err)
+	}
+	resp.Body.Close()
+
+	t.Run("null resets to default-deny", func(t *testing.T) {
+		// Push null to reset to default-deny.
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader([]byte("null")))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if result["status"] != "ok" {
+			t.Errorf("expected status ok, got %v", result["status"])
+		}
+		// All permissions should be false when policy is null.
+		if result["allow_join"] != false {
+			t.Errorf("expected allow_join=false after null, got %v", result["allow_join"])
+		}
+		if result["allow_invite"] != false {
+			t.Errorf("expected allow_invite=false after null, got %v", result["allow_invite"])
+		}
+		if result["allow_room_create"] != false {
+			t.Errorf("expected allow_room_create=false after null, got %v", result["allow_room_create"])
+		}
+	})
+
+	t.Run("default-deny blocks all gated operations", func(t *testing.T) {
+		// After null policy, all self-service membership operations
+		// should be blocked by the proxy.
+		endpoints := []struct {
+			name string
+			path string
+		}{
+			{"join by alias", "/http/matrix/_matrix/client/v3/join/%23room:bureau.local"},
+			{"join by room ID", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/join"},
+			{"invite", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite"},
+			{"createRoom", "/http/matrix/_matrix/client/v3/createRoom"},
+		}
+
+		for _, endpoint := range endpoints {
+			t.Run(endpoint.name, func(t *testing.T) {
+				resp, err := agentClient.Post(
+					"http://localhost"+endpoint.path,
+					"application/json",
+					bytes.NewReader([]byte("{}")),
+				)
+				if err != nil {
+					t.Fatalf("request failed: %v", err)
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusForbidden {
+					t.Errorf("expected 403 for %s, got %d", endpoint.name, resp.StatusCode)
+				}
+				respBody, _ := io.ReadAll(resp.Body)
+				if !strings.Contains(string(respBody), "matrix policy:") {
+					t.Errorf("expected policy rejection reason for %s, got %q", endpoint.name, string(respBody))
+				}
+			})
+		}
+	})
+}

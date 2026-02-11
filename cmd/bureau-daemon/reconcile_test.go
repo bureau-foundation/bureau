@@ -480,6 +480,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
 		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -615,6 +616,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
 		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -748,6 +750,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -895,6 +898,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -1004,6 +1008,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -1192,6 +1197,7 @@ func TestReconcileVisibilityHotReload(t *testing.T) {
 		lastVisibility: map[string][]string{
 			"agent/test": {"service/old/*"},
 		},
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -1317,6 +1323,7 @@ func TestReconcileVisibilityUnchanged(t *testing.T) {
 		lastVisibility: map[string][]string{
 			"agent/test": {"service/stt/*"},
 		},
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),

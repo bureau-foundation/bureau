@@ -81,9 +81,17 @@ func run() error {
 	}
 	log("config room: %s", configRoomID)
 
-	// Step 4: Send "quickstart-test-ready" to the config room.
+	// Step 4: Read payload (if present) and send ready signal.
+	payloadContent := readPayloadJSON()
+	readyMessage := "quickstart-test-ready"
+	if payloadContent != "" {
+		readyMessage += ": payload=" + payloadContent
+		log("payload at startup: %s", payloadContent)
+	} else {
+		log("no payload file found")
+	}
 	log("sending ready signal...")
-	if err := matrixSendMessage(ctx, client, configRoomID, "quickstart-test-ready"); err != nil {
+	if err := matrixSendMessage(ctx, client, configRoomID, readyMessage); err != nil {
 		return fmt.Errorf("send ready message: %w", err)
 	}
 	log("ready signal sent")
@@ -96,8 +104,13 @@ func run() error {
 	}
 	log("received: %q", message)
 
-	// Step 6: Acknowledge the received message.
+	// Step 6: Re-read payload (may have been hot-reloaded) and acknowledge.
+	currentPayload := readPayloadJSON()
 	ackBody := fmt.Sprintf("quickstart-test-ok: received '%s'", message)
+	if currentPayload != "" {
+		ackBody += " payload=" + currentPayload
+		log("payload at ack: %s", currentPayload)
+	}
 	log("sending acknowledgment...")
 	if err := matrixSendMessage(ctx, client, configRoomID, ackBody); err != nil {
 		return fmt.Errorf("send ack message: %w", err)
@@ -110,6 +123,30 @@ func run() error {
 
 func log(format string, args ...any) {
 	fmt.Fprintf(os.Stdout, "TEST_AGENT: "+format+"\n", args...)
+}
+
+const payloadPath = "/run/bureau/payload.json"
+
+// readPayloadJSON reads the payload file bind-mounted at /run/bureau/payload.json
+// and returns its content as a compact JSON string. Returns "" if the file does
+// not exist (no payload was configured for this principal).
+func readPayloadJSON() string {
+	data, err := os.ReadFile(payloadPath)
+	if err != nil {
+		return ""
+	}
+	// Re-marshal to ensure compact JSON (no extra whitespace).
+	var parsed any
+	if json.Unmarshal(data, &parsed) != nil {
+		// Return raw content if it's not valid JSON — the test harness
+		// will catch the malformed content in its assertions.
+		return string(data)
+	}
+	compact, err := json.Marshal(parsed)
+	if err != nil {
+		return string(data)
+	}
+	return string(compact)
 }
 
 // --- Proxy HTTP client ---

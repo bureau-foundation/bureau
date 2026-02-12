@@ -570,9 +570,10 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		return
 	}
 
-	// Payload-only change: hot-reload by rewriting the payload file.
-	// The agent process sees the update via the bind-mounted file at
-	// /run/bureau/payload.json (inotify or periodic poll).
+	// Payload-only change: hot-reload by rewriting the payload file
+	// in-place (preserving the bind-mounted inode). The agent reads the
+	// updated file after receiving notification — see handleUpdatePayload
+	// for the safety argument.
 	if payloadChanged(oldSpec, newSpec) {
 		d.logger.Info("payload changed for running principal, hot-reloading",
 			"principal", localpart,
@@ -595,6 +596,10 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		d.lastSpecs[localpart] = newSpec
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("payload hot-reloaded", "principal", localpart)
+
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("Payload updated for %s", localpart),
+		))
 	}
 }
 

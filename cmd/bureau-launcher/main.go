@@ -1218,11 +1218,29 @@ func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *
 	}
 }
 
-// handleUpdatePayload atomically rewrites the payload file for a running
-// sandbox. The payload file is bind-mounted into the sandbox at
-// /run/bureau/payload.json, so the update is immediately visible to the
-// agent process. The agent can detect the change via inotify or periodic
-// polling — Bureau does not send a signal to the process.
+// handleUpdatePayload rewrites the payload file for a running sandbox.
+//
+// The file is written in-place (truncate + write) rather than via atomic
+// rename. Rename creates a new inode, and bwrap bind mounts reference the
+// source dentry — after a rename the sandbox process still sees the old
+// content through the original inode, making the update invisible.
+//
+// In-place write is not atomic: the file is briefly empty between truncate
+// and write completion. This is safe because there is no concurrent reader
+// during the truncate window — the IPC response does not return until
+// write+close completes, the daemon sends its config room notification
+// only after the IPC response, and agents read the file only after
+// receiving that notification. Unlike atomic rename (which guarantees
+// old-or-new content on crash, never partial), in-place write is not
+// crash-safe — a launcher crash between truncate and write leaves an empty
+// file. This is acceptable because payloads are ephemeral: the sandbox is
+// gone if the launcher crashes, and the payload is recreated on restart.
+//
+// Limitation: if the initial deployment had no payload (len(spec.Payload)
+// == 0), no bind mount was created. A later config update that adds a
+// payload writes the file on the host but the sandbox has no mount point
+// — the agent cannot see it. Fixing this requires adding a bind mount to
+// a running namespace, which bwrap does not support.
 func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}
@@ -1248,22 +1266,25 @@ func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest)
 		return IPCResponse{OK: false, Error: "payload is required for update-payload"}
 	}
 
-	// Write the payload atomically: write to a temp file in the same
-	// directory, then rename. This ensures the agent never sees a
-	// partially-written file.
 	payloadJSON, err := json.Marshal(request.Payload)
 	if err != nil {
 		return IPCResponse{OK: false, Error: fmt.Sprintf("marshaling payload: %v", err)}
 	}
 
+	// Write in-place to preserve the inode. O_CREATE is defensive — the
+	// file should exist from initial sandbox creation, but we handle the
+	// edge case of unexpected removal gracefully.
 	payloadPath := filepath.Join(sandbox.configDir, "payload.json")
-	tempPath := payloadPath + ".tmp"
-	if err := os.WriteFile(tempPath, payloadJSON, 0644); err != nil {
-		return IPCResponse{OK: false, Error: fmt.Sprintf("writing temp payload: %v", err)}
+	file, err := os.OpenFile(payloadPath, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("opening payload file: %v", err)}
 	}
-	if err := os.Rename(tempPath, payloadPath); err != nil {
-		os.Remove(tempPath)
-		return IPCResponse{OK: false, Error: fmt.Sprintf("renaming payload: %v", err)}
+	if _, err := file.Write(payloadJSON); err != nil {
+		file.Close()
+		return IPCResponse{OK: false, Error: fmt.Sprintf("writing payload: %v", err)}
+	}
+	if err := file.Close(); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("closing payload file: %v", err)}
 	}
 
 	l.logger.Info("payload updated",

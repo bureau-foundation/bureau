@@ -70,6 +70,8 @@ type principalAccount struct {
 // principalSpec describes a principal to deploy on a machine.
 type principalSpec struct {
 	Account           principalAccount
+	Template          string         // optional: template ref (e.g., "bureau/template:name")
+	Payload           map[string]any // optional: per-instance payload merged over template defaults
 	MatrixPolicy      map[string]any // optional per-principal policy
 	ServiceVisibility []string       // optional: glob patterns for service discovery
 }
@@ -361,10 +363,17 @@ func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMach
 
 	principalConfigs := make([]map[string]any, len(config.Principals))
 	for i, spec := range config.Principals {
+		templateValue := ""
+		if spec.Template != "" {
+			templateValue = spec.Template
+		}
 		entry := map[string]any{
 			"localpart":  spec.Account.Localpart,
-			"template":   "",
+			"template":   templateValue,
 			"auto_start": true,
+		}
+		if spec.Payload != nil {
+			entry["payload"] = spec.Payload
 		}
 		if spec.MatrixPolicy != nil {
 			entry["matrix_policy"] = spec.MatrixPolicy

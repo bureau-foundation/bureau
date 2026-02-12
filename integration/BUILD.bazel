@@ -22,6 +22,7 @@ go_test(
         "lifecycle_test.go",
         "machine_test.go",
         "messaging_test.go",
+        "payload_test.go",
         "pipeline_test.go",
         "powerlevel_test.go",
         "quickstart_test.go",

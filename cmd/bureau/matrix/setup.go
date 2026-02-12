@@ -481,19 +481,7 @@ func baseTemplates() []namedTemplate {
 // (m.bureau.webrtc_offer/answer); and service room members register via
 // m.bureau.service.
 func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string) map[string]any {
-	events := map[string]any{
-		"m.room.avatar":             100,
-		"m.room.canonical_alias":    100,
-		"m.room.encryption":         100,
-		"m.room.history_visibility": 100,
-		"m.room.join_rules":         100,
-		"m.room.name":               100,
-		"m.room.power_levels":       100,
-		"m.room.server_acl":         100,
-		"m.room.tombstone":          100,
-		"m.room.topic":              100,
-		"m.space.child":             100,
-	}
+	events := schema.AdminProtectedEvents()
 	for _, eventType := range memberSettableEventTypes {
 		events[eventType] = 0
 	}

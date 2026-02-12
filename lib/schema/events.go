@@ -1407,6 +1407,27 @@ type LayoutMemberFilter struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+// AdminProtectedEvents returns the set of Matrix room metadata event types
+// that Bureau restricts to admin power level (100) in all rooms. Every
+// power level function uses this as its base events map, adding
+// Bureau-specific overrides on top. Returns a fresh map each call so
+// callers can safely merge their own entries.
+func AdminProtectedEvents() map[string]any {
+	return map[string]any{
+		"m.room.avatar":             100,
+		"m.room.canonical_alias":    100,
+		"m.room.encryption":         100,
+		"m.room.history_visibility": 100,
+		"m.room.join_rules":         100,
+		"m.room.name":               100,
+		"m.room.power_levels":       100,
+		"m.room.server_acl":         100,
+		"m.room.tombstone":          100,
+		"m.room.topic":              100,
+		"m.space.child":             100,
+	}
+}
+
 // WorkspaceRoomPowerLevels returns the power level structure for workspace
 // collaboration rooms. Unlike config rooms (events_default: 100, admin-only),
 // workspace rooms are collaboration spaces where agents send messages freely.
@@ -1434,21 +1455,15 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 		users[machineUserID] = 50
 	}
 
+	events := AdminProtectedEvents()
+	events[EventTypeProject] = 100
+	events[EventTypeWorkspace] = 0
+	events[EventTypeLayout] = 0
+
 	return map[string]any{
-		"users":         users,
-		"users_default": 0,
-		"events": map[string]any{
-			EventTypeProject:            100,
-			EventTypeWorkspace:          0,
-			EventTypeLayout:             0,
-			"m.room.name":               100,
-			"m.room.topic":              100,
-			"m.room.avatar":             100,
-			"m.room.canonical_alias":    100,
-			"m.room.history_visibility": 100,
-			"m.room.power_levels":       100,
-			"m.room.join_rules":         100,
-		},
+		"users":          users,
+		"users_default":  0,
+		"events":         events,
 		"events_default": 0,
 		"state_default":  100,
 		"ban":            100,
@@ -1486,22 +1501,16 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 		users[machineUserID] = 50
 	}
 
+	events := AdminProtectedEvents()
+	events[EventTypeMachineConfig] = 100
+	events[EventTypeCredentials] = 100
+	events[EventTypeLayout] = 0  // daemon publishes layout state
+	events["m.room.message"] = 0 // daemon posts command results and pipeline results
+
 	return map[string]any{
-		"users":         users,
-		"users_default": 0,
-		"events": map[string]any{
-			EventTypeMachineConfig:      100,
-			EventTypeCredentials:        100,
-			EventTypeLayout:             0, // daemon publishes layout state
-			"m.room.message":            0, // daemon posts command results and pipeline results
-			"m.room.name":               100,
-			"m.room.topic":              100,
-			"m.room.avatar":             100,
-			"m.room.canonical_alias":    100,
-			"m.room.history_visibility": 100,
-			"m.room.power_levels":       100,
-			"m.room.join_rules":         100,
-		},
+		"users":          users,
+		"users_default":  0,
+		"events":         events,
 		"events_default": 100,
 		"state_default":  100,
 		"ban":            100,
@@ -1524,21 +1533,15 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 // for writes. No machine tier is needed — machines read pipelines via
 // their proxy, they don't write them.
 func PipelineRoomPowerLevels(adminUserID string) map[string]any {
+	events := AdminProtectedEvents()
+	events[EventTypePipeline] = 100
+
 	return map[string]any{
 		"users": map[string]any{
 			adminUserID: 100,
 		},
-		"users_default": 0,
-		"events": map[string]any{
-			EventTypePipeline:           100,
-			"m.room.name":               100,
-			"m.room.topic":              100,
-			"m.room.avatar":             100,
-			"m.room.canonical_alias":    100,
-			"m.room.history_visibility": 100,
-			"m.room.power_levels":       100,
-			"m.room.join_rules":         100,
-		},
+		"users_default":  0,
+		"events":         events,
 		"events_default": 100,
 		"state_default":  100,
 		"ban":            100,

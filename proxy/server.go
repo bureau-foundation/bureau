@@ -256,7 +256,7 @@ func (s *Server) Start() error {
 	}
 
 	// Notify systemd that we're ready (no-op if not running under systemd)
-	notifySystemd("READY=1")
+	notifySystemd(s.logger, "READY=1")
 
 	return nil
 }
@@ -264,7 +264,7 @@ func (s *Server) Start() error {
 // notifySystemd sends a notification to systemd's sd_notify socket.
 // This is used to signal readiness when running as a systemd service.
 // Does nothing if NOTIFY_SOCKET is not set.
-func notifySystemd(state string) {
+func notifySystemd(logger *slog.Logger, state string) {
 	socketPath := os.Getenv("NOTIFY_SOCKET")
 	if socketPath == "" {
 		return
@@ -272,11 +272,14 @@ func notifySystemd(state string) {
 
 	conn, err := net.Dial("unixgram", socketPath)
 	if err != nil {
+		logger.Warn("connecting to systemd notify socket", "error", err, "socket", socketPath)
 		return
 	}
 	defer conn.Close()
 
-	conn.Write([]byte(state))
+	if _, err := conn.Write([]byte(state)); err != nil {
+		logger.Warn("writing to systemd notify socket", "error", err, "state", state)
+	}
 }
 
 // Shutdown gracefully shuts down the server.

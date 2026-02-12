@@ -831,7 +831,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	var request IPCRequest
 	if err := decoder.Decode(&request); err != nil {
 		l.logger.Error("decoding IPC request", "error", err)
-		encoder.Encode(IPCResponse{OK: false, Error: "invalid request"})
+		if err := encoder.Encode(IPCResponse{OK: false, Error: "invalid request"}); err != nil {
+			l.logger.Error("encoding IPC error response", "error", err)
+		}
 		return
 	}
 
@@ -1078,12 +1080,16 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 // cancelled), the handler returns without sending a response.
 func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
 	if request.Principal == "" {
-		encoder.Encode(IPCResponse{OK: false, Error: "principal is required"})
+		if err := encoder.Encode(IPCResponse{OK: false, Error: "principal is required"}); err != nil {
+			l.logger.Error("encoding IPC response", "error", err, "action", "wait-sandbox")
+		}
 		return
 	}
 
 	if err := principal.ValidateLocalpart(request.Principal); err != nil {
-		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)})
+		if encodeErr := encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}); encodeErr != nil {
+			l.logger.Error("encoding IPC response", "error", encodeErr, "action", "wait-sandbox")
+		}
 		return
 	}
 
@@ -1093,7 +1099,9 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 	l.mu.Unlock()
 
 	if !exists {
-		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)})
+		if err := encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}); err != nil {
+			l.logger.Error("encoding IPC response", "error", err, "action", "wait-sandbox", "principal", request.Principal)
+		}
 		return
 	}
 
@@ -1121,7 +1129,10 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 		if sandbox.exitError != nil {
 			response.Error = sandbox.exitError.Error()
 		}
-		encoder.Encode(response)
+		if err := encoder.Encode(response); err != nil {
+			l.logger.Error("encoding wait-sandbox result", "error", err,
+				"principal", request.Principal, "exit_code", exitCode)
+		}
 
 	case <-connClosed:
 		l.logger.Info("wait-sandbox: daemon disconnected",
@@ -1142,12 +1153,16 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 // blocked during the (potentially long) wait.
 func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
 	if request.Principal == "" {
-		encoder.Encode(IPCResponse{OK: false, Error: "principal is required"})
+		if err := encoder.Encode(IPCResponse{OK: false, Error: "principal is required"}); err != nil {
+			l.logger.Error("encoding IPC response", "error", err, "action", "wait-proxy")
+		}
 		return
 	}
 
 	if err := principal.ValidateLocalpart(request.Principal); err != nil {
-		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)})
+		if encodeErr := encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}); encodeErr != nil {
+			l.logger.Error("encoding IPC response", "error", encodeErr, "action", "wait-proxy")
+		}
 		return
 	}
 
@@ -1156,7 +1171,9 @@ func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *
 	l.mu.Unlock()
 
 	if !exists {
-		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)})
+		if err := encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}); err != nil {
+			l.logger.Error("encoding IPC response", "error", err, "action", "wait-proxy", "principal", request.Principal)
+		}
 		return
 	}
 
@@ -1172,7 +1189,10 @@ func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *
 	select {
 	case <-sandbox.proxyDone:
 		exitCode := sandbox.proxyExitCode
-		encoder.Encode(IPCResponse{OK: true, ExitCode: &exitCode})
+		if err := encoder.Encode(IPCResponse{OK: true, ExitCode: &exitCode}); err != nil {
+			l.logger.Error("encoding wait-proxy result", "error", err,
+				"principal", request.Principal, "exit_code", exitCode)
+		}
 
 	case <-connClosed:
 		l.logger.Info("wait-proxy: daemon disconnected",

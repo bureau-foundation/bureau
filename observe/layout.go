@@ -173,8 +173,10 @@ func ApplyLayout(server *tmux.Server, sessionName string, layout *Layout) error 
 				}
 			} else {
 				// Session exists. Rename the current window.
-				_, _ = server.Run("rename-window",
-					"-t", sessionName, window.Name)
+				if _, err := server.Run("rename-window",
+					"-t", sessionName, window.Name); err != nil {
+					return fmt.Errorf("renaming window %q in session %q: %w", window.Name, sessionName, err)
+				}
 			}
 
 			// Get the window target for this first window.

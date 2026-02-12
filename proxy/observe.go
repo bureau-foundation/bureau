@@ -297,9 +297,15 @@ func (proxy *observeProxy) sendError(connection net.Conn, format string, args ..
 		"ok":    false,
 		"error": message,
 	}
-	data, _ := json.Marshal(response)
+	data, err := json.Marshal(response)
+	if err != nil {
+		proxy.logger.Warn("marshaling observe error response", "error", err)
+		return
+	}
 	data = append(data, '\n')
-	connection.Write(data)
+	if _, err := connection.Write(data); err != nil {
+		proxy.logger.Warn("writing observe error response", "error", err)
+	}
 }
 
 // stop shuts down the observation proxy. It closes the listener to stop

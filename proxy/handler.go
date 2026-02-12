@@ -173,8 +173,7 @@ func (h *Handler) SetMatrixPolicy(policy *schema.MatrixPolicy) {
 
 // HandleHealth handles health check requests.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	h.writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // HandleIdentity returns the agent's Matrix identity. Agents use this to
@@ -189,8 +188,7 @@ func (h *Handler) HandleIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(identity)
+	h.writeJSON(w, identity)
 }
 
 // HandleProxy handles proxy requests.
@@ -271,8 +269,7 @@ func (h *Handler) handleBufferedRequest(w http.ResponseWriter, r *http.Request, 
 		"duration", time.Since(startTime),
 	)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(Response{
+	h.writeJSON(w, Response{
 		ExitCode: result.ExitCode,
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,
@@ -326,13 +323,17 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 			"duration", time.Since(startTime),
 		)
 		// Send error as final chunk
-		encoder.Encode(StreamChunk{Type: "error", Data: err.Error()})
+		if encodeErr := encoder.Encode(StreamChunk{Type: "error", Data: err.Error()}); encodeErr != nil {
+			h.logger.Warn("writing streaming error chunk", "error", encodeErr, "service", req.Service)
+		}
 		flusher.Flush()
 		return
 	}
 
 	// Send exit code as final chunk
-	encoder.Encode(StreamChunk{Type: "exit", Code: exitCode})
+	if err := encoder.Encode(StreamChunk{Type: "exit", Code: exitCode}); err != nil {
+		h.logger.Warn("writing streaming exit chunk", "error", err, "service", req.Service)
+	}
 	flusher.Flush()
 
 	h.logger.Info("proxy streaming complete",
@@ -373,10 +374,22 @@ func (w *chunkWriter) Write(p []byte) (n int, err error) {
 func (h *Handler) sendError(w http.ResponseWriter, status int, format string, args ...any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(Response{
+	if err := json.NewEncoder(w).Encode(Response{
 		ExitCode: -1,
 		Error:    fmt.Sprintf(format, args...),
-	})
+	}); err != nil {
+		h.logger.Warn("writing JSON error response", "error", err, "status", status)
+	}
+}
+
+// writeJSON encodes value as JSON into w, setting the Content-Type header.
+// If encoding fails (typically because the client disconnected), the error
+// is logged — the caller cannot send a corrective response to a dead client.
+func (h *Handler) writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		h.logger.Warn("writing JSON response", "error", err)
+	}
 }
 
 // HandleHTTPProxy handles HTTP proxy requests.
@@ -556,8 +569,7 @@ func (h *Handler) HandleAdminListServices(w http.ResponseWriter, r *http.Request
 	}
 	h.mu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(services)
+	h.writeJSON(w, services)
 }
 
 // HandleAdminRegisterService creates or replaces an HTTP proxy service.
@@ -597,10 +609,12 @@ func (h *Handler) HandleAdminRegisterService(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(AdminServiceInfo{
+	if err := json.NewEncoder(w).Encode(AdminServiceInfo{
 		Name:     name,
 		Upstream: service.upstream.String(),
-	})
+	}); err != nil {
+		h.logger.Warn("writing JSON response", "error", err)
+	}
 }
 
 // HandleAdminUnregisterService removes an HTTP proxy service.
@@ -617,8 +631,7 @@ func (h *Handler) HandleAdminUnregisterService(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "removed", "name": name})
+	h.writeJSON(w, map[string]string{"status": "removed", "name": name})
 }
 
 // SetServiceDirectory replaces the cached service directory. Called by the
@@ -686,8 +699,7 @@ func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request)
 		directory = filtered
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(directory)
+	h.writeJSON(w, directory)
 }
 
 // HandleAdminSetDirectory replaces the full service directory. The daemon
@@ -702,8 +714,7 @@ func (h *Handler) HandleAdminSetDirectory(w http.ResponseWriter, r *http.Request
 
 	h.SetServiceDirectory(entries)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	h.writeJSON(w, map[string]any{
 		"status":   "ok",
 		"services": len(entries),
 	})
@@ -732,8 +743,7 @@ func (h *Handler) HandleAdminSetVisibility(w http.ResponseWriter, r *http.Reques
 
 	h.SetServiceVisibility(patterns)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	h.writeJSON(w, map[string]any{
 		"status":   "ok",
 		"patterns": len(patterns),
 	})
@@ -755,8 +765,7 @@ func (h *Handler) HandleAdminSetMatrixPolicy(w http.ResponseWriter, r *http.Requ
 	allowInvite := policy != nil && policy.AllowInvite
 	allowRoomCreate := policy != nil && policy.AllowRoomCreate
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	h.writeJSON(w, map[string]any{
 		"status":            "ok",
 		"allow_join":        allowJoin,
 		"allow_invite":      allowInvite,

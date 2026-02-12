@@ -165,7 +165,12 @@ and proceeds directly to ensuring room membership.`,
 				// Agent accounts use a password derived from the registration
 				// token. The derived value is deterministic, so re-running
 				// with the same token produces the same account.
-				passwordBuffer, err = deriveAdminPassword(registrationToken)
+				tokenBuffer, tokenErr := secret.NewFromString(registrationToken)
+				if tokenErr != nil {
+					return fmt.Errorf("protecting registration token: %w", tokenErr)
+				}
+				defer tokenBuffer.Close()
+				passwordBuffer, err = deriveAdminPassword(tokenBuffer)
 				if err != nil {
 					return fmt.Errorf("derive password: %w", err)
 				}
@@ -186,10 +191,16 @@ and proceeds directly to ensuring room membership.`,
 			// the account already exists — verify the password matches
 			// (if one was explicitly provided) and proceed to room invites.
 			userID := fmt.Sprintf("@%s:%s", username, serverName)
+			registrationTokenBuffer, tokenErr := secret.NewFromString(registrationToken)
+			if tokenErr != nil {
+				return fmt.Errorf("protecting registration token: %w", tokenErr)
+			}
+			defer registrationTokenBuffer.Close()
+
 			session, registerErr := client.Register(ctx, messaging.RegisterRequest{
 				Username:          username,
-				Password:          passwordBuffer.String(),
-				RegistrationToken: registrationToken,
+				Password:          passwordBuffer,
+				RegistrationToken: registrationTokenBuffer,
 			})
 			if registerErr != nil {
 				if operator && messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
@@ -197,7 +208,7 @@ and proceeds directly to ensuring room membership.`,
 					// rooms (invite alone leaves the user in limbo —
 					// they must also join to become a full member).
 					var loginErr error
-					session, loginErr = client.Login(ctx, username, passwordBuffer.String())
+					session, loginErr = client.Login(ctx, username, passwordBuffer)
 					if loginErr != nil {
 						if passwordFile != "" {
 							return fmt.Errorf("account %s already exists but the provided password does not match (the existing password was not changed)", userID)

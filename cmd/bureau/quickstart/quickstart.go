@@ -28,6 +28,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -215,15 +216,27 @@ func run(config Config) error {
 	sysadminLocalpart := "sysadmin/" + machineName
 	fmt.Fprintf(os.Stderr, "Registering principal %s...\n", sysadminLocalpart)
 
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return fmt.Errorf("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	quickstartPassword, err := secret.Concat("quickstart-", registrationTokenBuffer)
+	if err != nil {
+		return fmt.Errorf("building quickstart password: %w", err)
+	}
+	defer quickstartPassword.Close()
+
 	sysadminSession, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          sysadminLocalpart,
-		Password:          "quickstart-" + registrationToken,
-		RegistrationToken: registrationToken,
+		Password:          quickstartPassword,
+		RegistrationToken: registrationTokenBuffer,
 	})
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
 			// Already registered — log in instead.
-			sysadminSession, err = client.Login(ctx, sysadminLocalpart, "quickstart-"+registrationToken)
+			sysadminSession, err = client.Login(ctx, sysadminLocalpart, quickstartPassword)
 			if err != nil {
 				return fmt.Errorf("login existing sysadmin principal: %w", err)
 			}

@@ -3,11 +3,16 @@
 
 package messaging
 
+import "github.com/bureau-foundation/bureau/lib/secret"
+
 // RegisterRequest holds parameters for registering a new Matrix account.
+// Password and RegistrationToken are stored in mmap-backed buffers (locked
+// against swap, excluded from core dumps). The caller retains ownership of
+// the buffers — Register reads from them but does not close them.
 type RegisterRequest struct {
-	Username          string `json:"username"`
-	Password          string `json:"password"`
-	RegistrationToken string `json:"-"` // used in the auth flow, not sent as a top-level field
+	Username          string
+	Password          *secret.Buffer
+	RegistrationToken *secret.Buffer
 }
 
 // AuthResponse is returned by Register and Login.

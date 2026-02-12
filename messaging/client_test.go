@@ -9,7 +9,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
+
+// testBuffer creates a secret.Buffer from a string for testing. The buffer
+// is automatically closed when the test completes.
+func testBuffer(t *testing.T, value string) *secret.Buffer {
+	t.Helper()
+	buffer, err := secret.NewFromString(value)
+	if err != nil {
+		t.Fatalf("creating test buffer: %v", err)
+	}
+	t.Cleanup(func() { buffer.Close() })
+	return buffer
+}
 
 func TestNewClient(t *testing.T) {
 	t.Run("valid URL", func(t *testing.T) {
@@ -100,8 +114,8 @@ func TestRegister(t *testing.T) {
 
 		session, err := client.Register(context.Background(), RegisterRequest{
 			Username:          "alice",
-			Password:          "password123",
-			RegistrationToken: "test-reg-token",
+			Password:          testBuffer(t, "password123"),
+			RegistrationToken: testBuffer(t, "test-reg-token"),
 		})
 		if err != nil {
 			t.Fatalf("Register failed: %v", err)
@@ -140,8 +154,8 @@ func TestRegister(t *testing.T) {
 
 		_, err = client.Register(context.Background(), RegisterRequest{
 			Username:          "alice",
-			Password:          "password123",
-			RegistrationToken: "test-reg-token",
+			Password:          testBuffer(t, "password123"),
+			RegistrationToken: testBuffer(t, "test-reg-token"),
 		})
 		if err == nil {
 			t.Fatal("expected error for existing user")
@@ -161,7 +175,7 @@ func TestRegister(t *testing.T) {
 
 		_, err = client.Register(context.Background(), RegisterRequest{Username: "alice"})
 		if err == nil {
-			t.Fatal("expected error for empty password")
+			t.Fatal("expected error for nil password")
 		}
 	})
 }
@@ -200,7 +214,7 @@ func TestLogin(t *testing.T) {
 			t.Fatalf("NewClient failed: %v", err)
 		}
 
-		session, err := client.Login(context.Background(), "bob", "secret")
+		session, err := client.Login(context.Background(), "bob", testBuffer(t, "secret"))
 		if err != nil {
 			t.Fatalf("Login failed: %v", err)
 		}
@@ -230,7 +244,7 @@ func TestLogin(t *testing.T) {
 			t.Fatalf("NewClient failed: %v", err)
 		}
 
-		_, err = client.Login(context.Background(), "bob", "wrong")
+		_, err = client.Login(context.Background(), "bob", testBuffer(t, "wrong"))
 		if err == nil {
 			t.Fatal("expected error for invalid credentials")
 		}
@@ -242,14 +256,14 @@ func TestLogin(t *testing.T) {
 	t.Run("validation errors", func(t *testing.T) {
 		client, _ := NewClient(ClientConfig{HomeserverURL: "http://localhost:1"})
 
-		_, err := client.Login(context.Background(), "", "password")
+		_, err := client.Login(context.Background(), "", testBuffer(t, "password"))
 		if err == nil {
 			t.Fatal("expected error for empty username")
 		}
 
-		_, err = client.Login(context.Background(), "alice", "")
+		_, err = client.Login(context.Background(), "alice", nil)
 		if err == nil {
-			t.Fatal("expected error for empty password")
+			t.Fatal("expected error for nil password")
 		}
 	})
 }

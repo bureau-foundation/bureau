@@ -19,6 +19,7 @@ go_library(
         "//lib/bootstrap",
         "//lib/principal",
         "//lib/schema",
+        "//lib/secret",
         "//messaging",
         "@com_github_spf13_pflag//:pflag",
     ],

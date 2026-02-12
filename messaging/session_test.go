@@ -886,7 +886,7 @@ func TestChangePassword(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.ChangePassword(context.Background(), "old-password", "new-secret-password")
+		err := session.ChangePassword(context.Background(), testBuffer(t, "old-password"), testBuffer(t, "new-secret-password"))
 		if err != nil {
 			t.Fatalf("ChangePassword failed: %v", err)
 		}
@@ -899,7 +899,7 @@ func TestChangePassword(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Invalid password"})
 		}))
 
-		err := session.ChangePassword(context.Background(), "wrong-password", "new-password")
+		err := session.ChangePassword(context.Background(), testBuffer(t, "wrong-password"), testBuffer(t, "new-password"))
 		if err == nil {
 			t.Fatal("expected error for wrong password")
 		}
@@ -908,25 +908,25 @@ func TestChangePassword(t *testing.T) {
 		}
 	})
 
-	t.Run("empty current password", func(t *testing.T) {
+	t.Run("nil current password", func(t *testing.T) {
 		_, session := newTestSession(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			t.Fatal("server should not be called")
 		}))
 
-		err := session.ChangePassword(context.Background(), "", "new-password")
+		err := session.ChangePassword(context.Background(), nil, testBuffer(t, "new-password"))
 		if err == nil {
-			t.Fatal("expected error for empty current password")
+			t.Fatal("expected error for nil current password")
 		}
 	})
 
-	t.Run("empty new password", func(t *testing.T) {
+	t.Run("nil new password", func(t *testing.T) {
 		_, session := newTestSession(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			t.Fatal("server should not be called")
 		}))
 
-		err := session.ChangePassword(context.Background(), "old-password", "")
+		err := session.ChangePassword(context.Background(), testBuffer(t, "old-password"), nil)
 		if err == nil {
-			t.Fatal("expected error for empty new password")
+			t.Fatal("expected error for nil new password")
 		}
 	})
 }

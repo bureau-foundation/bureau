@@ -430,25 +430,27 @@ func (s *Session) TURNCredentials(ctx context.Context) (*TURNCredentialsResponse
 // Interactive Authentication (UIA) for this endpoint, so the caller must
 // provide the current password. The server invalidates all other access tokens
 // for the account (logout_devices defaults to true in the spec).
+// Both password Buffers are read but not closed — the caller retains ownership.
 //
 // Corresponds to POST /_matrix/client/v3/account/password.
-func (s *Session) ChangePassword(ctx context.Context, currentPassword, newPassword string) error {
-	if currentPassword == "" {
+func (s *Session) ChangePassword(ctx context.Context, currentPassword, newPassword *secret.Buffer) error {
+	if currentPassword == nil {
 		return fmt.Errorf("messaging: current password is required for password change")
 	}
-	if newPassword == "" {
+	if newPassword == nil {
 		return fmt.Errorf("messaging: new password is required for password change")
 	}
 
 	// The Matrix password change endpoint requires User Interactive Auth.
 	// We embed the auth block directly rather than doing a two-step UIA
 	// flow, because password-based auth is always available.
+	// Passwords are converted to strings at the JSON serialization boundary.
 	requestBody := map[string]any{
-		"new_password": newPassword,
+		"new_password": newPassword.String(),
 		"auth": map[string]any{
 			"type":     "m.login.password",
 			"user":     s.userID,
-			"password": currentPassword,
+			"password": currentPassword.String(),
 		},
 	}
 

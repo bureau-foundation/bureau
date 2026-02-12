@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -117,11 +118,27 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	}
 
 	// Generate a random one-time password (32 bytes = 64 hex chars).
+	// The raw bytes are zeroed after hex encoding, and the hex bytes
+	// are moved into an mmap-backed buffer.
 	passwordBytes := make([]byte, 32)
 	if _, err := rand.Read(passwordBytes); err != nil {
 		return fmt.Errorf("generate random password: %w", err)
 	}
-	oneTimePassword := hex.EncodeToString(passwordBytes)
+	hexBytes := []byte(hex.EncodeToString(passwordBytes))
+	for index := range passwordBytes {
+		passwordBytes[index] = 0
+	}
+	oneTimePassword, err := secret.NewFromBytes(hexBytes)
+	if err != nil {
+		return fmt.Errorf("protecting one-time password: %w", err)
+	}
+	defer oneTimePassword.Close()
+
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return fmt.Errorf("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
 
 	// Register the machine account. Use the one-time password (NOT a
 	// derived password from the registration token). The launcher will
@@ -132,7 +149,7 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	_, registerError := client.Register(ctx, messaging.RegisterRequest{
 		Username:          machineName,
 		Password:          oneTimePassword,
-		RegistrationToken: registrationToken,
+		RegistrationToken: registrationTokenBuffer,
 	})
 	if registerError != nil {
 		if messaging.IsMatrixError(registerError, messaging.ErrCodeUserInUse) {
@@ -215,7 +232,7 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 		HomeserverURL: homeserverURL,
 		ServerName:    serverName,
 		MachineName:   machineName,
-		Password:      oneTimePassword,
+		Password:      oneTimePassword.String(),
 	}
 
 	if outputPath != "" {

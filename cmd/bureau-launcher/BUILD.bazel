@@ -48,6 +48,7 @@ go_test(
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
+        "//lib/secret",
         "//lib/testutil",
         "//lib/tmux",
         "//lib/watchdog",

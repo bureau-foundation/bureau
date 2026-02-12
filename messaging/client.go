@@ -93,15 +93,18 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 	if request.Username == "" {
 		return nil, fmt.Errorf("messaging: username is required for registration")
 	}
-	if request.Password == "" {
+	if request.Password == nil {
 		return nil, fmt.Errorf("messaging: password is required for registration")
 	}
 
 	// Matrix registration uses the UIAA flow. First attempt without auth
 	// to get the session ID, then complete with the registration token.
+	//
+	// Password is converted to string at the JSON serialization boundary.
+	// The heap copy is short-lived — it exists only during the HTTP call.
 	firstAttempt := map[string]any{
 		"username": request.Username,
-		"password": request.Password,
+		"password": request.Password.String(),
 	}
 	body, err := c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", nil, firstAttempt)
 	if err == nil {
@@ -129,12 +132,12 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 	// Complete registration with the token auth stage.
 	auth := map[string]any{
 		"type":    "m.login.registration_token",
-		"token":   request.RegistrationToken,
+		"token":   request.RegistrationToken.String(),
 		"session": sessionID,
 	}
 	completeRequest := map[string]any{
 		"username": request.Username,
-		"password": request.Password,
+		"password": request.Password.String(),
 		"auth":     auth,
 	}
 	body, err = c.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/register", nil, completeRequest)
@@ -156,18 +159,20 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 }
 
 // Login authenticates with username and password, returning a Session.
-func (c *Client) Login(ctx context.Context, username, password string) (*Session, error) {
+// The password Buffer is read but not closed — the caller retains ownership.
+func (c *Client) Login(ctx context.Context, username string, password *secret.Buffer) (*Session, error) {
 	if username == "" {
 		return nil, fmt.Errorf("messaging: username is required for login")
 	}
-	if password == "" {
+	if password == nil {
 		return nil, fmt.Errorf("messaging: password is required for login")
 	}
 
+	// Password is converted to string at the JSON serialization boundary.
 	loginRequest := LoginRequest{
 		Type:                     "m.login.password",
 		User:                     username,
-		Password:                 password,
+		Password:                 password.String(),
 		InitialDeviceDisplayName: "bureau",
 	}
 

@@ -52,6 +52,7 @@ go_test(
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
+        "//lib/secret",
         "//messaging",
         "//observe",
     ],

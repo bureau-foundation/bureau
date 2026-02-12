@@ -88,6 +88,66 @@ func NewFromBytes(source []byte) (*Buffer, error) {
 	return buffer, nil
 }
 
+// NewFromString creates a secret buffer from a string value. The string
+// is copied into an mmap-backed region via a temporary byte slice, which
+// is zeroed before returning. The original string remains on the Go heap
+// (strings are immutable in Go) and will be garbage collected normally —
+// this function minimizes the protected copy's exposure, not the caller's.
+//
+// Use this at API boundaries where the caller has a string (e.g., from
+// JSON unmarshaling) and needs a Buffer for a function that requires one.
+// When possible, prefer keeping data in Buffer form throughout the call
+// chain rather than converting from strings.
+func NewFromString(value string) (*Buffer, error) {
+	if value == "" {
+		return nil, fmt.Errorf("secret: cannot create buffer from empty string")
+	}
+	return NewFromBytes([]byte(value))
+}
+
+// Concat creates a new secret buffer by concatenating one or more segments.
+// Each segment is either a string (for non-secret prefixes like "bureau-admin-password:")
+// or a *Buffer (for secret material). This avoids creating intermediate heap
+// strings when combining a prefix with a secret value.
+//
+// The concatenated bytes are assembled in a temporary heap slice, moved into
+// an mmap-backed buffer, and the temporary slice is zeroed. The caller must
+// close the returned Buffer.
+//
+// Panics if a segment is neither string nor *Buffer.
+func Concat(segments ...any) (*Buffer, error) {
+	// Calculate total length.
+	totalLength := 0
+	for _, segment := range segments {
+		switch value := segment.(type) {
+		case string:
+			totalLength += len(value)
+		case *Buffer:
+			totalLength += value.Len()
+		default:
+			panic(fmt.Sprintf("secret.Concat: unsupported segment type %T (expected string or *Buffer)", segment))
+		}
+	}
+
+	if totalLength == 0 {
+		return nil, fmt.Errorf("secret: Concat produced empty result")
+	}
+
+	// Assemble into a temporary heap slice.
+	temporary := make([]byte, 0, totalLength)
+	for _, segment := range segments {
+		switch value := segment.(type) {
+		case string:
+			temporary = append(temporary, value...)
+		case *Buffer:
+			temporary = append(temporary, value.Bytes()...)
+		}
+	}
+
+	// Move into mmap and zero the temporary. NewFromBytes zeros source.
+	return NewFromBytes(temporary)
+}
+
 // NewFromReader reads all data from reader into a secret buffer. Reads up
 // to maxSize bytes; returns an error if the reader produces no data or
 // exceeds maxSize. The data briefly exists on the Go heap during the read

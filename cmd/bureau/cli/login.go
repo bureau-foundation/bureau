@@ -91,7 +91,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 				return fmt.Errorf("create matrix client: %w", err)
 			}
 
-			session, err := client.Login(ctx, username, passwordBuffer.String())
+			session, err := client.Login(ctx, username, passwordBuffer)
 			if err != nil {
 				return fmt.Errorf("login failed: %w", err)
 			}

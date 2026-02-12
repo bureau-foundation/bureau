@@ -347,12 +347,12 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 
 	// Register the machine account. Use a password derived from the
 	// registration token (deterministic, so re-running is idempotent).
-	password, err := derivePassword(registrationToken.String(), machineName)
+	password, err := derivePassword(registrationToken, machineName)
 	if err != nil {
 		return fmt.Errorf("derive machine password: %w", err)
 	}
 	defer password.Close()
-	session, err := registerOrLogin(ctx, client, machineName, password.String(), registrationToken.String())
+	session, err := registerOrLogin(ctx, client, machineName, password, registrationToken)
 	if err != nil {
 		return fmt.Errorf("registering machine account: %w", err)
 	}
@@ -444,7 +444,13 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 
 	// Log in with the one-time password (not register — the account was
 	// already created by "bureau machine provision").
-	session, err := client.Login(ctx, machineName, config.Password)
+	bootstrapPassword, err := secret.NewFromString(config.Password)
+	if err != nil {
+		return fmt.Errorf("protecting bootstrap password: %w", err)
+	}
+	defer bootstrapPassword.Close()
+
+	session, err := client.Login(ctx, machineName, bootstrapPassword)
 	if err != nil {
 		return fmt.Errorf("logging in with bootstrap password: %w", err)
 	}
@@ -463,7 +469,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 
 	// Rotate the password immediately. After this, the one-time password
 	// from the bootstrap config is invalidated.
-	if err := session.ChangePassword(ctx, config.Password, permanentPassword.String()); err != nil {
+	if err := session.ChangePassword(ctx, bootstrapPassword, permanentPassword); err != nil {
 		return fmt.Errorf("rotating password: %w", err)
 	}
 	logger.Info("rotated one-time password to permanent password")
@@ -1319,7 +1325,8 @@ func listenSocket(socketPath string) (net.Listener, error) {
 }
 
 // registerOrLogin registers a new account, or logs in if it already exists.
-func registerOrLogin(ctx context.Context, client *messaging.Client, username, password, registrationToken string) (*messaging.Session, error) {
+// Password and registrationToken are read but not closed — the caller retains ownership.
+func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.Session, error) {
 	session, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          username,
 		Password:          password,
@@ -1343,8 +1350,13 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username, pa
 // register with the same token and machine name always produces the same
 // password, so the launcher can safely re-run first-boot against an account
 // that already exists.
-func derivePassword(registrationToken, machineName string) (*secret.Buffer, error) {
-	hash := sha256.Sum256([]byte("bureau-machine-password:" + machineName + ":" + registrationToken))
+func derivePassword(registrationToken *secret.Buffer, machineName string) (*secret.Buffer, error) {
+	preimage, err := secret.Concat("bureau-machine-password:", machineName, ":", registrationToken)
+	if err != nil {
+		return nil, fmt.Errorf("building password preimage: %w", err)
+	}
+	defer preimage.Close()
+	hash := sha256.Sum256(preimage.Bytes())
 	hexBytes := []byte(hex.EncodeToString(hash[:]))
 	return secret.NewFromBytes(hexBytes)
 }

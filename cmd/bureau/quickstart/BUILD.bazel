@@ -17,6 +17,7 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
+        "//lib/secret",
         "//messaging",
         "@com_github_spf13_pflag//:pflag",
     ],

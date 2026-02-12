@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -142,7 +143,12 @@ func TestMachineLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create matrix client: %v", err)
 	}
-	_, loginError := matrixClient.Login(ctx, machineName, oneTimePassword)
+	oneTimePasswordBuffer, err := secret.NewFromString(oneTimePassword)
+	if err != nil {
+		t.Fatalf("create one-time password buffer: %v", err)
+	}
+	_, loginError := matrixClient.Login(ctx, machineName, oneTimePasswordBuffer)
+	oneTimePasswordBuffer.Close()
 	if loginError == nil {
 		t.Error("login with one-time password should have failed after rotation, but succeeded")
 	} else {
@@ -462,10 +468,22 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	registerPrincipalLocal := func(localpart, password string) string {
+		passwordBuffer, err := secret.NewFromString(password)
+		if err != nil {
+			t.Fatalf("create password buffer for %q: %v", localpart, err)
+		}
+		defer passwordBuffer.Close()
+
+		registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+		if err != nil {
+			t.Fatalf("create registration token buffer: %v", err)
+		}
+		defer registrationTokenBuffer.Close()
+
 		session, err := matrixClient.Register(ctx, messaging.RegisterRequest{
 			Username:          localpart,
-			Password:          password,
-			RegistrationToken: testRegistrationToken,
+			Password:          passwordBuffer,
+			RegistrationToken: registrationTokenBuffer,
 		})
 		if err != nil {
 			t.Fatalf("register principal %q: %v", localpart, err)

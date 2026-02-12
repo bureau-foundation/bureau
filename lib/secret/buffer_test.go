@@ -164,6 +164,118 @@ func TestBuffer_String_PanicsAfterClose(t *testing.T) {
 	_ = buffer.String()
 }
 
+func TestNewFromString(t *testing.T) {
+	buffer, err := NewFromString("test-secret")
+	if err != nil {
+		t.Fatalf("NewFromString failed: %v", err)
+	}
+	defer buffer.Close()
+
+	if got := buffer.String(); got != "test-secret" {
+		t.Errorf("expected %q, got %q", "test-secret", got)
+	}
+	if buffer.Len() != len("test-secret") {
+		t.Errorf("expected length %d, got %d", len("test-secret"), buffer.Len())
+	}
+}
+
+func TestNewFromString_Empty(t *testing.T) {
+	_, err := NewFromString("")
+	if err == nil {
+		t.Fatal("expected error for empty string")
+	}
+}
+
+func TestConcat_StringAndBuffer(t *testing.T) {
+	token, err := NewFromBytes([]byte("my-token"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer token.Close()
+
+	result, err := Concat("prefix:", token)
+	if err != nil {
+		t.Fatalf("Concat failed: %v", err)
+	}
+	defer result.Close()
+
+	if got := result.String(); got != "prefix:my-token" {
+		t.Errorf("expected %q, got %q", "prefix:my-token", got)
+	}
+}
+
+func TestConcat_MultipleSegments(t *testing.T) {
+	first, err := NewFromBytes([]byte("secret1"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer first.Close()
+
+	second, err := NewFromBytes([]byte("secret2"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer second.Close()
+
+	result, err := Concat("a:", first, ":", second, ":z")
+	if err != nil {
+		t.Fatalf("Concat failed: %v", err)
+	}
+	defer result.Close()
+
+	if got := result.String(); got != "a:secret1:secret2:z" {
+		t.Errorf("expected %q, got %q", "a:secret1:secret2:z", got)
+	}
+}
+
+func TestConcat_StringsOnly(t *testing.T) {
+	result, err := Concat("hello", " ", "world")
+	if err != nil {
+		t.Fatalf("Concat failed: %v", err)
+	}
+	defer result.Close()
+
+	if got := result.String(); got != "hello world" {
+		t.Errorf("expected %q, got %q", "hello world", got)
+	}
+}
+
+func TestConcat_SingleBuffer(t *testing.T) {
+	original, err := NewFromBytes([]byte("only-this"))
+	if err != nil {
+		t.Fatalf("NewFromBytes failed: %v", err)
+	}
+	defer original.Close()
+
+	result, err := Concat(original)
+	if err != nil {
+		t.Fatalf("Concat failed: %v", err)
+	}
+	defer result.Close()
+
+	if got := result.String(); got != "only-this" {
+		t.Errorf("expected %q, got %q", "only-this", got)
+	}
+}
+
+func TestConcat_EmptyResult(t *testing.T) {
+	_, err := Concat("")
+	if err == nil {
+		t.Fatal("expected error for empty Concat result")
+	}
+}
+
+func TestConcat_UnsupportedType(t *testing.T) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected panic for unsupported segment type")
+		}
+	}()
+
+	Concat("prefix", 42)
+}
+
 func TestNewFromReader(t *testing.T) {
 	reader := strings.NewReader("secret-from-reader")
 	buffer, err := NewFromReader(reader, 1024)

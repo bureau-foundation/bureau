@@ -140,12 +140,12 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 
 	// Step 1: Register or login the admin account.
-	adminPassword, err := deriveAdminPassword(config.registrationToken.String())
+	adminPassword, err := deriveAdminPassword(config.registrationToken)
 	if err != nil {
 		return fmt.Errorf("derive admin password: %w", err)
 	}
 	defer adminPassword.Close()
-	session, err := registerOrLogin(ctx, client, config.adminUsername, adminPassword.String(), config.registrationToken.String())
+	session, err := registerOrLogin(ctx, client, config.adminUsername, adminPassword, config.registrationToken)
 	if err != nil {
 		return fmt.Errorf("get admin session: %w", err)
 	}
@@ -267,7 +267,8 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 }
 
 // registerOrLogin registers a new account, or logs in if it already exists.
-func registerOrLogin(ctx context.Context, client *messaging.Client, username, password, registrationToken string) (*messaging.Session, error) {
+// Password and registrationToken are read but not closed — the caller retains ownership.
+func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.Session, error) {
 	session, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          username,
 		Password:          password,
@@ -563,8 +564,13 @@ func readSecret(path string) (*secret.Buffer, error) {
 // password (idempotency). Acceptable because the registration token is
 // high-entropy random material (openssl rand -hex 32) and the password
 // only needs to resist online attacks rate-limited by the homeserver.
-func deriveAdminPassword(registrationToken string) (*secret.Buffer, error) {
-	hash := sha256.Sum256([]byte("bureau-admin-password:" + registrationToken))
+func deriveAdminPassword(registrationToken *secret.Buffer) (*secret.Buffer, error) {
+	preimage, err := secret.Concat("bureau-admin-password:", registrationToken)
+	if err != nil {
+		return nil, fmt.Errorf("building password preimage: %w", err)
+	}
+	defer preimage.Close()
+	hash := sha256.Sum256(preimage.Bytes())
 	hexBytes := []byte(hex.EncodeToString(hash[:]))
 	return secret.NewFromBytes(hexBytes)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -229,7 +230,13 @@ func loginPrincipal(t *testing.T, localpart, password string) principalAccount {
 		t.Fatalf("create client for principal login: %v", err)
 	}
 
-	session, err := client.Login(t.Context(), localpart, password)
+	passwordBuffer, err := secret.NewFromString(password)
+	if err != nil {
+		t.Fatalf("create password buffer: %v", err)
+	}
+	defer passwordBuffer.Close()
+
+	session, err := client.Login(t.Context(), localpart, passwordBuffer)
 	if err != nil {
 		t.Fatalf("login principal %q: %v", localpart, err)
 	}
@@ -255,10 +262,22 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 		t.Fatalf("create client for principal registration: %v", err)
 	}
 
+	passwordBuffer, err := secret.NewFromString(password)
+	if err != nil {
+		t.Fatalf("create password buffer: %v", err)
+	}
+	defer passwordBuffer.Close()
+
+	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("create registration token buffer: %v", err)
+	}
+	defer registrationTokenBuffer.Close()
+
 	session, err := client.Register(t.Context(), messaging.RegisterRequest{
 		Username:          localpart,
-		Password:          password,
-		RegistrationToken: testRegistrationToken,
+		Password:          passwordBuffer,
+		RegistrationToken: registrationTokenBuffer,
 	})
 	if err != nil {
 		t.Fatalf("register principal %q: %v", localpart, err)

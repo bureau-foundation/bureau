@@ -20,18 +20,29 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
+func testBuffer(t *testing.T, value string) *secret.Buffer {
+	t.Helper()
+	buffer, err := secret.NewFromString(value)
+	if err != nil {
+		t.Fatalf("creating test buffer: %v", err)
+	}
+	t.Cleanup(func() { buffer.Close() })
+	return buffer
+}
+
 func TestDerivePassword(t *testing.T) {
 	// Deterministic: same inputs produce same output.
-	password1, err := derivePassword("token123", "machine/workstation")
+	password1, err := derivePassword(testBuffer(t, "token123"), "machine/workstation")
 	if err != nil {
 		t.Fatalf("derivePassword: %v", err)
 	}
 	defer password1.Close()
-	password2, err := derivePassword("token123", "machine/workstation")
+	password2, err := derivePassword(testBuffer(t, "token123"), "machine/workstation")
 	if err != nil {
 		t.Fatalf("derivePassword: %v", err)
 	}
@@ -41,7 +52,7 @@ func TestDerivePassword(t *testing.T) {
 	}
 
 	// Different tokens produce different passwords.
-	password3, err := derivePassword("different-token", "machine/workstation")
+	password3, err := derivePassword(testBuffer(t, "different-token"), "machine/workstation")
 	if err != nil {
 		t.Fatalf("derivePassword: %v", err)
 	}
@@ -51,7 +62,7 @@ func TestDerivePassword(t *testing.T) {
 	}
 
 	// Different machine names produce different passwords.
-	password4, err := derivePassword("token123", "machine/other")
+	password4, err := derivePassword(testBuffer(t, "token123"), "machine/other")
 	if err != nil {
 		t.Fatalf("derivePassword: %v", err)
 	}

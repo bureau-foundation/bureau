@@ -24,4 +24,5 @@ go_test(
         "session_test.go",
     ],
     embed = [":messaging"],
+    deps = ["//lib/secret"],
 )

@@ -406,24 +406,24 @@ func (d *Daemon) pushServiceDirectory(ctx context.Context) {
 	}
 }
 
-// pushDirectoryToProxy pushes the service directory to a single consumer's
-// proxy via the admin API (PUT /v1/admin/directory). Called when a new
-// sandbox starts and after the directory changes.
-func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart string, directory []adminDirectoryEntry) error {
-	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+// putProxyAdmin sends a JSON PUT request to a principal's proxy admin API.
+// Used by all push-to-proxy functions (directory, visibility, policy) which
+// differ only in the endpoint path and payload type.
+func (d *Daemon) putProxyAdmin(ctx context.Context, localpart, path string, payload any) error {
+	adminSocket := d.adminSocketPathFunc(localpart)
 	client := proxyAdminClient(adminSocket)
 
-	body, err := json.Marshal(directory)
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshaling directory: %w", err)
+		return fmt.Errorf("marshaling %s payload: %w", path, err)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		"http://localhost/v1/admin/directory",
+		"http://localhost"+path,
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
+		return fmt.Errorf("creating %s request: %w", path, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 
@@ -434,10 +434,17 @@ func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart str
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return fmt.Errorf("%s returned %d: %s", path, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	return nil
+}
+
+// pushDirectoryToProxy pushes the service directory to a single consumer's
+// proxy via the admin API (PUT /v1/admin/directory). Called when a new
+// sandbox starts and after the directory changes.
+func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart string, directory []adminDirectoryEntry) error {
+	return d.putProxyAdmin(ctx, consumerLocalpart, "/v1/admin/directory", directory)
 }
 
 // buildServiceDirectory converts the daemon's service map into a wire-format
@@ -477,68 +484,14 @@ type adminDirectoryEntry struct {
 // when a new sandbox starts so the proxy knows which services the agent is
 // allowed to discover.
 func (d *Daemon) pushVisibilityToProxy(ctx context.Context, consumerLocalpart string, patterns []string) error {
-	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
-	client := proxyAdminClient(adminSocket)
-
-	body, err := json.Marshal(patterns)
-	if err != nil {
-		return fmt.Errorf("marshaling visibility patterns: %w", err)
-	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		"http://localhost/v1/admin/visibility",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("connecting to admin socket %s: %w", adminSocket, err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
-	}
-
-	return nil
+	return d.putProxyAdmin(ctx, consumerLocalpart, "/v1/admin/visibility", patterns)
 }
 
 // pushMatrixPolicyToProxy pushes the Matrix access policy to a single
 // principal's proxy via the admin API (PUT /v1/admin/policy). Called when
 // a running principal's MatrixPolicy changes in the MachineConfig.
 func (d *Daemon) pushMatrixPolicyToProxy(ctx context.Context, localpart string, policy *schema.MatrixPolicy) error {
-	adminSocket := d.adminSocketPathFunc(localpart)
-	client := proxyAdminClient(adminSocket)
-
-	body, err := json.Marshal(policy)
-	if err != nil {
-		return fmt.Errorf("marshaling matrix policy: %w", err)
-	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		"http://localhost/v1/admin/policy",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("connecting to admin socket %s: %w", adminSocket, err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
-	}
-
-	return nil
+	return d.putProxyAdmin(ctx, localpart, "/v1/admin/policy", policy)
 }
 
 // unregisterProxyRoute removes a single service from a single consumer's proxy

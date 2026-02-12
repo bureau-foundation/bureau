@@ -627,13 +627,19 @@ type StartCondition struct {
 	RoomAlias string `json:"room_alias,omitempty"`
 
 	// ContentMatch specifies key-value pairs that must all match in
-	// the event content for the condition to be satisfied. This is a
-	// flat string equality check: every key must appear in the event
-	// content with the exact same string value. When nil or empty,
-	// only event existence is checked.
+	// the event content for the condition to be satisfied. When nil
+	// or empty, only event existence is checked.
 	//
-	// Example: {"status": "active"} matches only when the workspace
-	// state event has status "active", not "pending" or "archived".
+	// For string fields, this is exact equality: the field value must
+	// equal the match value. For array fields, this is containment:
+	// the array must contain a string element equal to the match value.
+	// All entries must match (AND semantics across keys).
+	//
+	// Examples:
+	//   - {"status": "active"} matches when the event's "status" field
+	//     is the string "active".
+	//   - {"labels": "bug"} matches when the event's "labels" field is
+	//     an array containing the string "bug".
 	ContentMatch map[string]string `json:"content_match,omitempty"`
 }
 

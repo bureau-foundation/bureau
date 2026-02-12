@@ -441,6 +441,351 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	}
 }
 
+// TestReconcile_ContentMatchArrayContains verifies that ContentMatch supports
+// array containment: {"labels": "bug"} matches when the event's "labels" field
+// is an array containing "bug".
+func TestReconcile_ContentMatchArrayContains(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Ticket event with an array "labels" field containing "bug".
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-1", map[string]any{
+		"title":  "Fix the widget",
+		"labels": []any{"bug", "p1", "frontend"},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/bugfix",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-1",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "bug"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/bugfix", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/bugfix" {
+		t.Errorf("expected create-sandbox for agent/bugfix, got %v", tracker.created)
+	}
+}
+
+// TestReconcile_ContentMatchArrayDoesNotContain verifies that ContentMatch
+// correctly defers a principal when an array field does not contain the
+// required value.
+func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Ticket with labels that do NOT include "security".
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-2", map[string]any{
+		"title":  "Improve performance",
+		"labels": []any{"enhancement", "backend"},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/security",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-2",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "security"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/security", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (array does not contain value), got %v", tracker.created)
+	}
+}
+
+// TestReconcile_ContentMatchArrayWithNonStringElements verifies that an array
+// containing non-string elements (numbers, booleans, objects) does not match.
+// Only string elements participate in containment checks.
+func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Array with non-string elements only.
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-3", map[string]any{
+		"title":  "Numeric labels",
+		"labels": []any{42, true, map[string]any{"nested": "value"}},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/numeric",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-3",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "42"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/numeric", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (non-string array elements), got %v", tracker.created)
+	}
+}
+
+// TestReconcile_ContentMatchMixedStringAndArray verifies that ContentMatch
+// works correctly when one key matches against a string field and another
+// matches against an array field. Both must match (AND semantics).
+func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-4", map[string]any{
+		"title":  "Security bug",
+		"labels": []any{"bug", "security", "p0"},
+		"status": "open",
+	})
+
+	// Both conditions must match: status is string "open" AND labels contains "security".
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/secbug",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-4",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"status": "open", "labels": "security"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/secbug", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/secbug" {
+		t.Errorf("expected create-sandbox for agent/secbug, got %v", tracker.created)
+	}
+}
+
+// TestReconcile_ContentMatchMixedStringAndArray_PartialFail verifies that when
+// one ContentMatch key matches but the other doesn't, the principal is deferred.
+func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-5", map[string]any{
+		"title":  "Feature request",
+		"labels": []any{"enhancement", "backend"},
+		"status": "open",
+	})
+
+	// Status matches ("open") but labels does not contain "security" → deferred.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/seconly",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-5",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"status": "open", "labels": "security"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/seconly", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (array match fails), got %v", tracker.created)
+	}
+}
+
+// TestReconcile_ContentMatchEmptyArray verifies that an empty array never
+// matches any ContentMatch value.
+func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-6", map[string]any{
+		"title":  "Unlabeled ticket",
+		"labels": []any{},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/empty",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-6",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "bug"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/empty", schema.Credentials{
+		Ciphertext: "encrypted-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 0 {
+		t.Errorf("expected no create-sandbox calls (empty array), got %v", tracker.created)
+	}
+}
+
 // TestReconcile_RunningPrincipalStoppedWhenConditionFails verifies continuous
 // enforcement: a principal that was running because its StartCondition was
 // satisfied gets stopped when the condition becomes false. This is the core

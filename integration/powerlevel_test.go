@@ -76,6 +76,10 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 	// Resolve global rooms (created by TestMain's bureau matrix setup) and
 	// join the test users so we can test their power levels there too.
+	pipelineRoomID, err := admin.ResolveAlias(ctx, "#bureau/pipeline:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
 	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
@@ -85,6 +89,12 @@ func TestPowerLevelEnforcement(t *testing.T) {
 		t.Fatalf("resolve service room: %v", err)
 	}
 
+	if err := admin.InviteUser(ctx, pipelineRoomID, agentAccount.UserID); err != nil {
+		t.Fatalf("invite agent to pipeline room: %v", err)
+	}
+	if _, err := agentSession.JoinRoom(ctx, pipelineRoomID); err != nil {
+		t.Fatalf("agent join pipeline room: %v", err)
+	}
 	if err := admin.InviteUser(ctx, machineRoomID, agentAccount.UserID); err != nil {
 		t.Fatalf("invite agent to machine room: %v", err)
 	}
@@ -306,6 +316,35 @@ func TestPowerLevelEnforcement(t *testing.T) {
 					"topic": "hijacked topic",
 				})
 			assertForbidden(t, err, "member (PL 0) setting m.room.topic (PL 100)")
+		})
+	})
+
+	// --- Pipeline room tests (global, from setup) ---
+	// Power levels: admin=100, users_default=0
+	// events_default: 100, state_default: 100, invite: 100
+	// m.bureau.pipeline: 100
+	// This is the strictest room type: PL 0 members can't write anything.
+
+	t.Run("PipelineRoom", func(t *testing.T) {
+		t.Run("MemberCannotPublishPipeline", func(t *testing.T) {
+			_, err := agentSession.SendStateEvent(ctx, pipelineRoomID,
+				schema.EventTypePipeline, "test-pipeline", map[string]any{
+					"steps": []any{},
+				})
+			assertForbidden(t, err, "member (PL 0) publishing m.bureau.pipeline (PL 100)")
+		})
+
+		t.Run("MemberCannotSendMessage", func(t *testing.T) {
+			// events_default is 100 in pipeline rooms — even messages are
+			// blocked for non-admin members.
+			_, err := agentSession.SendMessage(ctx, pipelineRoomID,
+				messaging.NewTextMessage("should be rejected"))
+			assertForbidden(t, err, "member (PL 0) sending message (events_default: 100)")
+		})
+
+		t.Run("MemberCannotInvite", func(t *testing.T) {
+			err := agentSession.InviteUser(ctx, pipelineRoomID, bystander.UserID)
+			assertForbidden(t, err, "member (PL 0) inviting to pipeline room (invite: 100)")
 		})
 	})
 }

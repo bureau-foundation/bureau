@@ -8,11 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/httpx"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -380,8 +380,7 @@ func (d *Daemon) registerProxyRoute(ctx context.Context, consumerLocalpart, serv
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusCreated {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	return nil
@@ -435,8 +434,7 @@ func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart str
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	return nil
@@ -503,8 +501,7 @@ func (d *Daemon) pushVisibilityToProxy(ctx context.Context, consumerLocalpart st
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	return nil
@@ -538,8 +535,7 @@ func (d *Daemon) pushMatrixPolicyToProxy(ctx context.Context, localpart string, 
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	return nil
@@ -568,8 +564,7 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, se
 	// 404 is acceptable — the service may have been removed already (e.g.,
 	// the proxy restarted and lost its in-memory state).
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotFound {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, string(responseBody))
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	return nil

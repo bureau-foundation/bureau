@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/httpx"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
@@ -742,7 +743,7 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 		return
 	}
 
-	responseBody, _ := io.ReadAll(httpResponse.Body)
+	responseBody, _ := httpx.ReadResponse(httpResponse.Body)
 	httpResponse.Body.Close()
 
 	var peerResponse observeResponse

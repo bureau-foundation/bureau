@@ -16,6 +16,7 @@ go_test(
     name = "integration_test",
     size = "medium",
     srcs = [
+        "bootstrap_test.go",
         "fleet_test.go",
         "helpers_test.go",
         "lifecycle_test.go",

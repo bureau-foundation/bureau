@@ -14,7 +14,10 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/messaging",
     visibility = ["//visibility:public"],
-    deps = ["//lib/secret"],
+    deps = [
+        "//lib/httpx",
+        "//lib/secret",
+    ],
 )
 
 go_test(

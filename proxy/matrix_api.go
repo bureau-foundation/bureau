@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/bureau-foundation/bureau/lib/httpx"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -111,8 +113,7 @@ func (h *Handler) resolveRoomAlias(r *http.Request, service *HTTPService, alias 
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		return "", fmt.Errorf("resolving alias %q: HTTP %d: %s", alias, response.StatusCode, body)
+		return "", fmt.Errorf("resolving alias %q: HTTP %d: %s", alias, response.StatusCode, httpx.ErrorBody(response.Body))
 	}
 
 	var result struct {

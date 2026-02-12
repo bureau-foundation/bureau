@@ -11,7 +11,10 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-proxy-call",
     visibility = ["//visibility:private"],
-    deps = ["//lib/version"],
+    deps = [
+        "//lib/httpx",
+        "//lib/version",
+    ],
 )
 
 go_binary(

@@ -30,6 +30,7 @@ go_library(
     deps = [
         "//lib/binhash",
         "//lib/git",
+        "//lib/httpx",
         "//lib/hwinfo",
         "//lib/hwinfo/amdgpu",
         "//lib/hwinfo/nvidia",

@@ -157,8 +157,8 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 	if condition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
 		t.Errorf("condition RoomAlias = %q, want %q", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
 	}
-	if condition.ContentMatch["status"] != "teardown" {
-		t.Errorf("condition ContentMatch[\"status\"] = %q, want %q", condition.ContentMatch["status"], "teardown")
+	if condition.ContentMatch["status"].StringValue() != "teardown" {
+		t.Errorf("condition ContentMatch[\"status\"] = %q, want %q", condition.ContentMatch["status"].StringValue(), "teardown")
 	}
 }
 
@@ -192,9 +192,9 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 			t.Errorf("agent %d StartCondition is nil", index)
 			continue
 		}
-		if agent.StartCondition.ContentMatch["status"] != "active" {
+		if agent.StartCondition.ContentMatch["status"].StringValue() != "active" {
 			t.Errorf("agent %d ContentMatch[\"status\"] = %q, want %q",
-				index, agent.StartCondition.ContentMatch["status"], "active")
+				index, agent.StartCondition.ContentMatch["status"].StringValue(), "active")
 		}
 	}
 
@@ -203,9 +203,9 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 	if teardown.StartCondition == nil {
 		t.Fatal("teardown StartCondition is nil")
 	}
-	if teardown.StartCondition.ContentMatch["status"] != "teardown" {
+	if teardown.StartCondition.ContentMatch["status"].StringValue() != "teardown" {
 		t.Errorf("teardown ContentMatch[\"status\"] = %q, want %q",
-			teardown.StartCondition.ContentMatch["status"], "teardown")
+			teardown.StartCondition.ContentMatch["status"].StringValue(), "teardown")
 	}
 }
 

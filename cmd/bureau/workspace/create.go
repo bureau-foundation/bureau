@@ -239,7 +239,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		suffix := ""
 		if assignment.StartCondition != nil {
 			if status, ok := assignment.StartCondition.ContentMatch["status"]; ok {
-				suffix = fmt.Sprintf(" (waits for workspace %s)", status)
+				suffix = fmt.Sprintf(" (waits for workspace %s)", status.StringValue())
 			} else {
 				suffix = " (conditional)"
 			}
@@ -356,7 +356,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 				EventType:    schema.EventTypeWorkspace,
 				StateKey:     "",
 				RoomAlias:    workspaceRoomAlias,
-				ContentMatch: map[string]string{"status": "active"},
+				ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 			},
 		})
 	}
@@ -388,7 +388,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 			EventType:    schema.EventTypeWorkspace,
 			StateKey:     "",
 			RoomAlias:    workspaceRoomAlias,
-			ContentMatch: map[string]string{"status": "teardown"},
+			ContentMatch: schema.ContentMatch{"status": schema.Eq("teardown")},
 		},
 	})
 

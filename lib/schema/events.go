@@ -756,21 +756,27 @@ type StartCondition struct {
 	// When empty, the daemon checks the principal's own config room.
 	RoomAlias string `json:"room_alias,omitempty"`
 
-	// ContentMatch specifies key-value pairs that must all match in
-	// the event content for the condition to be satisfied. When nil
-	// or empty, only event existence is checked.
+	// ContentMatch specifies criteria that must all be satisfied in the
+	// event content for the condition to pass. When nil or empty, only
+	// event existence is checked.
 	//
-	// For string fields, this is exact equality: the field value must
-	// equal the match value. For array fields, this is containment:
-	// the array must contain a string element equal to the match value.
-	// All entries must match (AND semantics across keys).
+	// Each key names a field in the event content. Each value is either
+	// a bare scalar (shorthand for equality) or a $-prefixed operator
+	// object supporting comparisons and set membership. Multiple
+	// operators on the same field AND together (enabling ranges).
 	//
-	// Examples:
-	//   - {"status": "active"} matches when the event's "status" field
-	//     is the string "active".
-	//   - {"labels": "bug"} matches when the event's "labels" field is
-	//     an array containing the string "bug".
-	ContentMatch map[string]string `json:"content_match,omitempty"`
+	// Bare values (backward compatible):
+	//   {"status": "active"}            — string equality
+	//   {"priority": 2}                 — numeric equality
+	//
+	// Operators:
+	//   {"priority": {"$lte": 2}}       — comparison
+	//   {"priority": {"$gte": 1, "$lte": 3}} — range
+	//   {"hour": {"$in": [9, 10, 11]}}  — set membership
+	//
+	// For array targets, all operators evaluate per-element: a match
+	// succeeds if any element in the array satisfies the criterion.
+	ContentMatch ContentMatch `json:"content_match,omitempty"`
 }
 
 // MatrixPolicy controls which self-service Matrix operations an agent can
@@ -2251,10 +2257,11 @@ type TicketGate struct {
 	// empty, watches the ticket's own room.
 	RoomAlias string `json:"room_alias,omitempty"`
 
-	// ContentMatch specifies key-value pairs that must all match
-	// in the watched event's content (type "state_event"). Same
-	// semantics as StartCondition.ContentMatch.
-	ContentMatch map[string]string `json:"content_match,omitempty"`
+	// ContentMatch specifies criteria that must be satisfied in the
+	// watched event's content (type "state_event"). Same semantics
+	// as StartCondition.ContentMatch: bare scalars for equality,
+	// $-prefixed operators for comparisons and set membership.
+	ContentMatch ContentMatch `json:"content_match,omitempty"`
 
 	// TicketID is the ticket to watch (type "ticket"). The gate
 	// is satisfied when that ticket's status becomes "closed".

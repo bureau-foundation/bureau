@@ -2041,7 +2041,7 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 			EventType:    "m.bureau.workspace",
 			StateKey:     "",
 			RoomAlias:    "#iree/amdgpu/inference:bureau.local",
-			ContentMatch: map[string]string{"status": "active"},
+			ContentMatch: ContentMatch{"status": Eq("active")},
 		},
 	}
 
@@ -2087,9 +2087,13 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 		t.Errorf("StartCondition.RoomAlias: got %q, want %q",
 			decoded.StartCondition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
 	}
-	if decoded.StartCondition.ContentMatch["status"] != "active" {
+	statusMatch, ok := decoded.StartCondition.ContentMatch["status"]
+	if !ok {
+		t.Fatal("StartCondition.ContentMatch missing \"status\" key")
+	}
+	if statusMatch.StringValue() != "active" {
 		t.Errorf("StartCondition.ContentMatch[status]: got %q, want %q",
-			decoded.StartCondition.ContentMatch["status"], "active")
+			statusMatch.StringValue(), "active")
 	}
 }
 
@@ -2146,7 +2150,7 @@ func TestStartConditionContentMatchRoundTrip(t *testing.T) {
 		EventType:    "m.bureau.workspace",
 		StateKey:     "",
 		RoomAlias:    "#iree/amdgpu/inference:bureau.local",
-		ContentMatch: map[string]string{"status": "active"},
+		ContentMatch: ContentMatch{"status": Eq("active")},
 	}
 
 	data, err := json.Marshal(condition)
@@ -2162,8 +2166,12 @@ func TestStartConditionContentMatchRoundTrip(t *testing.T) {
 	if len(decoded.ContentMatch) != 1 {
 		t.Fatalf("ContentMatch length = %d, want 1", len(decoded.ContentMatch))
 	}
-	if decoded.ContentMatch["status"] != "active" {
-		t.Errorf("ContentMatch[status] = %q, want %q", decoded.ContentMatch["status"], "active")
+	statusMatch, ok := decoded.ContentMatch["status"]
+	if !ok {
+		t.Fatal("ContentMatch missing \"status\" key")
+	}
+	if statusMatch.StringValue() != "active" {
+		t.Errorf("ContentMatch[status] = %q, want %q", statusMatch.StringValue(), "active")
 	}
 }
 
@@ -2172,9 +2180,9 @@ func TestStartConditionMultipleContentMatch(t *testing.T) {
 	condition := StartCondition{
 		EventType: "m.bureau.service",
 		StateKey:  "stt/whisper",
-		ContentMatch: map[string]string{
-			"status": "healthy",
-			"stage":  "canary",
+		ContentMatch: ContentMatch{
+			"status": Eq("healthy"),
+			"stage":  Eq("canary"),
 		},
 	}
 
@@ -4584,8 +4592,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 				EventType: "m.bureau.workspace",
 				StateKey:  "",
 				RoomAlias: "#iree/amdgpu/inference:bureau.local",
-				ContentMatch: map[string]string{
-					"status": "active",
+				ContentMatch: ContentMatch{
+					"status": Eq("active"),
 				},
 			},
 			checks: map[string]any{

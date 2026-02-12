@@ -749,8 +749,8 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		return false, nil, ""
 	}
 
-	// Event exists. If ContentMatch is specified, verify all key-value
-	// pairs match the event content.
+	// Event exists. If ContentMatch is specified, verify all criteria
+	// match the event content.
 	if len(condition.ContentMatch) > 0 {
 		var contentMap map[string]any
 		if err := json.Unmarshal(content, &contentMap); err != nil {
@@ -762,60 +762,25 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 			)
 			return false, nil, ""
 		}
-		for matchKey, matchValue := range condition.ContentMatch {
-			actual, exists := contentMap[matchKey]
-			if !exists {
-				d.logger.Info("start condition content_match key missing, deferring principal",
-					"principal", localpart,
-					"event_type", condition.EventType,
-					"room_id", roomID,
-					"key", matchKey,
-					"expected", matchValue,
-				)
-				return false, nil, ""
-			}
-			if actualString, ok := actual.(string); ok {
-				if actualString != matchValue {
-					d.logger.Info("start condition content_match value mismatch, deferring principal",
-						"principal", localpart,
-						"event_type", condition.EventType,
-						"room_id", roomID,
-						"key", matchKey,
-						"expected", matchValue,
-						"actual", actual,
-					)
-					return false, nil, ""
-				}
-			} else if actualArray, ok := actual.([]any); ok {
-				found := false
-				for _, element := range actualArray {
-					if elementString, ok := element.(string); ok && elementString == matchValue {
-						found = true
-						break
-					}
-				}
-				if !found {
-					d.logger.Info("start condition content_match array does not contain value, deferring principal",
-						"principal", localpart,
-						"event_type", condition.EventType,
-						"room_id", roomID,
-						"key", matchKey,
-						"expected", matchValue,
-						"actual", actual,
-					)
-					return false, nil, ""
-				}
-			} else {
-				d.logger.Info("start condition content_match value is neither string nor array, deferring principal",
-					"principal", localpart,
-					"event_type", condition.EventType,
-					"room_id", roomID,
-					"key", matchKey,
-					"expected", matchValue,
-					"actual", actual,
-				)
-				return false, nil, ""
-			}
+		matched, failedKey, err := condition.ContentMatch.Evaluate(contentMap)
+		if err != nil {
+			d.logger.Error("start condition content_match expression error",
+				"principal", localpart,
+				"event_type", condition.EventType,
+				"room_id", roomID,
+				"key", failedKey,
+				"error", err,
+			)
+			return false, nil, ""
+		}
+		if !matched {
+			d.logger.Info("start condition content_match not satisfied, deferring principal",
+				"principal", localpart,
+				"event_type", condition.EventType,
+				"room_id", roomID,
+				"key", failedKey,
+			)
+			return false, nil, ""
 		}
 	}
 

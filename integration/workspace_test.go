@@ -113,7 +113,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: map[string]string{"status": "active"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
 			{
@@ -125,7 +125,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: map[string]string{"status": "teardown"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("teardown")},
 				},
 			},
 		},
@@ -346,7 +346,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: map[string]string{"status": "pending"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("pending")},
 				},
 				Payload: map[string]any{
 					"pipeline_inline": map[string]any{
@@ -395,7 +395,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: map[string]string{"status": "active"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
 			{
@@ -444,7 +444,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: map[string]string{"status": "teardown"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("teardown")},
 				},
 			},
 		},

@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "doc.go",
         "events.go",
+        "match.go",
         "pipeline_ref.go",
         "sandbox_spec.go",
         "template_ref.go",
@@ -20,6 +21,7 @@ go_test(
     name = "schema_test",
     srcs = [
         "events_test.go",
+        "match_test.go",
         "pipeline_ref_test.go",
         "sandbox_spec_test.go",
         "template_ref_test.go",

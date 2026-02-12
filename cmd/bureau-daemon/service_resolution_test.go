@@ -252,7 +252,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
 					RoomAlias:    "#iree/amdgpu/inference:test.local",
-					ContentMatch: map[string]string{"status": "active"},
+					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
 		},

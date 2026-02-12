@@ -161,6 +161,26 @@ const (
 	// Room: any room that uses the service
 	EventTypeRoomService = "m.bureau.room_service"
 
+	// EventTypeTicket is a work item tracked in a room by the ticket
+	// service. Each ticket is a state event whose state key is the
+	// ticket ID (e.g., "tkt-a3f9"). The ticket service maintains an
+	// indexed cache of these events for fast queries. Historical
+	// versions are preserved in the room timeline.
+	//
+	// State key: ticket ID (e.g., "tkt-a3f9")
+	// Room: any room with ticket management enabled (has EventTypeTicketConfig)
+	EventTypeTicket = "m.bureau.ticket"
+
+	// EventTypeTicketConfig enables and configures ticket management
+	// for a room. Rooms without this event do not accept ticket
+	// operations from the ticket service. Published by the admin
+	// (via "bureau ticket enable") alongside the room service binding
+	// and service invitation.
+	//
+	// State key: "" (singleton per room)
+	// Room: any room that wants ticket management
+	EventTypeTicketConfig = "m.bureau.ticket_config"
+
 	// EventTypeArtifact is published to #bureau/artifact when an
 	// artifact is stored in the content-addressable store. Contains
 	// metadata: BLAKE3 hash, content type, size, chunk/container
@@ -238,6 +258,15 @@ const (
 	// CredentialsVersion is the current schema version for
 	// Credentials events.
 	CredentialsVersion = 1
+
+	// TicketContentVersion is the current schema version for
+	// TicketContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	TicketContentVersion = 1
+
+	// TicketConfigVersion is the current schema version for
+	// TicketConfigContent events.
+	TicketConfigVersion = 1
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -1636,6 +1665,482 @@ type CommandMessage struct {
 	// example, principal.spawn includes "template" and "payload"
 	// fields. The daemon passes these through to the handler.
 	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+// TicketContent is the content of an EventTypeTicket state event. Each
+// ticket is a work item tracked in a room. The ticket service maintains
+// an indexed cache of these events for fast queries via its unix socket
+// API, and writes mutations back to Matrix as state event PUTs.
+//
+// Multiple ticket service instances in a fleet may operate on overlapping
+// rooms. The Version field and CanModify guard prevent silent data loss
+// during rolling upgrades where different instances run different code
+// versions. See CanModify for details.
+//
+// State key: ticket ID (e.g., "tkt-a3f9")
+// Room: any room with ticket management enabled
+type TicketContent struct {
+	// Version is the schema version (see TicketContentVersion).
+	// Code that modifies this event must call CanModify() first; if
+	// Version exceeds TicketContentVersion, the modification is
+	// refused to prevent silent field loss. Readers may process any
+	// version (unknown fields are harmlessly ignored by Go's JSON
+	// unmarshaler).
+	Version int `json:"version"`
+
+	// Title is a short summary of the work item.
+	Title string `json:"title"`
+
+	// Body is the full description, supporting markdown.
+	Body string `json:"body,omitempty"`
+
+	// Status is the lifecycle state: "open", "in_progress",
+	// "blocked", "closed". The ticket service computes derived
+	// readiness from status + dependency graph + gate satisfaction,
+	// but "blocked" is also a valid explicit status for agents to
+	// signal blockage on things not tracked as ticket dependencies.
+	Status string `json:"status"`
+
+	// Priority is 0-4: 0=critical, 1=high, 2=medium, 3=low,
+	// 4=backlog.
+	Priority int `json:"priority"`
+
+	// Type categorizes the work: "task", "bug", "feature",
+	// "epic", "chore", "docs", "question".
+	Type string `json:"type"`
+
+	// Labels are free-form tags for filtering and grouping.
+	Labels []string `json:"labels,omitempty"`
+
+	// Assignee is the Matrix user ID of the principal working
+	// on this ticket (e.g., "@iree/amdgpu/pm:bureau.local").
+	// Single assignee: Bureau agents are principals with unique
+	// identities, one agent works one ticket. Multiple people
+	// on something means sub-tickets (parent-child).
+	Assignee string `json:"assignee,omitempty"`
+
+	// Parent is the ticket ID of the parent work item (e.g., an
+	// epic). Enables hierarchical breakdown: the ticket service
+	// computes children sets from the reverse mapping for progress
+	// tracking and cascading operations.
+	Parent string `json:"parent,omitempty"`
+
+	// BlockedBy lists ticket IDs (in this room) that must be
+	// closed before this ticket is considered ready. The ticket
+	// service computes the transitive closure for dependency
+	// queries and detects cycles on mutation.
+	BlockedBy []string `json:"blocked_by,omitempty"`
+
+	// Gates are async coordination conditions that must all be
+	// satisfied before the ticket is considered ready. See
+	// TicketGate for the gate evaluation model.
+	Gates []TicketGate `json:"gates,omitempty"`
+
+	// Notes are short annotations attached to the ticket by
+	// agents, services, or humans. Each note is a self-contained
+	// piece of context that travels with the ticket — warnings,
+	// references, analysis results. Notes are embedded (not
+	// Matrix threads) for single-read completeness: an agent
+	// reading a ticket gets all context without a second fetch.
+	Notes []TicketNote `json:"notes,omitempty"`
+
+	// Attachments are references to artifacts stored outside the
+	// ticket (in the artifact service or Matrix media repository).
+	// The ticket stores references, not content.
+	Attachments []TicketAttachment `json:"attachments,omitempty"`
+
+	// CreatedBy is the Matrix user ID of the ticket creator.
+	CreatedBy string `json:"created_by"`
+
+	// CreatedAt is an ISO 8601 timestamp.
+	CreatedAt string `json:"created_at"`
+
+	// UpdatedAt is an ISO 8601 timestamp of the last modification.
+	UpdatedAt string `json:"updated_at"`
+
+	// ClosedAt is set when status transitions to "closed".
+	ClosedAt string `json:"closed_at,omitempty"`
+
+	// CloseReason explains why the ticket was closed.
+	CloseReason string `json:"close_reason,omitempty"`
+
+	// Origin tracks where this ticket came from when imported
+	// from an external system (GitHub, beads JSONL, etc.).
+	Origin *TicketOrigin `json:"origin,omitempty"`
+
+	// Extra is a documented extension namespace for experimental or
+	// preview fields before promotion to top-level schema fields in
+	// a version bump. Same semantics as ArtifactContent.Extra.
+	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// Validate checks that all required fields are present and well-formed.
+// Returns an error describing the first invalid field found, or nil if
+// the content is valid. Recursively validates embedded gates, notes,
+// attachments, and origin.
+func (t *TicketContent) Validate() error {
+	if t.Version < 1 {
+		return fmt.Errorf("ticket content: version must be >= 1, got %d", t.Version)
+	}
+	if t.Title == "" {
+		return errors.New("ticket content: title is required")
+	}
+	switch t.Status {
+	case "open", "in_progress", "blocked", "closed":
+		// Valid.
+	case "":
+		return errors.New("ticket content: status is required")
+	default:
+		return fmt.Errorf("ticket content: unknown status %q", t.Status)
+	}
+	if t.Priority < 0 || t.Priority > 4 {
+		return fmt.Errorf("ticket content: priority must be 0-4, got %d", t.Priority)
+	}
+	switch t.Type {
+	case "task", "bug", "feature", "epic", "chore", "docs", "question":
+		// Valid.
+	case "":
+		return errors.New("ticket content: type is required")
+	default:
+		return fmt.Errorf("ticket content: unknown type %q", t.Type)
+	}
+	if t.CreatedBy == "" {
+		return errors.New("ticket content: created_by is required")
+	}
+	if t.CreatedAt == "" {
+		return errors.New("ticket content: created_at is required")
+	}
+	if t.UpdatedAt == "" {
+		return errors.New("ticket content: updated_at is required")
+	}
+	for i := range t.Gates {
+		if err := t.Gates[i].Validate(); err != nil {
+			return fmt.Errorf("ticket content: gates[%d]: %w", i, err)
+		}
+	}
+	for i := range t.Notes {
+		if err := t.Notes[i].Validate(); err != nil {
+			return fmt.Errorf("ticket content: notes[%d]: %w", i, err)
+		}
+	}
+	for i := range t.Attachments {
+		if err := t.Attachments[i].Validate(); err != nil {
+			return fmt.Errorf("ticket content: attachments[%d]: %w", i, err)
+		}
+	}
+	if t.Origin != nil {
+		if err := t.Origin.Validate(); err != nil {
+			return fmt.Errorf("ticket content: origin: %w", err)
+		}
+	}
+	return nil
+}
+
+// CanModify checks whether this code version can safely perform a
+// read-modify-write cycle on this event. Returns nil if safe, or an
+// error explaining why modification would risk data loss.
+//
+// If the event's Version exceeds TicketContentVersion, this code does
+// not understand all fields in the event. Marshaling the modified struct
+// back to JSON would silently drop the unknown fields. The caller must
+// either upgrade the ticket service or refuse the operation.
+//
+// Read-only access does not require CanModify — unknown fields are
+// harmlessly ignored during display, listing, and search.
+func (t *TicketContent) CanModify() error {
+	if t.Version > TicketContentVersion {
+		return fmt.Errorf(
+			"ticket content version %d exceeds supported version %d: "+
+				"modification would lose fields added in newer versions; "+
+				"upgrade the ticket service before modifying this event",
+			t.Version, TicketContentVersion,
+		)
+	}
+	return nil
+}
+
+// TicketGate is an async coordination condition on a ticket. Each gate
+// represents something that must happen before the ticket is ready: a
+// CI pipeline must pass, a human must approve, a timer must expire,
+// another ticket must close, or an arbitrary Matrix state event must
+// appear.
+//
+// The ticket service evaluates gates via its /sync loop — no polling.
+// Gate types map to evaluation strategies:
+//
+//   - "human": No automatic evaluation. Resolved explicitly via
+//     bureau ticket gate resolve. The ticket service records who
+//     approved and when.
+//
+//   - "pipeline": Watches for m.bureau.pipeline_result state events
+//     where the pipeline ref matches PipelineRef and the conclusion
+//     matches Conclusion. Syntactic sugar for a state_event gate.
+//
+//   - "state_event": Watches for a Matrix state event matching
+//     EventType + StateKey + RoomAlias + ContentMatch. This is the
+//     general-purpose gate — pipeline and ticket gates are special
+//     cases of it.
+//
+//   - "ticket": Watches for m.bureau.ticket with the given TicketID
+//     transitioning to status "closed" in the same room.
+//
+//   - "timer": Checks whether the current time exceeds the gate's
+//     CreatedAt + Duration on each /sync tick.
+type TicketGate struct {
+	// ID uniquely identifies this gate within the ticket (e.g.,
+	// "ci-pass", "lead-approval"). Used for targeted updates.
+	ID string `json:"id"`
+
+	// Type determines how the condition is evaluated: "human",
+	// "pipeline", "state_event", "ticket", or "timer".
+	Type string `json:"type"`
+
+	// Status is "pending" or "satisfied". The ticket service
+	// transitions this when the condition is met.
+	Status string `json:"status"`
+
+	// Description is a human-readable explanation of what this
+	// gate waits for (e.g., "CI pipeline must pass", "24h soak
+	// period"). Shown in ticket listings and notifications.
+	Description string `json:"description,omitempty"`
+
+	// --- Type-specific condition fields ---
+
+	// PipelineRef identifies the pipeline to watch (type
+	// "pipeline"). Matches against the pipeline_ref field in
+	// m.bureau.pipeline_result events.
+	PipelineRef string `json:"pipeline_ref,omitempty"`
+
+	// Conclusion is the required pipeline result (type
+	// "pipeline"). Typically "success". If empty, any completed
+	// result satisfies the gate.
+	Conclusion string `json:"conclusion,omitempty"`
+
+	// EventType is the Matrix state event type to watch (type
+	// "state_event"). Same semantics as StartCondition.EventType.
+	EventType string `json:"event_type,omitempty"`
+
+	// StateKey is the state key to match (type "state_event").
+	StateKey string `json:"state_key,omitempty"`
+
+	// RoomAlias is the room to watch (type "state_event"). When
+	// empty, watches the ticket's own room.
+	RoomAlias string `json:"room_alias,omitempty"`
+
+	// ContentMatch specifies key-value pairs that must all match
+	// in the watched event's content (type "state_event"). Same
+	// semantics as StartCondition.ContentMatch.
+	ContentMatch map[string]string `json:"content_match,omitempty"`
+
+	// TicketID is the ticket to watch (type "ticket"). The gate
+	// is satisfied when that ticket's status becomes "closed".
+	TicketID string `json:"ticket_id,omitempty"`
+
+	// Duration is how long to wait (type "timer"). Parsed by
+	// time.ParseDuration (e.g., "24h", "30m"). The deadline is
+	// computed from the gate's CreatedAt + Duration.
+	Duration string `json:"duration,omitempty"`
+
+	// --- Lifecycle metadata ---
+
+	// CreatedAt is when this gate was added. For gates present
+	// at ticket creation, equals the ticket's CreatedAt. For
+	// gates added later, this is when the gate was appended.
+	// Used as the base time for timer gates.
+	CreatedAt string `json:"created_at,omitempty"`
+
+	// SatisfiedAt is set when the gate transitions to "satisfied".
+	SatisfiedAt string `json:"satisfied_at,omitempty"`
+
+	// SatisfiedBy records what satisfied the gate: an event ID
+	// for state_event/pipeline/ticket gates, a Matrix user ID
+	// for human gates, "timer" for timer gates.
+	SatisfiedBy string `json:"satisfied_by,omitempty"`
+}
+
+// Validate checks that the gate has a valid type, status, and the
+// type-specific fields required for its gate type.
+func (g *TicketGate) Validate() error {
+	if g.ID == "" {
+		return errors.New("gate: id is required")
+	}
+	switch g.Type {
+	case "human":
+		// No type-specific fields required.
+	case "pipeline":
+		if g.PipelineRef == "" {
+			return fmt.Errorf("gate %q: pipeline_ref is required for pipeline gates", g.ID)
+		}
+	case "state_event":
+		if g.EventType == "" {
+			return fmt.Errorf("gate %q: event_type is required for state_event gates", g.ID)
+		}
+	case "ticket":
+		if g.TicketID == "" {
+			return fmt.Errorf("gate %q: ticket_id is required for ticket gates", g.ID)
+		}
+	case "timer":
+		if g.Duration == "" {
+			return fmt.Errorf("gate %q: duration is required for timer gates", g.ID)
+		}
+	case "":
+		return fmt.Errorf("gate %q: type is required", g.ID)
+	default:
+		return fmt.Errorf("gate %q: unknown type %q", g.ID, g.Type)
+	}
+	switch g.Status {
+	case "pending", "satisfied":
+		// Valid.
+	case "":
+		return fmt.Errorf("gate %q: status is required", g.ID)
+	default:
+		return fmt.Errorf("gate %q: unknown status %q", g.ID, g.Status)
+	}
+	return nil
+}
+
+// TicketNote is a short annotation on a ticket. Notes are for context
+// that should travel with the ticket: warnings, references, analysis
+// results, review comments. They are not conversations — use Matrix
+// thread replies for discussion.
+//
+// Notes are append-only from the caller's perspective: the ticket
+// service assigns IDs and timestamps. Notes can be removed by ID
+// but not edited (append a correction instead).
+type TicketNote struct {
+	// ID uniquely identifies this note within the ticket.
+	// Assigned by the ticket service (e.g., "n-1", "n-2").
+	ID string `json:"id"`
+
+	// Author is the Matrix user ID of the note creator.
+	Author string `json:"author"`
+
+	// CreatedAt is an ISO 8601 timestamp.
+	CreatedAt string `json:"created_at"`
+
+	// Body is the note content, supporting markdown. Keep notes
+	// concise — for content that exceeds a few hundred bytes,
+	// store it as an artifact and reference it from a note.
+	Body string `json:"body"`
+}
+
+// Validate checks that all required fields are present.
+func (n *TicketNote) Validate() error {
+	if n.ID == "" {
+		return errors.New("note: id is required")
+	}
+	if n.Author == "" {
+		return errors.New("note: author is required")
+	}
+	if n.CreatedAt == "" {
+		return errors.New("note: created_at is required")
+	}
+	if n.Body == "" {
+		return errors.New("note: body is required")
+	}
+	return nil
+}
+
+// TicketAttachment is a reference to an artifact stored outside the
+// ticket state event (in the artifact service or Matrix media
+// repository). The ticket service stores references, not content.
+type TicketAttachment struct {
+	// Ref is the artifact reference. Format depends on the storage
+	// backend: "art-<hash>" for the artifact service, or
+	// "mxc://<server>/<id>" for Matrix media.
+	Ref string `json:"ref"`
+
+	// Label is a human-readable description shown in listings
+	// (e.g., "stack trace", "screenshot of rendering bug").
+	Label string `json:"label,omitempty"`
+
+	// ContentType is the MIME type of the referenced content
+	// (e.g., "text/plain", "image/png").
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// Validate checks that the required ref field is present.
+func (a *TicketAttachment) Validate() error {
+	if a.Ref == "" {
+		return errors.New("attachment: ref is required")
+	}
+	return nil
+}
+
+// TicketOrigin records the provenance of an imported ticket.
+type TicketOrigin struct {
+	// Source identifies the external system ("github", "beads",
+	// "linear", etc.).
+	Source string `json:"source"`
+
+	// ExternalRef is the identifier in the source system
+	// (e.g., "bureau-foundation/bureau#42" for GitHub, "PROJ-123"
+	// for Jira/Linear).
+	ExternalRef string `json:"external_ref"`
+
+	// SourceRoom is the room ID where this ticket was originally
+	// created, if it was moved between rooms.
+	SourceRoom string `json:"source_room,omitempty"`
+}
+
+// Validate checks that the required source and external_ref fields
+// are present.
+func (o *TicketOrigin) Validate() error {
+	if o.Source == "" {
+		return errors.New("origin: source is required")
+	}
+	if o.ExternalRef == "" {
+		return errors.New("origin: external_ref is required")
+	}
+	return nil
+}
+
+// TicketConfigContent enables and configures ticket management for a
+// room. Rooms without this event do not accept ticket operations from
+// the ticket service. Published by the admin via "bureau ticket enable".
+//
+// State key: "" (singleton per room)
+// Room: any room that wants ticket management
+type TicketConfigContent struct {
+	// Version is the schema version (see TicketConfigVersion).
+	// Same semantics as TicketContent.Version — call CanModify()
+	// before any read-modify-write cycle.
+	Version int `json:"version"`
+
+	// Prefix is the ticket ID prefix for this room. Defaults
+	// to "tkt" if empty. The ticket service generates IDs as
+	// prefix + "-" + short hash.
+	Prefix string `json:"prefix,omitempty"`
+
+	// DefaultLabels are applied to new tickets that don't
+	// explicitly specify labels.
+	DefaultLabels []string `json:"default_labels,omitempty"`
+
+	// Extra is a documented extension namespace. Same semantics as
+	// TicketContent.Extra.
+	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// Validate checks that the config has a valid version.
+func (c *TicketConfigContent) Validate() error {
+	if c.Version < 1 {
+		return fmt.Errorf("ticket config: version must be >= 1, got %d", c.Version)
+	}
+	return nil
+}
+
+// CanModify checks whether this code version can safely modify this
+// config event. Same semantics as TicketContent.CanModify.
+func (c *TicketConfigContent) CanModify() error {
+	if c.Version > TicketConfigVersion {
+		return fmt.Errorf(
+			"ticket config version %d exceeds supported version %d: "+
+				"modification would lose fields added in newer versions; "+
+				"upgrade the ticket service before modifying this event",
+			c.Version, TicketConfigVersion,
+		)
+	}
+	return nil
 }
 
 // ArtifactContent is the content of an EventTypeArtifact state event.

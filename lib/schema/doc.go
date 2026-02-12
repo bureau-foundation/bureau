@@ -16,6 +16,7 @@
 //   - [EventTypeService] -- service directory
 //   - [EventTypeWebRTCOffer], [EventTypeWebRTCAnswer] -- signaling
 //   - [EventTypeLayout] -- tmux session structure for observation
+//   - [EventTypeTicket], [EventTypeTicketConfig] -- work item tracking
 //   - [EventTypeArtifact], [EventTypeArtifactTag] -- CAS blob metadata
 //
 // [SandboxSpec] is the fully-resolved sandbox configuration sent over

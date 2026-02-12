@@ -297,6 +297,7 @@
             pkgs.pre-commit
             pkgs.shellcheck
             pkgs.lychee
+            pkgs.golangci-lint
 
             # Version control.
             pkgs.git

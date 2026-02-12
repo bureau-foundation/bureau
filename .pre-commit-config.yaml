@@ -87,6 +87,19 @@ repos:
         pass_filenames: false
         files: \.go$
 
+  # golangci-lint: go-critic diagnostic checks (bug detection) and dupl
+  # (structural duplication). Only checks code changed since HEAD so
+  # existing issues tracked in beads don't block commits. Remove
+  # --new-from-rev once existing findings are resolved.
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run --new-from-rev HEAD --timeout=5m
+        language: system
+        pass_filenames: false
+        files: \.go$
+
   # Bazel lint checks.
   # Uses the same repo as buildifier formatting above.
   - repo: https://github.com/keith/pre-commit-buildifier

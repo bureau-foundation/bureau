@@ -1,0 +1,51 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# golangci-lint v2 configuration. Focused on bug detection (go-critic
+# diagnostics) and structural duplication (dupl). Style and formatting
+# are handled by other pre-commit hooks (gofmt, buildifier).
+#
+# Run manually:
+#   golangci-lint run              # all issues
+#   golangci-lint run --new-from-rev HEAD  # only issues in staged changes
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - gocritic
+    - dupl
+
+  settings:
+    gocritic:
+      # Only diagnostic checkers — these catch real bugs (exitAfterDefer,
+      # appendAssign, sloppyLen, badCall, dupBranchBody, etc). Style and
+      # performance suggestions are handled by code review, not automation.
+      enabled-tags:
+        - diagnostic
+      disabled-tags:
+        - style
+        - performance
+        - experimental
+        - opinionated
+
+    dupl:
+      # Token count threshold. At 100, only structurally identical blocks
+      # of ~8-12+ lines are flagged. We validated this against the
+      # codebase: all non-test findings at this threshold are genuine
+      # extraction opportunities. Standalone dupl catches a few more
+      # (doctor.go, signaler_matrix.go, signaler_memory.go) that
+      # golangci-lint's integration misses at the same threshold.
+      threshold: 100
+
+  exclusions:
+    # Disable all preset exclusion rules so nothing is silently hidden.
+    presets: []
+    rules:
+      # Test files have legitimate structural repetition (table-driven
+      # tests, repeated setup/assertion patterns). Flagging these drowns
+      # out real signals from production code.
+      - path: _test\.go
+        linters:
+          - dupl

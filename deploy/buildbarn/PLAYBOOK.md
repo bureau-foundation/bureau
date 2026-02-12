@@ -84,8 +84,9 @@ Environment profiles are defined in the
 [bureau-foundation/environment](https://github.com/bureau-foundation/environment)
 repo. Each profile describes a complete execution environment for a class
 of machine (workstation, EC2 instance, etc.). Bureau's own `flake.nix`
-exports `lib.baseRunnerPackages` — the minimum set of tools Bureau's
-tests need — and the environment repo composes on top of that.
+exports `lib.bureauRuntime` — the minimum set of tools Bureau's
+sandboxes need (bubblewrap, tmux) — and the environment repo composes
+`lib.modules` and `lib.presets` on top of that.
 
 Build the runner environment for this machine's profile:
 
@@ -395,6 +396,6 @@ becomes a candidate for a tracked issue.
 | bb-worker config | `actionCache` and `contentAddressableStorage` are top-level in bb-storage but nested under `blobstore` in bb-worker. The proto field names differ between components. | med |
 | runner binary | `bb-runner-installer` image ships `bb_runner` but not `tini`. Use Docker Compose `init: true` instead. | low |
 | @platforms dep | `platform()` rule needs `bazel_dep(name = "platforms")` in MODULE.bazel — not implicitly visible to user BUILD files under bzlmod. | med |
-| tmux tests | `//observe:observe_test` and `//cmd/bureau-daemon:bureau-daemon_test` fail remotely (no tmux in runner). Need Nix bind-mount or local execution tag. **Resolved:** tmux added to `baseRunnerPackages`, bind-mounted via runner-env. | high |
+| tmux tests | `//observe:observe_test` and `//cmd/bureau-daemon:bureau-daemon_test` fail remotely (no tmux in runner). Need Nix bind-mount or local execution tag. **Resolved:** tmux added to `bureauRuntime`, bind-mounted via runner-env. | high |
 | bwrap in runner | `TestDaemonLauncherIntegration` needs bwrap for sandbox creation. bwrap is in runner-env but namespace creation fails inside Docker (`network_mode: none`, no `CAP_SYS_ADMIN`). Test skips when bwrap can't create namespaces. | med |
 | WebRTC tests | `//transport:transport_test` fails remotely (runner has `network_mode: none`, WebRTC ICE needs at least loopback). Needs loopback-only network or local execution tag. | high |

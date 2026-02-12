@@ -22,123 +22,158 @@
       nixpkgs,
       flake-utils,
     }:
-    # Base packages required by Bureau's own tests in any execution
-    # environment (Buildbarn runner, sandbox, etc.). The environment repo
-    # (bureau-foundation/environment) composes on top of this list —
-    # project-specific tools go there, not here.
+    # Environment modules and presets. These are functions, not
+    # derivations, so they live outside the per-system wrapper.
+    # Callers pass their own pkgs to get the right system's packages.
     #
-    # This is a function, not a derivation, so it lives outside the
-    # per-system wrapper. Callers pass their own pkgs to get the right
-    # system's packages.
+    # Modules are atomic building blocks (pkgs -> [derivation]).
+    # Presets compose modules into useful groups.
+    # The environment repo (bureau-foundation/environment) composes
+    # on top of these — project-specific tools go there, not here.
     {
       lib = {
-        baseRunnerPackages = pkgs: [
+        # Apply all module functions in an attribute set to pkgs and
+        # flatten into a single package list.
+        applyModules =
+          moduleSet: pkgs:
+          builtins.concatLists (builtins.attrValues (builtins.mapAttrs (_: m: m pkgs) moduleSet));
+
+        # Atomic modules: each is pkgs -> [derivation].
+        # modules.<category>.<name> — always an atom, never a composition.
+        modules = {
+          # Foundation: tools any shell user expects.
+          foundation = {
+            shell = pkgs: [
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.gawk
+              pkgs.diffutils
+              pkgs.patch
+            ];
+            search = pkgs: [
+              pkgs.ripgrep
+              pkgs.fd
+            ];
+            data = pkgs: [
+              pkgs.jq
+              pkgs.yq-go
+            ];
+            archive = pkgs: [
+              pkgs.gnutar
+              pkgs.gzip
+              pkgs.xz
+              pkgs.zstd
+              pkgs.bzip2
+              pkgs.unzip
+              pkgs.zip
+            ];
+            crypto = pkgs: [
+              pkgs.openssl
+            ];
+            network = pkgs: [
+              pkgs.curl
+            ];
+          };
+
+          # Developer: tools for anyone writing code.
+          developer = {
+            vcs = pkgs: [
+              pkgs.git
+              pkgs.gh
+            ];
+            editor = pkgs: [
+              pkgs.nano
+            ];
+            inspect = pkgs: [
+              pkgs.less
+              pkgs.file
+              pkgs.tree
+              pkgs.which
+            ];
+          };
+
+          # Language runtimes: pick per-project.
+          runtime = {
+            nodejs = pkgs: [ pkgs.nodejs ];
+            python = pkgs: [ pkgs.python3 ];
+            uv = pkgs: [ pkgs.uv ];
+            bun = pkgs: [ pkgs.bun ];
+          };
+
+          # System administration: for sysadmin agents.
+          sysadmin = {
+            remote = pkgs: [
+              pkgs.openssh
+              pkgs.rsync
+              pkgs.wget
+            ];
+            network-debug = pkgs: [
+              pkgs.nmap
+              pkgs.socat
+              pkgs.dnsutils
+              pkgs.iproute2
+            ];
+            containers = pkgs: [
+              pkgs.docker-client
+              pkgs.docker-compose
+            ];
+            nix-tools = pkgs: [
+              pkgs.attic-client
+              pkgs.nixfmt
+            ];
+            system-inspect = pkgs: [
+              pkgs.procps
+              pkgs.htop
+              pkgs.strace
+              pkgs.lsof
+              pkgs.util-linux
+            ];
+            crypto = pkgs: [
+              pkgs.age
+              pkgs.gnupg
+            ];
+            utils = pkgs: [
+              pkgs.p7zip
+              pkgs.gettext
+            ];
+          };
+        };
+
+        # Composed presets: each is pkgs -> [derivation].
+        # presets.<name> — always a composition, never an atom.
+        presets = {
+          # Bare working shell. Minimum viable interactive environment.
+          foundation-minimal = pkgs: self.lib.modules.foundation.shell pkgs;
+
+          # Full foundation. Shell + search + data processing + archives +
+          # crypto + network. What anyone interacting with a Linux system expects.
+          foundation = self.lib.applyModules self.lib.modules.foundation;
+
+          # Developer tools. Foundation + version control + editor + inspection.
+          # Base for any coding agent or human developer.
+          developer =
+            pkgs: self.lib.presets.foundation pkgs ++ self.lib.applyModules self.lib.modules.developer pkgs;
+
+          # Sysadmin tools. Developer + remote access + network debugging +
+          # containers + Nix tooling + system inspection + encryption.
+          # The Nix CLI itself is NOT included — it lives on the host at
+          # /nix/var/nix/profiles/default/bin/nix. The sysadmin template
+          # bind-mounts /nix/store (ro) and the nix profile so the sandbox
+          # uses the host's exact version. Same pattern for the Docker socket.
+          sysadmin =
+            pkgs: self.lib.presets.developer pkgs ++ self.lib.applyModules self.lib.modules.sysadmin pkgs;
+        };
+
+        # Bureau-specific sandbox runtime dependencies. Not a general module —
+        # these are Bureau's own binaries needed to manage sandboxes (bubblewrap
+        # for namespace creation, tmux for observation relay).
+        bureauRuntime = pkgs: [
           pkgs.bubblewrap
           pkgs.tmux
         ];
-
-        # Tools for coding agents working on projects inside sandboxes.
-        # Extends baseRunnerPackages with a functional shell environment,
-        # language runtimes, package managers, and common developer utilities.
-        developerRunnerPackages =
-          pkgs:
-          self.lib.baseRunnerPackages pkgs
-          ++ [
-            # Shell foundation.
-            pkgs.bash
-            pkgs.coreutils
-            pkgs.findutils
-            pkgs.gnugrep
-            pkgs.gnused
-            pkgs.gawk
-            pkgs.diffutils
-            pkgs.patch
-            pkgs.less
-            pkgs.file
-            pkgs.tree
-            pkgs.which
-            pkgs.nano
-
-            # Search.
-            pkgs.ripgrep
-            pkgs.fd
-
-            # Data processing.
-            pkgs.jq
-            pkgs.yq-go
-
-            # Version control.
-            pkgs.git
-            pkgs.gh
-
-            # Network.
-            pkgs.curl
-
-            # Language runtimes and package managers. Agents install
-            # additional tools on-demand into /var/bureau/cache/ via
-            # these package managers.
-            pkgs.nodejs
-            pkgs.python3
-            pkgs.uv
-            pkgs.bun
-
-            # Archives and compression.
-            pkgs.gnutar
-            pkgs.gzip
-            pkgs.xz
-            pkgs.zstd
-            pkgs.unzip
-            pkgs.zip
-
-            # Crypto.
-            pkgs.openssl
-          ];
-
-        # Full machine administration toolkit. Extends developerRunnerPackages
-        # with remote access, system inspection, debugging, and infrastructure
-        # management tools. The sysadmin agent uses this tier.
-        #
-        # The Nix CLI is NOT included here — it lives on the host at
-        # /nix/var/nix/profiles/default/bin/nix. The sysadmin template
-        # bind-mounts /nix/store (ro) and the nix profile so the sandbox
-        # uses the host's exact version. Same pattern for the Docker socket.
-        sysadminRunnerPackages =
-          pkgs:
-          self.lib.developerRunnerPackages pkgs
-          ++ [
-            # Remote access and network debugging.
-            pkgs.openssh
-            pkgs.rsync
-            pkgs.wget
-            pkgs.socat
-            pkgs.dnsutils
-            pkgs.nmap
-            pkgs.iproute2
-
-            # System inspection and debugging.
-            pkgs.procps
-            pkgs.htop
-            pkgs.strace
-            pkgs.lsof
-            pkgs.util-linux
-
-            # Infrastructure management.
-            pkgs.attic-client
-            pkgs.nixfmt
-            pkgs.docker-client
-            pkgs.docker-compose
-
-            # Encryption.
-            pkgs.age
-            pkgs.gnupg
-
-            # Additional compression.
-            pkgs.bzip2
-            pkgs.p7zip
-
-            # Utilities.
-            pkgs.gettext
-          ];
       };
     }
     // flake-utils.lib.eachDefaultSystem (
@@ -225,47 +260,47 @@
           // {
             default = self.packages.${system}.bureau;
 
-            # Minimal environment for Bureau's own CI and local development.
-            # Contains only what Bureau's tests need (see lib.baseRunnerPackages).
-            # Production environments are defined in the environment repo
-            # (bureau-foundation/environment), which composes on top of this
-            # base. For Buildbarn runners, prefer:
+            # Minimal environment for Bureau's own CI and Buildbarn runners.
+            # Contains only Bureau's sandbox runtime deps (bubblewrap, tmux).
+            # For Buildbarn runners, prefer:
             #   bureau environment build workstation --out-link deploy/buildbarn/runner-env
             runner-env = pkgs.buildEnv {
               name = "bureau-runner-env";
-              paths = self.lib.baseRunnerPackages pkgs;
+              paths = self.lib.bureauRuntime pkgs;
             };
 
-            # Integration test environment: runner-env plus a shell and
-            # coreutils. Sandbox commands (pipeline steps, workspace scripts)
-            # run via "sh -c" and need basic tools. Production environments
-            # get these from the environment repo; this derivation provides
-            # them for integration tests without pulling in the full repo.
+            # Integration test environment: Bureau runtime + a working shell.
+            # Sandbox commands (pipeline steps, workspace scripts) run via
+            # "sh -c" and need basic tools. Production environments get a full
+            # foundation from the environment repo; this provides just enough
+            # for integration tests.
             integration-test-env = pkgs.buildEnv {
               name = "bureau-integration-test-env";
-              paths = self.lib.baseRunnerPackages pkgs ++ [
-                pkgs.bash
-                pkgs.coreutils
-              ];
+              paths = self.lib.bureauRuntime pkgs ++ self.lib.presets.foundation-minimal pkgs;
             };
 
-            # Environment for coding agents working on projects. Includes
-            # shell tools, language runtimes (Node.js, Python), package
-            # managers (npm, uv, bun), search tools (ripgrep, fd), and
-            # common developer utilities.
+            # Environment for coding agents working on projects. Bureau
+            # runtime + full developer preset + language runtimes (Node.js,
+            # Python, uv, bun). Agents install additional tools on-demand
+            # into /var/bureau/cache/ via these package managers.
             developer-runner-env = pkgs.buildEnv {
               name = "bureau-developer-runner-env";
-              paths = self.lib.developerRunnerPackages pkgs;
+              paths =
+                self.lib.bureauRuntime pkgs
+                ++ self.lib.presets.developer pkgs
+                ++ self.lib.applyModules self.lib.modules.runtime pkgs;
             };
 
-            # Environment for the sysadmin agent. Includes everything in
-            # developer-runner-env plus machine administration tools:
-            # remote access (ssh, rsync), system inspection (htop, strace,
-            # lsof), network debugging (nmap, socat, dig), and
-            # infrastructure management (attic, docker, age).
+            # Environment for the sysadmin agent. Bureau runtime + sysadmin
+            # preset (developer tools + remote access, network debugging,
+            # containers, Nix tooling, system inspection, encryption) +
+            # language runtimes.
             sysadmin-runner-env = pkgs.buildEnv {
               name = "bureau-sysadmin-runner-env";
-              paths = self.lib.sysadminRunnerPackages pkgs;
+              paths =
+                self.lib.bureauRuntime pkgs
+                ++ self.lib.presets.sysadmin pkgs
+                ++ self.lib.applyModules self.lib.modules.runtime pkgs;
             };
           };
 

@@ -167,6 +167,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			d.lastVisibility[localpart] = newVisibility
+
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("Service visibility updated for %s: %v", localpart, newVisibility),
+			))
 		}
 	}
 
@@ -186,6 +190,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			d.lastMatrixPolicy[localpart] = newPolicy
+
+			var policySummary string
+			if newPolicy != nil {
+				policySummary = fmt.Sprintf("join=%v invite=%v create=%v",
+					newPolicy.AllowJoin, newPolicy.AllowInvite, newPolicy.AllowRoomCreate)
+			} else {
+				policySummary = "default-deny"
+			}
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("Matrix policy updated for %s (%s)", localpart, policySummary),
+			))
 		}
 	}
 

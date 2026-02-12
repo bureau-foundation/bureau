@@ -17,6 +17,7 @@ go_test(
     size = "medium",
     srcs = [
         "bootstrap_test.go",
+        "config_hotreload_test.go",
         "fleet_test.go",
         "helpers_test.go",
         "lifecycle_test.go",

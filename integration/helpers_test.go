@@ -605,6 +605,92 @@ func waitForMessageInRoom(t *testing.T, session *messaging.Session, roomID, body
 	}
 }
 
+// --- Room Watch (checkpoint-based message waiting) ---
+
+// roomWatch captures a point in a room's timeline. Create one with watchRoom
+// BEFORE triggering the action that generates the expected message, then call
+// WaitForMessage to find messages that arrived after the checkpoint. This
+// avoids the stale-match problem where waitForMessageInRoom finds an older
+// message with identical content.
+//
+// The checkpoint records the event ID of the most recent event at creation
+// time. WaitForMessage scans backward from the timeline's current end and
+// stops when it hits the checkpoint event, so only newer events are
+// considered. This uses backward pagination (dir=b), which is well-tested
+// against Continuwuity — forward pagination (dir=f) from backward-origin
+// tokens is not reliably supported.
+type roomWatch struct {
+	session         *messaging.Session
+	roomID          string
+	checkpointEvent string // event ID of the newest event when the watch was created
+}
+
+// watchRoom captures the current end of a room's timeline as an event ID
+// checkpoint. The returned roomWatch only sees messages arriving after this
+// call returns.
+func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatch {
+	t.Helper()
+	response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
+		Direction: "b",
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("watchRoom: capture timeline checkpoint: %v", err)
+	}
+	var checkpointEvent string
+	if len(response.Chunk) > 0 {
+		checkpointEvent = response.Chunk[0].EventID
+	}
+	return roomWatch{
+		session:         session,
+		roomID:          roomID,
+		checkpointEvent: checkpointEvent,
+	}
+}
+
+// WaitForMessage polls for a message from senderID containing bodyContains
+// that arrived AFTER the watch was created. Scans backward from the current
+// timeline end and stops at the checkpoint event, so pre-existing messages
+// cannot match.
+func (w roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		response, err := w.session.RoomMessages(t.Context(), w.roomID, messaging.RoomMessagesOptions{
+			Direction: "b",
+			Limit:     50,
+		})
+		if err != nil {
+			t.Logf("roomWatch poll error (retrying): %v", err)
+		} else {
+			for _, event := range response.Chunk {
+				// Stop at the checkpoint — events at or before this
+				// point were already in the room when the watch was
+				// created.
+				if event.EventID == w.checkpointEvent {
+					break
+				}
+				if event.Type != "m.room.message" {
+					continue
+				}
+				if event.Sender != senderID {
+					continue
+				}
+				body, _ := event.Content["body"].(string)
+				if strings.Contains(body, bodyContains) {
+					return body
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for new message containing %q from %s in room %s",
+				timeout, bodyContains, senderID, w.roomID)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // --- Proxy Test Helpers ---
 
 // proxyHTTPClient creates an HTTP client that connects through a proxy Unix
@@ -665,6 +751,28 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 		body, _ := io.ReadAll(response.Body)
 		t.Fatalf("join room %s: status %d: %s", roomID, response.StatusCode, body)
 	}
+}
+
+// proxyTryJoinRoom attempts to join a room through a proxy and returns the
+// HTTP status code and response body. Unlike proxyJoinRoom, this does not
+// fatal on non-200 responses — callers can assert on expected failures
+// (e.g., MatrixPolicy blocking the join with 403 Forbidden).
+func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, string) {
+	t.Helper()
+	request, err := http.NewRequest("POST",
+		"http://proxy/http/matrix/_matrix/client/v3/join/"+url.PathEscape(roomID),
+		strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("create join request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("join request connection error: %v", err)
+	}
+	defer response.Body.Close()
+	responseBody, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(responseBody)
 }
 
 // proxySendMessage sends a text message to a room through a proxy. Returns the

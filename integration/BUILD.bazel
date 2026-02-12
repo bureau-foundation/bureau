@@ -28,6 +28,7 @@ go_test(
         "restart_test.go",
         "setup_test.go",
         "workspace_test.go",
+        "worktree_test.go",
     ],
     data = [
         "//:MODULE.bazel",

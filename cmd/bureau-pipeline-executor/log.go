@@ -67,6 +67,16 @@ func (l *threadLogger) logEventID() string {
 	return l.rootEventID
 }
 
+// logRoomID returns the resolved Matrix room ID where this logger posts
+// thread messages, or empty string if thread logging is not configured.
+// Used by the result event publisher to publish to the same room.
+func (l *threadLogger) logRoomID() string {
+	if l == nil {
+		return ""
+	}
+	return l.roomID
+}
+
 // logStep posts a step status update as a thread reply.
 func (l *threadLogger) logStep(ctx context.Context, index, total int, name, status string, duration time.Duration) {
 	if l == nil {

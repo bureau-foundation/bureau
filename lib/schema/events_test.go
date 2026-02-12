@@ -30,6 +30,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"project", EventTypeProject, "m.bureau.project"},
 		{"workspace", EventTypeWorkspace, "m.bureau.workspace"},
 		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
+		{"pipeline_result", EventTypePipelineResult, "m.bureau.pipeline_result"},
 		{"room_service", EventTypeRoomService, "m.bureau.room_service"},
 		{"ticket", EventTypeTicket, "m.bureau.ticket"},
 		{"ticket_config", EventTypeTicketConfig, "m.bureau.ticket_config"},
@@ -2780,6 +2781,426 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	// invite at PL 50 — pipeline rooms have no machine tier).
 	if levels["invite"] != 100 {
 		t.Errorf("invite = %v, want 100", levels["invite"])
+	}
+}
+
+// --- PipelineResultContent tests ---
+
+func validPipelineResultContent() PipelineResultContent {
+	return PipelineResultContent{
+		Version:     1,
+		PipelineRef: "dev-workspace-init",
+		Conclusion:  "success",
+		StartedAt:   "2026-02-12T10:00:00Z",
+		CompletedAt: "2026-02-12T10:01:30Z",
+		DurationMS:  90000,
+		StepCount:   3,
+		StepResults: []PipelineStepResult{
+			{Name: "clone-repo", Status: "ok", DurationMS: 30000},
+			{Name: "install-deps", Status: "ok", DurationMS: 45000},
+			{Name: "publish-ready", Status: "ok", DurationMS: 200},
+		},
+		LogEventID: "$abc123:bureau.local",
+	}
+}
+
+func TestPipelineResultContentRoundTrip(t *testing.T) {
+	original := validPipelineResultContent()
+	original.Extra = map[string]json.RawMessage{
+		"trigger_event": json.RawMessage(`"$trigger123:bureau.local"`),
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON field names match the wire format.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+
+	requiredFields := []string{
+		"version", "pipeline_ref", "conclusion",
+		"started_at", "completed_at", "duration_ms",
+		"step_count", "step_results", "log_event_id", "extra",
+	}
+	for _, field := range requiredFields {
+		if _, exists := raw[field]; !exists {
+			t.Errorf("JSON missing field %q", field)
+		}
+	}
+
+	// Verify step result wire format.
+	stepResults, ok := raw["step_results"].([]any)
+	if !ok {
+		t.Fatal("step_results is not an array")
+	}
+	if len(stepResults) != 3 {
+		t.Fatalf("step_results length = %d, want 3", len(stepResults))
+	}
+	firstStep, ok := stepResults[0].(map[string]any)
+	if !ok {
+		t.Fatal("step_results[0] is not an object")
+	}
+	for _, field := range []string{"name", "status", "duration_ms"} {
+		if _, exists := firstStep[field]; !exists {
+			t.Errorf("step_results[0] missing field %q", field)
+		}
+	}
+
+	// Round-trip.
+	var decoded PipelineResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if !reflect.DeepEqual(original, decoded) {
+		t.Errorf("round-trip mismatch:\n  original: %+v\n  decoded:  %+v", original, decoded)
+	}
+}
+
+func TestPipelineResultContentOmitsEmptyOptionals(t *testing.T) {
+	content := PipelineResultContent{
+		Version:     1,
+		PipelineRef: "dev-init",
+		Conclusion:  "success",
+		StartedAt:   "2026-02-12T10:00:00Z",
+		CompletedAt: "2026-02-12T10:01:00Z",
+		DurationMS:  60000,
+		StepCount:   1,
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Optional fields with zero values should be omitted.
+	for _, field := range []string{"step_results", "failed_step", "error_message", "log_event_id", "extra"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("expected field %q to be omitted, but it is present", field)
+		}
+	}
+}
+
+func TestPipelineResultContentFailure(t *testing.T) {
+	content := PipelineResultContent{
+		Version:     1,
+		PipelineRef: "ci-pipeline",
+		Conclusion:  "failure",
+		StartedAt:   "2026-02-12T10:00:00Z",
+		CompletedAt: "2026-02-12T10:00:45Z",
+		DurationMS:  45000,
+		StepCount:   3,
+		StepResults: []PipelineStepResult{
+			{Name: "build", Status: "ok", DurationMS: 30000},
+			{Name: "test", Status: "failed", DurationMS: 15000, Error: "exit code 1"},
+		},
+		FailedStep:   "test",
+		ErrorMessage: "exit code 1",
+		LogEventID:   "$log:bureau.local",
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if raw["failed_step"] != "test" {
+		t.Errorf("failed_step = %v, want %q", raw["failed_step"], "test")
+	}
+	if raw["error_message"] != "exit code 1" {
+		t.Errorf("error_message = %v, want %q", raw["error_message"], "exit code 1")
+	}
+
+	var decoded PipelineResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.FailedStep != "test" {
+		t.Errorf("decoded.FailedStep = %q, want %q", decoded.FailedStep, "test")
+	}
+}
+
+func TestPipelineResultContentExtraRoundTrip(t *testing.T) {
+	content := validPipelineResultContent()
+	content.Extra = map[string]json.RawMessage{
+		"custom_metric": json.RawMessage(`42`),
+		"build_info":    json.RawMessage(`{"commit":"abc123"}`),
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded PipelineResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if string(decoded.Extra["custom_metric"]) != "42" {
+		t.Errorf("Extra[custom_metric] = %s, want 42", decoded.Extra["custom_metric"])
+	}
+	if string(decoded.Extra["build_info"]) != `{"commit":"abc123"}` {
+		t.Errorf("Extra[build_info] = %s, want {\"commit\":\"abc123\"}", decoded.Extra["build_info"])
+	}
+}
+
+func TestPipelineResultContentForwardCompatibility(t *testing.T) {
+	// Simulate a newer version with unknown fields. Readers should
+	// successfully unmarshal and access known fields without error.
+	futureJSON := `{
+		"version": 2,
+		"pipeline_ref": "dev-init",
+		"conclusion": "success",
+		"started_at": "2026-02-12T10:00:00Z",
+		"completed_at": "2026-02-12T10:01:00Z",
+		"duration_ms": 60000,
+		"step_count": 1,
+		"future_field": "something new",
+		"extra": {"custom": true}
+	}`
+
+	var content PipelineResultContent
+	if err := json.Unmarshal([]byte(futureJSON), &content); err != nil {
+		t.Fatalf("Unmarshal future content: %v", err)
+	}
+
+	// Known fields are correctly populated.
+	if content.Version != 2 {
+		t.Errorf("Version = %d, want 2", content.Version)
+	}
+	if content.PipelineRef != "dev-init" {
+		t.Errorf("PipelineRef = %q, want %q", content.PipelineRef, "dev-init")
+	}
+	if content.Conclusion != "success" {
+		t.Errorf("Conclusion = %q, want %q", content.Conclusion, "success")
+	}
+
+	// CanModify should refuse modification (version > current).
+	if err := content.CanModify(); err == nil {
+		t.Error("CanModify() = nil for future version, want error")
+	}
+}
+
+func TestPipelineResultContentValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*PipelineResultContent)
+		wantErr string
+	}{
+		{
+			name:    "valid",
+			modify:  func(p *PipelineResultContent) {},
+			wantErr: "",
+		},
+		{
+			name:    "version_zero",
+			modify:  func(p *PipelineResultContent) { p.Version = 0 },
+			wantErr: "version must be >= 1",
+		},
+		{
+			name:    "version_negative",
+			modify:  func(p *PipelineResultContent) { p.Version = -1 },
+			wantErr: "version must be >= 1",
+		},
+		{
+			name:    "pipeline_ref_empty",
+			modify:  func(p *PipelineResultContent) { p.PipelineRef = "" },
+			wantErr: "pipeline_ref is required",
+		},
+		{
+			name:    "conclusion_empty",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "" },
+			wantErr: "conclusion is required",
+		},
+		{
+			name:    "conclusion_unknown",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "cancelled" },
+			wantErr: `unknown conclusion "cancelled"`,
+		},
+		{
+			name:    "conclusion_success",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "success" },
+			wantErr: "",
+		},
+		{
+			name:    "conclusion_failure",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "failure" },
+			wantErr: "",
+		},
+		{
+			name:    "conclusion_aborted",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "aborted" },
+			wantErr: "",
+		},
+		{
+			name:    "started_at_empty",
+			modify:  func(p *PipelineResultContent) { p.StartedAt = "" },
+			wantErr: "started_at is required",
+		},
+		{
+			name:    "completed_at_empty",
+			modify:  func(p *PipelineResultContent) { p.CompletedAt = "" },
+			wantErr: "completed_at is required",
+		},
+		{
+			name:    "step_count_zero",
+			modify:  func(p *PipelineResultContent) { p.StepCount = 0 },
+			wantErr: "step_count must be >= 1",
+		},
+		{
+			name: "step_result_invalid",
+			modify: func(p *PipelineResultContent) {
+				p.StepResults = []PipelineStepResult{
+					{Name: "", Status: "ok"},
+				}
+			},
+			wantErr: "step_results[0]: step result: name is required",
+		},
+		{
+			name: "step_result_invalid_status",
+			modify: func(p *PipelineResultContent) {
+				p.StepResults = []PipelineStepResult{
+					{Name: "build", Status: "unknown"},
+				}
+			},
+			wantErr: `step_results[0]: step result: unknown status "unknown"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			content := validPipelineResultContent()
+			test.modify(&content)
+			err := content.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestPipelineResultContentCanModify(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+		wantErr bool
+	}{
+		{"current_version", PipelineResultContentVersion, false},
+		{"older_version", PipelineResultContentVersion - 1, false},
+		{"newer_version", PipelineResultContentVersion + 1, true},
+		{"far_future_version", PipelineResultContentVersion + 100, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			content := validPipelineResultContent()
+			content.Version = test.version
+			err := content.CanModify()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("CanModify() = nil, want error")
+				}
+				message := err.Error()
+				if !strings.Contains(message, "upgrade") {
+					t.Errorf("error should mention upgrade: %q", message)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("CanModify() = %v, want nil", err)
+				}
+			}
+		})
+	}
+}
+
+func TestPipelineStepResultValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    PipelineStepResult
+		wantErr string
+	}{
+		{
+			name:    "valid_ok",
+			step:    PipelineStepResult{Name: "build", Status: "ok", DurationMS: 1000},
+			wantErr: "",
+		},
+		{
+			name:    "valid_failed",
+			step:    PipelineStepResult{Name: "test", Status: "failed", DurationMS: 500, Error: "exit 1"},
+			wantErr: "",
+		},
+		{
+			name:    "valid_failed_optional",
+			step:    PipelineStepResult{Name: "lint", Status: "failed (optional)", DurationMS: 200},
+			wantErr: "",
+		},
+		{
+			name:    "valid_skipped",
+			step:    PipelineStepResult{Name: "deploy", Status: "skipped"},
+			wantErr: "",
+		},
+		{
+			name:    "valid_aborted",
+			step:    PipelineStepResult{Name: "check", Status: "aborted"},
+			wantErr: "",
+		},
+		{
+			name:    "name_empty",
+			step:    PipelineStepResult{Name: "", Status: "ok"},
+			wantErr: "name is required",
+		},
+		{
+			name:    "status_empty",
+			step:    PipelineStepResult{Name: "build", Status: ""},
+			wantErr: "status is required",
+		},
+		{
+			name:    "status_unknown",
+			step:    PipelineStepResult{Name: "build", Status: "timeout"},
+			wantErr: `unknown status "timeout"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.step.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
 	}
 }
 

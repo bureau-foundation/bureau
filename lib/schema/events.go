@@ -170,6 +170,20 @@ const (
 	// Room: pipeline room (e.g., #bureau/pipeline:<server>)
 	EventTypePipeline = "m.bureau.pipeline"
 
+	// EventTypePipelineResult is published by the pipeline executor when
+	// a pipeline completes (successfully, with failure, or by abort). The
+	// ticket service watches these events to evaluate pipeline gates —
+	// a TicketGate with type "pipeline" matches the PipelineRef and
+	// Conclusion fields from this event.
+	//
+	// Published to the pipeline's log room (PipelineContent.Log.Room).
+	// Pipelines without a log room do not publish result events; the
+	// JSONL result log (BUREAU_RESULT_PATH) covers daemon-internal needs.
+	//
+	// State key: pipeline name/ref (e.g., "dev-workspace-init")
+	// Room: the pipeline's log room
+	EventTypePipelineResult = "m.bureau.pipeline_result"
+
 	// EventTypeRoomService declares which service principal handles a
 	// given service role in a room. This is a general mechanism for
 	// room-scoped service binding — any service type (tickets, CI, code
@@ -289,6 +303,11 @@ const (
 	// TicketConfigVersion is the current schema version for
 	// TicketConfigContent events.
 	TicketConfigVersion = 1
+
+	// PipelineResultContentVersion is the current schema version for
+	// PipelineResultContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	PipelineResultContentVersion = 1
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -1434,6 +1453,161 @@ type PipelineLog struct {
 	// "${WORKSPACE_ROOM_ID}"). The executor resolves aliases via
 	// the proxy.
 	Room string `json:"room"`
+}
+
+// PipelineResultContent is the content of an EventTypePipelineResult state
+// event. Published by the pipeline executor when execution finishes. This
+// is the Matrix-native public format; the JSONL result log
+// (BUREAU_RESULT_PATH) is a separate internal format for daemon tailing.
+//
+// The ticket service evaluates pipeline gates against these events:
+// TicketGate.PipelineRef matches PipelineRef, TicketGate.Conclusion
+// matches Conclusion. Gate evaluation happens via /sync — when the
+// ticket service sees a PipelineResult state event change, it re-checks
+// all pending pipeline gates in that room.
+type PipelineResultContent struct {
+	// Version is the schema version (see PipelineResultContentVersion).
+	// Same semantics as TicketContent.Version — call CanModify() before
+	// any read-modify-write cycle.
+	Version int `json:"version"`
+
+	// PipelineRef identifies which pipeline was executed (e.g.,
+	// "dev-workspace-init"). This is the name/ref used when the
+	// pipeline was resolved. TicketGate.PipelineRef matches against
+	// this field.
+	PipelineRef string `json:"pipeline_ref"`
+
+	// Conclusion is the terminal outcome: "success", "failure", or
+	// "aborted". TicketGate.Conclusion matches against this field.
+	// An empty Conclusion in a gate means "any completed result".
+	Conclusion string `json:"conclusion"`
+
+	// StartedAt is an ISO 8601 timestamp of when execution began.
+	StartedAt string `json:"started_at"`
+
+	// CompletedAt is an ISO 8601 timestamp of when execution finished.
+	CompletedAt string `json:"completed_at"`
+
+	// DurationMS is the total execution wall-clock time in milliseconds.
+	DurationMS int64 `json:"duration_ms"`
+
+	// StepCount is the total number of steps in the pipeline definition.
+	StepCount int `json:"step_count"`
+
+	// StepResults records the outcome of each step that executed. Steps
+	// that were never reached (due to earlier failure or abort) are not
+	// included. Ordered by execution order.
+	StepResults []PipelineStepResult `json:"step_results,omitempty"`
+
+	// FailedStep is the name of the step that caused a failure. Empty
+	// when Conclusion is "success".
+	FailedStep string `json:"failed_step,omitempty"`
+
+	// ErrorMessage is the error text from the failed or aborted step.
+	// Empty when Conclusion is "success".
+	ErrorMessage string `json:"error_message,omitempty"`
+
+	// LogEventID is the Matrix event ID of the thread root message in
+	// the log room. Provides a direct link from the result summary to
+	// the detailed step-by-step execution log. Empty when the pipeline
+	// has no log room configured (which should not happen since the
+	// result event itself is published to the log room).
+	LogEventID string `json:"log_event_id,omitempty"`
+
+	// Extra is a documented extension namespace for experimental or
+	// preview fields before promotion to top-level schema fields in
+	// a version bump. Same semantics as TicketContent.Extra.
+	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// PipelineStepResult records the outcome of a single pipeline step.
+type PipelineStepResult struct {
+	// Name is the step's human-readable identifier from the pipeline
+	// definition.
+	Name string `json:"name"`
+
+	// Status is the step outcome: "ok", "failed", "skipped", or
+	// "aborted". "failed (optional)" is recorded when an optional
+	// step fails but execution continues.
+	Status string `json:"status"`
+
+	// DurationMS is the step execution wall-clock time in milliseconds.
+	DurationMS int64 `json:"duration_ms"`
+
+	// Error is the error message when the step failed or aborted.
+	// Empty for successful or skipped steps.
+	Error string `json:"error,omitempty"`
+}
+
+// Validate checks that all required fields are present and well-formed.
+// Returns an error describing the first invalid field found, or nil if
+// the content is valid.
+func (p *PipelineResultContent) Validate() error {
+	if p.Version < 1 {
+		return fmt.Errorf("pipeline result: version must be >= 1, got %d", p.Version)
+	}
+	if p.PipelineRef == "" {
+		return errors.New("pipeline result: pipeline_ref is required")
+	}
+	switch p.Conclusion {
+	case "success", "failure", "aborted":
+		// Valid.
+	case "":
+		return errors.New("pipeline result: conclusion is required")
+	default:
+		return fmt.Errorf("pipeline result: unknown conclusion %q", p.Conclusion)
+	}
+	if p.StartedAt == "" {
+		return errors.New("pipeline result: started_at is required")
+	}
+	if p.CompletedAt == "" {
+		return errors.New("pipeline result: completed_at is required")
+	}
+	if p.StepCount < 1 {
+		return fmt.Errorf("pipeline result: step_count must be >= 1, got %d", p.StepCount)
+	}
+	for i := range p.StepResults {
+		if err := p.StepResults[i].Validate(); err != nil {
+			return fmt.Errorf("pipeline result: step_results[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// CanModify checks whether this code version can safely perform a
+// read-modify-write cycle on this event. Returns nil if safe, or an
+// error explaining why modification would risk data loss.
+//
+// Pipeline result events are typically write-once (each execution
+// overwrites the previous result), but CanModify is provided for
+// consistency with the schema pattern and to protect against future
+// use cases where results might be annotated.
+func (p *PipelineResultContent) CanModify() error {
+	if p.Version > PipelineResultContentVersion {
+		return fmt.Errorf(
+			"pipeline result version %d exceeds supported version %d: "+
+				"modification would lose fields added in newer versions; "+
+				"upgrade the pipeline executor before modifying this event",
+			p.Version, PipelineResultContentVersion,
+		)
+	}
+	return nil
+}
+
+// Validate checks that the step result has valid required fields.
+func (s *PipelineStepResult) Validate() error {
+	if s.Name == "" {
+		return errors.New("step result: name is required")
+	}
+	switch s.Status {
+	case "ok", "failed", "failed (optional)", "skipped", "aborted":
+		// Valid.
+	case "":
+		return errors.New("step result: status is required")
+	default:
+		return fmt.Errorf("step result: unknown status %q", s.Status)
+	}
+	return nil
 }
 
 // Credentials is the content of an EventTypeCredentials state event.

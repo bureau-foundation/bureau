@@ -21,7 +21,6 @@ const (
 	defaultProxySocket = "/run/bureau/proxy.sock"
 	defaultPayloadPath = "/run/bureau/payload.json"
 	defaultTriggerPath = "/run/bureau/trigger.json"
-	eventTypePipeline  = "m.bureau.pipeline"
 )
 
 func main() {
@@ -150,12 +149,19 @@ func run() error {
 	pipelineStart := time.Now()
 	results.writeStart(name, len(content.Steps))
 
+	// Accumulate step outcomes for the pipeline result state event.
+	var stepResults []schema.PipelineStepResult
+
 	for index, step := range content.Steps {
 		expandedStep, err := pipeline.ExpandStep(step, variables)
 		if err != nil {
+			totalDuration := time.Since(pipelineStart)
 			results.writeFailed(step.Name, err.Error(),
-				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
+				totalDuration.Milliseconds(), logger.logEventID())
 			logger.logFailed(ctx, name, step.Name, err)
+			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+				"failure", pipelineStart, totalDuration, stepResults,
+				step.Name, err.Error())
 			return fmt.Errorf("expanding step %q: %w", step.Name, err)
 		}
 
@@ -172,6 +178,16 @@ func run() error {
 				result.duration.Milliseconds(), result.err.Error())
 			results.writeAborted(expandedStep.Name, result.err.Error(),
 				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
+			stepResults = append(stepResults, schema.PipelineStepResult{
+				Name:       expandedStep.Name,
+				Status:     "aborted",
+				DurationMS: result.duration.Milliseconds(),
+				Error:      result.err.Error(),
+			})
+			totalDuration := time.Since(pipelineStart)
+			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+				"aborted", pipelineStart, totalDuration, stepResults,
+				expandedStep.Name, result.err.Error())
 			return nil
 
 		case "failed":
@@ -182,12 +198,24 @@ func run() error {
 					"failed (optional)", result.duration)
 				results.writeStep(index, expandedStep.Name, "failed (optional)",
 					result.duration.Milliseconds(), result.err.Error())
+				stepResults = append(stepResults, schema.PipelineStepResult{
+					Name:       expandedStep.Name,
+					Status:     "failed (optional)",
+					DurationMS: result.duration.Milliseconds(),
+					Error:      result.err.Error(),
+				})
 			} else {
 				fmt.Printf("[pipeline] step %d/%d: %s... failed: %v\n",
 					index+1, len(content.Steps), expandedStep.Name, result.err)
 				logger.logFailed(ctx, name, expandedStep.Name, result.err)
 				results.writeStep(index, expandedStep.Name, "failed",
 					result.duration.Milliseconds(), result.err.Error())
+				stepResults = append(stepResults, schema.PipelineStepResult{
+					Name:       expandedStep.Name,
+					Status:     "failed",
+					DurationMS: result.duration.Milliseconds(),
+					Error:      result.err.Error(),
+				})
 
 				// Run on_failure steps before recording the terminal failure.
 				// These are best-effort: their failures are logged but do not
@@ -195,14 +223,23 @@ func run() error {
 				runOnFailureSteps(ctx, content.OnFailure, variables,
 					expandedStep.Name, result.err, proxy, logger, results)
 
+				totalDuration := time.Since(pipelineStart)
 				results.writeFailed(expandedStep.Name, result.err.Error(),
-					time.Since(pipelineStart).Milliseconds(), logger.logEventID())
+					totalDuration.Milliseconds(), logger.logEventID())
+				publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+					"failure", pipelineStart, totalDuration, stepResults,
+					expandedStep.Name, result.err.Error())
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
 			}
 
 		default:
 			results.writeStep(index, expandedStep.Name, result.status,
 				result.duration.Milliseconds(), "")
+			stepResults = append(stepResults, schema.PipelineStepResult{
+				Name:       expandedStep.Name,
+				Status:     result.status,
+				DurationMS: result.duration.Milliseconds(),
+			})
 		}
 	}
 
@@ -210,7 +247,55 @@ func run() error {
 	fmt.Printf("[pipeline] %s: complete (%s)\n", name, formatDuration(totalDuration))
 	logger.logComplete(ctx, name, totalDuration)
 	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID())
+	publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+		"success", pipelineStart, totalDuration, stepResults,
+		"", "")
 	return nil
+}
+
+// publishPipelineResult publishes a PipelineResultContent state event to the
+// pipeline's log room. This is the Matrix-native record of pipeline execution
+// that the ticket service watches to evaluate pipeline gates.
+//
+// Publishing is best-effort: if the log room is not configured (logger is nil)
+// or the putState call fails, a warning is printed but the pipeline's own
+// exit status is not affected. The JSONL result log is the primary structured
+// output for the daemon; the state event is for cross-service coordination.
+func publishPipelineResult(
+	ctx context.Context,
+	proxy *proxyClient,
+	logger *threadLogger,
+	pipelineName string,
+	stepCount int,
+	conclusion string,
+	startedAt time.Time,
+	totalDuration time.Duration,
+	stepResults []schema.PipelineStepResult,
+	failedStep string,
+	errorMessage string,
+) {
+	roomID := logger.logRoomID()
+	if roomID == "" {
+		return
+	}
+
+	result := schema.PipelineResultContent{
+		Version:      schema.PipelineResultContentVersion,
+		PipelineRef:  pipelineName,
+		Conclusion:   conclusion,
+		StartedAt:    startedAt.UTC().Format(time.RFC3339),
+		CompletedAt:  time.Now().UTC().Format(time.RFC3339),
+		DurationMS:   totalDuration.Milliseconds(),
+		StepCount:    stepCount,
+		StepResults:  stepResults,
+		FailedStep:   failedStep,
+		ErrorMessage: errorMessage,
+		LogEventID:   logger.logEventID(),
+	}
+
+	if _, err := proxy.putState(ctx, roomID, schema.EventTypePipelineResult, pipelineName, result); err != nil {
+		fmt.Printf("[pipeline] warning: failed to publish pipeline result event: %v\n", err)
+	}
 }
 
 // runOnFailureSteps executes the on_failure steps after a pipeline failure.
@@ -346,7 +431,7 @@ func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyClient) (st
 		return "", nil, fmt.Errorf("resolving pipeline room %q: %w", alias, err)
 	}
 
-	stateContent, err := proxy.getState(ctx, roomID, eventTypePipeline, templateRef.Template)
+	stateContent, err := proxy.getState(ctx, roomID, schema.EventTypePipeline, templateRef.Template)
 	if err != nil {
 		return "", nil, fmt.Errorf("reading pipeline %q from room %s: %w", templateRef.Template, roomID, err)
 	}

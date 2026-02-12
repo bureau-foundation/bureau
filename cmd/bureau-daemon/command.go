@@ -42,12 +42,14 @@ type commandDefinition struct {
 // builtinCommands maps command names to their definitions. Commands not
 // in this map are rejected with an "unknown command" error.
 var builtinCommands = map[string]commandDefinition{
-	"workspace.list":          {schema.PowerLevelReadOnly, false, handleWorkspaceList},
-	"workspace.status":        {schema.PowerLevelReadOnly, true, handleWorkspaceStatus},
-	"workspace.du":            {schema.PowerLevelReadOnly, true, handleWorkspaceDu},
-	"workspace.worktree.list": {schema.PowerLevelOperator, true, handleWorkspaceWorktreeList},
-	"workspace.fetch":         {schema.PowerLevelOperator, true, handleWorkspaceFetch},
-	"pipeline.execute":        {schema.PowerLevelAdmin, false, handlePipelineExecute},
+	"workspace.list":            {schema.PowerLevelReadOnly, false, handleWorkspaceList},
+	"workspace.status":          {schema.PowerLevelReadOnly, true, handleWorkspaceStatus},
+	"workspace.du":              {schema.PowerLevelReadOnly, true, handleWorkspaceDu},
+	"workspace.worktree.list":   {schema.PowerLevelOperator, true, handleWorkspaceWorktreeList},
+	"workspace.worktree.add":    {schema.PowerLevelOperator, true, handleWorkspaceWorktreeAdd},
+	"workspace.worktree.remove": {schema.PowerLevelOperator, true, handleWorkspaceWorktreeRemove},
+	"workspace.fetch":           {schema.PowerLevelOperator, true, handleWorkspaceFetch},
+	"pipeline.execute":          {schema.PowerLevelAdmin, false, handlePipelineExecute},
 }
 
 // processCommandMessages scans timeline events for m.bureau.command

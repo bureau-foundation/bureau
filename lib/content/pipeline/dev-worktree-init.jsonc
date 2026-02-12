@@ -1,0 +1,89 @@
+{
+  // Create a git worktree within an existing project workspace. Called
+  // by the daemon's workspace.worktree.add handler via an ephemeral
+  // pipeline executor sandbox.
+  //
+  // Assumes the project's bare repository already exists at
+  // /workspace/${PROJECT}/.bare/ (created by dev-workspace-init).
+  //
+  // Execution order:
+  //   - Verify the bare repository exists
+  //   - Create the git worktree at the requested subpath
+  //   - Run git submodule update if the repository has submodules
+  //   - Run the project-level worktree-init script if provided
+  //
+  // Project-specific worktree init scripts live at
+  // .bureau/pipeline/worktree-init within the repository. They receive
+  // WORKTREE_PATH and BRANCH as environment variables.
+
+  "description": "Create git worktree within an existing project",
+
+  "variables": {
+    "PROJECT": {
+      "description": "Project name (directory under /workspace containing .bare/)",
+      "required": true
+    },
+    "WORKTREE_PATH": {
+      "description": "Worktree subpath relative to the project root (e.g., feature/amdgpu)",
+      "required": true
+    },
+    "BRANCH": {
+      "description": "Git branch or commit to check out in the new worktree. Empty creates a detached HEAD at the default branch tip.",
+      "default": ""
+    },
+    "WORKSPACE_ROOM_ID": {
+      "description": "Matrix room ID for the parent workspace (for logging)",
+      "required": true
+    },
+    "MACHINE": {
+      "description": "Machine localpart identifying the host",
+      "required": true
+    }
+  },
+
+  "steps": [
+    {
+      "name": "verify-bare-repo",
+      "run": "test -d /workspace/${PROJECT}/.bare/objects",
+      "check": "test -d /workspace/${PROJECT}/.bare/objects"
+    },
+    {
+      "name": "create-parent-directories",
+      "run": "mkdir -p $(dirname /workspace/${PROJECT}/${WORKTREE_PATH})"
+    },
+    {
+      // Create the worktree. When BRANCH is empty, git worktree add
+      // without a branch argument creates a new branch named after the
+      // last path component. We use --detach for the empty case to
+      // avoid creating branches with arbitrary names — the agent can
+      // check out or create whatever branch it needs.
+      "name": "create-worktree",
+      "run": "if [ -n \"${BRANCH}\" ]; then\n  git -C /workspace/${PROJECT}/.bare worktree add /workspace/${PROJECT}/${WORKTREE_PATH} \"${BRANCH}\"\nelse\n  git -C /workspace/${PROJECT}/.bare worktree add --detach /workspace/${PROJECT}/${WORKTREE_PATH}\nfi",
+      "check": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}/.git || test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.git",
+      "timeout": "5m"
+    },
+    {
+      // Update submodules if the repository uses them. The --init flag
+      // handles first-time checkout. Skipped if no .gitmodules exists.
+      "name": "submodule-update",
+      "when": "test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.gitmodules",
+      "run": "git -C /workspace/${PROJECT}/${WORKTREE_PATH} submodule update --init --recursive",
+      "optional": true,
+      "timeout": "30m"
+    },
+    {
+      // Run the project-level worktree-init script from the repository
+      // if it exists. Projects use this for worktree-specific setup:
+      // virtualenv creation, build system configuration, symlink setup.
+      "name": "run-worktree-init",
+      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/worktree-init 2>/dev/null",
+      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/worktree-init > /tmp/bureau-worktree-init && chmod +x /tmp/bureau-worktree-init && WORKTREE_PATH=${WORKTREE_PATH} BRANCH=${BRANCH} PROJECT=${PROJECT} /tmp/bureau-worktree-init",
+      "optional": true,
+      "timeout": "10m"
+    }
+  ],
+
+  "log": {
+    "room": "${WORKSPACE_ROOM_ID}"
+  }
+}

@@ -24,6 +24,7 @@ go_library(
         "template.go",
         "token_verifier.go",
         "transport.go",
+        "worktree.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-daemon",
     visibility = ["//visibility:private"],

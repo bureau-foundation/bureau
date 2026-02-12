@@ -4,8 +4,6 @@
 package pipeline
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -96,7 +94,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Generate a request ID for correlating the command with its
 			// threaded result replies.
-			requestID, err := generateRequestID()
+			requestID, err := cli.GenerateRequestID()
 			if err != nil {
 				return fmt.Errorf("generating request ID: %w", err)
 			}
@@ -139,15 +137,4 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			return nil
 		},
 	}
-}
-
-// generateRequestID creates a random 16-byte hex string for correlating
-// command requests with their threaded result replies. Uses crypto/rand
-// for uniqueness without external dependencies.
-func generateRequestID() (string, error) {
-	var buffer [16]byte
-	if _, err := rand.Read(buffer[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buffer[:]), nil
 }

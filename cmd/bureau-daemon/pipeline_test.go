@@ -298,13 +298,13 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 		}
 	}
 
-	// Workspace root mount.
-	workspaceMount := findMount("/var/bureau/workspace")
+	// Workspace root mount (canonical /workspace path used by pipeline JSONC).
+	workspaceMount := findMount("/workspace")
 	if workspaceMount == nil {
 		t.Error("workspace root mount not found")
 	} else {
 		if workspaceMount.Source != "/var/bureau/workspace" {
-			t.Errorf("workspace mount source = %q", workspaceMount.Source)
+			t.Errorf("workspace mount source = %q, want %q", workspaceMount.Source, "/var/bureau/workspace")
 		}
 		if workspaceMount.Mode != "rw" {
 			t.Errorf("workspace mount mode = %q, want 'rw'", workspaceMount.Mode)

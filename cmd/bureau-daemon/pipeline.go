@@ -277,9 +277,8 @@ func (d *Daemon) buildPipelineExecutorSpec(
 			// Result file: bind-mounted RW so the executor can write
 			// JSONL and the daemon reads the host file after exit.
 			{Source: resultFilePath, Dest: "/run/bureau/result.jsonl", Mode: "rw"},
-			// Workspace root: needed by pipeline steps that perform
-			// git operations (clone, fetch, worktree create/remove).
-			{Source: d.workspaceRoot, Dest: d.workspaceRoot, Mode: "rw"},
+			// Workspace root: pipeline JSONC references /workspace/${PROJECT}.
+			{Source: d.workspaceRoot, Dest: "/workspace", Mode: "rw"},
 		},
 		Namespaces: &schema.TemplateNamespaces{
 			PID: true,

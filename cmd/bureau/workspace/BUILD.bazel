@@ -9,6 +9,7 @@ go_library(
         "command.go",
         "create.go",
         "doc.go",
+        "remote.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/workspace",
     visibility = ["//visibility:public"],

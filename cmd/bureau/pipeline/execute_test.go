@@ -4,48 +4,12 @@
 package pipeline
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
-
-func TestGenerateRequestID(t *testing.T) {
-	t.Parallel()
-
-	id, err := generateRequestID()
-	if err != nil {
-		t.Fatalf("generateRequestID: %v", err)
-	}
-
-	// 16 bytes → 32 hex characters.
-	if len(id) != 32 {
-		t.Errorf("request ID length = %d, want 32", len(id))
-	}
-
-	// Must be valid hex.
-	if _, err := hex.DecodeString(id); err != nil {
-		t.Errorf("request ID %q is not valid hex: %v", id, err)
-	}
-}
-
-func TestGenerateRequestIDUniqueness(t *testing.T) {
-	t.Parallel()
-
-	seen := make(map[string]bool)
-	for range 100 {
-		id, err := generateRequestID()
-		if err != nil {
-			t.Fatalf("generateRequestID: %v", err)
-		}
-		if seen[id] {
-			t.Fatalf("duplicate request ID: %s", id)
-		}
-		seen[id] = true
-	}
-}
 
 func TestExecutePipeline(t *testing.T) {
 

@@ -348,96 +348,470 @@ func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomI
 	}, nil
 }
 
-func statusCommand() *cli.Command {
+// aliasCommand builds a CLI command that takes a single positional alias
+// argument and a --server-name flag, then delegates to the provided run
+// function. This pattern is shared by status, du, fetch, and worktree list.
+func aliasCommand(name, summary, description, usage string, run func(alias, serverName string) error) *cli.Command {
+	var serverName string
 	return &cli.Command{
-		Name:    "status",
-		Summary: "Show detailed workspace status",
-		Description: `Query the hosting machine for detailed workspace status: disk usage,
-git status per worktree, running principals, and last activity.
-
-This is a remote command — the daemon on the hosting machine executes
-it and replies via Matrix.`,
+		Name:        name,
+		Summary:     summary,
+		Description: description,
+		Usage:       usage,
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet(name, pflag.ContinueOnError)
+			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+			return flagSet
+		},
 		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace status")
+			if len(args) == 0 {
+				return fmt.Errorf("workspace alias is required\n\nUsage: %s", usage)
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected argument: %s", args[1])
+			}
+			return run(args[0], serverName)
 		},
 	}
 }
 
+func statusCommand() *cli.Command {
+	return aliasCommand(
+		"status",
+		"Show detailed workspace status",
+		`Query the hosting machine for detailed workspace status including
+whether the workspace directory exists, has a bare repo, and its
+current Matrix lifecycle state.
+
+This is a remote command — the daemon on the hosting machine executes
+it and replies via Matrix.`,
+		"bureau workspace status <alias> [flags]",
+		runStatus,
+	)
+}
+
+func runStatus(alias, serverName string) error {
+	ctx, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer session.Close()
+
+	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.status", alias, nil)
+	if err != nil {
+		return err
+	}
+
+	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	// Display the result.
+	workspace, _ := result.Result["workspace"].(string)
+	exists, _ := result.Result["exists"].(bool)
+	fmt.Printf("Workspace: %s\n", workspace)
+	fmt.Printf("  exists: %v\n", exists)
+	if exists {
+		if hasBare, ok := result.Result["has_bare_repo"].(bool); ok && hasBare {
+			fmt.Printf("  has_bare_repo: true\n")
+		}
+		if isDir, ok := result.Result["is_dir"].(bool); ok {
+			fmt.Printf("  is_dir: %v\n", isDir)
+		}
+	}
+	return nil
+}
+
 func duCommand() *cli.Command {
-	return &cli.Command{
-		Name:    "du",
-		Summary: "Show workspace disk usage breakdown",
-		Description: `Show disk usage for workspace subdirectories: .bare/ (git objects),
+	return aliasCommand(
+		"du",
+		"Show workspace disk usage breakdown",
+		`Show disk usage for workspace subdirectories: .bare/ (git objects),
 each worktree, .shared/ (virtualenvs, build caches), and .cache/
 (cross-project caches). Helps identify where disk space went.`,
-		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace du")
-		},
+		"bureau workspace du <alias> [flags]",
+		runDu,
+	)
+}
+
+func runDu(alias, serverName string) error {
+	ctx, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
 	}
+	defer cancel()
+	defer session.Close()
+
+	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.du", alias, nil)
+	if err != nil {
+		return err
+	}
+
+	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	workspace, _ := result.Result["workspace"].(string)
+	size, _ := result.Result["size"].(string)
+	fmt.Fprintf(writer, "WORKSPACE\tSIZE\n")
+	fmt.Fprintf(writer, "%s\t%s\n", workspace, size)
+	writer.Flush()
+	return nil
 }
 
 func worktreeCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "worktree",
 		Summary: "Manage git worktrees within a workspace",
-		Description: `Add or remove git worktrees in a workspace project. Adding a worktree
-creates both the git worktree on the hosting machine and a Matrix
-room for the new workspace path.`,
+		Description: `Add, remove, or list git worktrees in a workspace project.
+
+The worktree alias extends the workspace alias: if "iree" is a workspace,
+then "iree/feature/amdgpu" is a worktree within it. The CLI discovers
+the parent workspace automatically by walking up the alias path.`,
 		Subcommands: []*cli.Command{
 			worktreeAddCommand(),
 			worktreeRemoveCommand(),
+			worktreeListCommand(),
 		},
 		Examples: []cli.Example{
 			{
 				Description: "Add a worktree for a feature branch",
-				Command:     "bureau workspace worktree add iree/amdgpu/pm --branch feature/amdgpu-pm",
+				Command:     "bureau workspace worktree add iree/feature/amdgpu --branch feature/amdgpu-pm",
 			},
 			{
-				Description: "Remove a worktree (checks for uncommitted changes)",
-				Command:     "bureau workspace worktree remove iree/amdgpu/pm",
+				Description: "Remove a worktree (archives uncommitted changes by default)",
+				Command:     "bureau workspace worktree remove iree/feature/amdgpu",
+			},
+			{
+				Description: "List all worktrees in a workspace",
+				Command:     "bureau workspace worktree list iree",
 			},
 		},
 	}
 }
 
 func worktreeAddCommand() *cli.Command {
+	var (
+		branch     string
+		serverName string
+	)
+
 	return &cli.Command{
 		Name:    "add",
 		Summary: "Add a git worktree to a workspace",
-		Description: `Create a new git worktree in a workspace project. Creates the
-worktree on the hosting machine (via the daemon) and the
-corresponding Matrix room.`,
+		Description: `Create a new git worktree in a workspace project. The alias extends
+the parent workspace alias — for workspace "iree", creating worktree
+"iree/feature/amdgpu" adds a worktree at the "feature/amdgpu" subpath.
+
+The daemon spawns a pipeline executor to perform the git operations
+(worktree creation, submodule init, project-level setup scripts).
+This is an async operation — the command returns immediately with
+an "accepted" status.`,
+		Usage: "bureau workspace worktree add <alias> [flags]",
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("worktree add", pflag.ContinueOnError)
+			flagSet.StringVar(&branch, "branch", "", "git branch or commit to check out (empty for detached HEAD)")
+			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+			return flagSet
+		},
 		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace worktree add")
+			if len(args) == 0 {
+				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected argument: %s", args[1])
+			}
+			return runWorktreeAdd(args[0], branch, serverName)
 		},
 	}
+}
+
+func runWorktreeAdd(alias, branch, serverName string) error {
+	if err := principal.ValidateLocalpart(alias); err != nil {
+		return fmt.Errorf("invalid worktree alias: %w", err)
+	}
+
+	ctx, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer session.Close()
+
+	// Walk up to find the parent workspace.
+	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	if workspaceState.Status != "active" {
+		return fmt.Errorf("workspace %s is in status %q (must be \"active\" to add worktrees)", workspaceAlias, workspaceState.Status)
+	}
+
+	// Derive the worktree subpath: the part of the alias after the
+	// workspace alias prefix.
+	worktreeSubpath := alias[len(workspaceAlias)+1:] // +1 for the "/"
+
+	parameters := map[string]any{
+		"path": worktreeSubpath,
+	}
+	if branch != "" {
+		parameters["branch"] = branch
+	}
+
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, workspaceRoomID, "workspace.worktree.add", workspaceAlias, parameters)
+	if err != nil {
+		return err
+	}
+
+	// Wait for the "accepted" ack from the daemon.
+	result, err := waitForCommandResult(ctx, session, workspaceRoomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	principalName, _ := result.Result["principal"].(string)
+	fmt.Fprintf(os.Stderr, "Worktree add accepted for %s\n", alias)
+	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
+	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
+	if branch != "" {
+		fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
+	}
+	if principalName != "" {
+		fmt.Fprintf(os.Stderr, "  executor:  %s\n", principalName)
+		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", principalName)
+	}
+	return nil
 }
 
 func worktreeRemoveCommand() *cli.Command {
+	var (
+		mode       string
+		serverName string
+	)
+
 	return &cli.Command{
 		Name:    "remove",
 		Summary: "Remove a git worktree from a workspace",
-		Description: `Remove a git worktree from a workspace project. Checks for
-uncommitted changes before removing. Also removes the Matrix room
-if it has no other purpose.`,
+		Description: `Remove a git worktree from a workspace project. In archive mode
+(the default), any uncommitted changes are committed to a timestamped
+archive branch before removal, preserving work-in-progress. In delete
+mode, the worktree is removed without preserving changes.
+
+The daemon spawns a pipeline executor to perform the removal. This is
+an async operation — the command returns immediately.`,
+		Usage: "bureau workspace worktree remove <alias> [flags]",
+		Flags: func() *pflag.FlagSet {
+			flagSet := pflag.NewFlagSet("worktree remove", pflag.ContinueOnError)
+			flagSet.StringVar(&mode, "mode", "archive", "removal mode: archive (preserve uncommitted work) or delete")
+			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+			return flagSet
+		},
 		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace worktree remove")
+			if len(args) == 0 {
+				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected argument: %s", args[1])
+			}
+			if mode != "archive" && mode != "delete" {
+				return fmt.Errorf("--mode must be \"archive\" or \"delete\", got %q", mode)
+			}
+			return runWorktreeRemove(args[0], mode, serverName)
 		},
 	}
 }
 
+func runWorktreeRemove(alias, mode, serverName string) error {
+	if err := principal.ValidateLocalpart(alias); err != nil {
+		return fmt.Errorf("invalid worktree alias: %w", err)
+	}
+
+	ctx, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer session.Close()
+
+	// Walk up to find the parent workspace.
+	workspaceRoomID, _, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	worktreeSubpath := alias[len(workspaceAlias)+1:]
+
+	parameters := map[string]any{
+		"path": worktreeSubpath,
+		"mode": mode,
+	}
+
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, workspaceRoomID, "workspace.worktree.remove", workspaceAlias, parameters)
+	if err != nil {
+		return err
+	}
+
+	result, err := waitForCommandResult(ctx, session, workspaceRoomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	principalName, _ := result.Result["principal"].(string)
+	fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
+	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
+	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
+	if principalName != "" {
+		fmt.Fprintf(os.Stderr, "  executor:  %s\n", principalName)
+		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", principalName)
+	}
+	return nil
+}
+
 func fetchCommand() *cli.Command {
-	return &cli.Command{
-		Name:    "fetch",
-		Summary: "Fetch latest changes for a workspace",
-		Description: `Run git fetch on the workspace's bare object store. Uses flock
+	return aliasCommand(
+		"fetch",
+		"Fetch latest changes for a workspace",
+		`Run git fetch on the workspace's bare object store. Uses flock
 coordination to prevent concurrent fetch conflicts when multiple
 agents share the same .bare/ directory.
 
 This is a remote command — the daemon on the hosting machine
-executes it.`,
-		Run: func(args []string) error {
-			return cli.ErrNotImplemented("workspace fetch")
-		},
+executes it. Fetch can take minutes for large repos, so the poll
+timeout is extended to 5 minutes.`,
+		"bureau workspace fetch <alias> [flags]",
+		runFetch,
+	)
+}
+
+func runFetch(alias, serverName string) error {
+	// Use ConnectOperator for the initial session setup (30s timeout).
+	_, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
 	}
+	defer cancel()
+	defer session.Close()
+
+	// Resolve workspace room within the initial 30s context.
+	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer resolveCancel()
+
+	roomID, err := resolveWorkspaceRoom(resolveCtx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	// Send the command with the shorter context.
+	sendCtx, sendCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sendCancel()
+
+	eventID, requestID, err := sendWorkspaceCommand(sendCtx, session, roomID, "workspace.fetch", alias, nil)
+	if err != nil {
+		return err
+	}
+
+	// Poll with a 5-minute timeout — fetch can be slow for large repos.
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer pollCancel()
+
+	fmt.Fprintf(os.Stderr, "Fetching %s (this may take a while for large repos)...\n", alias)
+
+	result, err := waitForCommandResult(pollCtx, session, roomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	output, _ := result.Result["output"].(string)
+	if output != "" {
+		fmt.Println(output)
+	}
+	fmt.Fprintf(os.Stderr, "Fetch complete (%dms)\n", result.DurationMS)
+	return nil
+}
+
+func worktreeListCommand() *cli.Command {
+	return aliasCommand(
+		"list",
+		"List git worktrees in a workspace",
+		`List all git worktrees in a workspace's .bare directory. Shows the
+raw git worktree list output including paths and branch information.`,
+		"bureau workspace worktree list <alias> [flags]",
+		runWorktreeList,
+	)
+}
+
+func runWorktreeList(alias, serverName string) error {
+	ctx, cancel, session, err := cli.ConnectOperator()
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer session.Close()
+
+	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
+	if err != nil {
+		return err
+	}
+
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.worktree.list", alias, nil)
+	if err != nil {
+		return err
+	}
+
+	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
+	if err != nil {
+		return err
+	}
+
+	if result.Status == "error" {
+		return fmt.Errorf("daemon error: %s", result.Error)
+	}
+
+	worktrees, _ := result.Result["worktrees"].([]any)
+	if len(worktrees) == 0 {
+		fmt.Println("No worktrees found.")
+		return nil
+	}
+
+	for _, worktree := range worktrees {
+		if line, ok := worktree.(string); ok {
+			fmt.Println(line)
+		}
+	}
+	return nil
 }

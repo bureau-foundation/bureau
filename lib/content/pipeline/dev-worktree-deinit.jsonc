@@ -1,0 +1,83 @@
+{
+  // Remove a git worktree from an existing project workspace. Called
+  // by the daemon's workspace.worktree.remove handler via an ephemeral
+  // pipeline executor sandbox.
+  //
+  // The removal mode controls behavior:
+  //   archive — commit any uncommitted work to a timestamped archive
+  //             branch before removing the worktree. This preserves
+  //             work-in-progress in the git history.
+  //   delete  — remove the worktree without preserving uncommitted work.
+  //
+  // Project-specific worktree deinit scripts live at
+  // .bureau/pipeline/worktree-deinit within the repository. They receive
+  // WORKTREE_PATH, MODE, and PROJECT as environment variables.
+
+  "description": "Remove git worktree from an existing project",
+
+  "variables": {
+    "PROJECT": {
+      "description": "Project name (directory under /workspace containing .bare/)",
+      "required": true
+    },
+    "WORKTREE_PATH": {
+      "description": "Worktree subpath relative to the project root",
+      "required": true
+    },
+    "MODE": {
+      "description": "Removal mode: 'archive' preserves uncommitted changes, 'delete' removes everything",
+      "default": "archive"
+    },
+    "WORKSPACE_ROOM_ID": {
+      "description": "Matrix room ID for the parent workspace (for logging)",
+      "required": true
+    },
+    "MACHINE": {
+      "description": "Machine localpart identifying the host",
+      "required": true
+    }
+  },
+
+  "steps": [
+    {
+      "name": "validate-mode",
+      "run": "case \"${MODE}\" in archive|delete) ;; *) echo \"invalid MODE: '${MODE}' (expected 'archive' or 'delete')\" >&2; exit 1;; esac"
+    },
+    {
+      "name": "verify-worktree-exists",
+      "run": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}",
+      "check": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}"
+    },
+    {
+      // In archive mode, commit any uncommitted changes to a
+      // timestamped archive branch. This preserves work-in-progress
+      // in the git history before the worktree is removed.
+      "name": "archive-dirty-changes",
+      "when": "test \"${MODE}\" = archive && test -n \"$(git -C /workspace/${PROJECT}/${WORKTREE_PATH} status --porcelain 2>/dev/null)\"",
+      "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nbranch=\"archive/${WORKTREE_PATH}-${timestamp}\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} checkout -b \"$branch\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} add -A\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} commit -m \"Archive uncommitted work before worktree removal\"",
+      "optional": true,
+      "timeout": "2m"
+    },
+    {
+      // Run the project-level worktree-deinit script from the
+      // repository if it exists. Projects use this for cleanup that
+      // only the project knows about: dropping databases, removing
+      // build artifacts, revoking tokens, etc.
+      "name": "run-worktree-deinit",
+      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/worktree-deinit 2>/dev/null",
+      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/worktree-deinit > /tmp/bureau-worktree-deinit && chmod +x /tmp/bureau-worktree-deinit && WORKTREE_PATH=${WORKTREE_PATH} MODE=${MODE} PROJECT=${PROJECT} /tmp/bureau-worktree-deinit",
+      "optional": true,
+      "timeout": "10m"
+    },
+    {
+      "name": "remove-worktree",
+      "run": "git -C /workspace/${PROJECT}/.bare worktree remove --force /workspace/${PROJECT}/${WORKTREE_PATH}",
+      "check": "test ! -d /workspace/${PROJECT}/${WORKTREE_PATH}",
+      "timeout": "2m"
+    }
+  ],
+
+  "log": {
+    "room": "${WORKSPACE_ROOM_ID}"
+  }
+}

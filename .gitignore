@@ -37,6 +37,7 @@ venv/
 
 # Bureau local state
 /.notes/
+/docs/design/
 *.log
 logs/
 tmp/

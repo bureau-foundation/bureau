@@ -1,0 +1,18 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Minimal "bare machine" image for bootstrap integration testing.
+# Contains only the system prerequisites that script/bootstrap-machine
+# requires. Bureau binaries and source are bind-mounted at runtime.
+
+FROM ubuntu:24.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        bubblewrap \
+        curl \
+        jq \
+        procps \
+        sudo \
+        tmux \
+    && rm -rf /var/lib/apt/lists/*

@@ -219,6 +219,26 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.reconcileRunningPrincipal(ctx, localpart, assignment)
 	}
 
+	// Set up management goroutines for principals that survived a daemon
+	// restart. After adoptPreExistingSandboxes populates d.running from
+	// the launcher's list-sandboxes response, those entries have no exit
+	// watcher, layout watcher, health monitor, or consumer proxy config.
+	// The earlier reconcile passes (credential tracking, visibility push,
+	// MatrixPolicy push, reconcileRunningPrincipal for lastSpecs) already
+	// handled their state — this pass starts the goroutines.
+	//
+	// On subsequent reconcile calls all d.running entries have exit
+	// watchers, so this loop is a no-op in steady state.
+	for localpart, assignment := range desired {
+		if !d.running[localpart] {
+			continue
+		}
+		if _, hasWatcher := d.exitWatchers[localpart]; hasWatcher {
+			continue // Already fully managed.
+		}
+		d.adoptSurvivingPrincipal(ctx, localpart, assignment)
+	}
+
 	// Create sandboxes for principals that should be running but aren't.
 	// StartConditions were already evaluated when building the desired
 	// set above — only principals with satisfied conditions are here.
@@ -564,6 +584,53 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		d.lastActivityAt = time.Now()
 		d.logger.Info("payload hot-reloaded", "principal", localpart)
 	}
+}
+
+// adoptSurvivingPrincipal sets up the management goroutines for a principal
+// that survived a daemon restart. The launcher continued running the sandbox
+// while the daemon was down — adoptPreExistingSandboxes added the principal
+// to d.running, and earlier reconcile passes handled state tracking
+// (credentials, visibility, MatrixPolicy, ObservePolicy, lastSpecs). This
+// method starts the goroutines that the "create missing" pass normally starts:
+// exit watcher, layout watcher, health monitor, consumer proxy configuration.
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
+	d.logger.Info("setting up management for adopted principal", "principal", localpart)
+
+	// Start watching the tmux session for layout changes.
+	d.startLayoutWatcher(ctx, localpart)
+
+	// Start health monitoring if the template defines a health check.
+	if template := d.lastTemplates[localpart]; template != nil && template.HealthCheck != nil {
+		d.startHealthMonitor(ctx, localpart, template.HealthCheck)
+	}
+
+	// Register all known local service routes on the adopted consumer's
+	// proxy so it can reach services discovered while the daemon was down.
+	d.configureConsumerProxy(ctx, localpart)
+
+	// Push the service directory so the consumer's agent can discover
+	// services via GET /v1/services.
+	directory := d.buildServiceDirectory()
+	if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
+		d.logger.Error("failed to push service directory to adopted consumer proxy",
+			"consumer", localpart,
+			"error", err,
+		)
+	}
+
+	// Watch for sandbox process exit. Uses shutdownCtx (not the sync
+	// cycle's ctx) so the watcher survives across sync iterations.
+	if d.shutdownCtx != nil {
+		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
+		d.exitWatchers[localpart] = watcherCancel
+		go d.watchSandboxExit(watcherCtx, localpart)
+	}
+
+	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+		fmt.Sprintf("Adopted %s from previous daemon instance", localpart),
+	))
 }
 
 // payloadChanged returns true if the payloads of two SandboxSpecs differ.
@@ -1003,12 +1070,20 @@ type launcherServiceMount struct {
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.
 type launcherIPCResponse struct {
-	OK              bool   `json:"ok"`
-	Error           string `json:"error,omitempty"`
-	ProxyPID        int    `json:"proxy_pid,omitempty"`
-	BinaryHash      string `json:"binary_hash,omitempty"`
-	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
-	ExitCode        *int   `json:"exit_code,omitempty"`
+	OK              bool                       `json:"ok"`
+	Error           string                     `json:"error,omitempty"`
+	ProxyPID        int                        `json:"proxy_pid,omitempty"`
+	BinaryHash      string                     `json:"binary_hash,omitempty"`
+	ProxyBinaryPath string                     `json:"proxy_binary_path,omitempty"`
+	ExitCode        *int                       `json:"exit_code,omitempty"`
+	Sandboxes       []launcherSandboxListEntry `json:"sandboxes,omitempty"`
+}
+
+// launcherSandboxListEntry mirrors the launcher's SandboxListEntry type.
+// Returned by the "list-sandboxes" action for daemon restart recovery.
+type launcherSandboxListEntry struct {
+	Localpart string `json:"localpart"`
+	ProxyPID  int    `json:"proxy_pid"`
 }
 
 // queryLauncherStatus sends a "status" IPC request to the launcher and
@@ -1027,6 +1102,46 @@ func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, 
 		return "", "", fmt.Errorf("launcher status rejected: %s", response.Error)
 	}
 	return response.BinaryHash, response.ProxyBinaryPath, nil
+}
+
+// adoptPreExistingSandboxes queries the launcher for running sandboxes and
+// pre-populates d.running. Called once during daemon startup, before the
+// initial sync and first reconcile. This handles daemon restart recovery:
+// when the daemon restarts while the launcher continues running, the
+// launcher still has sandbox processes alive. Without this call, reconcile
+// would try to create-sandbox for each desired principal, which the launcher
+// rejects ("already has a running sandbox"), leaving the principal orphaned
+// from daemon management.
+//
+// The actual management goroutines (exit watchers, layout watchers, health
+// monitors) are started later during the first reconcile's "adopt surviving"
+// pass, which detects d.running entries without exit watchers.
+func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action: "list-sandboxes",
+	})
+	if err != nil {
+		return fmt.Errorf("list-sandboxes IPC: %w", err)
+	}
+	if !response.OK {
+		return fmt.Errorf("list-sandboxes rejected: %s", response.Error)
+	}
+
+	for _, entry := range response.Sandboxes {
+		d.running[entry.Localpart] = true
+		d.logger.Info("adopted pre-existing sandbox",
+			"principal", entry.Localpart,
+			"proxy_pid", entry.ProxyPID,
+		)
+	}
+
+	if count := len(response.Sandboxes); count > 0 {
+		d.logger.Info("adopted pre-existing sandboxes from launcher",
+			"count", count,
+		)
+	}
+
+	return nil
 }
 
 // reconcileBureauVersion compares the desired BureauVersion from MachineConfig

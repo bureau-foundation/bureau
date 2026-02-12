@@ -803,6 +803,17 @@ type IPCResponse struct {
 	// Uses a pointer to distinguish "exit code 0" (success) from
 	// "field not present" (non-wait-sandbox responses).
 	ExitCode *int `json:"exit_code,omitempty"`
+
+	// Sandboxes lists running sandboxes. Returned by "list-sandboxes"
+	// so the daemon can discover principals that survived a daemon
+	// restart while the launcher continued running.
+	Sandboxes []SandboxListEntry `json:"sandboxes,omitempty"`
+}
+
+// SandboxListEntry describes a running sandbox returned by "list-sandboxes".
+type SandboxListEntry struct {
+	Localpart string `json:"localpart"`
+	ProxyPID  int    `json:"proxy_pid"`
 }
 
 // handleConnection processes a single IPC request/response cycle.
@@ -844,6 +855,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 			BinaryHash:      l.binaryHash,
 			ProxyBinaryPath: l.proxyBinaryPath,
 		}
+
+	case "list-sandboxes":
+		response = l.handleListSandboxes()
 
 	case "create-sandbox":
 		response = l.handleCreateSandbox(ctx, &request)
@@ -988,6 +1002,26 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	}
 
 	return IPCResponse{OK: true, ProxyPID: pid}
+}
+
+// handleListSandboxes returns all currently running sandboxes. The daemon
+// uses this on startup to discover principals that survived a daemon restart
+// while the launcher continued running. Only sandboxes whose process is still
+// alive (done channel not closed) are included.
+func (l *Launcher) handleListSandboxes() IPCResponse {
+	var entries []SandboxListEntry
+	for localpart, sandbox := range l.sandboxes {
+		select {
+		case <-sandbox.done:
+			continue // Already exited — not reported as running.
+		default:
+		}
+		entries = append(entries, SandboxListEntry{
+			Localpart: localpart,
+			ProxyPID:  sandbox.proxyProcess.Pid,
+		})
+	}
+	return IPCResponse{OK: true, Sandboxes: entries}
 }
 
 // handleDestroySandbox terminates a sandbox by killing its tmux session and

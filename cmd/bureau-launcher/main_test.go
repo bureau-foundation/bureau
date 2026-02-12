@@ -2158,3 +2158,91 @@ func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
 		t.Fatalf("status request blocked by wait-sandbox: %s", statusResponse.Error)
 	}
 }
+
+func TestListSandboxes(t *testing.T) {
+	proxyBinary := buildProxyBinary(t)
+	launcher := newTestLauncher(t, proxyBinary)
+
+	// Empty launcher should return an empty list.
+	emptyResponse := launcher.handleListSandboxes()
+	if !emptyResponse.OK {
+		t.Fatalf("list-sandboxes on empty launcher failed: %s", emptyResponse.Error)
+	}
+	if len(emptyResponse.Sandboxes) != 0 {
+		t.Errorf("expected 0 sandboxes, got %d", len(emptyResponse.Sandboxes))
+	}
+
+	// Create two sandboxes.
+	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN":   "syt_fake_test_token",
+		"MATRIX_USER_ID": "@test/list-a:bureau.local",
+	})
+
+	responseA := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/list-a",
+		EncryptedCredentials: ciphertext,
+	})
+	if !responseA.OK {
+		t.Fatalf("create sandbox A: %s", responseA.Error)
+	}
+
+	ciphertextB := encryptCredentials(t, launcher.keypair, map[string]string{
+		"MATRIX_TOKEN":   "syt_fake_test_token_b",
+		"MATRIX_USER_ID": "@test/list-b:bureau.local",
+	})
+	responseB := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
+		Action:               "create-sandbox",
+		Principal:            "test/list-b",
+		EncryptedCredentials: ciphertextB,
+	})
+	if !responseB.OK {
+		t.Fatalf("create sandbox B: %s", responseB.Error)
+	}
+
+	// List should return both sandboxes.
+	listResponse := launcher.handleListSandboxes()
+	if !listResponse.OK {
+		t.Fatalf("list-sandboxes failed: %s", listResponse.Error)
+	}
+	if len(listResponse.Sandboxes) != 2 {
+		t.Fatalf("expected 2 sandboxes, got %d", len(listResponse.Sandboxes))
+	}
+
+	// Verify both are present with valid PIDs.
+	found := make(map[string]int)
+	for _, entry := range listResponse.Sandboxes {
+		found[entry.Localpart] = entry.ProxyPID
+	}
+	if pid, ok := found["test/list-a"]; !ok {
+		t.Error("test/list-a not found in list-sandboxes response")
+	} else if pid == 0 {
+		t.Error("test/list-a has zero proxy PID")
+	}
+	if pid, ok := found["test/list-b"]; !ok {
+		t.Error("test/list-b not found in list-sandboxes response")
+	} else if pid == 0 {
+		t.Error("test/list-b has zero proxy PID")
+	}
+
+	// Destroy one sandbox.
+	destroyResponse := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: "test/list-a",
+	})
+	if !destroyResponse.OK {
+		t.Fatalf("destroy sandbox A: %s", destroyResponse.Error)
+	}
+
+	// List should return only the surviving sandbox.
+	afterDestroyResponse := launcher.handleListSandboxes()
+	if !afterDestroyResponse.OK {
+		t.Fatalf("list-sandboxes after destroy failed: %s", afterDestroyResponse.Error)
+	}
+	if len(afterDestroyResponse.Sandboxes) != 1 {
+		t.Fatalf("expected 1 sandbox after destroy, got %d", len(afterDestroyResponse.Sandboxes))
+	}
+	if afterDestroyResponse.Sandboxes[0].Localpart != "test/list-b" {
+		t.Errorf("surviving sandbox = %q, want test/list-b", afterDestroyResponse.Sandboxes[0].Localpart)
+	}
+}

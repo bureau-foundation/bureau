@@ -266,6 +266,15 @@ func run() error {
 	defer daemon.stopAllLayoutWatchers()
 	defer daemon.stopAllHealthMonitors()
 
+	// Query the launcher for sandboxes that survived a daemon restart.
+	// Pre-populating d.running before reconcile prevents the daemon from
+	// trying to create-sandbox for principals the launcher already has,
+	// which would be rejected with "already has a running sandbox" and
+	// leave the principal orphaned from daemon management.
+	if err := daemon.adoptPreExistingSandboxes(ctx); err != nil {
+		logger.Warn("failed to query launcher for pre-existing sandboxes", "error", err)
+	}
+
 	// Perform the initial Matrix /sync to establish a since token and
 	// baseline state (reconcile, peer addresses, service directory).
 	sinceToken, err := daemon.initialSync(ctx)

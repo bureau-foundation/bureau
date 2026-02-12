@@ -13,8 +13,9 @@
   //   - Run the project-level worktree-init script if provided
   //
   // Project-specific worktree init scripts live at
-  // .bureau/pipeline/worktree-init within the repository. They receive
-  // WORKTREE_PATH and BRANCH as environment variables.
+  // .bureau/pipeline/worktree-init within the checked-out worktree.
+  // They receive PROJECT, WORKTREE_PATH, and BRANCH as environment
+  // variables.
 
   "description": "Create git worktree within an existing project",
 
@@ -72,12 +73,13 @@
       "timeout": "30m"
     },
     {
-      // Run the project-level worktree-init script from the repository
-      // if it exists. Projects use this for worktree-specific setup:
-      // virtualenv creation, build system configuration, symlink setup.
+      // Run the project-level worktree-init script if it exists in the
+      // checked-out worktree. Read directly from the worktree filesystem
+      // (not via git show HEAD:...) so the script matches the branch
+      // that was actually checked out.
       "name": "run-worktree-init",
-      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/worktree-init 2>/dev/null",
-      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/worktree-init > /tmp/bureau-worktree-init && chmod +x /tmp/bureau-worktree-init && WORKTREE_PATH=${WORKTREE_PATH} BRANCH=${BRANCH} PROJECT=${PROJECT} /tmp/bureau-worktree-init",
+      "when": "test -x /workspace/${PROJECT}/${WORKTREE_PATH}/.bureau/pipeline/worktree-init",
+      "run": "cd /workspace/${PROJECT}/${WORKTREE_PATH} && PROJECT=${PROJECT} WORKTREE_PATH=${WORKTREE_PATH} BRANCH=${BRANCH} .bureau/pipeline/worktree-init",
       "optional": true,
       "timeout": "10m"
     }

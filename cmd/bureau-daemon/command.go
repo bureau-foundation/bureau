@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/git"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -151,18 +152,13 @@ func (d *Daemon) handleCommand(ctx context.Context, roomID, eventID, sender stri
 }
 
 // validateWorkspacePath checks that a workspace name is safe for
-// filesystem operations. Rejects path traversal attempts (.. segments,
-// absolute paths, leading dots) and verifies the resolved path would
-// fall under workspaceRoot.
+// filesystem operations and shell interpolation. Uses the shared
+// principal.ValidateRelativePath for charset and segment validation,
+// then adds containment checking to verify the resolved path falls
+// under workspaceRoot.
 func (d *Daemon) validateWorkspacePath(workspace string) error {
-	if strings.Contains(workspace, "..") {
-		return fmt.Errorf("workspace name must not contain '..' segments: %q", workspace)
-	}
-	if filepath.IsAbs(workspace) {
-		return fmt.Errorf("workspace name must not be an absolute path: %q", workspace)
-	}
-	if strings.HasPrefix(workspace, ".") {
-		return fmt.Errorf("workspace name must not start with '.': %q", workspace)
+	if err := principal.ValidateRelativePath(workspace, "workspace name"); err != nil {
+		return err
 	}
 
 	// Verify containment: the resolved path must be under workspaceRoot.

@@ -77,34 +77,10 @@ func TestPipelineExecution(t *testing.T) {
 	// it enough time for the full lifecycle.
 	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
 
-	// Classify results by their content. The "accepted" result comes from
-	// postCommandResult (has result.status == "accepted"), the pipeline
-	// result comes from postPipelineResult (has exit_code).
-	var acceptedResult, pipelineResult map[string]any
-	for _, event := range results {
-		content := event.Content
-
-		// Check if this is the pipeline result (has exit_code).
-		if _, hasExitCode := content["exit_code"]; hasExitCode {
-			pipelineResult = content
-			continue
-		}
-
-		// Check if this is the accepted result.
-		resultField, _ := content["result"].(map[string]any)
-		if resultField != nil {
-			status, _ := resultField["status"].(string)
-			if status == "accepted" {
-				acceptedResult = content
-				continue
-			}
-		}
-	}
+	acceptedResult := findAcceptedEvent(t, results)
+	pipelineResult := findPipelineEvent(t, results)
 
 	// --- Verify accepted result ---
-	if acceptedResult == nil {
-		t.Fatal("accepted result not found in command results")
-	}
 	if status, _ := acceptedResult["status"].(string); status != "success" {
 		t.Errorf("accepted result status = %q, want %q", status, "success")
 	}
@@ -120,9 +96,6 @@ func TestPipelineExecution(t *testing.T) {
 	verifyThreadRelation(t, acceptedResult, commandEventID)
 
 	// --- Verify pipeline result ---
-	if pipelineResult == nil {
-		t.Fatal("pipeline result not found in command results")
-	}
 	if status, _ := pipelineResult["status"].(string); status != "success" {
 		body, _ := pipelineResult["body"].(string)
 		t.Errorf("pipeline result status = %q, want %q (body: %s)", status, "success", body)
@@ -210,19 +183,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	}
 
 	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
-
-	// Find the pipeline result (the one with exit_code).
-	var pipelineResult map[string]any
-	for _, event := range results {
-		if _, hasExitCode := event.Content["exit_code"]; hasExitCode {
-			pipelineResult = event.Content
-			break
-		}
-	}
-
-	if pipelineResult == nil {
-		t.Fatal("pipeline result not found in command results")
-	}
+	pipelineResult := findPipelineEvent(t, results)
 
 	// The executor exits non-zero when a step fails, and the daemon
 	// reports this as an error status.
@@ -336,19 +297,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	}
 
 	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
-
-	// Find the pipeline result.
-	var pipelineResult map[string]any
-	for _, event := range results {
-		if _, hasExitCode := event.Content["exit_code"]; hasExitCode {
-			pipelineResult = event.Content
-			break
-		}
-	}
-
-	if pipelineResult == nil {
-		t.Fatal("pipeline result not found in command results")
-	}
+	pipelineResult := findPipelineEvent(t, results)
 
 	// If the step succeeded (exit 0), the variable was propagated correctly
 	// through the entire daemon → launcher → executor → shell chain.

@@ -199,6 +199,22 @@ func waitForCommandResult(
 	}
 }
 
+// extractSubpath returns the portion of alias that follows the workspace
+// alias prefix. For example, extractSubpath("iree/feature/amdgpu", "iree")
+// returns "feature/amdgpu". Returns an error if the workspace alias is not
+// a proper prefix of the full alias separated by "/".
+func extractSubpath(alias, workspaceAlias string) (string, error) {
+	prefix := workspaceAlias + "/"
+	if !strings.HasPrefix(alias, prefix) {
+		return "", fmt.Errorf("alias %q does not start with workspace prefix %q", alias, prefix)
+	}
+	subpath := alias[len(prefix):]
+	if subpath == "" {
+		return "", fmt.Errorf("alias %q is identical to workspace alias (no worktree subpath)", alias)
+	}
+	return subpath, nil
+}
+
 // readWorkspaceState reads and parses the m.bureau.workspace state
 // event from a room. Returns an error if the event doesn't exist or
 // can't be parsed.

@@ -221,25 +221,18 @@ type workspaceInfo struct {
 }
 
 func runList(args []string) error {
-	operatorSession, err := cli.LoadSession()
+	// Use a 60-second timeout — this scans all joined rooms, issuing
+	// one GetRoomState call per room. For a fleet with many rooms this
+	// can take a while.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	_, operatorCancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: operatorSession.Homeserver,
-	})
-	if err != nil {
-		return fmt.Errorf("creating Matrix client: %w", err)
-	}
-
-	session, err := client.SessionFromToken(operatorSession.UserID, operatorSession.AccessToken)
-	if err != nil {
-		return fmt.Errorf("creating Matrix session: %w", err)
-	}
+	defer operatorCancel()
 	defer session.Close()
-
-	ctx := context.Background()
 
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
@@ -560,6 +553,12 @@ func runWorktreeAdd(alias, branch, serverName string) error {
 	defer cancel()
 	defer session.Close()
 
+	// Worktree operations route through the parent workspace room.
+	// Worktrees don't get their own rooms — they're filesystem
+	// artifacts, not organizational boundaries. If per-worktree rooms
+	// become useful (e.g., for agent communication scoped to a
+	// worktree), that's a separate information architecture decision.
+	//
 	// Walk up to find the parent workspace.
 	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
 	if err != nil {
@@ -571,8 +570,13 @@ func runWorktreeAdd(alias, branch, serverName string) error {
 	}
 
 	// Derive the worktree subpath: the part of the alias after the
-	// workspace alias prefix.
-	worktreeSubpath := alias[len(workspaceAlias)+1:] // +1 for the "/"
+	// workspace alias prefix. findParentWorkspace always returns a
+	// strict prefix (it strips at least one segment), but verify
+	// the invariant explicitly rather than panicking on a bad slice.
+	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)
+	if err != nil {
+		return err
+	}
 
 	parameters := map[string]any{
 		"path": worktreeSubpath,
@@ -661,12 +665,19 @@ func runWorktreeRemove(alias, mode, serverName string) error {
 	defer session.Close()
 
 	// Walk up to find the parent workspace.
-	workspaceRoomID, _, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
+	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
 	if err != nil {
 		return err
 	}
 
-	worktreeSubpath := alias[len(workspaceAlias)+1:]
+	if workspaceState.Status != "active" {
+		return fmt.Errorf("workspace %s is in status %q (must be \"active\" to remove worktrees)", workspaceAlias, workspaceState.Status)
+	}
+
+	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)
+	if err != nil {
+		return err
+	}
 
 	parameters := map[string]any{
 		"path": worktreeSubpath,
@@ -715,33 +726,26 @@ timeout is extended to 5 minutes.`,
 }
 
 func runFetch(alias, serverName string) error {
-	// Use ConnectOperator for the initial session setup (30s timeout).
-	_, cancel, session, err := cli.ConnectOperator()
+	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
 	defer cancel()
 	defer session.Close()
 
-	// Resolve workspace room within the initial 30s context.
-	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer resolveCancel()
-
-	roomID, err := resolveWorkspaceRoom(resolveCtx, session, alias, serverName)
+	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
 	if err != nil {
 		return err
 	}
 
-	// Send the command with the shorter context.
-	sendCtx, sendCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer sendCancel()
-
-	eventID, requestID, err := sendWorkspaceCommand(sendCtx, session, roomID, "workspace.fetch", alias, nil)
+	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.fetch", alias, nil)
 	if err != nil {
 		return err
 	}
 
 	// Poll with a 5-minute timeout — fetch can be slow for large repos.
+	// The ConnectOperator context has a 30s deadline which is too short
+	// for the polling phase, so create a new context here.
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer pollCancel()
 

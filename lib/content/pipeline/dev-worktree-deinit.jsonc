@@ -10,8 +10,9 @@
   //   delete  — remove the worktree without preserving uncommitted work.
   //
   // Project-specific worktree deinit scripts live at
-  // .bureau/pipeline/worktree-deinit within the repository. They receive
-  // WORKTREE_PATH, MODE, and PROJECT as environment variables.
+  // .bureau/pipeline/worktree-deinit within the checked-out worktree.
+  // They receive PROJECT, WORKTREE_PATH, and MODE as environment
+  // variables.
 
   "description": "Remove git worktree from an existing project",
 
@@ -59,13 +60,13 @@
       "timeout": "2m"
     },
     {
-      // Run the project-level worktree-deinit script from the
-      // repository if it exists. Projects use this for cleanup that
-      // only the project knows about: dropping databases, removing
-      // build artifacts, revoking tokens, etc.
+      // Run the project-level worktree-deinit script if it exists in
+      // the worktree. Read directly from the worktree filesystem (not
+      // via git show HEAD:...) so the script matches the branch that
+      // was actually checked out.
       "name": "run-worktree-deinit",
-      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/worktree-deinit 2>/dev/null",
-      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/worktree-deinit > /tmp/bureau-worktree-deinit && chmod +x /tmp/bureau-worktree-deinit && WORKTREE_PATH=${WORKTREE_PATH} MODE=${MODE} PROJECT=${PROJECT} /tmp/bureau-worktree-deinit",
+      "when": "test -x /workspace/${PROJECT}/${WORKTREE_PATH}/.bureau/pipeline/worktree-deinit",
+      "run": "cd /workspace/${PROJECT}/${WORKTREE_PATH} && PROJECT=${PROJECT} WORKTREE_PATH=${WORKTREE_PATH} MODE=${MODE} .bureau/pipeline/worktree-deinit",
       "optional": true,
       "timeout": "10m"
     },

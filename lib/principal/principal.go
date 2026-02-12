@@ -91,31 +91,62 @@ func ValidateLocalpart(localpart string) error {
 		return fmt.Errorf("localpart is %d characters, maximum is %d", len(localpart), MaxLocalpartLength)
 	}
 
+	return validatePath(localpart, "localpart")
+}
+
+// ValidateRelativePath checks that a path is safe for use in filesystem
+// operations and shell interpolation. Enforces the same character whitelist
+// and segment rules as ValidateLocalpart but without the length restriction.
+//
+// Used by daemon-side validation of workspace names and worktree paths.
+// The character whitelist prevents shell metacharacters from reaching
+// pipeline shell commands via variable substitution.
+//
+// The label parameter names the path in error messages (e.g., "worktree path",
+// "workspace name").
+func ValidateRelativePath(path, label string) error {
+	if path == "" {
+		return fmt.Errorf("%s is empty", label)
+	}
+
+	return validatePath(path, label)
+}
+
+// validatePath enforces the Bureau path safety rules shared by localparts,
+// workspace names, and worktree paths:
+//
+//   - Characters restricted to a-z, 0-9, ., _, =, -, / (the Matrix
+//     localpart charset — no shell metacharacters, no uppercase)
+//   - No leading or trailing /
+//   - No empty segments (double slashes)
+//   - No ".." segments (path traversal)
+//   - No segments starting with "." (hidden files/directories)
+func validatePath(path, label string) error {
 	// Check every character against the allowed set.
-	for i := 0; i < len(localpart); i++ {
-		if !allowedChars[localpart[i]] {
-			return fmt.Errorf("invalid character %q at position %d (allowed: a-z, 0-9, ., _, =, -, /)", localpart[i], i)
+	for i := 0; i < len(path); i++ {
+		if !allowedChars[path[i]] {
+			return fmt.Errorf("%s: invalid character %q at position %d (allowed: a-z, 0-9, ., _, =, -, /)", label, path[i], i)
 		}
 	}
 
 	// Structural checks on the slash-separated segments.
-	if localpart[0] == '/' {
-		return fmt.Errorf("localpart must not start with /")
+	if path[0] == '/' {
+		return fmt.Errorf("%s must not start with /", label)
 	}
-	if localpart[len(localpart)-1] == '/' {
-		return fmt.Errorf("localpart must not end with /")
+	if path[len(path)-1] == '/' {
+		return fmt.Errorf("%s must not end with /", label)
 	}
 
-	segments := strings.Split(localpart, "/")
+	segments := strings.Split(path, "/")
 	for _, segment := range segments {
 		if segment == "" {
-			return fmt.Errorf("localpart contains empty segment (double slash)")
+			return fmt.Errorf("%s contains empty segment (double slash)", label)
 		}
 		if segment == ".." {
-			return fmt.Errorf("localpart contains '..' segment (path traversal)")
+			return fmt.Errorf("%s contains '..' segment (path traversal)", label)
 		}
 		if segment[0] == '.' {
-			return fmt.Errorf("segment %q starts with '.' (hidden file/directory)", segment)
+			return fmt.Errorf("%s segment %q starts with '.' (hidden file/directory)", label, segment)
 		}
 	}
 

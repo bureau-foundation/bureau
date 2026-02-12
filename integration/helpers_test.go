@@ -436,6 +436,47 @@ func waitForStateEvent(t *testing.T, session *messaging.Session, roomID, eventTy
 	}
 }
 
+// --- Command Result Classification Helpers ---
+
+// findAcceptedEvent searches command result events for the "accepted"
+// acknowledgment posted by async daemon handlers (worktree.add, worktree.remove,
+// pipeline.execute). The accepted event has content["result"]["status"] == "accepted".
+// Returns the full event content map. Fatals if no accepted event is found.
+func findAcceptedEvent(t *testing.T, events []messaging.Event) map[string]any {
+	t.Helper()
+
+	for _, event := range events {
+		resultField, _ := event.Content["result"].(map[string]any)
+		if resultField == nil {
+			continue
+		}
+		status, _ := resultField["status"].(string)
+		if status == "accepted" {
+			return event.Content
+		}
+	}
+
+	t.Fatalf("accepted event not found among %d command results", len(events))
+	return nil
+}
+
+// findPipelineEvent searches command result events for the pipeline execution
+// result. Pipeline results are distinguished from the "accepted" ack by the
+// presence of an "exit_code" field in the content. Returns the full event
+// content map. Fatals if no pipeline event is found.
+func findPipelineEvent(t *testing.T, events []messaging.Event) map[string]any {
+	t.Helper()
+
+	for _, event := range events {
+		if _, hasExitCode := event.Content["exit_code"]; hasExitCode {
+			return event.Content
+		}
+	}
+
+	t.Fatalf("pipeline event not found among %d command results", len(events))
+	return nil
+}
+
 // --- Pipeline Test Helpers ---
 
 // findRunnerEnv builds the Nix integration-test-env and returns the store

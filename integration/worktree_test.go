@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestWorkspaceCommands exercises the daemon's synchronous workspace command
@@ -379,9 +378,10 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 		// Wait for both the accepted ack and the pipeline result.
 		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 2, 60*time.Second)
-		acceptedResult := findAcceptedResult(t, results)
+		acceptedContent := findAcceptedEvent(t, results)
+		innerResult, _ := acceptedContent["result"].(map[string]any)
 
-		principalName, _ := acceptedResult["principal"].(string)
+		principalName, _ := innerResult["principal"].(string)
 		if principalName == "" {
 			t.Error("accepted result has empty principal")
 		}
@@ -408,9 +408,10 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		}
 
 		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 2, 60*time.Second)
-		acceptedResult := findAcceptedResult(t, results)
+		acceptedContent := findAcceptedEvent(t, results)
+		innerResult, _ := acceptedContent["result"].(map[string]any)
 
-		principalName, _ := acceptedResult["principal"].(string)
+		principalName, _ := innerResult["principal"].(string)
 		if principalName == "" {
 			t.Error("accepted result has empty principal")
 		}
@@ -552,29 +553,6 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 }
 
 // --- Test helpers ---
-
-// findAcceptedResult searches command result events for the "accepted"
-// acknowledgment posted by async daemon handlers (worktree.add, worktree.remove,
-// pipeline.execute). The accepted result has content.result.status == "accepted".
-// Returns the inner result map (containing "status" and "principal" fields).
-// Fatals if no accepted result is found.
-func findAcceptedResult(t *testing.T, events []messaging.Event) map[string]any {
-	t.Helper()
-
-	for _, event := range events {
-		resultField, _ := event.Content["result"].(map[string]any)
-		if resultField == nil {
-			continue
-		}
-		status, _ := resultField["status"].(string)
-		if status == "accepted" {
-			return resultField
-		}
-	}
-
-	t.Fatalf("accepted result not found among %d command results", len(events))
-	return nil
-}
 
 // initTestGitRepo creates a regular git repo with one commit on a "main"
 // branch. Used as the seed for git clone --bare to create Bureau's .bare/

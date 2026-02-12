@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -161,25 +162,10 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID, event
 }
 
 // validateWorktreePath checks that a worktree path is safe for filesystem
-// operations. Rejects absolute paths, path traversal (..), hidden segments
-// (leading dot), and empty segments.
+// operations and shell interpolation. Delegates to principal.ValidateRelativePath
+// for charset enforcement and segment validation.
 func validateWorktreePath(path string) error {
-	if filepath.IsAbs(path) {
-		return fmt.Errorf("worktree path must not be absolute: %q", path)
-	}
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("worktree path must not contain '..': %q", path)
-	}
-	segments := strings.Split(path, "/")
-	for _, segment := range segments {
-		if segment == "" {
-			return fmt.Errorf("worktree path contains empty segment: %q", path)
-		}
-		if segment[0] == '.' {
-			return fmt.Errorf("worktree path segment %q starts with '.' (hidden)", segment)
-		}
-	}
-	return nil
+	return principal.ValidateRelativePath(path, "worktree path")
 }
 
 // worktreeLocalpart generates a unique principal localpart for a worktree

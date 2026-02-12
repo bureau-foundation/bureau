@@ -91,6 +91,55 @@ func TestValidateLocalpart(t *testing.T) {
 	}
 }
 
+func TestValidateRelativePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		label   string
+		wantErr string
+	}{
+		// Valid paths.
+		{name: "simple", path: "feature/amdgpu", label: "worktree path"},
+		{name: "single_segment", path: "main", label: "workspace name"},
+		{name: "deep", path: "a/b/c/d", label: "worktree path"},
+		{name: "with_dots_dashes", path: "v1.0/feature-branch", label: "worktree path"},
+
+		// Empty.
+		{name: "empty", path: "", label: "worktree path", wantErr: "worktree path is empty"},
+
+		// Invalid characters — label appears in error.
+		{name: "uppercase", path: "Feature", label: "workspace name", wantErr: "workspace name: invalid character"},
+		{name: "shell_metachar", path: "foo;bar", label: "worktree path", wantErr: "worktree path: invalid character"},
+
+		// Structural.
+		{name: "leading_slash", path: "/foo", label: "worktree path", wantErr: "must not start with /"},
+		{name: "trailing_slash", path: "foo/", label: "worktree path", wantErr: "must not end with /"},
+		{name: "double_slash", path: "foo//bar", label: "worktree path", wantErr: "empty segment"},
+		{name: "path_traversal", path: "foo/../bar", label: "worktree path", wantErr: "path traversal"},
+		{name: "hidden_segment", path: "foo/.hidden", label: "worktree path", wantErr: "starts with '.'"},
+
+		// No length restriction (unlike ValidateLocalpart).
+		{name: "very_long", path: strings.Repeat("a/", 100) + "end", label: "worktree path"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRelativePath(test.path, test.label)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("ValidateRelativePath(%q, %q) = %v, want nil", test.path, test.label, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateRelativePath(%q, %q) = nil, want error containing %q", test.path, test.label, test.wantErr)
+				} else if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("ValidateRelativePath(%q, %q) = %v, want error containing %q", test.path, test.label, err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
 func TestMatrixUserID(t *testing.T) {
 	tests := []struct {
 		name       string

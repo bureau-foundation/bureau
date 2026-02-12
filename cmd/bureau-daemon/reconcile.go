@@ -295,6 +295,27 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			d.ensurePrincipalRoomAccess(ctx, localpart, workspaceRoomID)
 		}
 
+		// Resolve required service sockets to host-side paths. The daemon
+		// looks up m.bureau.room_service state events in rooms the principal
+		// will be a member of (workspace room first, then config room).
+		// Failure to resolve any required service blocks sandbox creation.
+		var serviceMounts []launcherServiceMount
+		if sandboxSpec != nil && len(sandboxSpec.RequiredServices) > 0 {
+			mounts, err := d.resolveServiceMounts(ctx, sandboxSpec.RequiredServices, workspaceRoomID)
+			if err != nil {
+				d.logger.Error("resolving required services",
+					"principal", localpart,
+					"required_services", sandboxSpec.RequiredServices,
+					"error", err,
+				)
+				d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+					fmt.Sprintf("Cannot start %s: %v", localpart, err),
+				))
+				continue
+			}
+			serviceMounts = mounts
+		}
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
@@ -303,6 +324,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			MatrixPolicy:         assignment.MatrixPolicy,
 			SandboxSpec:          sandboxSpec,
 			TriggerContent:       triggerContents[localpart],
+			ServiceMounts:        serviceMounts,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
@@ -766,6 +788,77 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, works
 			)
 		}
 	}
+}
+
+// resolveServiceMounts resolves a list of required service roles to host-side
+// socket paths by looking up m.bureau.room_service state events. Rooms are
+// checked in specificity order: workspace room first (if any), then the
+// machine config room. The first binding found for each role wins.
+//
+// Returns an error if any required service cannot be resolved — callers should
+// treat this as a fatal condition that blocks sandbox creation (no silent
+// fallbacks, no degraded mode).
+func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []string, workspaceRoomID string) ([]launcherServiceMount, error) {
+	// Collect rooms to search, ordered by specificity (most specific first).
+	// Workspace room bindings override machine config room bindings.
+	var rooms []string
+	if workspaceRoomID != "" {
+		rooms = append(rooms, workspaceRoomID)
+	}
+	rooms = append(rooms, d.configRoomID)
+
+	var mounts []launcherServiceMount
+	for _, role := range requiredServices {
+		socketPath, err := d.resolveServiceSocket(ctx, role, rooms)
+		if err != nil {
+			return nil, fmt.Errorf("resolving required service %q: %w", role, err)
+		}
+		mounts = append(mounts, launcherServiceMount{
+			Role:       role,
+			SocketPath: socketPath,
+		})
+	}
+	return mounts, nil
+}
+
+// resolveServiceSocket looks up a single service role in the given rooms.
+// For each room, it fetches the m.bureau.room_service state event with the
+// role as the state key. If found, derives the host-side socket path from
+// the binding's principal localpart.
+func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []string) (string, error) {
+	for _, roomID := range rooms {
+		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeRoomService, role)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				continue // Not bound in this room, try next.
+			}
+			return "", fmt.Errorf("fetching service binding in room %s: %w", roomID, err)
+		}
+
+		var binding schema.RoomServiceContent
+		if err := json.Unmarshal(content, &binding); err != nil {
+			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, roomID, err)
+		}
+
+		if binding.Principal == "" {
+			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, roomID)
+		}
+
+		// Derive the host-side socket path from the service principal's
+		// localpart. For local services this is the actual proxy socket;
+		// for remote services (future) the daemon would create a tunnel
+		// socket and use that path instead.
+		socketPath := principal.RunDirSocketPath(d.runDir, binding.Principal)
+		d.logger.Info("resolved service binding",
+			"role", role,
+			"principal", binding.Principal,
+			"socket", socketPath,
+			"room", roomID,
+		)
+		return socketPath, nil
+	}
+
+	return "", fmt.Errorf("no binding found for service role %q in any accessible room", role)
 }
 
 // cancelExitWatcher cancels the watchSandboxExit goroutine for a principal.

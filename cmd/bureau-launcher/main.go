@@ -951,7 +951,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	// principal without a bwrap sandbox).
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
-		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent)
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts)
 		if setupErr != nil {
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)
@@ -1186,12 +1186,14 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 // script path). The bwrap arguments are built from the SandboxSpec's profile
 // conversion, and a payload file is written if the spec includes a Payload.
 // When triggerContent is non-nil, it is written to trigger.json and bind-mounted
-// read-only at /run/bureau/trigger.json inside the sandbox.
+// read-only at /run/bureau/trigger.json inside the sandbox. Service mounts
+// are bind-mounted read-write at /run/bureau/service/<role>.sock, giving
+// the sandboxed process direct access to Bureau services.
 //
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent json.RawMessage) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent json.RawMessage, serviceMounts []ServiceMount) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -1250,6 +1252,17 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 			Source: triggerPath,
 			Dest:   "/run/bureau/trigger.json",
 			Mode:   sandbox.MountModeRO,
+		})
+	}
+
+	// Bind-mount service sockets into the sandbox. Each required service
+	// gets a socket at /run/bureau/service/<role>.sock, giving the agent
+	// direct access to Bureau services without routing through the proxy.
+	for _, mount := range serviceMounts {
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: mount.SocketPath,
+			Dest:   "/run/bureau/service/" + mount.Role + ".sock",
+			Mode:   sandbox.MountModeRW,
 		})
 	}
 

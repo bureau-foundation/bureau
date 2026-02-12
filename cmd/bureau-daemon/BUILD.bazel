@@ -72,6 +72,7 @@ go_test(
         "prefetch_test.go",
         "query_layout_test.go",
         "reconcile_test.go",
+        "service_resolution_test.go",
         "services_test.go",
         "start_condition_test.go",
         "sync_test.go",

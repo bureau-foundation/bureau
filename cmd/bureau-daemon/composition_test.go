@@ -695,6 +695,314 @@ func TestDaemonJoinsGlobalRooms(t *testing.T) {
 	}
 }
 
+// TestProxyCrashRecovery exercises the full proxy crash detection and recovery
+// path. It creates a real sandbox via the launcher, kills the proxy process
+// with SIGKILL, and verifies that the daemon's watchProxyExit goroutine
+// detects the crash, destroys the orphaned sandbox, and re-reconciles to
+// create a fresh one.
+//
+// This test validates that proxy crash detection works without health checks
+// — the wait-proxy IPC provides event-driven detection within milliseconds
+// of proxy death, compared to the polling-based health check path.
+func TestProxyCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds binaries and manages subprocesses")
+	}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap not available (sandbox creation requires namespace support)")
+	}
+
+	proxyBinary := buildBinary(t, "./cmd/bureau-proxy")
+	launcherBinary := buildBinary(t, "./cmd/bureau-launcher")
+
+	keypair, err := sealed.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	defer keypair.Close()
+
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), keypair.PrivateKey.Bytes(), 0600); err != nil {
+		t.Fatalf("writing private key: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.pub"), []byte(keypair.PublicKey), 0644); err != nil {
+		t.Fatalf("writing public key: %v", err)
+	}
+
+	runDir := testutil.SocketDir(t)
+	launcherSocket := principal.LauncherSocketPath(runDir)
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const (
+		configRoomID   = "!config:test"
+		machineRoomID  = "!machine:test"
+		serviceRoomID  = "!service:test"
+		templateRoomID = "!templates:test"
+	)
+
+	principalLocalpart := "test/echo"
+	matrixState.setRoomAlias("#templates:bureau.local", templateRoomID)
+	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "echo", schema.TemplateContent{
+		Description: "Echo test template",
+		Command:     []string{"/bin/sleep", "3600"},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: principalLocalpart,
+			Template:  "templates:echo",
+			AutoStart: true,
+		}},
+	})
+
+	credentialMap := map[string]string{
+		"MATRIX_TOKEN":          "syt_test_echo_token",
+		"MATRIX_HOMESERVER_URL": matrixServer.URL,
+		"MATRIX_USER_ID":        "@test/echo:bureau.local",
+	}
+	credentialJSON, err := json.Marshal(credentialMap)
+	if err != nil {
+		t.Fatalf("marshaling credentials: %v", err)
+	}
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{keypair.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypting credentials: %v", err)
+	}
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, principalLocalpart, schema.Credentials{
+		Version:       1,
+		Principal:     "@test/echo:bureau.local",
+		EncryptedFor:  []string{"@machine/test:bureau.local"},
+		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID"},
+		Ciphertext:    ciphertext,
+		ProvisionedBy: "@bureau-admin:bureau.local",
+		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	sessionJSON, _ := json.Marshal(sessionData{
+		HomeserverURL: matrixServer.URL,
+		UserID:        "@machine/test:bureau.local",
+		AccessToken:   "syt_launcher_session_token",
+	})
+	if err := os.WriteFile(filepath.Join(stateDir, "session.json"), sessionJSON, 0600); err != nil {
+		t.Fatalf("writing session.json: %v", err)
+	}
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	launcherCmd := exec.Command(launcherBinary,
+		"--machine-name", "machine/test",
+		"--run-dir", runDir,
+		"--state-dir", stateDir,
+		"--proxy-binary", proxyBinary,
+		"--homeserver", matrixServer.URL,
+		"--server-name", "bureau.local",
+		"--workspace-root", workspaceRoot,
+	)
+	launcherCmd.Stderr = os.Stderr
+	if err := launcherCmd.Start(); err != nil {
+		t.Fatalf("starting launcher: %v", err)
+	}
+	t.Cleanup(func() {
+		launcherCmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { launcherCmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			launcherCmd.Process.Kill()
+			launcherCmd.Wait()
+		}
+	})
+
+	waitForFile(t, launcherSocket, 10*time.Second)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_daemon_session_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	// shutdownCtx enables exit watchers. The daemon starts watchSandboxExit
+	// and watchProxyExit goroutines only when shutdownCtx is non-nil.
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	t.Cleanup(shutdownCancel)
+
+	daemon := &Daemon{
+		runDir:            runDir,
+		session:           session,
+		machineName:       "machine/test",
+		machineUserID:     "@machine/test:bureau.local",
+		serverName:        "bureau.local",
+		configRoomID:      configRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
+		launcherSocket:    launcherSocket,
+		statusInterval:    time.Hour,
+		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
+		running:           make(map[string]bool),
+		exitWatchers:      make(map[string]context.CancelFunc),
+		proxyExitWatchers: make(map[string]context.CancelFunc),
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
+		lastSpecs:         make(map[string]*schema.SandboxSpec),
+		previousSpecs:     make(map[string]*schema.SandboxSpec),
+		lastTemplates:     make(map[string]*schema.TemplateContent),
+		healthMonitors:    make(map[string]*healthMonitor),
+		services:          make(map[string]*schema.Service),
+		proxyRoutes:       make(map[string]string),
+		peerAddresses:     make(map[string]string),
+		peerTransports:    make(map[string]http.RoundTripper),
+		adminSocketPathFunc: func(localpart string) string {
+			return principal.RunDirAdminSocketPath(runDir, localpart)
+		},
+		layoutWatchers: make(map[string]*layoutWatcher),
+		shutdownCtx:    shutdownCtx,
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(func() {
+		shutdownCancel()
+		daemon.stopAllLayoutWatchers()
+		daemon.stopAllHealthMonitors()
+	})
+
+	ctx := context.Background()
+	adminSocket := principal.RunDirAdminSocketPath(runDir, principalLocalpart)
+
+	// --- Phase 1: Create sandbox and verify proxy is running. ---
+
+	if err := daemon.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile (create): %v", err)
+	}
+
+	if !daemon.running[principalLocalpart] {
+		t.Fatalf("%s should be running after reconcile", principalLocalpart)
+	}
+
+	// Verify proxy is functional via admin socket health check.
+	adminClient := unixHTTPClient(adminSocket)
+	healthResponse, err := adminClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check on admin socket: %v", err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("health check status = %d, want 200", healthResponse.StatusCode)
+	}
+
+	// Verify exit watchers are running.
+	daemon.reconcileMu.Lock()
+	hasSandboxWatcher := daemon.exitWatchers[principalLocalpart] != nil
+	hasProxyWatcher := daemon.proxyExitWatchers[principalLocalpart] != nil
+	daemon.reconcileMu.Unlock()
+	if !hasSandboxWatcher {
+		t.Fatal("sandbox exit watcher should be running")
+	}
+	if !hasProxyWatcher {
+		t.Fatal("proxy exit watcher should be running")
+	}
+
+	// --- Phase 2: Kill the proxy process with SIGKILL. ---
+
+	// Get the proxy PID from the launcher via list-sandboxes IPC.
+	listResponse, err := daemon.launcherRequest(ctx, launcherIPCRequest{
+		Action: "list-sandboxes",
+	})
+	if err != nil {
+		t.Fatalf("list-sandboxes IPC: %v", err)
+	}
+	if !listResponse.OK {
+		t.Fatalf("list-sandboxes rejected: %s", listResponse.Error)
+	}
+
+	var proxyPID int
+	for _, entry := range listResponse.Sandboxes {
+		if entry.Localpart == principalLocalpart {
+			proxyPID = entry.ProxyPID
+			break
+		}
+	}
+	if proxyPID == 0 {
+		t.Fatalf("proxy PID not found in list-sandboxes for %s", principalLocalpart)
+	}
+
+	t.Logf("killing proxy (PID %d) with SIGKILL", proxyPID)
+	if err := syscall.Kill(proxyPID, syscall.SIGKILL); err != nil {
+		t.Fatalf("killing proxy PID %d: %v", proxyPID, err)
+	}
+
+	// --- Phase 3: Wait for detection and recovery. ---
+
+	// The watchProxyExit goroutine should detect the proxy death, destroy
+	// the orphaned sandbox, clear running state, and trigger re-reconcile
+	// which recreates the sandbox. Poll until running goes false→true.
+
+	// First, wait for the daemon to detect the crash (running becomes false).
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		daemon.reconcileMu.Lock()
+		running := daemon.running[principalLocalpart]
+		daemon.reconcileMu.Unlock()
+		if !running {
+			t.Log("proxy crash detected: principal no longer running")
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for daemon to detect proxy crash")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The re-reconcile should recreate the sandbox. Wait for it to
+	// become running again with a functional proxy.
+	for {
+		daemon.reconcileMu.Lock()
+		running := daemon.running[principalLocalpart]
+		daemon.reconcileMu.Unlock()
+		if running {
+			t.Log("principal is running again after recovery")
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for daemon to recreate sandbox after proxy crash")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Verify the new proxy is functional.
+	newAdminClient := unixHTTPClient(adminSocket)
+	newHealthResponse, err := newAdminClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check after recovery: %v", err)
+	}
+	newHealthResponse.Body.Close()
+	if newHealthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("health check after recovery = %d, want 200", newHealthResponse.StatusCode)
+	}
+
+	// Verify new exit watchers are running for the recreated sandbox.
+	daemon.reconcileMu.Lock()
+	hasSandboxWatcher = daemon.exitWatchers[principalLocalpart] != nil
+	hasProxyWatcher = daemon.proxyExitWatchers[principalLocalpart] != nil
+	daemon.reconcileMu.Unlock()
+	if !hasSandboxWatcher {
+		t.Error("sandbox exit watcher should be running after recovery")
+	}
+	if !hasProxyWatcher {
+		t.Error("proxy exit watcher should be running after recovery")
+	}
+
+	t.Log("proxy crash recovery completed successfully")
+}
+
 // --- Helpers ---
 
 // buildBinary returns the path to a pre-built binary for the given

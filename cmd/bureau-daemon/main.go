@@ -201,6 +201,7 @@ func run() error {
 		failedExecPaths:   make(map[string]bool),
 		running:           make(map[string]bool),
 		exitWatchers:      make(map[string]context.CancelFunc),
+		proxyExitWatchers: make(map[string]context.CancelFunc),
 		lastCredentials:   make(map[string]string),
 		lastVisibility:    make(map[string][]string),
 		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
@@ -422,6 +423,13 @@ type Daemon struct {
 	// goroutine does not see the destroy as an unexpected exit and
 	// corrupt the daemon's running state. Protected by reconcileMu.
 	exitWatchers map[string]context.CancelFunc
+
+	// proxyExitWatchers tracks per-principal cancellation functions
+	// for watchProxyExit goroutines. Mirrors exitWatchers but watches
+	// the proxy process instead of the tmux session. When the proxy
+	// dies unexpectedly, the watcher destroys the sandbox and triggers
+	// re-reconciliation. Protected by reconcileMu.
+	proxyExitWatchers map[string]context.CancelFunc
 
 	// healthMonitors tracks running health check goroutines, keyed by
 	// principal localpart. Protected by healthMonitorsMu. Started after

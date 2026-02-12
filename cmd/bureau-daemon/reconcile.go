@@ -108,6 +108,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			"principal", localpart)
 
 		d.cancelExitWatcher(localpart)
+		d.cancelProxyExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
@@ -128,6 +129,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -404,11 +406,13 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			)
 		}
 
-		// Watch for sandbox process exit. The goroutine blocks on the
-		// launcher's wait-sandbox IPC until the sandbox's tmux session
-		// exits, then clears d.running and triggers re-reconciliation.
-		// Uses shutdownCtx (not the sync cycle's ctx) so the watcher
-		// survives across sync iterations but cancels on daemon shutdown.
+		// Watch for sandbox process exit and proxy process exit. Each
+		// goroutine blocks on a launcher IPC call (wait-sandbox or
+		// wait-proxy) until the respective process exits, then clears
+		// d.running and triggers re-reconciliation.
+		//
+		// Uses shutdownCtx (not the sync cycle's ctx) so the watchers
+		// survive across sync iterations but cancel on daemon shutdown.
 		// shutdownCtx is nil in unit tests — those tests don't exercise
 		// exit watching (mock launchers return immediately for all IPC).
 		//
@@ -421,6 +425,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
 			d.exitWatchers[localpart] = watcherCancel
 			go d.watchSandboxExit(watcherCtx, localpart)
+
+			proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
+			d.proxyExitWatchers[localpart] = proxyCancel
+			go d.watchProxyExit(proxyCtx, localpart)
 		}
 	}
 
@@ -432,9 +440,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.logger.Info("stopping principal", "principal", localpart)
 
-		// Cancel the exit watcher before destroying — the destroy is
+		// Cancel exit watchers before destroying — the destroy is
 		// intentional, not an unexpected exit.
 		d.cancelExitWatcher(localpart)
+		d.cancelProxyExitWatcher(localpart)
 
 		// Stop health monitoring and layout watching before destroying
 		// the sandbox. This ensures clean shutdown rather than having
@@ -457,6 +466,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -517,6 +527,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		)
 
 		d.cancelExitWatcher(localpart)
+		d.cancelProxyExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 
@@ -543,6 +554,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -620,12 +632,16 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, 
 		)
 	}
 
-	// Watch for sandbox process exit. Uses shutdownCtx (not the sync
-	// cycle's ctx) so the watcher survives across sync iterations.
+	// Watch for sandbox and proxy process exit. Uses shutdownCtx (not
+	// the sync cycle's ctx) so the watchers survive across sync iterations.
 	if d.shutdownCtx != nil {
 		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
 		d.exitWatchers[localpart] = watcherCancel
 		go d.watchSandboxExit(watcherCtx, localpart)
+
+		proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
+		d.proxyExitWatchers[localpart] = proxyCancel
+		go d.watchProxyExit(proxyCtx, localpart)
 	}
 
 	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
@@ -938,6 +954,17 @@ func (d *Daemon) cancelExitWatcher(localpart string) {
 	}
 }
 
+// cancelProxyExitWatcher cancels the watchProxyExit goroutine for a
+// principal. Must be called alongside cancelExitWatcher before any
+// intentional destroy-sandbox IPC so the watcher does not interpret
+// the proxy's death (from the sandbox being torn down) as a crash.
+// Caller must hold reconcileMu.
+func (d *Daemon) cancelProxyExitWatcher(localpart string) {
+	if cancel, ok := d.proxyExitWatchers[localpart]; ok {
+		cancel()
+	}
+}
+
 // watchSandboxExit blocks until the named sandbox's process exits, then clears
 // the daemon's running state and triggers re-reconciliation. This enables the
 // daemon to detect one-shot principals (setup/teardown) that complete their work
@@ -970,10 +997,12 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 
 	d.reconcileMu.Lock()
 	if d.running[localpart] {
+		d.cancelProxyExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -1349,4 +1378,148 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 		exitCode = *response.ExitCode
 	}
 	return exitCode, response.Error, nil
+}
+
+// launcherWaitProxy opens a long-lived IPC connection to the launcher and
+// blocks until the proxy process for the given principal exits. The response
+// includes the proxy's exit code.
+//
+// This mirrors launcherWaitSandbox: a dedicated connection with no read
+// deadline, and a cancellation goroutine that closes the connection when the
+// context is cancelled (unblocking the Read).
+func (d *Daemon) launcherWaitProxy(ctx context.Context, principalLocalpart string) (int, error) {
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "unix", d.launcherSocket)
+	if err != nil {
+		return -1, fmt.Errorf("connecting to launcher at %s: %w", d.launcherSocket, err)
+	}
+	defer conn.Close()
+
+	// Close the connection when the context is cancelled. This unblocks
+	// the Read call below and signals the launcher to clean up its
+	// wait-proxy handler.
+	readDone := make(chan struct{})
+	defer close(readDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-readDone:
+		}
+	}()
+
+	// Send the request with a short write deadline — the send itself
+	// should be fast; only the response blocks for the process lifetime.
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	request := launcherIPCRequest{
+		Action:    "wait-proxy",
+		Principal: principalLocalpart,
+	}
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return -1, fmt.Errorf("sending wait-proxy request: %w", err)
+	}
+
+	// Clear the write deadline and read without a deadline — the
+	// launcher responds only after the proxy process exits.
+	conn.SetDeadline(time.Time{})
+
+	var response launcherIPCResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
+		return -1, fmt.Errorf("reading wait-proxy response: %w", err)
+	}
+
+	if !response.OK {
+		return -1, fmt.Errorf("wait-proxy: %s", response.Error)
+	}
+
+	exitCode := 0
+	if response.ExitCode != nil {
+		exitCode = *response.ExitCode
+	}
+	return exitCode, nil
+}
+
+// watchProxyExit monitors a principal's proxy process via the launcher's
+// wait-proxy IPC. When the proxy dies unexpectedly, the daemon destroys the
+// sandbox (the tmux session is still running but useless without the proxy),
+// clears all running state, and triggers re-reconciliation to restart.
+//
+// This provides event-driven proxy death detection that fires within
+// milliseconds of the proxy exiting — much faster than health check polling,
+// and works even when the template has no HealthCheck configured.
+func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
+	exitCode, err := d.launcherWaitProxy(ctx, localpart)
+	if err != nil {
+		if ctx.Err() != nil {
+			return // Watcher cancelled or daemon shutting down.
+		}
+		d.logger.Error("wait-proxy failed",
+			"principal", localpart,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Warn("proxy exited unexpectedly",
+		"principal", localpart,
+		"exit_code", exitCode,
+	)
+
+	d.reconcileMu.Lock()
+	if !d.running[localpart] {
+		// Already handled by another path (sandbox exit, reconcile, etc.).
+		d.reconcileMu.Unlock()
+		return
+	}
+
+	// Cancel the sandbox exit watcher — the destroy below will kill the
+	// tmux session, which would trigger watchSandboxExit. We handle the
+	// full cleanup here.
+	d.cancelExitWatcher(localpart)
+	d.stopHealthMonitor(localpart)
+	d.stopLayoutWatcher(localpart)
+
+	// Destroy the sandbox. The proxy is dead but the tmux session may
+	// still be running. We must destroy before clearing state so that a
+	// concurrent reconcile doesn't attempt to recreate while the old
+	// session is alive.
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+	})
+	if err != nil {
+		d.logger.Error("proxy exit handler: destroy-sandbox IPC failed",
+			"principal", localpart, "error", err)
+	} else if !response.OK {
+		d.logger.Error("proxy exit handler: destroy-sandbox rejected",
+			"principal", localpart, "error", response.Error)
+	}
+
+	delete(d.running, localpart)
+	delete(d.exitWatchers, localpart)
+	delete(d.proxyExitWatchers, localpart)
+	delete(d.lastSpecs, localpart)
+	delete(d.previousSpecs, localpart)
+	delete(d.lastTemplates, localpart)
+	delete(d.lastCredentials, localpart)
+	delete(d.lastVisibility, localpart)
+	delete(d.lastMatrixPolicy, localpart)
+	delete(d.lastObservePolicy, localpart)
+	d.lastActivityAt = time.Now()
+	d.reconcileMu.Unlock()
+
+	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+		fmt.Sprintf("CRITICAL: Proxy for %s exited unexpectedly (code %d). Sandbox destroyed, re-reconciling.", localpart, exitCode),
+	))
+
+	// Trigger re-reconciliation to restart the principal.
+	if err := d.reconcile(ctx); err != nil {
+		d.logger.Error("reconciliation after proxy exit failed",
+			"principal", localpart,
+			"error", err,
+		)
+	}
 }

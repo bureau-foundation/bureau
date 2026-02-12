@@ -224,9 +224,10 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 
 	previousSpec := d.previousSpecs[localpart]
 
-	// Cancel the exit watcher before destroying — the rollback destroy
+	// Cancel exit watchers before destroying — the rollback destroy
 	// is intentional, not an unexpected exit.
 	d.cancelExitWatcher(localpart)
+	d.cancelProxyExitWatcher(localpart)
 
 	// Stop the layout watcher before destroying the sandbox.
 	d.stopLayoutWatcher(localpart)
@@ -242,6 +243,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		// Clean up state even on IPC failure — the sandbox may be gone.
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -256,6 +258,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart, "error", response.Error)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
+		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
@@ -268,6 +271,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 
 	delete(d.running, localpart)
 	delete(d.exitWatchers, localpart)
+	delete(d.proxyExitWatchers, localpart)
 	delete(d.lastCredentials, localpart)
 	delete(d.lastVisibility, localpart)
 	delete(d.lastMatrixPolicy, localpart)
@@ -383,11 +387,15 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		d.startHealthMonitor(ctx, localpart, template.HealthCheck)
 	}
 
-	// Start a new exit watcher for the recreated sandbox.
+	// Start new exit watchers for the recreated sandbox.
 	if d.shutdownCtx != nil {
 		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
 		d.exitWatchers[localpart] = watcherCancel
 		go d.watchSandboxExit(watcherCtx, localpart)
+
+		proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
+		d.proxyExitWatchers[localpart] = proxyCancel
+		go d.watchProxyExit(proxyCtx, localpart)
 	}
 
 	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(

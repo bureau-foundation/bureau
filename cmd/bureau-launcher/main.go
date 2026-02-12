@@ -614,14 +614,16 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 // command exits, user types exit, session killed), cleanup fires: the proxy
 // is killed, sockets are removed, and the done channel closes.
 type managedSandbox struct {
-	localpart    string
-	proxyProcess *os.Process         // credential injection proxy (killed on sandbox exit)
-	configDir    string              // temp directory for proxy config, scripts, payload
-	done         chan struct{}       // closed when the sandbox exits (tmux session ends)
-	doneOnce     sync.Once           // protects close(done) from concurrent callers
-	exitCode     int                 // command exit code (set before done is closed)
-	exitError    error               // descriptive exit error (set before done is closed)
-	roles        map[string][]string // role name → command, from SandboxSpec.Roles
+	localpart     string
+	proxyProcess  *os.Process         // credential injection proxy (killed on sandbox exit)
+	configDir     string              // temp directory for proxy config, scripts, payload
+	done          chan struct{}       // closed when the sandbox exits (tmux session ends)
+	doneOnce      sync.Once           // protects close(done) from concurrent callers
+	exitCode      int                 // command exit code (set before done is closed)
+	exitError     error               // descriptive exit error (set before done is closed)
+	roles         map[string][]string // role name → command, from SandboxSpec.Roles
+	proxyDone     chan struct{}       // closed when the proxy process exits
+	proxyExitCode int                 // proxy exit code (set before proxyDone is closed)
 }
 
 // proxyCredentialPayload is the JSON structure piped to the proxy's stdin.
@@ -835,12 +837,16 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	l.logger.Info("IPC request", "action", request.Action, "principal", request.Principal)
 
-	// wait-sandbox blocks until a sandbox process exits, potentially for
-	// hours. Handle it before acquiring the mutex so that other IPC
-	// requests (create-sandbox, destroy-sandbox, status, etc.) are not
-	// blocked while a wait is pending.
+	// wait-sandbox and wait-proxy block until a sandbox or proxy process
+	// exits, potentially for hours. Handle them before acquiring the
+	// mutex so that other IPC requests (create-sandbox, destroy-sandbox,
+	// status, etc.) are not blocked while a wait is pending.
 	if request.Action == "wait-sandbox" {
 		l.handleWaitSandbox(ctx, conn, encoder, &request)
+		return
+	}
+	if request.Action == "wait-proxy" {
+		l.handleWaitProxy(ctx, conn, encoder, &request)
 		return
 	}
 
@@ -1123,6 +1129,57 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 
 	case <-ctx.Done():
 		l.logger.Info("wait-sandbox: launcher shutting down",
+			"principal", request.Principal)
+	}
+}
+
+// handleWaitProxy blocks until the named sandbox's proxy process exits,
+// then responds with the exit code. This mirrors handleWaitSandbox but
+// watches the proxy process instead of the tmux session, enabling the
+// daemon to detect proxy crashes even when the sandbox is still running.
+//
+// Runs outside the launcher mutex so that other IPC requests are not
+// blocked during the (potentially long) wait.
+func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
+	if request.Principal == "" {
+		encoder.Encode(IPCResponse{OK: false, Error: "principal is required"})
+		return
+	}
+
+	if err := principal.ValidateLocalpart(request.Principal); err != nil {
+		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)})
+		return
+	}
+
+	l.mu.Lock()
+	sandbox, exists := l.sandboxes[request.Principal]
+	l.mu.Unlock()
+
+	if !exists {
+		encoder.Encode(IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)})
+		return
+	}
+
+	conn.SetDeadline(time.Time{})
+
+	connClosed := make(chan struct{})
+	go func() {
+		buffer := make([]byte, 1)
+		conn.Read(buffer)
+		close(connClosed)
+	}()
+
+	select {
+	case <-sandbox.proxyDone:
+		exitCode := sandbox.proxyExitCode
+		encoder.Encode(IPCResponse{OK: true, ExitCode: &exitCode})
+
+	case <-connClosed:
+		l.logger.Info("wait-proxy: daemon disconnected",
+			"principal", request.Principal)
+
+	case <-ctx.Done():
+		l.logger.Info("wait-proxy: launcher shutting down",
 			"principal", request.Principal)
 	}
 }
@@ -1566,25 +1623,24 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Track the sandbox. The done channel is NOT closed when the proxy
 	// exits — it is closed by the session watcher when the tmux session
-	// ends, or by handleDestroySandbox.
+	// ends, or by handleDestroySandbox. The proxyDone channel is closed
+	// by the reap goroutine when the proxy process exits, enabling the
+	// daemon's wait-proxy IPC to detect proxy crashes independently of
+	// the sandbox lifecycle.
 	sb := &managedSandbox{
 		localpart:    principalLocalpart,
 		proxyProcess: cmd.Process,
 		configDir:    configDir,
 		done:         make(chan struct{}),
+		proxyDone:    make(chan struct{}),
 	}
 
-	// proxyDone is a local signal for waitForSocket: if the proxy dies
-	// before its socket appears, we need to fail fast rather than wait
-	// the full 10 seconds.
-	proxyDone := make(chan struct{})
-
-	// Reap the proxy process in the background to avoid zombies. This
-	// goroutine does NOT close sandbox.done — that is the session
-	// watcher's responsibility.
+	// Reap the proxy process in the background to avoid zombies. Sets
+	// the proxy exit code and closes proxyDone so that wait-proxy IPC
+	// callers and waitForSocket are unblocked. Does NOT close
+	// sandbox.done — that is the session watcher's responsibility.
 	go func() {
 		waitError := cmd.Wait()
-		close(proxyDone)
 		exitCode := 0
 		if waitError != nil {
 			var exitErr *exec.ExitError
@@ -1594,6 +1650,8 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 				exitCode = -1
 			}
 		}
+		sb.proxyExitCode = exitCode
+		close(sb.proxyDone)
 		l.logger.Info("proxy process exited",
 			"principal", principalLocalpart,
 			"pid", cmd.Process.Pid,
@@ -1603,9 +1661,11 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	}()
 
 	// Wait for the proxy to become ready (agent socket file appears).
-	if err := waitForSocket(socketPath, proxyDone, 10*time.Second); err != nil {
+	// Uses sb.proxyDone to detect early proxy death and fail fast
+	// rather than waiting the full 10-second timeout.
+	if err := waitForSocket(socketPath, sb.proxyDone, 10*time.Second); err != nil {
 		cmd.Process.Kill()
-		<-proxyDone
+		<-sb.proxyDone
 		os.RemoveAll(configDir)
 		return 0, fmt.Errorf("proxy for %q: %w", principalLocalpart, err)
 	}

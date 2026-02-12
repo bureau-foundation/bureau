@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -177,6 +178,20 @@ type standardRoom struct {
 	name                     string   // human name for check output
 	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINES_ROOM")
 	memberSettableEventTypes []string // event types that members should be able to set
+
+	// powerLevelsFunc overrides the default power level generation. When
+	// nil, powerLevels() returns adminOnlyPowerLevels with the room's
+	// memberSettableEventTypes. Set this for rooms that need a different
+	// power level structure (e.g., pipeline rooms use events_default: 100).
+	powerLevelsFunc func(adminUserID string) map[string]any
+}
+
+// powerLevels returns the correct power level structure for this room.
+func (r standardRoom) powerLevels(adminUserID string) map[string]any {
+	if r.powerLevelsFunc != nil {
+		return r.powerLevelsFunc(adminUserID)
+	}
+	return adminOnlyPowerLevels(adminUserID, r.memberSettableEventTypes)
 }
 
 var standardRooms = []standardRoom{
@@ -209,6 +224,14 @@ var standardRooms = []standardRoom{
 		topic:         "Sandbox templates",
 		name:          "template room",
 		credentialKey: "MATRIX_TEMPLATE_ROOM",
+	},
+	{
+		alias:           "bureau/pipeline",
+		displayName:     "Bureau Pipeline",
+		topic:           "Pipeline definitions",
+		name:            "pipeline room",
+		credentialKey:   "MATRIX_PIPELINE_ROOM",
+		powerLevelsFunc: schema.PipelineRoomPowerLevels,
 	},
 }
 
@@ -266,7 +289,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 			result.FixHint = fmt.Sprintf("create %s", room.name)
 			result.fix = func(ctx context.Context, session *messaging.Session) error {
 				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-					spaceRoomID, serverName, room.memberSettableEventTypes, logger)
+					spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
 				if err != nil {
 					return err
 				}
@@ -322,14 +345,16 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	// Section 5: Power levels.
 	adminUserID := session.UserID()
 	if spaceRoomID != "" {
-		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID, nil)...)
+		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID,
+			nil, adminOnlyPowerLevels(adminUserID, nil))...)
 	}
 	for _, room := range standardRooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
 		}
-		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserID, room.memberSettableEventTypes)...)
+		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserID,
+			room.memberSettableEventTypes, room.powerLevels(adminUserID))...)
 	}
 
 	// Section 6: Join rules.
@@ -350,6 +375,11 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	// Section 8: Base templates published.
 	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
 		results = append(results, checkBaseTemplates(ctx, session, templateRoomID)...)
+	}
+
+	// Section 9: Base pipelines published.
+	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
+		results = append(results, checkBasePipelines(ctx, session, pipelineRoomID)...)
 	}
 
 	return results
@@ -436,9 +466,9 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // checkPowerLevels reads the m.room.power_levels state event from a room and
 // verifies: admin at 100, state_default at 100, and any expected member-settable
 // event types at power level 0. The first failing sub-check gets a fix closure
-// that resets the entire power levels state to the standard Bureau configuration;
-// subsequent sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string) []checkResult {
+// that resets the entire power levels state to expectedPowerLevels; subsequent
+// sub-checks share that single fix.
+func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
 	var results []checkResult
 
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
@@ -457,7 +487,7 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 	// Only attached to the first failure — a single PL write fixes all issues.
 	fixPowerLevels := func(ctx context.Context, session *messaging.Session) error {
 		_, err := session.SendStateEvent(ctx, roomID, "m.room.power_levels", "",
-			adminOnlyPowerLevels(adminUserID, memberSettableEventTypes))
+			expectedPowerLevels)
 		return err
 	}
 	fixAttached := false
@@ -702,6 +732,46 @@ func checkBaseTemplates(ctx context.Context, session *messaging.Session, templat
 					func(ctx context.Context, session *messaging.Session) error {
 						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeTemplate,
 							capturedTemplate.name, capturedTemplate.content)
+						return err
+					},
+				))
+				continue
+			}
+			results = append(results, fail(checkName, fmt.Sprintf("cannot read: %v", err)))
+			continue
+		}
+		results = append(results, pass(checkName, "published"))
+	}
+
+	return results
+}
+
+// checkBasePipelines verifies that the embedded pipeline definitions are
+// published as m.bureau.pipeline state events in the pipeline room. Missing
+// pipelines are fixable by re-publishing them.
+func checkBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string) []checkResult {
+	var results []checkResult
+
+	pipelines, err := content.Pipelines()
+	if err != nil {
+		results = append(results, fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err)))
+		return results
+	}
+
+	for _, pipeline := range pipelines {
+		checkName := fmt.Sprintf("pipeline %q", pipeline.Name)
+		_, err := session.GetStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, pipeline.Name)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				capturedPipeline := pipeline
+				capturedRoomID := pipelineRoomID
+				results = append(results, failWithFix(
+					checkName,
+					fmt.Sprintf("pipeline %q not published", pipeline.Name),
+					fmt.Sprintf("publish pipeline %q", pipeline.Name),
+					func(ctx context.Context, session *messaging.Session) error {
+						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypePipeline,
+							capturedPipeline.Name, capturedPipeline.Content)
 						return err
 					},
 				))

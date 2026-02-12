@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,8 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/content"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -36,6 +39,7 @@ type mockDoctorServer struct {
 	machinesID string
 	servicesID string
 	templateID string
+	pipelineID string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
@@ -64,6 +68,7 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		machinesID:  "!machines:local",
 		servicesID:  "!services:local",
 		templateID:  "!template:local",
+		pipelineID:  "!pipeline:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -123,6 +128,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				"#bureau/machines:local": m.machinesID,
 				"#bureau/services:local": m.servicesID,
 				"#bureau/template:local": m.templateID,
+				"#bureau/pipeline:local": m.pipelineID,
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -196,7 +202,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machinesID, m.servicesID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machinesID, m.servicesID, m.pipelineID))
 			return
 		}
 
@@ -212,6 +218,28 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					for _, template := range baseTemplates() {
 						if template.name == stateKey {
 							json.NewEncoder(writer).Encode(template.content)
+							return
+						}
+					}
+				}
+			}
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
+			return
+		}
+
+		// GET specific state event: m.bureau.pipeline (pipeline room).
+		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.pipeline") {
+			roomID := extractRoomIDFromStatePath(rawPath)
+			if roomID == m.pipelineID {
+				idx := strings.Index(rawPath, "/state/m.bureau.pipeline/")
+				if idx >= 0 {
+					stateKey := rawPath[idx+len("/state/m.bureau.pipeline/"):]
+					stateKey, _ = url.PathUnescape(stateKey)
+					pipelines, _ := content.Pipelines()
+					for _, pipeline := range pipelines {
+						if pipeline.Name == stateKey {
+							json.NewEncoder(writer).Encode(pipeline.Content)
 							return
 						}
 					}
@@ -261,6 +289,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 						m.machinesID: true,
 						m.servicesID: true,
 						m.templateID: true,
+						m.pipelineID: true,
 					}
 				}
 				for childID := range childIDs {
@@ -298,7 +327,12 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID string) map[string]any {
+func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID, pipelineID string) map[string]any {
+	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
+	if roomID == pipelineID {
+		return schema.PipelineRoomPowerLevels(adminUserID)
+	}
+
 	events := map[string]any{
 		"m.room.name":         100,
 		"m.room.topic":        100,
@@ -342,6 +376,9 @@ func extractRoomIDFromStatePath(path string) string {
 	}
 	if strings.Contains(path, "%21templates%3Alocal") || strings.Contains(path, "!template:local") {
 		return "!template:local"
+	}
+	if strings.Contains(path, "%21pipeline%3Alocal") || strings.Contains(path, "!pipeline:local") {
+		return "!pipeline:local"
 	}
 	return ""
 }
@@ -420,8 +457,21 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"machines room join rules",
 		"services room join rules",
 		"template room join rules",
+		"pipeline room",
+		"pipeline room in space",
+		"pipeline room admin power",
+		"pipeline room state_default",
+		"pipeline room join rules",
 		`template "base"`,
 		`template "base-networked"`,
+	}
+	// Add expected pipeline checks dynamically from embedded content.
+	pipelines, err := content.Pipelines()
+	if err != nil {
+		t.Fatalf("content.Pipelines(): %v", err)
+	}
+	for _, pipeline := range pipelines {
+		expectedChecks = append(expectedChecks, fmt.Sprintf("pipeline %q", pipeline.Name))
 	}
 	for _, expected := range expectedChecks {
 		if !names[expected] {
@@ -451,6 +501,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_MACHINES_ROOM": "!machines:local",
 		"MATRIX_SERVICES_ROOM": "!services:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
+		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
@@ -483,6 +534,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_MACHINES_ROOM": "!machines:local",
 		"MATRIX_SERVICES_ROOM": "!services:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
+		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
@@ -626,8 +678,8 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 			spaceChildCount++
 		}
 	}
-	if spaceChildCount != 4 {
-		t.Errorf("expected 4 m.space.child state events, got %d", spaceChildCount)
+	if spaceChildCount != 5 {
+		t.Errorf("expected 5 m.space.child state events, got %d", spaceChildCount)
 	}
 
 	// Verify results updated to fixed.

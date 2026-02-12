@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -53,7 +54,8 @@ Standard rooms created:
   bureau/system      Operational messages
   bureau/machines    Machine keys and status
   bureau/services    Service directory
-  bureau/template    Sandbox templates (base, base-networked)`,
+  bureau/template    Sandbox templates (base, base-networked)
+  bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)`,
 		Usage: "bureau matrix setup [flags]",
 		Examples: []cli.Example{
 			{
@@ -159,7 +161,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 3: Create standard rooms.
 	systemRoomID, err := ensureRoom(ctx, session, "bureau/system", "Bureau System", "Operational messages",
-		spaceRoomID, config.serverName, nil, logger)
+		spaceRoomID, config.serverName, adminOnlyPowerLevels(session.UserID(), nil), logger)
 	if err != nil {
 		return fmt.Errorf("create system room: %w", err)
 	}
@@ -167,13 +169,13 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	machinesRoomID, err := ensureRoom(ctx, session, "bureau/machines", "Bureau Machines", "Machine keys and status",
 		spaceRoomID, config.serverName,
-		[]string{
+		adminOnlyPowerLevels(session.UserID(), []string{
 			schema.EventTypeMachineKey,
 			schema.EventTypeMachineInfo,
 			schema.EventTypeMachineStatus,
 			schema.EventTypeWebRTCOffer,
 			schema.EventTypeWebRTCAnswer,
-		}, logger)
+		}), logger)
 	if err != nil {
 		return fmt.Errorf("create machines room: %w", err)
 	}
@@ -181,14 +183,14 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	servicesRoomID, err := ensureRoom(ctx, session, "bureau/services", "Bureau Services", "Service directory",
 		spaceRoomID, config.serverName,
-		[]string{schema.EventTypeService}, logger)
+		adminOnlyPowerLevels(session.UserID(), []string{schema.EventTypeService}), logger)
 	if err != nil {
 		return fmt.Errorf("create services room: %w", err)
 	}
 	logger.Info("services room ready", "room_id", servicesRoomID)
 
 	templateRoomID, err := ensureRoom(ctx, session, "bureau/template", "Bureau Template", "Sandbox templates",
-		spaceRoomID, config.serverName, nil, logger)
+		spaceRoomID, config.serverName, adminOnlyPowerLevels(session.UserID(), nil), logger)
 	if err != nil {
 		return fmt.Errorf("create template room: %w", err)
 	}
@@ -197,6 +199,18 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	// Step 3b: Publish base templates into the template room.
 	if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
 		return fmt.Errorf("publish base templates: %w", err)
+	}
+
+	pipelineRoomID, err := ensureRoom(ctx, session, "bureau/pipeline", "Bureau Pipeline", "Pipeline definitions",
+		spaceRoomID, config.serverName, schema.PipelineRoomPowerLevels(session.UserID()), logger)
+	if err != nil {
+		return fmt.Errorf("create pipeline room: %w", err)
+	}
+	logger.Info("pipeline room ready", "room_id", pipelineRoomID)
+
+	// Step 3c: Publish base pipelines into the pipeline room.
+	if err := publishBasePipelines(ctx, session, pipelineRoomID, logger); err != nil {
+		return fmt.Errorf("publish base pipelines: %w", err)
 	}
 
 	// Step 4: Invite users to all Bureau rooms.
@@ -210,6 +224,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			{"bureau/machines", machinesRoomID},
 			{"bureau/services", servicesRoomID},
 			{"bureau/template", templateRoomID},
+			{"bureau/pipeline", pipelineRoomID},
 		}
 		for _, userID := range config.inviteUsers {
 			for _, room := range allRooms {
@@ -234,7 +249,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID); err != nil {
+		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID, pipelineRoomID); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -246,6 +261,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		"machines_room", machinesRoomID,
 		"services_room", servicesRoomID,
 		"template_room", templateRoomID,
+		"pipeline_room", pipelineRoomID,
 	)
 	return nil
 }
@@ -300,10 +316,8 @@ func ensureSpace(ctx context.Context, session *messaging.Session, serverName str
 }
 
 // ensureRoom creates a room if it doesn't exist and adds it as a child of the space.
-//
-// memberSettableEventTypes lists Bureau-specific state event types that room
-// members at the default power level (0) are allowed to set.
-func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, name, topic, spaceRoomID, serverName string, memberSettableEventTypes []string, logger *slog.Logger) (string, error) {
+// The powerLevels parameter sets the room's power level structure directly.
+func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, name, topic, spaceRoomID, serverName string, powerLevels map[string]any, logger *slog.Logger) (string, error) {
 	alias := fmt.Sprintf("#%s:%s", aliasLocal, serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -321,7 +335,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 		Topic:                     topic,
 		Preset:                    "private_chat",
 		Visibility:                "private",
-		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID(), memberSettableEventTypes),
+		PowerLevelContentOverride: powerLevels,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create room %q: %w", aliasLocal, err)
@@ -340,7 +354,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID, pipelineRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -354,6 +368,7 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_MACHINES_ROOM=%s\n", machinesRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SERVICES_ROOM=%s\n", servicesRoomID)
 	fmt.Fprintf(&builder, "MATRIX_TEMPLATE_ROOM=%s\n", templateRoomID)
+	fmt.Fprintf(&builder, "MATRIX_PIPELINE_ROOM=%s\n", pipelineRoomID)
 
 	return os.WriteFile(path, []byte(builder.String()), 0600)
 }
@@ -368,6 +383,24 @@ func publishBaseTemplates(ctx context.Context, session *messaging.Session, templ
 			return fmt.Errorf("publishing template %q: %w", template.name, err)
 		}
 		logger.Info("published template", "name", template.name, "room_id", templateRoomID)
+	}
+	return nil
+}
+
+// publishBasePipelines publishes the embedded pipeline definitions to the
+// pipeline room as m.bureau.pipeline state events. Idempotent: re-publishing
+// overwrites the existing state event with the same content.
+func publishBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string, logger *slog.Logger) error {
+	pipelines, err := content.Pipelines()
+	if err != nil {
+		return fmt.Errorf("loading embedded pipelines: %w", err)
+	}
+	for _, pipeline := range pipelines {
+		_, err := session.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, pipeline.Name, pipeline.Content)
+		if err != nil {
+			return fmt.Errorf("publishing pipeline %q: %w", pipeline.Name, err)
+		}
+		logger.Info("published pipeline", "name", pipeline.Name, "room_id", pipelineRoomID)
 	}
 	return nil
 }

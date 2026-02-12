@@ -1225,6 +1225,540 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	}
 }
 
+// TestReconcile_ArrayContainmentTriggerContent verifies that when a
+// StartCondition matches via array containment, the full event content
+// (including the array field) is captured as TriggerContent and passed
+// to the launcher's create-sandbox IPC request. This is the
+// array-containment counterpart of TestReconcile_TriggerContentPassedToLauncher:
+// the pipeline executor reads trigger.json to get event context, so the
+// array values must be faithfully preserved.
+func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Ticket event with an array field. The "labels" array contains "urgent"
+	// which will satisfy the ContentMatch condition.
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-100", map[string]any{
+		"title":    "Critical production issue",
+		"labels":   []any{"urgent", "production", "p0"},
+		"status":   "open",
+		"assignee": "oncall/primary",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/oncall",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-100",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "urgent"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/oncall", schema.Credentials{
+		Ciphertext: "encrypted-oncall-credentials",
+	})
+
+	// Use a custom mock launcher that captures TriggerContent from the IPC request.
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var capturedTriggerContent json.RawMessage
+	var triggerMu sync.Mutex
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		triggerMu.Lock()
+		defer triggerMu.Unlock()
+		if request.Action == "create-sandbox" {
+			capturedTriggerContent = request.TriggerContent
+		}
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	daemon := &Daemon{
+		runDir:              principal.DefaultRunDir,
+		session:             session,
+		machineName:         machineName,
+		serverName:          serverName,
+		configRoomID:        configRoomID,
+		launcherSocket:      launcherSocket,
+		running:             make(map[string]bool),
+		lastCredentials:     make(map[string]string),
+		lastVisibility:      make(map[string][]string),
+		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		prefetchFunc: func(ctx context.Context, storePath string) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		daemon.stopAllHealthMonitors()
+		daemon.stopAllLayoutWatchers()
+	})
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	if !daemon.running["agent/oncall"] {
+		t.Fatal("agent/oncall should be running after array containment match")
+	}
+
+	triggerMu.Lock()
+	defer triggerMu.Unlock()
+
+	if capturedTriggerContent == nil {
+		t.Fatal("TriggerContent should be non-nil when condition matches via array containment")
+	}
+
+	// Parse the trigger content and verify the full event is preserved,
+	// including the array field that was matched against.
+	var triggerMap map[string]any
+	if err := json.Unmarshal(capturedTriggerContent, &triggerMap); err != nil {
+		t.Fatalf("parsing TriggerContent: %v", err)
+	}
+	if triggerMap["title"] != "Critical production issue" {
+		t.Errorf("trigger title = %v, want %q", triggerMap["title"], "Critical production issue")
+	}
+	if triggerMap["status"] != "open" {
+		t.Errorf("trigger status = %v, want %q", triggerMap["status"], "open")
+	}
+	if triggerMap["assignee"] != "oncall/primary" {
+		t.Errorf("trigger assignee = %v, want %q", triggerMap["assignee"], "oncall/primary")
+	}
+
+	// Verify the array field is preserved in the trigger content. JSON
+	// unmarshal produces []any with string elements.
+	labelsRaw, ok := triggerMap["labels"]
+	if !ok {
+		t.Fatal("trigger content missing 'labels' field")
+	}
+	labels, ok := labelsRaw.([]any)
+	if !ok {
+		t.Fatalf("trigger labels is %T, want []any", labelsRaw)
+	}
+	expectedLabels := []string{"urgent", "production", "p0"}
+	if len(labels) != len(expectedLabels) {
+		t.Fatalf("trigger labels length = %d, want %d", len(labels), len(expectedLabels))
+	}
+	for index, expected := range expectedLabels {
+		if labels[index] != expected {
+			t.Errorf("trigger labels[%d] = %v, want %q", index, labels[index], expected)
+		}
+	}
+}
+
+// TestReconcile_ArrayContainmentDeferredThenLaunches verifies the lifecycle
+// when an array field initially does not contain the required value, then
+// gets updated to include it. The first reconcile defers the principal;
+// the second reconcile (after the array is updated) launches it.
+func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Initial ticket has labels that do NOT include "reviewed".
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-200", map[string]any{
+		"title":  "Needs code review",
+		"labels": []any{"pending", "feature"},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/deployer",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-200",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "reviewed"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/deployer", schema.Credentials{
+		Ciphertext: "encrypted-deployer-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: "reviewed" not in array → deferred.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if len(tracker.created) != 0 {
+		t.Errorf("first reconcile: expected no create-sandbox calls, got %v", tracker.created)
+	}
+	if daemon.running["agent/deployer"] {
+		t.Error("first reconcile: agent/deployer should not be running")
+	}
+	tracker.mu.Unlock()
+
+	// Simulate the review being completed: "reviewed" is now in the labels array.
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-200", map[string]any{
+		"title":  "Needs code review",
+		"labels": []any{"pending", "feature", "reviewed"},
+		"status": "open",
+	})
+
+	// Second reconcile: "reviewed" now in array → launches.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/deployer" {
+		t.Errorf("second reconcile: expected create-sandbox for agent/deployer, got %v", tracker.created)
+	}
+	if !daemon.running["agent/deployer"] {
+		t.Error("second reconcile: agent/deployer should be running after array now contains value")
+	}
+}
+
+// TestReconcile_ArrayContainmentRunningPrincipalStopped verifies continuous
+// enforcement with array containment: a principal that was running because
+// its ContentMatch value was present in an array gets stopped when the array
+// is updated to no longer contain that value. This mirrors the string-based
+// TestReconcile_RunningPrincipalStoppedWhenConditionFails but for the array
+// containment code path.
+func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Ticket initially has "active" in its tags array.
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-300", map[string]any{
+		"title": "Active work item",
+		"tags":  []any{"active", "sprint-42"},
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/worker",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-300",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"tags": "active"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/worker", schema.Credentials{
+		Ciphertext: "encrypted-worker-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: "active" is in the tags array → principal starts.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/worker" {
+		t.Fatalf("first reconcile: expected create-sandbox for agent/worker, got %v", tracker.created)
+	}
+	if !daemon.running["agent/worker"] {
+		t.Fatal("first reconcile: agent/worker should be running")
+	}
+	tracker.mu.Unlock()
+
+	// Simulate the ticket being moved to "done": remove "active" from the tags.
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-300", map[string]any{
+		"title": "Active work item",
+		"tags":  []any{"done", "sprint-42"},
+	})
+
+	// Second reconcile: "active" is no longer in the tags → principal stopped.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "agent/worker" {
+		t.Errorf("second reconcile: expected destroy-sandbox for agent/worker, got %v", tracker.destroyed)
+	}
+	if daemon.running["agent/worker"] {
+		t.Error("second reconcile: agent/worker should not be running after array no longer contains value")
+	}
+}
+
+// TestReconcile_ArrayContainmentMultiplePrincipals verifies that multiple
+// principals can gate on different values within the same array field of
+// the same event. Each principal's ContentMatch specifies a different
+// label, and only the principals whose required label is present in the
+// array should start. This exercises the per-principal ContentMatch
+// evaluation within a single reconcile cycle.
+func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Ticket with labels containing "bug" and "frontend" but NOT "backend".
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-400", map[string]any{
+		"title":  "UI rendering glitch",
+		"labels": []any{"bug", "frontend", "p1"},
+		"status": "open",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/bugfixer",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-400",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "bug"},
+				},
+			},
+			{
+				Localpart: "agent/frontend",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-400",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "frontend"},
+				},
+			},
+			{
+				Localpart: "agent/backend",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-400",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"labels": "backend"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/bugfixer", schema.Credentials{
+		Ciphertext: "encrypted-bugfixer-credentials",
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/frontend", schema.Credentials{
+		Ciphertext: "encrypted-frontend-credentials",
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/backend", schema.Credentials{
+		Ciphertext: "encrypted-backend-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	// agent/bugfixer and agent/frontend should start (their labels are in the array).
+	// agent/backend should NOT start ("backend" is not in the array).
+	if len(tracker.created) != 2 {
+		t.Fatalf("expected 2 create-sandbox calls, got %d: %v", len(tracker.created), tracker.created)
+	}
+
+	createdSet := make(map[string]bool)
+	for _, principal := range tracker.created {
+		createdSet[principal] = true
+	}
+
+	if !createdSet["agent/bugfixer"] {
+		t.Error("agent/bugfixer should have been created (labels contains 'bug')")
+	}
+	if !createdSet["agent/frontend"] {
+		t.Error("agent/frontend should have been created (labels contains 'frontend')")
+	}
+	if createdSet["agent/backend"] {
+		t.Error("agent/backend should NOT have been created (labels does not contain 'backend')")
+	}
+
+	if !daemon.running["agent/bugfixer"] {
+		t.Error("agent/bugfixer should be running")
+	}
+	if !daemon.running["agent/frontend"] {
+		t.Error("agent/frontend should be running")
+	}
+	if daemon.running["agent/backend"] {
+		t.Error("agent/backend should NOT be running")
+	}
+}
+
+// TestReconcile_ArrayContainmentFieldTypeChangesToArray verifies the
+// transition from a string field to an array field across reconcile cycles.
+// Initially the event field is a plain string (exact match works), then the
+// field is updated to an array (array containment takes over). This tests
+// that the reconcile logic handles the type change gracefully, restarting
+// the principal when the underlying field type changes but the match
+// semantics still hold.
+func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		ticketRoomID   = "!tickets:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+
+	// Start with "category" as a plain string value "infrastructure".
+	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-500", map[string]any{
+		"title":    "Server migration",
+		"category": "infrastructure",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/infra",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+				StartCondition: &schema.StartCondition{
+					EventType:    "m.bureau.ticket",
+					StateKey:     "TICKET-500",
+					RoomAlias:    "#tickets:test.local",
+					ContentMatch: map[string]string{"category": "infrastructure"},
+				},
+			},
+		},
+	})
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/infra", schema.Credentials{
+		Ciphertext: "encrypted-infra-credentials",
+	})
+
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	defer cleanup()
+
+	// First reconcile: string match succeeds → principal starts.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if len(tracker.created) != 1 || tracker.created[0] != "agent/infra" {
+		t.Fatalf("first reconcile: expected create-sandbox for agent/infra, got %v", tracker.created)
+	}
+	if !daemon.running["agent/infra"] {
+		t.Fatal("first reconcile: agent/infra should be running")
+	}
+	tracker.mu.Unlock()
+
+	// Update the field from a string to an array that still contains the
+	// value. The principal should remain running (condition is still satisfied).
+	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-500", map[string]any{
+		"title":    "Server migration",
+		"category": []any{"infrastructure", "networking"},
+	})
+
+	// Second reconcile: field is now an array containing "infrastructure" →
+	// condition still satisfied, principal stays running.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	if len(tracker.destroyed) != 0 {
+		t.Errorf("second reconcile: should not destroy (condition still met via array), destroyed %v", tracker.destroyed)
+	}
+	if !daemon.running["agent/infra"] {
+		t.Error("second reconcile: agent/infra should still be running after field became array containing the value")
+	}
+}
+
 // --- Test helpers ---
 
 // principalTracker is a thread-safe tracker for principals passed to

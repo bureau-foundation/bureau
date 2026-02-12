@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -45,6 +46,7 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, *tmux.Ser
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",

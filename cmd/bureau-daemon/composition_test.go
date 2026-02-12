@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -196,6 +197,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	// Construct the daemon directly (not via run()) so we control the lifecycle
 	// and avoid signal handling, polling loops, etc.
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            runDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -513,6 +515,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            runDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -613,6 +616,7 @@ func TestReconcileNoConfig(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -841,6 +845,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	t.Cleanup(shutdownCancel)
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            runDir,
 		session:           session,
 		machineName:       "machine/test",

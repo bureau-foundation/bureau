@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -93,6 +94,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -292,6 +294,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -419,6 +422,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -604,6 +608,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -687,6 +692,7 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 	})
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,

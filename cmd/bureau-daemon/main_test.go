@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -175,6 +176,7 @@ func TestUptimeSeconds(t *testing.T) {
 func TestPublishStatus_SandboxCount(t *testing.T) {
 	// Verify that the running map count is correctly calculated.
 	daemon := &Daemon{
+		clock:       clock.Real(),
 		runDir:      principal.DefaultRunDir,
 		machineName: "machine/test",
 		serverName:  "bureau.local",

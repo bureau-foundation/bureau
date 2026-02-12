@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -98,6 +99,7 @@ func newCommandTestHarness(t *testing.T) *commandTestHarness {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		session:           session,
 		machineName:       "machine/test",
 		machineUserID:     "@machine/test:bureau.local",

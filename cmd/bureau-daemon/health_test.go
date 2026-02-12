@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -91,6 +92,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusOK)
 
 		daemon := &Daemon{
+			clock:               clock.Real(),
 			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -107,6 +109,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusServiceUnavailable)
 
 		daemon := &Daemon{
+			clock:               clock.Real(),
 			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -120,6 +123,7 @@ func TestCheckHealth(t *testing.T) {
 	t.Run("missing socket returns false", func(t *testing.T) {
 		t.Parallel()
 		daemon := &Daemon{
+			clock:               clock.Real(),
 			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return "/nonexistent/proxy.sock" },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -136,6 +140,7 @@ func TestCheckHealth(t *testing.T) {
 		startMockAdminServer(t, socketPath, http.StatusOK)
 
 		daemon := &Daemon{
+			clock:               clock.Real(),
 			runDir:              principal.DefaultRunDir,
 			adminSocketPathFunc: func(localpart string) string { return socketPath },
 			logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -153,7 +158,10 @@ func TestCheckHealth(t *testing.T) {
 func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 	t.Parallel()
 
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
 	daemon := &Daemon{
+		clock:          fakeClock,
 		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -170,6 +178,9 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 		GracePeriodSeconds: 3600, // 1 hour — we'll stop it long before this
 	})
 
+	// Wait for the grace period timer to be registered.
+	fakeClock.WaitForTimers(1)
+
 	// Verify the monitor is registered.
 	daemon.healthMonitorsMu.Lock()
 	if _, exists := daemon.healthMonitors["test/agent"]; !exists {
@@ -177,7 +188,8 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 	}
 	daemon.healthMonitorsMu.Unlock()
 
-	// Stop should cancel the goroutine and return promptly.
+	// Stop should cancel the goroutine and return promptly (via
+	// context cancellation, not grace period expiry).
 	done := make(chan struct{})
 	go func() {
 		daemon.stopHealthMonitor("test/agent")
@@ -186,7 +198,6 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 
 	select {
 	case <-done:
-		// Good — stopped promptly.
 	case <-time.After(5 * time.Second):
 		t.Fatal("stopHealthMonitor did not return within 5 seconds")
 	}
@@ -203,6 +214,7 @@ func TestHealthMonitorIdempotentStart(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -235,6 +247,7 @@ func TestHealthMonitorStopNonexistent(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -248,6 +261,7 @@ func TestStopAllHealthMonitors(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		healthMonitors: make(map[string]*healthMonitor),
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -299,6 +313,8 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		localpart    = "agent/test"
 	)
 
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
 	// Mock Matrix: principal still in config with credentials.
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -347,7 +363,9 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 
-	// Mock launcher tracks IPC calls.
+	// Mock launcher tracks IPC calls. Signals rollbackDone when the
+	// create-sandbox (the final IPC in a rollback sequence) arrives.
+	rollbackDone := make(chan struct{}, 1)
 	var (
 		launcherMu    sync.Mutex
 		ipcActions    []string
@@ -360,17 +378,40 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		ipcPrincipals = append(ipcPrincipals, request.Principal)
 		lastSpec = request.SandboxSpec
 		launcherMu.Unlock()
+		if request.Action == "create-sandbox" {
+			select {
+			case rollbackDone <- struct{}{}:
+			default:
+			}
+		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	// Set up a mock admin server that always returns unhealthy.
+	// Mock admin server: always unhealthy. Signals after each request
+	// so the test knows when the health check HTTP call has completed.
 	adminSocket := filepath.Join(socketDir, "admin.sock")
-	startMockAdminServer(t, adminSocket, http.StatusServiceUnavailable)
+	checkHandled := make(chan struct{}, 10)
+	adminListener, err := net.Listen("unix", adminSocket)
+	if err != nil {
+		t.Fatalf("Listen(%s) error: %v", adminSocket, err)
+	}
+	adminServer := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			select {
+			case checkHandled <- struct{}{}:
+			default:
+			}
+		}),
+	}
+	go adminServer.Serve(adminListener)
+	t.Cleanup(func() { adminServer.Close(); adminListener.Close() })
 
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		clock:             fakeClock,
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -400,7 +441,6 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
-	// Start the health monitor with very short timings.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -412,35 +452,31 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		TimeoutSeconds:     1,
 	})
 
-	// Wait for the rollback to complete (grace period + 2 failures + processing).
-	deadline := time.After(15 * time.Second)
-	for {
-		time.Sleep(200 * time.Millisecond)
+	// Advance past grace period.
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(1 * time.Second)
 
+	// Wait for the ticker to be registered after grace period.
+	fakeClock.WaitForTimers(1)
+
+	// First tick → first health check (failure 1).
+	fakeClock.Advance(1 * time.Second)
+	select {
+	case <-checkHandled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first health check")
+	}
+
+	// Second tick → second health check (failure 2 → rollback).
+	fakeClock.Advance(1 * time.Second)
+
+	// Wait for rollback to complete (destroy + create IPC).
+	select {
+	case <-rollbackDone:
+	case <-time.After(5 * time.Second):
 		launcherMu.Lock()
-		foundDestroy := false
-		foundCreate := false
-		for _, action := range ipcActions {
-			if action == "destroy-sandbox" {
-				foundDestroy = true
-			}
-			if action == "create-sandbox" {
-				foundCreate = true
-			}
-		}
-		launcherMu.Unlock()
-
-		if foundDestroy && foundCreate {
-			break
-		}
-
-		select {
-		case <-deadline:
-			launcherMu.Lock()
-			t.Fatalf("timed out waiting for rollback, IPC actions: %v", ipcActions)
-			launcherMu.Unlock()
-		default:
-		}
+		t.Fatalf("timed out waiting for rollback, IPC actions: %v", ipcActions)
+		launcherMu.Unlock() //nolint:govet // unreachable but symmetry
 	}
 
 	// Verify the create-sandbox used the previous spec.
@@ -565,6 +601,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -639,6 +676,7 @@ func TestRollbackPrincipalAlreadyStopped(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -718,6 +756,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -814,6 +853,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -900,6 +940,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -960,6 +1001,8 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 
 	const localpart = "agent/test"
 
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
 	socketDir := testutil.SocketDir(t)
 	adminSocket := filepath.Join(socketDir, "admin.sock")
 
@@ -967,7 +1010,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	// transient failures below the threshold don't accumulate across
 	// recovery events — the counter resets on each successful check.
 	var requestCount atomic.Int32
-	patternComplete := make(chan struct{})
+	checkHandled := make(chan struct{}, 10)
 
 	listener, err := net.Listen("unix", adminSocket)
 	if err != nil {
@@ -988,9 +1031,10 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			default:
 				w.WriteHeader(http.StatusOK)
-				if count == 6 {
-					close(patternComplete)
-				}
+			}
+			select {
+			case checkHandled <- struct{}{}:
+			default:
 			}
 		}),
 	}
@@ -1001,6 +1045,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	})
 
 	daemon := &Daemon{
+		clock:               fakeClock,
 		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
 		lastCredentials:     make(map[string]string),
@@ -1028,14 +1073,23 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 		TimeoutSeconds:     1,
 	})
 
-	// Wait for the full pattern (6 checks) to complete.
-	select {
-	case <-patternComplete:
-	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for health check pattern to complete")
-	}
+	// Advance past grace period.
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(1 * time.Second)
 
-	cancel()
+	// Wait for ticker registration after grace period expires.
+	fakeClock.WaitForTimers(1)
+
+	// Drive 6 health checks through the pattern:
+	// fail, fail, succeed, fail, fail, succeed
+	for check := 1; check <= 6; check++ {
+		fakeClock.Advance(1 * time.Second)
+		select {
+		case <-checkHandled:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for health check %d", check)
+		}
+	}
 
 	// If rollback had been triggered, rollbackPrincipal would attempt
 	// launcherRequest (which would fail with no launcher socket) and
@@ -1051,13 +1105,14 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 
 	const localpart = "agent/test"
 
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
 	socketDir := testutil.SocketDir(t)
 	adminSocket := filepath.Join(socketDir, "admin.sock")
 
 	// Signal when the monitor has completed at least one health check,
 	// proving it is past the grace period and in the active polling loop.
-	firstCheckDone := make(chan struct{})
-	var once sync.Once
+	checkHandled := make(chan struct{}, 10)
 
 	listener, err := net.Listen("unix", adminSocket)
 	if err != nil {
@@ -1065,8 +1120,11 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	}
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			once.Do(func() { close(firstCheckDone) })
 			w.WriteHeader(http.StatusOK)
+			select {
+			case checkHandled <- struct{}{}:
+			default:
+			}
 		}),
 	}
 	go server.Serve(listener)
@@ -1076,6 +1134,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	})
 
 	daemon := &Daemon{
+		clock:               fakeClock,
 		runDir:              principal.DefaultRunDir,
 		running:             map[string]bool{localpart: true},
 		lastCredentials:     make(map[string]string),
@@ -1101,11 +1160,18 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 		TimeoutSeconds:     1,
 	})
 
-	// Wait until at least one health check completes, confirming the
-	// monitor is past the grace period and in the active polling loop.
+	// Advance past grace period.
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(1 * time.Second)
+
+	// Wait for ticker registration after grace period expires.
+	fakeClock.WaitForTimers(1)
+
+	// Drive one health check to confirm the monitor is in the polling loop.
+	fakeClock.Advance(1 * time.Second)
 	select {
-	case <-firstCheckDone:
-	case <-time.After(10 * time.Second):
+	case <-checkHandled:
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for first health check")
 	}
 
@@ -1214,6 +1280,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -1361,6 +1428,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -1485,6 +1553,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// config), the destroy-extras pass should clean up all associated
 	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,

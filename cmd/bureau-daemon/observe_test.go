@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -185,6 +186,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	}
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		client:        client,
 		tokenVerifier: newTokenVerifier(client, 5*time.Minute, logger),

@@ -173,7 +173,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 		return
 	}
 
-	d.lastActivityAt = time.Now()
+	d.lastActivityAt = d.clock.Now()
 
 	for _, localpart := range added {
 		service := d.services[localpart]

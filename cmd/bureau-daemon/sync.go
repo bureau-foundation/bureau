@@ -190,7 +190,7 @@ func (d *Daemon) syncLoop(ctx context.Context, sinceToken string) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-d.clock.After(backoff):
 			}
 			backoff *= 2
 			if backoff > maxBackoff {

@@ -1,0 +1,22 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "clock",
+    srcs = [
+        "clock.go",
+        "doc.go",
+        "fake.go",
+        "real.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/clock",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "clock_test",
+    srcs = ["fake_test.go"],
+    embed = [":clock"],
+)

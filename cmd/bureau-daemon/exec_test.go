@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -253,6 +254,7 @@ func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
 	)
 
 	daemon := &Daemon{
+		clock:            clock.Real(),
 		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		daemonBinaryHash: "abcd1234",
@@ -312,6 +314,7 @@ func TestExecDaemon_WatchdogWrittenBeforeExec(t *testing.T) {
 	var watchdogExistedAtExecTime bool
 
 	daemon := &Daemon{
+		clock:            clock.Real(),
 		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         stateDir,
@@ -373,6 +376,7 @@ func TestExecDaemon_ExecFailure(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:            clock.Real(),
 		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         stateDir,
@@ -412,6 +416,7 @@ func TestExecDaemon_RetryProtection(t *testing.T) {
 
 	execCalled := false
 	daemon := &Daemon{
+		clock:            clock.Real(),
 		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
 		stateDir:         t.TempDir(),
@@ -441,6 +446,7 @@ func TestExecDaemon_EmptyBinaryPath(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:            clock.Real(),
 		runDir:           principal.DefaultRunDir,
 		daemonBinaryPath: "", // unknown
 		stateDir:         t.TempDir(),
@@ -533,6 +539,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	)
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,

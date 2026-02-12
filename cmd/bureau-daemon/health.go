@@ -130,11 +130,11 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthC
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(time.Duration(config.GracePeriodSeconds) * time.Second):
+	case <-d.clock.After(time.Duration(config.GracePeriodSeconds) * time.Second):
 	}
 
 	consecutiveFailures := 0
-	ticker := time.NewTicker(time.Duration(config.IntervalSeconds) * time.Second)
+	ticker := d.clock.NewTicker(time.Duration(config.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -277,7 +277,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	delete(d.lastMatrixPolicy, localpart)
 	delete(d.lastObservePolicy, localpart)
 	delete(d.lastSpecs, localpart)
-	d.lastActivityAt = time.Now()
+	d.lastActivityAt = d.clock.Now()
 
 	d.logger.Info("health rollback: sandbox destroyed", "principal", localpart)
 
@@ -362,7 +362,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	d.running[localpart] = true
 	d.lastSpecs[localpart] = previousSpec
 	delete(d.previousSpecs, localpart)
-	d.lastActivityAt = time.Now()
+	d.lastActivityAt = d.clock.Now()
 
 	d.logger.Info("health rollback: sandbox recreated with previous spec",
 		"principal", localpart)

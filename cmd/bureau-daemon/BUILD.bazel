@@ -30,6 +30,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/binhash",
+        "//lib/clock",
         "//lib/git",
         "//lib/hwinfo",
         "//lib/hwinfo/amdgpu",
@@ -94,6 +95,7 @@ go_test(
     },
     deps = [
         "//lib/binhash",
+        "//lib/clock",
         "//lib/nix",
         "//lib/principal",
         "//lib/schema",

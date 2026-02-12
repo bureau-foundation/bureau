@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -19,6 +20,7 @@ func TestAuthorizeObserveDefaultDeny(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 	}
 	// No lastConfig — everything should be denied.
@@ -32,6 +34,7 @@ func TestAuthorizeObserveNoPolicyDeny(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
@@ -50,6 +53,7 @@ func TestAuthorizeObserveDefaultPolicyAllows(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -73,6 +77,7 @@ func TestAuthorizeObservePrincipalPolicyOverridesDefault(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -108,6 +113,7 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -144,6 +150,7 @@ func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -171,6 +178,7 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -205,6 +213,7 @@ func TestAuthorizeObserveUnknownPrincipal(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: &schema.ObservePolicy{
@@ -225,6 +234,7 @@ func TestAuthorizeListFiltering(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
@@ -274,6 +284,7 @@ func TestFindObservePolicyFallback(t *testing.T) {
 	}
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			DefaultObservePolicy: defaultPolicy,
@@ -349,6 +360,7 @@ func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
 	connection := &mockConn{}
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		// Policy initially allowed ops/** to observe, but has now been
 		// changed to only allow ops/alice. The session below is for
@@ -388,6 +400,7 @@ func TestEnforceObservePolicyChangeRetain(t *testing.T) {
 	connection := &mockConn{}
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		// Policy allows ops/** — ops/bob is still authorized.
 		lastConfig: &schema.MachineConfig{
@@ -425,6 +438,7 @@ func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
 	connection := &mockConn{}
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		// Policy still allows ops/** to observe, but ReadWriteObservers
 		// has been narrowed to only ops/alice. The session below was
@@ -466,6 +480,7 @@ func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
 	otherConnection := &mockConn{}
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
@@ -519,6 +534,7 @@ func TestEnforceObservePolicyChangeNoSessions(t *testing.T) {
 
 	// Verify no panic when there are no sessions.
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		lastConfig: &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{

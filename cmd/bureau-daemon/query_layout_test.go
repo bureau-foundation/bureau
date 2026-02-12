@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -75,6 +76,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		session:       session,
 		client:        matrixClient,

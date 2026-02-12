@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -71,6 +72,7 @@ func TestLauncherRequest(t *testing.T) {
 	}()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		launcherSocket: socketPath,
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -122,6 +124,7 @@ func TestLauncherRequest(t *testing.T) {
 
 func TestLauncherRequest_ConnectionRefused(t *testing.T) {
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		launcherSocket: "/nonexistent/launcher.sock",
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -413,6 +416,7 @@ func TestQueryLauncherStatus(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		launcherSocket: socketPath,
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -471,6 +475,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	// succeeds without error.
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -606,6 +611,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 	}
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -741,6 +747,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -889,6 +896,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	// Payload is nil in both old and new spec — only command differs.
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -999,6 +1007,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	// Old spec has same command but different payload.
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       machineName,
@@ -1080,6 +1089,7 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 	}()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		launcherSocket: socketPath,
 		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -1183,6 +1193,7 @@ func TestReconcileVisibilityHotReload(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,
@@ -1309,6 +1320,7 @@ func TestReconcileVisibilityUnchanged(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:          clock.Real(),
 		runDir:         principal.DefaultRunDir,
 		session:        session,
 		machineName:    machineName,

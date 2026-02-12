@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -69,6 +70,7 @@ func TestParseServiceFromPath(t *testing.T) {
 
 func TestServiceByProxyName(t *testing.T) {
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		services: map[string]*schema.Service{
 			"service/stt/whisper": {
@@ -105,6 +107,7 @@ func TestServiceByProxyName(t *testing.T) {
 
 func TestLocalProviderSocket(t *testing.T) {
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -167,6 +170,7 @@ func TestRelayHandler(t *testing.T) {
 	peerAddress := peerListener.Addr().String()
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -236,6 +240,7 @@ func TestRelayHandler(t *testing.T) {
 
 func TestRelayHandler_UnknownService(t *testing.T) {
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services:      make(map[string]*schema.Service),
@@ -295,6 +300,7 @@ func TestTransportInboundHandler(t *testing.T) {
 	defer providerServer.Close()
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -425,6 +431,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// 3. Set up the "provider daemon" (machine B) with a transport
 	// listener. Its inbound handler routes to the provider proxy.
 	providerDaemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/cloud-gpu:bureau.local",
 		services: map[string]*schema.Service{
@@ -484,6 +491,7 @@ func TestCrossTransportRouting(t *testing.T) {
 
 	// 4. Set up the "consumer daemon" (machine A) with a relay socket.
 	consumerDaemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{

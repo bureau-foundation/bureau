@@ -137,7 +137,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", localpart)
 
@@ -364,7 +364,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.lastObservePolicy[localpart] = assignment.ObservePolicy
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
 		// Start watching the tmux session for layout changes. This also
@@ -474,7 +474,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped", "principal", localpart)
 	}
 
@@ -559,7 +559,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
 			"principal", localpart)
 
@@ -593,7 +593,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 			return
 		}
 		d.lastSpecs[localpart] = newSpec
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("payload hot-reloaded", "principal", localpart)
 	}
 }
@@ -1010,7 +1010,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.lastVisibility, localpart)
 		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
-		d.lastActivityAt = time.Now()
+		d.lastActivityAt = d.clock.Now()
 	}
 	d.reconcileMu.Unlock()
 
@@ -1508,7 +1508,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	delete(d.lastVisibility, localpart)
 	delete(d.lastMatrixPolicy, localpart)
 	delete(d.lastObservePolicy, localpart)
-	d.lastActivityAt = time.Now()
+	d.lastActivityAt = d.clock.Now()
 	d.reconcileMu.Unlock()
 
 	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(

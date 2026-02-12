@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -1056,6 +1057,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -1180,6 +1182,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -1307,6 +1310,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,
@@ -1823,6 +1827,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	})
 
 	daemon := &Daemon{
+		clock:               clock.Real(),
 		runDir:              principal.DefaultRunDir,
 		session:             session,
 		machineName:         machineName,

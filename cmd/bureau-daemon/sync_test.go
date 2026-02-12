@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -110,6 +111,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -208,6 +210,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -307,6 +310,7 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -403,6 +407,7 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 
 	// Pre-populate with two peers. peerB is stale (not in state events).
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		machineUserID: "@machine/test:bureau.local",
 		session:       session,
 		machineRoomID: machineRoomID,
@@ -485,6 +490,7 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		machineUserID: "@machine/test:bureau.local",
 		session:       session,
 		machineRoomID: machineRoomID,
@@ -560,6 +566,7 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	// Two peers sharing the same address (e.g., behind a load balancer).
 	sharedAddress := "10.0.0.1:9090"
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		machineUserID: "@machine/test:bureau.local",
 		session:       session,
 		machineRoomID: machineRoomID,
@@ -612,6 +619,7 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -715,6 +723,7 @@ func TestInitialSync(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -820,6 +829,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -906,6 +916,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -993,6 +1004,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		session:           session,
 		machineName:       "machine/test",

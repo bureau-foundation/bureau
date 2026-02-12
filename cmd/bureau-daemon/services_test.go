@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -108,6 +109,7 @@ func TestStringSlicesEqual(t *testing.T) {
 
 func TestLocalAndRemoteServices(t *testing.T) {
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -153,6 +155,7 @@ func TestLocalAndRemoteServices(t *testing.T) {
 func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		machineName:   "machine/workstation",
@@ -209,6 +212,7 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 func TestReconcileServices_NoChanges(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		machineUserID:     "@machine/workstation:bureau.local",
 		services:          make(map[string]*schema.Service),
@@ -235,6 +239,7 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 func TestReconcileServices_Removal(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:             clock.Real(),
 		runDir:            principal.DefaultRunDir,
 		machineUserID:     "@machine/workstation:bureau.local",
 		services:          make(map[string]*schema.Service),
@@ -268,6 +273,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 func TestReconcileServices_ServiceMigration(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -354,6 +360,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -497,6 +504,7 @@ func TestConfigureConsumerProxy(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		proxyRoutes: map[string]string{
 			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
@@ -540,6 +548,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:           clock.Real(),
 		runDir:          principal.DefaultRunDir,
 		machineUserID:   "@machine/workstation:bureau.local",
 		machineName:     "machine/workstation",
@@ -593,6 +602,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 
 func TestBuildServiceDirectory(t *testing.T) {
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -655,6 +665,7 @@ func TestBuildServiceDirectory(t *testing.T) {
 
 func TestBuildServiceDirectory_Empty(t *testing.T) {
 	daemon := &Daemon{
+		clock:    clock.Real(),
 		runDir:   principal.DefaultRunDir,
 		services: make(map[string]*schema.Service),
 		logger:   slog.New(slog.NewJSONHandler(os.Stderr, nil)),
@@ -710,6 +721,7 @@ func TestPushDirectoryToProxy(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
@@ -811,6 +823,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 	}
 
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -850,6 +863,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	// When no consumers are running, pushServiceDirectory should be a no-op.
 	daemon := &Daemon{
+		clock:         clock.Real(),
 		runDir:        principal.DefaultRunDir,
 		machineUserID: "@machine/workstation:bureau.local",
 		services: map[string]*schema.Service{
@@ -914,6 +928,7 @@ func TestPushVisibilityToProxy(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
@@ -981,6 +996,7 @@ func TestPushVisibilityToProxy_EmptyPatterns(t *testing.T) {
 	defer adminServer.Close()
 
 	daemon := &Daemon{
+		clock:  clock.Real(),
 		runDir: principal.DefaultRunDir,
 		adminSocketPathFunc: func(localpart string) string {
 			return filepath.Join(tempDir, localpart+".admin.sock")
@@ -1012,6 +1028,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 
 	adminDir := testutil.SocketDir(t)
 	daemon := &Daemon{
+		clock:           clock.Real(),
 		runDir:          principal.DefaultRunDir,
 		machineUserID:   "@machine/workstation:bureau.local",
 		relaySocketPath: relaySocket,

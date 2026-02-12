@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/hwinfo"
 	"github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu"
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
@@ -184,6 +185,7 @@ func run() error {
 
 	daemon := &Daemon{
 		session:           session,
+		clock:             clock.Real(),
 		client:            client,
 		tokenVerifier:     newTokenVerifier(client, 5*time.Minute, logger),
 		machineName:       machineName,
@@ -298,6 +300,11 @@ func run() error {
 // Daemon is the core daemon state.
 type Daemon struct {
 	session *messaging.Session
+
+	// clock provides time operations (Now, After, NewTicker, AfterFunc,
+	// Sleep). Production code uses clock.Real(); tests use clock.Fake()
+	// for deterministic time control without real sleeps.
+	clock clock.Clock
 
 	// client is the unauthenticated Matrix client. Used by the token
 	// verifier to create temporary sessions for whoami calls.
@@ -581,7 +588,7 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 	// Publish initial status immediately.
 	d.publishStatus(ctx)
 
-	ticker := time.NewTicker(d.statusInterval)
+	ticker := d.clock.NewTicker(d.statusInterval)
 	defer ticker.Stop()
 
 	for {

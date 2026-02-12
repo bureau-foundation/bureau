@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -221,6 +222,7 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:                  clock.Real(),
 		pipelineExecutorBinary: "/nix/store/abc-executor/bin/bureau-pipeline-executor",
 		pipelineEnvironment:    "/nix/store/xyz-runner-env",
 		workspaceRoot:          "/var/bureau/workspace",
@@ -342,6 +344,7 @@ func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:                  clock.Real(),
 		pipelineExecutorBinary: "/usr/bin/executor",
 		pipelineEnvironment:    "", // No Nix environment.
 		workspaceRoot:          "/var/bureau/workspace",
@@ -359,6 +362,7 @@ func TestBuildPipelineExecutorSpec_NoRef(t *testing.T) {
 	t.Parallel()
 
 	daemon := &Daemon{
+		clock:                  clock.Real(),
 		pipelineExecutorBinary: "/usr/bin/executor",
 		workspaceRoot:          "/var/bureau/workspace",
 	}

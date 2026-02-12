@@ -317,12 +317,15 @@
 
           env.CGO_ENABLED = "0";
 
-          # Nix strips TMPDIR from the host environment. Git 2.52+'s SSH
-          # signing uses TMPDIR for its signing buffer and falls back to
-          # "/" when unset, causing "Permission denied" on commit.
-          env.TMPDIR = "/tmp";
-
           shellHook = ''
+            # Nix stdenv's setup.sh sets TMPDIR="$NIX_BUILD_TOP". In a
+            # dev shell NIX_BUILD_TOP is empty, so TMPDIR becomes "".
+            # Git's SSH signing constructs "/" + filename from empty
+            # TMPDIR, tries to create a file in /, and fails with
+            # "Permission denied". env.TMPDIR doesn't work because
+            # setup.sh runs after env attributes are applied.
+            export TMPDIR="/tmp"
+
             # nix develop replaces PATH with the dev shell's packages,
             # but the nix-daemon.sh profile script uses a guard variable
             # (__ETC_PROFILE_NIX_SOURCED) to run only once per shell.

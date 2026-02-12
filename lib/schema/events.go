@@ -2015,6 +2015,14 @@ type TicketContent struct {
 	// readiness from status + dependency graph + gate satisfaction,
 	// but "blocked" is also a valid explicit status for agents to
 	// signal blockage on things not tracked as ticket dependencies.
+	//
+	// Contention detection: the ticket service rejects transitions
+	// to "in_progress" when the ticket is already "in_progress",
+	// returning a conflict error with the current assignee. This
+	// forces agents to claim work atomically (open → in_progress)
+	// before beginning any planning or implementation. Assignee
+	// must be set in the same mutation that transitions to
+	// "in_progress".
 	Status string `json:"status"`
 
 	// Priority is 0-4: 0=critical, 1=high, 2=medium, 3=low,

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -83,66 +82,27 @@ func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererLocalpart, lo
 
 // PollOffers returns new SDP offers directed at this machine.
 func (s *MatrixSignaler) PollOffers(ctx context.Context, localpart string) ([]SignalMessage, error) {
-	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
-	if err != nil {
-		return nil, fmt.Errorf("fetching room state: %w", err)
-	}
-
-	suffix := signalingSeparator + localpart
-	var messages []SignalMessage
-
-	for _, event := range events {
-		if event.Type != schema.EventTypeWebRTCOffer {
-			continue
-		}
-		stateKey := ""
-		if event.StateKey != nil {
-			stateKey = *event.StateKey
-		}
-
-		// Check if this offer is directed at us.
-		if !strings.HasSuffix(stateKey, suffix) {
-			continue
-		}
-
-		// Extract the offerer localpart.
-		offererLocalpart := strings.TrimSuffix(stateKey, suffix)
-		if offererLocalpart == "" {
-			continue
-		}
-
-		signal, ok := s.parseSignal(event.Content)
-		if !ok {
-			continue
-		}
-
-		// Skip signals we've already processed.
-		if !s.isNewer(stateKey, signal.Timestamp) {
-			continue
-		}
-
-		messages = append(messages, SignalMessage{
-			PeerLocalpart: offererLocalpart,
-			SDP:           signal.SDP,
-			Timestamp:     signal.Timestamp,
-		})
-	}
-
-	return messages, nil
+	return s.pollSignals(ctx, localpart, schema.EventTypeWebRTCOffer, matchOfferKey)
 }
 
 // PollAnswers returns new SDP answers to offers originated by this machine.
 func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]SignalMessage, error) {
+	return s.pollSignals(ctx, localpart, schema.EventTypeWebRTCAnswer, matchAnswerKey)
+}
+
+// pollSignals fetches room state and returns signal messages matching the
+// given event type whose state keys pass the matcher. The matcher extracts
+// the peer localpart from each state key.
+func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart, eventType string, match signalKeyMatcher) ([]SignalMessage, error) {
 	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching room state: %w", err)
 	}
 
-	prefix := localpart + signalingSeparator
 	var messages []SignalMessage
 
 	for _, event := range events {
-		if event.Type != schema.EventTypeWebRTCAnswer {
+		if event.Type != eventType {
 			continue
 		}
 		stateKey := ""
@@ -150,14 +110,8 @@ func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]S
 			stateKey = *event.StateKey
 		}
 
-		// Check if this answer is for our offer.
-		if !strings.HasPrefix(stateKey, prefix) {
-			continue
-		}
-
-		// Extract the answerer (target) localpart.
-		targetLocalpart := strings.TrimPrefix(stateKey, prefix)
-		if targetLocalpart == "" {
+		peerLocalpart, ok := match(stateKey, localpart)
+		if !ok {
 			continue
 		}
 
@@ -166,13 +120,12 @@ func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]S
 			continue
 		}
 
-		// Skip signals we've already processed.
 		if !s.isNewer(stateKey, signal.Timestamp) {
 			continue
 		}
 
 		messages = append(messages, SignalMessage{
-			PeerLocalpart: targetLocalpart,
+			PeerLocalpart: peerLocalpart,
 			SDP:           signal.SDP,
 			Timestamp:     signal.Timestamp,
 		})

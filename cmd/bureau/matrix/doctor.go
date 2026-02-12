@@ -712,26 +712,36 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 	return results
 }
 
-// checkBaseTemplates verifies that the standard Bureau templates ("base" and
-// "base-networked") are published as m.bureau.template state events in the
-// template room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string) []checkResult {
+// stateEventItem describes a single state event that should be published
+// in a Matrix room. Used by checkPublishedStateEvents to verify presence
+// and offer a fix action if missing.
+type stateEventItem struct {
+	label     string // human-readable label (e.g., "template", "pipeline")
+	name      string // state key
+	eventType string // Matrix event type
+	content   any    // value to publish on fix
+}
+
+// checkPublishedStateEvents verifies that each item in the list is present
+// as a state event in the given room. Missing items produce a fixable failure
+// that re-publishes the expected content.
+func checkPublishedStateEvents(ctx context.Context, session *messaging.Session, roomID string, items []stateEventItem) []checkResult {
 	var results []checkResult
 
-	for _, template := range baseTemplates() {
-		checkName := fmt.Sprintf("template %q", template.name)
-		_, err := session.GetStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name)
+	for _, item := range items {
+		checkName := fmt.Sprintf("%s %q", item.label, item.name)
+		_, err := session.GetStateEvent(ctx, roomID, item.eventType, item.name)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-				capturedTemplate := template
-				capturedRoomID := templateRoomID
+				capturedItem := item
+				capturedRoomID := roomID
 				results = append(results, failWithFix(
 					checkName,
-					fmt.Sprintf("template %q not published", template.name),
-					fmt.Sprintf("publish template %q", template.name),
+					fmt.Sprintf("%s %q not published", item.label, item.name),
+					fmt.Sprintf("publish %s %q", item.label, item.name),
 					func(ctx context.Context, session *messaging.Session) error {
-						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeTemplate,
-							capturedTemplate.name, capturedTemplate.content)
+						_, err := session.SendStateEvent(ctx, capturedRoomID, capturedItem.eventType,
+							capturedItem.name, capturedItem.content)
 						return err
 					},
 				))
@@ -746,44 +756,41 @@ func checkBaseTemplates(ctx context.Context, session *messaging.Session, templat
 	return results
 }
 
+// checkBaseTemplates verifies that the standard Bureau templates ("base" and
+// "base-networked") are published as m.bureau.template state events in the
+// template room. Missing templates are fixable by re-publishing them.
+func checkBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string) []checkResult {
+	var items []stateEventItem
+	for _, template := range baseTemplates() {
+		items = append(items, stateEventItem{
+			label:     "template",
+			name:      template.name,
+			eventType: schema.EventTypeTemplate,
+			content:   template.content,
+		})
+	}
+	return checkPublishedStateEvents(ctx, session, templateRoomID, items)
+}
+
 // checkBasePipelines verifies that the embedded pipeline definitions are
 // published as m.bureau.pipeline state events in the pipeline room. Missing
 // pipelines are fixable by re-publishing them.
 func checkBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string) []checkResult {
-	var results []checkResult
-
 	pipelines, err := content.Pipelines()
 	if err != nil {
-		results = append(results, fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err)))
-		return results
+		return []checkResult{fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err))}
 	}
 
+	var items []stateEventItem
 	for _, pipeline := range pipelines {
-		checkName := fmt.Sprintf("pipeline %q", pipeline.Name)
-		_, err := session.GetStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, pipeline.Name)
-		if err != nil {
-			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-				capturedPipeline := pipeline
-				capturedRoomID := pipelineRoomID
-				results = append(results, failWithFix(
-					checkName,
-					fmt.Sprintf("pipeline %q not published", pipeline.Name),
-					fmt.Sprintf("publish pipeline %q", pipeline.Name),
-					func(ctx context.Context, session *messaging.Session) error {
-						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypePipeline,
-							capturedPipeline.Name, capturedPipeline.Content)
-						return err
-					},
-				))
-				continue
-			}
-			results = append(results, fail(checkName, fmt.Sprintf("cannot read: %v", err)))
-			continue
-		}
-		results = append(results, pass(checkName, "published"))
+		items = append(items, stateEventItem{
+			label:     "pipeline",
+			name:      pipeline.Name,
+			eventType: schema.EventTypePipeline,
+			content:   pipeline.Content,
+		})
 	}
-
-	return results
+	return checkPublishedStateEvents(ctx, session, pipelineRoomID, items)
 }
 
 // executeFixes runs the fix action for each fixable failure, updating

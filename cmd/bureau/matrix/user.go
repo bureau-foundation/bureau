@@ -137,7 +137,7 @@ and proceeds directly to ensuring room membership.`,
 				if registrationTokenFile == "-" && passwordFile == "-" {
 					return fmt.Errorf("--registration-token-file and --password-file cannot both be - (stdin)")
 				}
-				tokenBuffer, err := readSecret(registrationTokenFile)
+				tokenBuffer, err := secret.ReadFromPath(registrationTokenFile)
 				if err != nil {
 					return fmt.Errorf("read registration token: %w", err)
 				}
@@ -309,13 +309,13 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 // reads one line instead. The caller must Close the returned buffer.
 func readPassword(path string) (*secret.Buffer, error) {
 	if path != "-" {
-		return readSecret(path)
+		return secret.ReadFromPath(path)
 	}
 
 	stdinFd := int(os.Stdin.Fd())
 	if !term.IsTerminal(stdinFd) {
 		// Stdin is piped — read one line without prompting.
-		return readSecret("-")
+		return secret.ReadFromPath("-")
 	}
 
 	// Interactive terminal — prompt with echo disabled, confirm.

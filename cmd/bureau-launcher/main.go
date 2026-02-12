@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -327,7 +326,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	registrationToken, err := readSecret(registrationTokenFile)
+	registrationToken, err := secret.ReadFromPath(registrationTokenFile)
 	if err != nil {
 		return fmt.Errorf("reading registration token: %w", err)
 	}
@@ -1498,47 +1497,6 @@ func derivePassword(registrationToken *secret.Buffer, machineName string) (*secr
 	hash := sha256.Sum256(preimage.Bytes())
 	hexBytes := []byte(hex.EncodeToString(hash[:]))
 	return secret.NewFromBytes(hexBytes)
-}
-
-// readSecret reads a secret from a file path, or from stdin if path is "-".
-// The returned buffer is mmap-backed (locked into RAM, excluded from core
-// dumps) and must be closed by the caller. Leading/trailing whitespace is
-// trimmed before storing. Returns an error if the source is empty after
-// trimming.
-func readSecret(path string) (*secret.Buffer, error) {
-	var data []byte
-
-	if path == "-" {
-		scanner := bufio.NewScanner(os.Stdin)
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return nil, fmt.Errorf("reading stdin: %w", err)
-			}
-			return nil, fmt.Errorf("stdin is empty")
-		}
-		data = scanner.Bytes()
-	} else {
-		var err error
-		data, err = os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		secret.Zero(data)
-		return nil, fmt.Errorf("secret is empty")
-	}
-
-	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
-	buffer, err := secret.NewFromBytes(trimmed)
-	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
-	secret.Zero(data)
-	if err != nil {
-		return nil, err
-	}
-	return buffer, nil
 }
 
 // spawnProxy creates a bureau-proxy subprocess for the given principal.

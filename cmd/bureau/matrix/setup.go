@@ -4,8 +4,6 @@
 package matrix
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -92,7 +90,7 @@ Standard rooms created:
 				return fmt.Errorf("--credential-file is required")
 			}
 
-			registrationToken, err := readSecret(registrationTokenFile)
+			registrationToken, err := secret.ReadFromPath(registrationTokenFile)
 			if err != nil {
 				return fmt.Errorf("read registration token: %w", err)
 			}
@@ -497,47 +495,6 @@ func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string)
 		"users_default":  0,
 		"events":         events,
 	}
-}
-
-// readSecret reads a secret from a file path, or from stdin if path is "-".
-// The returned buffer is mmap-backed (locked into RAM, excluded from core
-// dumps) and must be closed by the caller. Leading/trailing whitespace is
-// trimmed before storing. Returns an error if the source is empty after
-// trimming.
-func readSecret(path string) (*secret.Buffer, error) {
-	var data []byte
-
-	if path == "-" {
-		scanner := bufio.NewScanner(os.Stdin)
-		if !scanner.Scan() {
-			if scanErr := scanner.Err(); scanErr != nil {
-				return nil, fmt.Errorf("reading stdin: %w", scanErr)
-			}
-			return nil, fmt.Errorf("stdin is empty")
-		}
-		data = scanner.Bytes()
-	} else {
-		var err error
-		data, err = os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		secret.Zero(data)
-		return nil, fmt.Errorf("secret is empty")
-	}
-
-	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
-	buffer, err := secret.NewFromBytes(trimmed)
-	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
-	secret.Zero(data)
-	if err != nil {
-		return nil, err
-	}
-	return buffer, nil
 }
 
 // deriveAdminPassword deterministically derives the admin password from the

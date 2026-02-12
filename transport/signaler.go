@@ -3,7 +3,10 @@
 
 package transport
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Signaler abstracts the mechanism for exchanging WebRTC session
 // descriptions between peer daemons. The production implementation
@@ -36,6 +39,39 @@ type Signaler interface {
 	// offerer matches localpart and the timestamp is newer than what was
 	// last processed.
 	PollAnswers(ctx context.Context, localpart string) ([]SignalMessage, error)
+}
+
+// signalKeyMatcher extracts the peer localpart from a signaling state key
+// given the local machine's localpart, or returns ok=false if the key
+// doesn't match.
+type signalKeyMatcher func(stateKey, localpart string) (peerLocalpart string, ok bool)
+
+// matchOfferKey matches signaling state keys for offers directed at localpart.
+// Offer keys have the form "offerer|target"; this returns the offerer.
+func matchOfferKey(stateKey, localpart string) (string, bool) {
+	suffix := signalingSeparator + localpart
+	if !strings.HasSuffix(stateKey, suffix) {
+		return "", false
+	}
+	peer := strings.TrimSuffix(stateKey, suffix)
+	if peer == "" {
+		return "", false
+	}
+	return peer, true
+}
+
+// matchAnswerKey matches signaling state keys for answers to offers from
+// localpart. Answer keys have the form "offerer|target"; this returns the target.
+func matchAnswerKey(stateKey, localpart string) (string, bool) {
+	prefix := localpart + signalingSeparator
+	if !strings.HasPrefix(stateKey, prefix) {
+		return "", false
+	}
+	peer := strings.TrimPrefix(stateKey, prefix)
+	if peer == "" {
+		return "", false
+	}
+	return peer, true
 }
 
 // SignalMessage represents a signaling message (offer or answer).

@@ -5,7 +5,6 @@ package transport
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 )
@@ -60,44 +59,23 @@ func (s *MemorySignaler) PublishAnswer(_ context.Context, offererLocalpart, loca
 }
 
 func (s *MemorySignaler) PollOffers(_ context.Context, localpart string) ([]SignalMessage, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	suffix := signalingSeparator + localpart
-	var messages []SignalMessage
-
-	for key, msg := range s.offers {
-		if !strings.HasSuffix(key, suffix) {
-			continue
-		}
-
-		timestamp, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
-		if err != nil {
-			continue
-		}
-
-		// Use a consumer-specific last-seen key: "offers:<localpart>:<stateKey>"
-		seenKey := "offers:" + localpart + ":" + key
-		if last, ok := s.lastSeen[seenKey]; ok && !timestamp.After(last) {
-			continue
-		}
-		s.lastSeen[seenKey] = timestamp
-
-		messages = append(messages, msg)
-	}
-
-	return messages, nil
+	return s.pollSignals(localpart, s.offers, "offers", matchOfferKey)
 }
 
 func (s *MemorySignaler) PollAnswers(_ context.Context, localpart string) ([]SignalMessage, error) {
+	return s.pollSignals(localpart, s.answers, "answers", matchAnswerKey)
+}
+
+// pollSignals iterates a signal store and returns messages whose keys match
+// the given matcher, filtering out already-seen timestamps.
+func (s *MemorySignaler) pollSignals(localpart string, store map[string]SignalMessage, storeLabel string, match signalKeyMatcher) ([]SignalMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prefix := localpart + signalingSeparator
 	var messages []SignalMessage
 
-	for key, msg := range s.answers {
-		if !strings.HasPrefix(key, prefix) {
+	for key, msg := range store {
+		if _, ok := match(key, localpart); !ok {
 			continue
 		}
 
@@ -106,8 +84,7 @@ func (s *MemorySignaler) PollAnswers(_ context.Context, localpart string) ([]Sig
 			continue
 		}
 
-		// Use a consumer-specific last-seen key.
-		seenKey := "answers:" + localpart + ":" + key
+		seenKey := storeLabel + ":" + localpart + ":" + key
 		if last, ok := s.lastSeen[seenKey]; ok && !timestamp.After(last) {
 			continue
 		}

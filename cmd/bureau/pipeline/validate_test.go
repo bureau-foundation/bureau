@@ -196,14 +196,14 @@ func TestValidatePipelineContent(t *testing.T) {
 			wantSubstrings: []string{"mutually exclusive"},
 		},
 		{
-			name: "step with neither run nor publish",
+			name: "step with neither run nor publish nor assert_state",
 			content: &schema.PipelineContent{
 				Steps: []schema.PipelineStep{
 					{Name: "nothing"},
 				},
 			},
 			expectedIssues: 1,
-			wantSubstrings: []string{"must set either run or publish"},
+			wantSubstrings: []string{"must set exactly one of run, publish, or assert_state"},
 		},
 		{
 			name: "check on publish step",

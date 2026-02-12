@@ -61,7 +61,8 @@ const syncFilter = `{
 				"m.bureau.service",
 				"m.bureau.layout",
 				"m.bureau.project",
-				"m.bureau.workspace"
+				"m.bureau.workspace",
+				"m.bureau.worktree"
 			]
 		},
 		"timeline": {
@@ -73,6 +74,7 @@ const syncFilter = `{
 				"m.bureau.layout",
 				"m.bureau.project",
 				"m.bureau.workspace",
+				"m.bureau.worktree",
 				"m.room.message"
 			],
 			"limit": 50

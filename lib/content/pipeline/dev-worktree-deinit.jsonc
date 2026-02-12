@@ -41,20 +41,40 @@
 
   "steps": [
     {
+      // Verify that the worktree is still in "removing" state. If the
+      // state changed between when this pipeline was queued and when it
+      // started executing (e.g., the remove was cancelled or another
+      // pipeline already handled it), abort cleanly rather than doing
+      // unwanted work.
+      "name": "assert-still-removing",
+      "assert_state": {
+        "room": "${WORKSPACE_ROOM_ID}",
+        "event_type": "m.bureau.worktree",
+        "state_key": "${WORKTREE_PATH}",
+        "field": "status",
+        "equals": "removing",
+        "on_mismatch": "abort",
+        "message": "worktree state is no longer 'removing', aborting deinit"
+      }
+    },
+    {
       "name": "validate-mode",
       "run": "case \"${MODE}\" in archive|delete) ;; *) echo \"invalid MODE: '${MODE}' (expected 'archive' or 'delete')\" >&2; exit 1;; esac"
     },
     {
+      // Verify the worktree directory exists. Uses a when guard instead
+      // of a hard check so that retries after partial completion (where
+      // the directory was already removed) can skip to the publish steps.
       "name": "verify-worktree-exists",
-      "run": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}",
-      "check": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}"
+      "when": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}",
+      "run": "true"
     },
     {
       // In archive mode, commit any uncommitted changes to a
       // timestamped archive branch. This preserves work-in-progress
       // in the git history before the worktree is removed.
       "name": "archive-dirty-changes",
-      "when": "test \"${MODE}\" = archive && test -n \"$(git -C /workspace/${PROJECT}/${WORKTREE_PATH} status --porcelain 2>/dev/null)\"",
+      "when": "test \"${MODE}\" = archive && test -d /workspace/${PROJECT}/${WORKTREE_PATH} && test -n \"$(git -C /workspace/${PROJECT}/${WORKTREE_PATH} status --porcelain 2>/dev/null)\"",
       "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nbranch=\"archive/${WORKTREE_PATH}-${timestamp}\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} checkout -b \"$branch\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} add -A\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} commit -m \"Archive uncommitted work before worktree removal\"",
       "optional": true,
       "timeout": "2m"
@@ -65,16 +85,66 @@
       // via git show HEAD:...) so the script matches the branch that
       // was actually checked out.
       "name": "run-worktree-deinit",
-      "when": "test -x /workspace/${PROJECT}/${WORKTREE_PATH}/.bureau/pipeline/worktree-deinit",
+      "when": "test -d /workspace/${PROJECT}/${WORKTREE_PATH} && test -x /workspace/${PROJECT}/${WORKTREE_PATH}/.bureau/pipeline/worktree-deinit",
       "run": "cd /workspace/${PROJECT}/${WORKTREE_PATH} && PROJECT=${PROJECT} WORKTREE_PATH=${WORKTREE_PATH} MODE=${MODE} .bureau/pipeline/worktree-deinit",
       "optional": true,
       "timeout": "10m"
     },
     {
+      // Remove the worktree. Uses a when guard so retries after the
+      // worktree was already removed skip this step instead of failing.
       "name": "remove-worktree",
+      "when": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}",
       "run": "git -C /workspace/${PROJECT}/.bare worktree remove --force /workspace/${PROJECT}/${WORKTREE_PATH}",
       "check": "test ! -d /workspace/${PROJECT}/${WORKTREE_PATH}",
       "timeout": "2m"
+    },
+    {
+      "name": "publish-archived",
+      "when": "test \"${MODE}\" = archive",
+      "publish": {
+        "event_type": "m.bureau.worktree",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "state_key": "${WORKTREE_PATH}",
+        "content": {
+          "status": "archived",
+          "project": "${PROJECT}",
+          "worktree_path": "${WORKTREE_PATH}",
+          "machine": "${MACHINE}"
+        }
+      }
+    },
+    {
+      "name": "publish-removed",
+      "when": "test \"${MODE}\" = delete",
+      "publish": {
+        "event_type": "m.bureau.worktree",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "state_key": "${WORKTREE_PATH}",
+        "content": {
+          "status": "removed",
+          "project": "${PROJECT}",
+          "worktree_path": "${WORKTREE_PATH}",
+          "machine": "${MACHINE}"
+        }
+      }
+    }
+  ],
+
+  "on_failure": [
+    {
+      "name": "publish-failed",
+      "publish": {
+        "event_type": "m.bureau.worktree",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "state_key": "${WORKTREE_PATH}",
+        "content": {
+          "status": "failed",
+          "project": "${PROJECT}",
+          "worktree_path": "${WORKTREE_PATH}",
+          "machine": "${MACHINE}"
+        }
+      }
     }
   ],
 

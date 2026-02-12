@@ -74,6 +74,21 @@
     }
   ],
 
+  "on_failure": [
+    {
+      "name": "publish-failed",
+      "publish": {
+        "event_type": "m.bureau.workspace",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "content": {
+          "status": "failed",
+          "project": "${PROJECT}",
+          "machine": "${MACHINE}"
+        }
+      }
+    }
+  ],
+
   "log": {
     "room": "${WORKSPACE_ROOM_ID}"
   }

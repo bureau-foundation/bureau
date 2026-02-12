@@ -40,6 +40,20 @@
 
   "steps": [
     {
+      // Verify the workspace is still requesting teardown. If the state
+      // changed between when this pipeline was queued and when it started
+      // executing (e.g., teardown was cancelled), abort cleanly.
+      "name": "assert-still-teardown",
+      "assert_state": {
+        "room": "${WORKSPACE_ROOM_ID}",
+        "event_type": "m.bureau.workspace",
+        "field": "status",
+        "equals": "teardown",
+        "on_mismatch": "abort",
+        "message": "workspace state is no longer 'teardown', aborting deinit"
+      }
+    },
+    {
       "name": "validate-mode",
       "run": "case \"${EVENT_teardown_mode}\" in archive|delete) ;; *) echo \"[deinit] invalid MODE: '${EVENT_teardown_mode}' (expected 'archive' or 'delete')\" >&2; exit 1;; esac"
     },
@@ -118,6 +132,21 @@
         "room": "${WORKSPACE_ROOM_ID}",
         "content": {
           "status": "removed",
+          "project": "${PROJECT}",
+          "machine": "${MACHINE}"
+        }
+      }
+    }
+  ],
+
+  "on_failure": [
+    {
+      "name": "publish-failed",
+      "publish": {
+        "event_type": "m.bureau.workspace",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "content": {
+          "status": "failed",
           "project": "${PROJECT}",
           "machine": "${MACHINE}"
         }

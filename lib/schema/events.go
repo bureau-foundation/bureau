@@ -138,6 +138,28 @@ const (
 	// Room: the workspace room
 	EventTypeWorkspace = "m.bureau.workspace"
 
+	// EventTypeWorktree tracks individual git worktree lifecycle within
+	// a workspace. Published to the workspace room with state key = the
+	// worktree path relative to the project root (e.g., "feature/amdgpu").
+	//
+	// Lifecycle:
+	//   creating → active    (init pipeline success)
+	//   creating → failed    (init pipeline failure)
+	//   active   → removing  (remove requested)
+	//   removing → archived  (archive mode success)
+	//   removing → removed   (delete mode success)
+	//   removing → failed    (deinit pipeline failure)
+	//   failed   → creating  (retry)
+	//
+	// Principals gate on this via StartCondition with ContentMatch,
+	// the same mechanism as workspace status. An agent principal that
+	// needs its worktree ready matches {"status": "active"} on the
+	// worktree event.
+	//
+	// State key: worktree path relative to project root
+	// Room: the workspace room
+	EventTypeWorktree = "m.bureau.worktree"
+
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
 	// state events in pipeline rooms (e.g., #bureau/pipeline for
@@ -1133,6 +1155,44 @@ type WorkspaceState struct {
 	ArchivePath string `json:"archive_path,omitempty"`
 }
 
+// WorktreeState is the content of an EventTypeWorktree state event.
+// It tracks the lifecycle of an individual git worktree within a workspace.
+// Each worktree has its own state event in the workspace room, keyed by
+// the worktree path relative to the project root.
+//
+// The lifecycle parallels WorkspaceState but is simpler: worktrees don't
+// have a "pending" state (the daemon publishes "creating" immediately
+// when it accepts the add request) and don't have a "teardown" stage
+// (removal is a single pipeline, not a multi-phase process).
+type WorktreeState struct {
+	// Status is the current lifecycle state. Valid values:
+	//   - "creating": daemon accepted the add request, init pipeline running.
+	//   - "active": init pipeline completed, worktree is ready for use.
+	//   - "removing": daemon accepted the remove request, deinit pipeline running.
+	//   - "archived": deinit completed in archive mode.
+	//   - "removed": deinit completed in delete mode.
+	//   - "failed": init or deinit pipeline failed.
+	Status string `json:"status"`
+
+	// Project is the project name (first path segment of the workspace alias).
+	Project string `json:"project"`
+
+	// WorktreePath is the worktree path relative to the project root
+	// (e.g., "feature/amdgpu", "main"). Matches the state key of the event.
+	WorktreePath string `json:"worktree_path"`
+
+	// Branch is the git branch checked out in this worktree. Empty when
+	// the worktree was created in detached HEAD mode.
+	Branch string `json:"branch,omitempty"`
+
+	// Machine is the machine localpart identifying which host the
+	// worktree lives on.
+	Machine string `json:"machine"`
+
+	// UpdatedAt is an ISO 8601 timestamp of the last status transition.
+	UpdatedAt string `json:"updated_at"`
+}
+
 // PipelineContent is the content of an EventTypePipeline state event.
 // It defines a reusable automation sequence: a list of steps executed
 // in order by the pipeline executor inside a sandbox. Steps can run
@@ -1164,6 +1224,25 @@ type PipelineContent struct {
 	// not support parallel steps (use shell backgrounding if needed).
 	Steps []PipelineStep `json:"steps"`
 
+	// OnFailure is a list of steps to execute when a non-optional step
+	// fails. Typically used to publish a failure state event so that
+	// observers can detect the failure and the resource doesn't get
+	// stuck in a transitional state (e.g., "creating" forever).
+	//
+	// On_failure steps are inherently best-effort: if an on_failure
+	// step itself fails, the failure is logged and the executor
+	// continues with remaining on_failure steps. The original error
+	// is preserved.
+	//
+	// On_failure steps do NOT run when a pipeline is aborted (an
+	// assert_state step with on_mismatch "abort" triggers a clean
+	// exit, not a failure).
+	//
+	// The variables FAILED_STEP (name of the step that failed) and
+	// FAILED_ERROR (error message) are injected into the variable
+	// context for on_failure steps.
+	OnFailure []PipelineStep `json:"on_failure,omitempty"`
+
 	// Log configures Matrix thread logging for pipeline executions.
 	// When set, the executor creates a thread in the specified room
 	// at pipeline start and posts step progress as thread replies.
@@ -1192,9 +1271,11 @@ type PipelineVariable struct {
 	Required bool `json:"required,omitempty"`
 }
 
-// PipelineStep is a single step in a pipeline. Exactly one of Run or
-// Publish must be set — Run for shell commands, Publish for Matrix
-// state events.
+// PipelineStep is a single step in a pipeline. Exactly one of Run,
+// Publish, or AssertState must be set:
+//   - Run: execute a shell command
+//   - Publish: publish a Matrix state event
+//   - AssertState: read a Matrix state event and check a condition
 type PipelineStep struct {
 	// Name is a human-readable identifier for this step, used in
 	// log output and status messages (e.g., "clone-repository",
@@ -1226,8 +1307,17 @@ type PipelineStep struct {
 
 	// Publish sends a Matrix state event instead of running a
 	// shell command. The executor connects to the proxy Unix
-	// socket directly. Mutually exclusive with Run.
+	// socket directly. Mutually exclusive with Run and AssertState.
 	Publish *PipelinePublish `json:"publish,omitempty"`
+
+	// AssertState reads a Matrix state event and checks a field
+	// against an expected value. Used for precondition checks
+	// (e.g., verifying a workspace is still in "teardown" before
+	// proceeding with destructive operations) and advisory CAS
+	// (e.g., verifying no one else is already removing a worktree).
+	//
+	// Mutually exclusive with Run and Publish.
+	AssertState *PipelineAssertState `json:"assert_state,omitempty"`
 
 	// Timeout is the maximum duration for this step (e.g., "5m",
 	// "30s", "1h"). Parsed by time.ParseDuration. The executor
@@ -1282,6 +1372,57 @@ type PipelinePublish struct {
 	// Content is the event content as a JSON-compatible map.
 	// String values support variable substitution.
 	Content map[string]any `json:"content"`
+}
+
+// PipelineAssertState describes a state event assertion — a precondition
+// check that reads a Matrix state event and verifies a field matches an
+// expected value. Used in pipeline steps to guard against stale state
+// (e.g., a deinit pipeline verifying the resource is still in "removing"
+// status before proceeding with destructive operations).
+//
+// Exactly one condition field must be set: Equals, NotEquals, In, or NotIn.
+//
+// All string fields support variable substitution (${NAME}).
+type PipelineAssertState struct {
+	// Room is the Matrix room alias or ID containing the state event.
+	Room string `json:"room"`
+
+	// EventType is the Matrix state event type to read (e.g.,
+	// "m.bureau.worktree", "m.bureau.workspace").
+	EventType string `json:"event_type"`
+
+	// StateKey is the state key for the event. Empty string is valid
+	// (for singleton events like m.bureau.workspace).
+	StateKey string `json:"state_key,omitempty"`
+
+	// Field is the top-level JSON field name to extract from the event
+	// content (e.g., "status"). The extracted value is stringified for
+	// comparison.
+	Field string `json:"field"`
+
+	// Equals asserts the field value equals this string exactly.
+	Equals string `json:"equals,omitempty"`
+
+	// NotEquals asserts the field value does not equal this string.
+	NotEquals string `json:"not_equals,omitempty"`
+
+	// In asserts the field value is one of the listed strings.
+	In []string `json:"in,omitempty"`
+
+	// NotIn asserts the field value is not any of the listed strings.
+	NotIn []string `json:"not_in,omitempty"`
+
+	// OnMismatch controls behavior when the assertion fails:
+	//   - "fail" (default): the step fails, the pipeline fails, and
+	//     on_failure steps run. Use for error conditions.
+	//   - "abort": the pipeline exits cleanly with exit code 0 and
+	//     on_failure steps do NOT run. Use for benign precondition
+	//     mismatches (e.g., "someone else is already handling this").
+	OnMismatch string `json:"on_mismatch,omitempty"`
+
+	// Message is a human-readable explanation logged when the assertion
+	// fails (e.g., "workspace status is no longer 'teardown'").
+	Message string `json:"message,omitempty"`
 }
 
 // PipelineLog configures Matrix thread logging for a pipeline.

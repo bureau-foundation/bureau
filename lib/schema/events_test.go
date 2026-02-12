@@ -4791,11 +4791,180 @@ func TestTicketConfigContentForwardCompatibility(t *testing.T) {
 		t.Error("CanModify() should reject v2 events from v1 code")
 	}
 
-	remarshaled, err := json.Marshal(config)
-	if err != nil {
-		t.Fatalf("re-Marshal: %v", err)
+	remarshaled, err2 := json.Marshal(config)
+	if err2 != nil {
+		t.Fatalf("re-Marshal: %v", err2)
 	}
 	if strings.Contains(string(remarshaled), "new_v2_field") {
 		t.Error("unknown field survived re-marshal; expected it to be dropped")
+	}
+}
+
+func TestWorktreeStateRoundTrip(t *testing.T) {
+	original := WorktreeState{
+		Status:       "active",
+		Project:      "iree",
+		WorktreePath: "feature/amdgpu",
+		Branch:       "feature/amdgpu-inference",
+		Machine:      "workstation",
+		UpdatedAt:    "2026-02-12T00:00:00Z",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "status", "active")
+	assertField(t, raw, "project", "iree")
+	assertField(t, raw, "worktree_path", "feature/amdgpu")
+	assertField(t, raw, "branch", "feature/amdgpu-inference")
+	assertField(t, raw, "machine", "workstation")
+	assertField(t, raw, "updated_at", "2026-02-12T00:00:00Z")
+
+	var decoded WorktreeState
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip mismatch:\n  got:  %+v\n  want: %+v", decoded, original)
+	}
+}
+
+func TestWorktreeStateOmitsEmptyBranch(t *testing.T) {
+	state := WorktreeState{
+		Status:       "creating",
+		Project:      "iree",
+		WorktreePath: "detached-work",
+		Machine:      "workstation",
+		UpdatedAt:    "2026-02-12T00:00:00Z",
+	}
+
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["branch"]; exists {
+		t.Error("branch should be omitted when empty")
+	}
+	assertField(t, raw, "status", "creating")
+	assertField(t, raw, "worktree_path", "detached-work")
+}
+
+func TestPipelineAssertStateInStep(t *testing.T) {
+	content := PipelineContent{
+		Steps: []PipelineStep{
+			{
+				Name: "verify-teardown",
+				AssertState: &PipelineAssertState{
+					Room:       "!room:bureau.local",
+					EventType:  "m.bureau.workspace",
+					Field:      "status",
+					Equals:     "teardown",
+					OnMismatch: "abort",
+					Message:    "workspace is no longer in teardown",
+				},
+			},
+			{
+				Name: "assert-not-removing",
+				AssertState: &PipelineAssertState{
+					Room:      "!room:bureau.local",
+					EventType: "m.bureau.worktree",
+					StateKey:  "feature/amdgpu",
+					Field:     "status",
+					NotIn:     []string{"removing", "archived", "removed"},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded PipelineContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.Steps) != 2 {
+		t.Fatalf("Steps count = %d, want 2", len(decoded.Steps))
+	}
+
+	step0 := decoded.Steps[0]
+	if step0.AssertState == nil {
+		t.Fatal("Steps[0].AssertState is nil")
+	}
+	if step0.AssertState.Equals != "teardown" {
+		t.Errorf("AssertState.Equals = %q, want %q", step0.AssertState.Equals, "teardown")
+	}
+	if step0.AssertState.OnMismatch != "abort" {
+		t.Errorf("AssertState.OnMismatch = %q, want %q", step0.AssertState.OnMismatch, "abort")
+	}
+
+	step1 := decoded.Steps[1]
+	if step1.AssertState == nil {
+		t.Fatal("Steps[1].AssertState is nil")
+	}
+	if step1.AssertState.StateKey != "feature/amdgpu" {
+		t.Errorf("AssertState.StateKey = %q, want %q", step1.AssertState.StateKey, "feature/amdgpu")
+	}
+	if len(step1.AssertState.NotIn) != 3 {
+		t.Fatalf("AssertState.NotIn length = %d, want 3", len(step1.AssertState.NotIn))
+	}
+}
+
+func TestPipelineOnFailure(t *testing.T) {
+	content := PipelineContent{
+		Steps: []PipelineStep{
+			{Name: "do-work", Run: "echo hello"},
+		},
+		OnFailure: []PipelineStep{
+			{
+				Name: "publish-failed",
+				Publish: &PipelinePublish{
+					EventType: "m.bureau.worktree",
+					Room:      "!room:bureau.local",
+					StateKey:  "feature/amdgpu",
+					Content:   map[string]any{"status": "failed"},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded PipelineContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.OnFailure) != 1 {
+		t.Fatalf("OnFailure count = %d, want 1", len(decoded.OnFailure))
+	}
+	if decoded.OnFailure[0].Name != "publish-failed" {
+		t.Errorf("OnFailure[0].Name = %q, want %q", decoded.OnFailure[0].Name, "publish-failed")
+	}
+	if decoded.OnFailure[0].Publish == nil {
+		t.Fatal("OnFailure[0].Publish is nil")
+	}
+	if decoded.OnFailure[0].Publish.EventType != "m.bureau.worktree" {
+		t.Errorf("OnFailure[0].Publish.EventType = %q, want %q",
+			decoded.OnFailure[0].Publish.EventType, "m.bureau.worktree")
 	}
 }

@@ -532,4 +532,212 @@ func TestExpandStep(t *testing.T) {
 			t.Error("Publish should remain nil")
 		}
 	})
+
+	t.Run("assert_state step", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "check-status",
+			AssertState: &schema.PipelineAssertState{
+				Room:      "${WORKSPACE_ROOM_ID}",
+				EventType: "m.bureau.worktree",
+				StateKey:  "${WORKTREE_PATH}",
+				Field:     "status",
+				Equals:    "${EXPECTED_STATUS}",
+				Message:   "expected ${EXPECTED_STATUS} but got something else",
+			},
+		}
+		variables := map[string]string{
+			"WORKSPACE_ROOM_ID": "!abc:bureau.local",
+			"WORKTREE_PATH":     "feature/amdgpu",
+			"EXPECTED_STATUS":   "removing",
+		}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		if expanded.AssertState.Room != "!abc:bureau.local" {
+			t.Errorf("AssertState.Room = %q", expanded.AssertState.Room)
+		}
+		if expanded.AssertState.StateKey != "feature/amdgpu" {
+			t.Errorf("AssertState.StateKey = %q", expanded.AssertState.StateKey)
+		}
+		if expanded.AssertState.Equals != "removing" {
+			t.Errorf("AssertState.Equals = %q", expanded.AssertState.Equals)
+		}
+		if expanded.AssertState.Message != "expected removing but got something else" {
+			t.Errorf("AssertState.Message = %q", expanded.AssertState.Message)
+		}
+	})
+
+	t.Run("assert_state with in list", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "check-in-set",
+			AssertState: &schema.PipelineAssertState{
+				Room:      "!room:bureau.local",
+				EventType: "m.bureau.workspace",
+				Field:     "status",
+				In:        []string{"${STATUS_A}", "${STATUS_B}"},
+			},
+		}
+		variables := map[string]string{
+			"STATUS_A": "active",
+			"STATUS_B": "teardown",
+		}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		if len(expanded.AssertState.In) != 2 {
+			t.Fatalf("AssertState.In length = %d, want 2", len(expanded.AssertState.In))
+		}
+		if expanded.AssertState.In[0] != "active" {
+			t.Errorf("AssertState.In[0] = %q", expanded.AssertState.In[0])
+		}
+		if expanded.AssertState.In[1] != "teardown" {
+			t.Errorf("AssertState.In[1] = %q", expanded.AssertState.In[1])
+		}
+	})
+
+	t.Run("assert_state with not_in list", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "check-not-in-set",
+			AssertState: &schema.PipelineAssertState{
+				Room:      "!room:bureau.local",
+				EventType: "m.bureau.workspace",
+				Field:     "status",
+				NotIn:     []string{"${TERMINAL_A}", "${TERMINAL_B}"},
+			},
+		}
+		variables := map[string]string{
+			"TERMINAL_A": "archived",
+			"TERMINAL_B": "removed",
+		}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		if len(expanded.AssertState.NotIn) != 2 {
+			t.Fatalf("AssertState.NotIn length = %d, want 2", len(expanded.AssertState.NotIn))
+		}
+		if expanded.AssertState.NotIn[0] != "archived" {
+			t.Errorf("AssertState.NotIn[0] = %q", expanded.AssertState.NotIn[0])
+		}
+		if expanded.AssertState.NotIn[1] != "removed" {
+			t.Errorf("AssertState.NotIn[1] = %q", expanded.AssertState.NotIn[1])
+		}
+	})
+
+	t.Run("assert_state with not_equals", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "check-not-removing",
+			AssertState: &schema.PipelineAssertState{
+				Room:      "!room:bureau.local",
+				EventType: "m.bureau.worktree",
+				StateKey:  "${WORKTREE_PATH}",
+				Field:     "status",
+				NotEquals: "${FORBIDDEN_STATUS}",
+			},
+		}
+		variables := map[string]string{
+			"WORKTREE_PATH":    "feature/test",
+			"FORBIDDEN_STATUS": "removing",
+		}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		if expanded.AssertState.NotEquals != "removing" {
+			t.Errorf("AssertState.NotEquals = %q", expanded.AssertState.NotEquals)
+		}
+	})
+
+	t.Run("nil assert_state passes through", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "simple",
+			Run:  "echo hello",
+		}
+
+		expanded, err := ExpandStep(step, map[string]string{})
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		if expanded.AssertState != nil {
+			t.Error("AssertState should remain nil")
+		}
+	})
+
+	t.Run("unresolved variable in assert_state", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "broken-assert",
+			AssertState: &schema.PipelineAssertState{
+				Room:      "${MISSING_ROOM}",
+				EventType: "m.bureau.workspace",
+				Field:     "status",
+				Equals:    "active",
+			},
+		}
+
+		_, err := ExpandStep(step, map[string]string{})
+		if err == nil {
+			t.Fatal("expected error for unresolved variable")
+		}
+		if !strings.Contains(err.Error(), "MISSING_ROOM") {
+			t.Errorf("error should mention MISSING_ROOM: %v", err)
+		}
+		if !strings.Contains(err.Error(), "assert_state.room") {
+			t.Errorf("error should identify the field: %v", err)
+		}
+	})
+
+	t.Run("assert_state does not modify original", func(t *testing.T) {
+		t.Parallel()
+
+		original := &schema.PipelineAssertState{
+			Room:      "${ROOM}",
+			EventType: "m.bureau.worktree",
+			Field:     "status",
+			Equals:    "active",
+			In:        []string{"${A}", "${B}"},
+		}
+		step := schema.PipelineStep{
+			Name:        "check",
+			AssertState: original,
+		}
+		variables := map[string]string{
+			"ROOM": "!expanded:bureau.local",
+			"A":    "one",
+			"B":    "two",
+		}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+		// Expanded step should have new values.
+		if expanded.AssertState.Room != "!expanded:bureau.local" {
+			t.Errorf("expanded Room = %q", expanded.AssertState.Room)
+		}
+		// Original should be untouched.
+		if original.Room != "${ROOM}" {
+			t.Errorf("original Room was modified to %q", original.Room)
+		}
+		if original.In[0] != "${A}" {
+			t.Errorf("original In[0] was modified to %q", original.In[0])
+		}
+	})
 }

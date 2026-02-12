@@ -99,14 +99,14 @@ func TestValidate(t *testing.T) {
 			wantSubstrings: []string{"name is required"},
 		},
 		{
-			name: "step with neither run nor publish",
+			name: "step with neither run nor publish nor assert_state",
 			content: &schema.PipelineContent{
 				Steps: []schema.PipelineStep{
 					{Name: "empty-step"},
 				},
 			},
 			expectedIssues: 1,
-			wantSubstrings: []string{"must set either run or publish"},
+			wantSubstrings: []string{"must set exactly one of run, publish, or assert_state"},
 		},
 		{
 			name: "step with both run and publish",
@@ -284,6 +284,252 @@ func TestValidate(t *testing.T) {
 			},
 			expectedIssues: 1,
 			wantSubstrings: []string{"log.room is required"},
+		},
+		{
+			name: "valid assert_state with equals",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "check-status",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							Equals:    "teardown",
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "valid assert_state with not_equals and abort",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "check-not-removing",
+						AssertState: &schema.PipelineAssertState{
+							Room:       "!room:bureau.local",
+							EventType:  "m.bureau.worktree",
+							StateKey:   "feature/amdgpu",
+							Field:      "status",
+							NotEquals:  "removing",
+							OnMismatch: "abort",
+							Message:    "someone else is already removing",
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "valid assert_state with in",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "check-status-in-set",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							In:        []string{"active", "teardown"},
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "valid assert_state with not_in",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "check-status-not-terminal",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							NotIn:     []string{"archived", "removed"},
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "assert_state missing room",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							Equals:    "active",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"assert_state.room is required"},
+		},
+		{
+			name: "assert_state missing event_type",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							Room:   "!room:bureau.local",
+							Field:  "status",
+							Equals: "active",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"assert_state.event_type is required"},
+		},
+		{
+			name: "assert_state missing field",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Equals:    "active",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"assert_state.field is required"},
+		},
+		{
+			name: "assert_state no condition",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"requires exactly one condition"},
+		},
+		{
+			name: "assert_state multiple conditions",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							Equals:    "active",
+							NotEquals: "teardown",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"conditions are mutually exclusive"},
+		},
+		{
+			name: "assert_state invalid on_mismatch",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "bad-assert",
+						AssertState: &schema.PipelineAssertState{
+							Room:       "!room:bureau.local",
+							EventType:  "m.bureau.workspace",
+							Field:      "status",
+							Equals:     "active",
+							OnMismatch: "panic",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"on_mismatch must be"},
+		},
+		{
+			name: "assert_state combined with run",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "both",
+						Run:  "echo hello",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							Equals:    "active",
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"mutually exclusive"},
+		},
+		{
+			name: "valid on_failure steps",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "work", Run: "echo hello"},
+				},
+				OnFailure: []schema.PipelineStep{
+					{
+						Name: "publish-failed",
+						Publish: &schema.PipelinePublish{
+							EventType: "m.bureau.worktree",
+							Room:      "!room:bureau.local",
+							Content:   map[string]any{"status": "failed"},
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "on_failure step with invalid structure",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "work", Run: "echo hello"},
+				},
+				OnFailure: []schema.PipelineStep{
+					{Name: "bad-cleanup"}, // neither run nor publish
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"on_failure[0]"},
+		},
+		{
+			name: "when on assert_state step is valid",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "conditional-assert",
+						When: "test \"${MODE}\" = archive",
+						AssertState: &schema.PipelineAssertState{
+							Room:      "!room:bureau.local",
+							EventType: "m.bureau.workspace",
+							Field:     "status",
+							Equals:    "teardown",
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
 		},
 		{
 			name: "multiple issues",

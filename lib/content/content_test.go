@@ -27,8 +27,8 @@ func TestPipelines(t *testing.T) {
 		byName[p.Name] = p
 	}
 
-	// Verify both dev-workspace pipelines are present.
-	for _, name := range []string{"dev-workspace-init", "dev-workspace-deinit"} {
+	// Verify all four dev pipelines are present.
+	for _, name := range []string{"dev-workspace-init", "dev-workspace-deinit", "dev-worktree-init", "dev-worktree-deinit"} {
 		if _, exists := byName[name]; !exists {
 			names := make([]string, 0, len(pipelines))
 			for _, p := range pipelines {
@@ -40,6 +40,8 @@ func TestPipelines(t *testing.T) {
 
 	verifyDevWorkspaceInit(t, byName["dev-workspace-init"])
 	verifyDevWorkspaceDeinit(t, byName["dev-workspace-deinit"])
+	verifyDevWorktreeInit(t, byName["dev-worktree-init"])
+	verifyDevWorktreeDeinit(t, byName["dev-worktree-deinit"])
 }
 
 func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
@@ -81,6 +83,17 @@ func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
 		t.Error("last step should be a publish step")
 	} else if lastStep.Publish.EventType != "m.bureau.workspace" {
 		t.Errorf("last step publish event_type = %q", lastStep.Publish.EventType)
+	}
+
+	// on_failure should publish workspace failed state.
+	if len(p.Content.OnFailure) != 1 {
+		t.Fatalf("expected 1 on_failure step, got %d", len(p.Content.OnFailure))
+	}
+	initOnFailure := p.Content.OnFailure[0]
+	if initOnFailure.Publish == nil {
+		t.Error("on_failure step should be a publish step")
+	} else if initOnFailure.Publish.EventType != "m.bureau.workspace" {
+		t.Errorf("on_failure publish event_type = %q, want %q", initOnFailure.Publish.EventType, "m.bureau.workspace")
 	}
 
 	// Log should point to the workspace room.
@@ -129,14 +142,33 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 		t.Errorf("EVENT_teardown_mode default = %q, want %q", modeVariable.Default, "archive")
 	}
 
-	// Should have enough steps for validate + check + cleanup + publish (x2).
-	if len(p.Content.Steps) < 5 {
-		t.Fatalf("expected at least 5 steps, got %d", len(p.Content.Steps))
+	// Should have enough steps for assert + validate + check + cleanup + publish (x2).
+	if len(p.Content.Steps) < 6 {
+		t.Fatalf("expected at least 6 steps, got %d", len(p.Content.Steps))
 	}
 
-	// First step should validate the MODE variable.
-	if p.Content.Steps[0].Name != "validate-mode" {
-		t.Errorf("first step name = %q, want %q", p.Content.Steps[0].Name, "validate-mode")
+	// First step should be the staleness guard (assert_state).
+	firstStep := p.Content.Steps[0]
+	if firstStep.Name != "assert-still-teardown" {
+		t.Errorf("first step name = %q, want %q", firstStep.Name, "assert-still-teardown")
+	}
+	if firstStep.AssertState == nil {
+		t.Error("first step should be an assert_state step")
+	} else {
+		if firstStep.AssertState.EventType != "m.bureau.workspace" {
+			t.Errorf("assert_state event_type = %q, want %q", firstStep.AssertState.EventType, "m.bureau.workspace")
+		}
+		if firstStep.AssertState.Equals != "teardown" {
+			t.Errorf("assert_state equals = %q, want %q", firstStep.AssertState.Equals, "teardown")
+		}
+		if firstStep.AssertState.OnMismatch != "abort" {
+			t.Errorf("assert_state on_mismatch = %q, want %q", firstStep.AssertState.OnMismatch, "abort")
+		}
+	}
+
+	// Second step should validate the MODE variable.
+	if p.Content.Steps[1].Name != "validate-mode" {
+		t.Errorf("second step name = %q, want %q", p.Content.Steps[1].Name, "validate-mode")
 	}
 
 	// Last two steps should be conditional publish steps (archive/delete).
@@ -160,6 +192,17 @@ func verifyDevWorkspaceDeinit(t *testing.T, p Pipeline) {
 	} else if lastStep.Publish.EventType != "m.bureau.workspace" {
 		t.Errorf("publish-removed event_type = %q, want %q",
 			lastStep.Publish.EventType, "m.bureau.workspace")
+	}
+
+	// on_failure should publish workspace failed state.
+	if len(p.Content.OnFailure) != 1 {
+		t.Fatalf("expected 1 on_failure step, got %d", len(p.Content.OnFailure))
+	}
+	onFailure := p.Content.OnFailure[0]
+	if onFailure.Publish == nil {
+		t.Error("on_failure step should be a publish step")
+	} else if onFailure.Publish.EventType != "m.bureau.workspace" {
+		t.Errorf("on_failure publish event_type = %q, want %q", onFailure.Publish.EventType, "m.bureau.workspace")
 	}
 
 	// Log should point to the workspace room.
@@ -199,6 +242,105 @@ func TestPipelinesSourceHashStable(t *testing.T) {
 			t.Errorf("pipeline %q hash changed between calls: %s vs %s",
 				first[i].Name, first[i].SourceHash, second[i].SourceHash)
 		}
+	}
+}
+
+func verifyDevWorktreeInit(t *testing.T, p Pipeline) {
+	t.Helper()
+
+	if p.Content.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// Verify required variables.
+	for _, name := range []string{"PROJECT", "WORKTREE_PATH", "WORKSPACE_ROOM_ID", "MACHINE"} {
+		variable, exists := p.Content.Variables[name]
+		if !exists {
+			t.Errorf("missing variable declaration: %s", name)
+			continue
+		}
+		if !variable.Required {
+			t.Errorf("variable %s should be marked required", name)
+		}
+	}
+
+	// Last step should publish worktree active state.
+	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
+	if lastStep.Name != "publish-active" {
+		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-active")
+	}
+	if lastStep.Publish == nil {
+		t.Error("last step should be a publish step")
+	} else {
+		if lastStep.Publish.EventType != "m.bureau.worktree" {
+			t.Errorf("publish event_type = %q, want %q", lastStep.Publish.EventType, "m.bureau.worktree")
+		}
+		if lastStep.Publish.StateKey != "${WORKTREE_PATH}" {
+			t.Errorf("publish state_key = %q, want %q", lastStep.Publish.StateKey, "${WORKTREE_PATH}")
+		}
+	}
+
+	// on_failure should publish worktree failed state.
+	if len(p.Content.OnFailure) != 1 {
+		t.Fatalf("expected 1 on_failure step, got %d", len(p.Content.OnFailure))
+	}
+	if p.Content.OnFailure[0].Publish == nil {
+		t.Error("on_failure step should be a publish step")
+	} else if p.Content.OnFailure[0].Publish.EventType != "m.bureau.worktree" {
+		t.Errorf("on_failure publish event_type = %q", p.Content.OnFailure[0].Publish.EventType)
+	}
+}
+
+func verifyDevWorktreeDeinit(t *testing.T, p Pipeline) {
+	t.Helper()
+
+	if p.Content.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// First step should be the staleness guard (assert_state).
+	firstStep := p.Content.Steps[0]
+	if firstStep.Name != "assert-still-removing" {
+		t.Errorf("first step name = %q, want %q", firstStep.Name, "assert-still-removing")
+	}
+	if firstStep.AssertState == nil {
+		t.Error("first step should be an assert_state step")
+	} else {
+		if firstStep.AssertState.EventType != "m.bureau.worktree" {
+			t.Errorf("assert_state event_type = %q, want %q", firstStep.AssertState.EventType, "m.bureau.worktree")
+		}
+		if firstStep.AssertState.Equals != "removing" {
+			t.Errorf("assert_state equals = %q, want %q", firstStep.AssertState.Equals, "removing")
+		}
+		if firstStep.AssertState.OnMismatch != "abort" {
+			t.Errorf("assert_state on_mismatch = %q, want %q", firstStep.AssertState.OnMismatch, "abort")
+		}
+	}
+
+	// Last two steps should be conditional publish steps (archived/removed).
+	lastStep := p.Content.Steps[len(p.Content.Steps)-1]
+	secondLastStep := p.Content.Steps[len(p.Content.Steps)-2]
+	if secondLastStep.Name != "publish-archived" {
+		t.Errorf("second-to-last step name = %q, want %q", secondLastStep.Name, "publish-archived")
+	}
+	if lastStep.Name != "publish-removed" {
+		t.Errorf("last step name = %q, want %q", lastStep.Name, "publish-removed")
+	}
+	if secondLastStep.Publish != nil && secondLastStep.Publish.EventType != "m.bureau.worktree" {
+		t.Errorf("publish-archived event_type = %q", secondLastStep.Publish.EventType)
+	}
+	if lastStep.Publish != nil && lastStep.Publish.EventType != "m.bureau.worktree" {
+		t.Errorf("publish-removed event_type = %q", lastStep.Publish.EventType)
+	}
+
+	// on_failure should publish worktree failed state.
+	if len(p.Content.OnFailure) != 1 {
+		t.Fatalf("expected 1 on_failure step, got %d", len(p.Content.OnFailure))
+	}
+	if p.Content.OnFailure[0].Publish == nil {
+		t.Error("on_failure step should be a publish step")
+	} else if p.Content.OnFailure[0].Publish.EventType != "m.bureau.worktree" {
+		t.Errorf("on_failure publish event_type = %q", p.Content.OnFailure[0].Publish.EventType)
 	}
 }
 

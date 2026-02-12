@@ -77,6 +77,20 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID, eventID 
 		},
 	}
 
+	// Publish the transitional "creating" state before launching the
+	// pipeline. This lets other principals gate on worktree existence
+	// via StartCondition, and ensures the worktree has a state event
+	// even if the pipeline fails to start.
+	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, schema.WorktreeState{
+		Status:       "creating",
+		Project:      project,
+		WorktreePath: worktreePath,
+		Branch:       branch,
+		Machine:      d.machineName,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to publish worktree creating state: %w", err)
+	}
+
 	d.logger.Info("workspace.worktree.add accepted",
 		"room_id", roomID,
 		"workspace", command.Workspace,
@@ -143,6 +157,19 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID, event
 			"WORKSPACE_ROOM_ID": roomID,
 			"MACHINE":           d.machineName,
 		},
+	}
+
+	// Publish the transitional "removing" state before launching the
+	// pipeline. The deinit pipeline's assert_state step verifies this
+	// state still holds at execution time, preventing races where
+	// removal was cancelled between queueing and execution.
+	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, schema.WorktreeState{
+		Status:       "removing",
+		Project:      project,
+		WorktreePath: worktreePath,
+		Machine:      d.machineName,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to publish worktree removing state: %w", err)
 	}
 
 	d.logger.Info("workspace.worktree.remove accepted",

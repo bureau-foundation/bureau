@@ -105,6 +105,23 @@ func (r *resultLog) writeFailed(failedStep, errorMessage string, durationMS int6
 	})
 }
 
+// writeAborted records a clean pipeline abort (precondition not met).
+// Unlike writeFailed, this indicates the pipeline did not encounter an error
+// — the work was simply not needed because the precondition changed.
+func (r *resultLog) writeAborted(abortedStep, reason string, durationMS int64, logEventID string) {
+	if r == nil {
+		return
+	}
+	r.write(resultAbortedEntry{
+		Type:        "aborted",
+		Status:      "aborted",
+		Reason:      reason,
+		AbortedStep: abortedStep,
+		DurationMS:  durationMS,
+		LogEventID:  logEventID,
+	})
+}
+
 func (r *resultLog) write(entry any) {
 	if err := r.encoder.Encode(entry); err != nil {
 		fmt.Printf("[pipeline] warning: failed to write result log entry: %v\n", err)
@@ -155,4 +172,15 @@ type resultFailedEntry struct {
 	FailedStep string `json:"failed_step"`
 	DurationMS int64  `json:"duration_ms"`
 	LogEventID string `json:"log_event_id"`
+}
+
+// resultAbortedEntry is the last line when the pipeline aborts cleanly
+// due to an assert_state precondition mismatch with on_mismatch="abort".
+type resultAbortedEntry struct {
+	Type        string `json:"type"`
+	Status      string `json:"status"`
+	Reason      string `json:"reason"`
+	AbortedStep string `json:"aborted_step"`
+	DurationMS  int64  `json:"duration_ms"`
+	LogEventID  string `json:"log_event_id"`
 }

@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-state-check_lib",
+    srcs = [
+        "doc.go",
+        "main.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-state-check",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/netutil",
+        "//lib/version",
+    ],
+)
+
+go_binary(
+    name = "bureau-state-check",
+    embed = [":bureau-state-check_lib"],
+    visibility = ["//visibility:public"],
+)

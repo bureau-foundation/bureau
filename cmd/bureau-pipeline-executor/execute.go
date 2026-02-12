@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,7 +21,7 @@ const defaultStepTimeout = 5 * time.Minute
 
 // stepResult captures the outcome of executing a single pipeline step.
 type stepResult struct {
-	status   string // "ok", "failed", "skipped"
+	status   string // "ok", "failed", "skipped", "aborted"
 	duration time.Duration
 	err      error
 }
@@ -138,12 +139,117 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 				err:      fmt.Errorf("publish: %w", err),
 			}
 		}
+	} else if step.AssertState != nil {
+		assertResult := executeAssertState(stepContext, step.AssertState, proxy)
+		if assertResult.err != nil {
+			return stepResult{
+				status:   assertResult.status,
+				duration: time.Since(startTime),
+				err:      assertResult.err,
+			}
+		}
 	}
 
 	duration := time.Since(startTime)
 	fmt.Printf("[pipeline] step %d/%d: %s... ok (%s)\n", index+1, total, step.Name, formatDuration(duration))
 	logger.logStep(ctx, index, total, step.Name, "ok", duration)
 	return stepResult{status: "ok", duration: duration}
+}
+
+// executeAssertState reads a Matrix state event and checks a condition against
+// a field value. Returns a result with status "ok" on match, or "failed" /
+// "aborted" on mismatch depending on the OnMismatch setting.
+//
+// The "abort" status is semantically different from "fail": abort means the
+// pipeline's precondition is no longer valid (e.g., the resource state changed
+// between when the pipeline was queued and when it started executing). The
+// pipeline exits cleanly with no error — there is nothing broken, the work
+// is simply no longer needed.
+//
+// The "fail" status (default) means the assertion is a hard requirement that
+// was not met, and the pipeline should report failure.
+func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, proxy *proxyClient) stepResult {
+	// Read the state event.
+	rawContent, err := proxy.getState(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
+	if err != nil {
+		return stepResult{
+			status: "failed",
+			err:    fmt.Errorf("assert_state: reading state event %s/%s in %s: %w", assertion.EventType, assertion.StateKey, assertion.Room, err),
+		}
+	}
+
+	// Parse the content as a generic map and extract the field value.
+	var content map[string]any
+	if err := json.Unmarshal(rawContent, &content); err != nil {
+		return stepResult{
+			status: "failed",
+			err:    fmt.Errorf("assert_state: parsing state event content: %w", err),
+		}
+	}
+
+	rawFieldValue, exists := content[assertion.Field]
+	if !exists {
+		return stepResult{
+			status: "failed",
+			err:    fmt.Errorf("assert_state: field %q not found in state event content", assertion.Field),
+		}
+	}
+
+	// Stringify the field value for comparison. Pipeline assertions operate
+	// on string equality — the field value is coerced to its JSON string
+	// representation. This covers the common case (string status fields)
+	// and gives predictable behavior for other types.
+	fieldValue := fmt.Sprintf("%v", rawFieldValue)
+
+	// Evaluate the condition.
+	matched := false
+	var conditionDescription string
+
+	switch {
+	case assertion.Equals != "":
+		matched = fieldValue == assertion.Equals
+		conditionDescription = fmt.Sprintf("equals %q", assertion.Equals)
+	case assertion.NotEquals != "":
+		matched = fieldValue != assertion.NotEquals
+		conditionDescription = fmt.Sprintf("not_equals %q", assertion.NotEquals)
+	case len(assertion.In) > 0:
+		for _, allowed := range assertion.In {
+			if fieldValue == allowed {
+				matched = true
+				break
+			}
+		}
+		conditionDescription = fmt.Sprintf("in %v", assertion.In)
+	case len(assertion.NotIn) > 0:
+		matched = true
+		for _, forbidden := range assertion.NotIn {
+			if fieldValue == forbidden {
+				matched = false
+				break
+			}
+		}
+		conditionDescription = fmt.Sprintf("not_in %v", assertion.NotIn)
+	}
+
+	if matched {
+		return stepResult{status: "ok"}
+	}
+
+	// Determine the mismatch behavior.
+	status := "failed"
+	if assertion.OnMismatch == "abort" {
+		status = "aborted"
+	}
+
+	message := assertion.Message
+	if message == "" {
+		message = fmt.Sprintf("field %q is %q, expected %s", assertion.Field, fieldValue, conditionDescription)
+	}
+
+	return stepResult{
+		status: status,
+		err:    fmt.Errorf("assert_state: %s", message),
+	}
 }
 
 // runShellCommand executes a command via sh -c with stdout and stderr

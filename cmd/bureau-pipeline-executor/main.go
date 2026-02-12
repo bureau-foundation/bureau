@@ -161,7 +161,20 @@ func run() error {
 
 		result := executeStep(ctx, expandedStep, index, len(content.Steps), proxy, logger)
 
-		if result.status == "failed" {
+		switch result.status {
+		case "aborted":
+			// Clean exit — a precondition check determined this pipeline's
+			// work is no longer needed. Not an error: the pipeline exits
+			// with success and on_failure steps are NOT run (nothing failed).
+			fmt.Printf("[pipeline] %s: aborted at step %q: %v\n", name, expandedStep.Name, result.err)
+			logger.logAborted(ctx, name, expandedStep.Name, result.err)
+			results.writeStep(index, expandedStep.Name, "aborted",
+				result.duration.Milliseconds(), result.err.Error())
+			results.writeAborted(expandedStep.Name, result.err.Error(),
+				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
+			return nil
+
+		case "failed":
 			if expandedStep.Optional {
 				fmt.Printf("[pipeline] step %d/%d: %s... failed (optional, continuing): %v\n",
 					index+1, len(content.Steps), expandedStep.Name, result.err)
@@ -175,11 +188,19 @@ func run() error {
 				logger.logFailed(ctx, name, expandedStep.Name, result.err)
 				results.writeStep(index, expandedStep.Name, "failed",
 					result.duration.Milliseconds(), result.err.Error())
+
+				// Run on_failure steps before recording the terminal failure.
+				// These are best-effort: their failures are logged but do not
+				// change the pipeline's overall outcome.
+				runOnFailureSteps(ctx, content.OnFailure, variables,
+					expandedStep.Name, result.err, proxy, logger, results)
+
 				results.writeFailed(expandedStep.Name, result.err.Error(),
 					time.Since(pipelineStart).Milliseconds(), logger.logEventID())
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
 			}
-		} else {
+
+		default:
 			results.writeStep(index, expandedStep.Name, result.status,
 				result.duration.Milliseconds(), "")
 		}
@@ -190,6 +211,66 @@ func run() error {
 	logger.logComplete(ctx, name, totalDuration)
 	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID())
 	return nil
+}
+
+// runOnFailureSteps executes the on_failure steps after a pipeline failure.
+// These steps run with the same variables as the main pipeline, plus two
+// additional variables:
+//
+//   - FAILED_STEP: the name of the step that failed
+//   - FAILED_ERROR: the error message from the failed step
+//
+// All on_failure steps are best-effort: if one fails, the error is logged
+// and execution continues with the remaining steps. This prevents cascading
+// failures from hiding the original error.
+//
+// on_failure steps are NOT run on abort (precondition mismatch) — abort means
+// nothing went wrong, the work was simply no longer needed.
+func runOnFailureSteps(
+	ctx context.Context,
+	steps []schema.PipelineStep,
+	variables map[string]string,
+	failedStepName string,
+	failedError error,
+	proxy *proxyClient,
+	logger *threadLogger,
+	results *resultLog,
+) {
+	if len(steps) == 0 {
+		return
+	}
+
+	// Build a copy of the variables with failure context added.
+	failureVariables := make(map[string]string, len(variables)+2)
+	for key, value := range variables {
+		failureVariables[key] = value
+	}
+	failureVariables["FAILED_STEP"] = failedStepName
+	failureVariables["FAILED_ERROR"] = failedError.Error()
+
+	fmt.Printf("[pipeline] running %d on_failure steps\n", len(steps))
+
+	for index, step := range steps {
+		expandedStep, err := pipeline.ExpandStep(step, failureVariables)
+		if err != nil {
+			fmt.Printf("[pipeline] on_failure[%d] %q: expansion failed: %v\n", index, step.Name, err)
+			continue
+		}
+
+		result := executeStep(ctx, expandedStep, index, len(steps), proxy, logger)
+
+		switch result.status {
+		case "ok", "skipped":
+			fmt.Printf("[pipeline] on_failure[%d] %q: %s\n", index, expandedStep.Name, result.status)
+		case "failed":
+			fmt.Printf("[pipeline] on_failure[%d] %q: failed (continuing): %v\n", index, expandedStep.Name, result.err)
+		case "aborted":
+			fmt.Printf("[pipeline] on_failure[%d] %q: aborted (continuing): %v\n", index, expandedStep.Name, result.err)
+		}
+
+		results.writeStep(index, "on_failure:"+expandedStep.Name, result.status,
+			result.duration.Milliseconds(), "")
+	}
 }
 
 // resolvePipeline determines the pipeline definition from the available

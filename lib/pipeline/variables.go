@@ -167,6 +167,51 @@ func ExpandStep(step schema.PipelineStep, variables map[string]string) (schema.P
 		step.Publish = &expanded
 	}
 
+	// Expand assert_state fields if present.
+	if step.AssertState != nil {
+		expanded := *step.AssertState
+		if expanded.Room, err = Expand(expanded.Room, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.room: %w", step.Name, err)
+		}
+		if expanded.EventType, err = Expand(expanded.EventType, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.event_type: %w", step.Name, err)
+		}
+		if expanded.StateKey, err = Expand(expanded.StateKey, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.state_key: %w", step.Name, err)
+		}
+		if expanded.Field, err = Expand(expanded.Field, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.field: %w", step.Name, err)
+		}
+		if expanded.Equals, err = Expand(expanded.Equals, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.equals: %w", step.Name, err)
+		}
+		if expanded.NotEquals, err = Expand(expanded.NotEquals, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.not_equals: %w", step.Name, err)
+		}
+		if expanded.Message, err = Expand(expanded.Message, merged); err != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.message: %w", step.Name, err)
+		}
+		if len(expanded.In) > 0 {
+			expandedIn := make([]string, len(expanded.In))
+			for index, value := range expanded.In {
+				if expandedIn[index], err = Expand(value, merged); err != nil {
+					return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.in[%d]: %w", step.Name, index, err)
+				}
+			}
+			expanded.In = expandedIn
+		}
+		if len(expanded.NotIn) > 0 {
+			expandedNotIn := make([]string, len(expanded.NotIn))
+			for index, value := range expanded.NotIn {
+				if expandedNotIn[index], err = Expand(value, merged); err != nil {
+					return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.not_in[%d]: %w", step.Name, index, err)
+				}
+			}
+			expanded.NotIn = expandedNotIn
+		}
+		step.AssertState = &expanded
+	}
+
 	step.Env = expandedEnv
 	return step, nil
 }

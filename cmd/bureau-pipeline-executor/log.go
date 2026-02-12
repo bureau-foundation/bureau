@@ -97,6 +97,19 @@ func (l *threadLogger) logFailed(ctx context.Context, name, stepName string, err
 	l.sendThreadReply(ctx, body)
 }
 
+// logAborted posts a pipeline abort message as a thread reply. Abort is
+// distinct from failure: it means a precondition check determined the
+// pipeline's work is no longer needed (e.g., the resource state changed
+// between queuing and execution).
+func (l *threadLogger) logAborted(ctx context.Context, name, stepName string, err error) {
+	if l == nil {
+		return
+	}
+
+	body := fmt.Sprintf("Pipeline %s: aborted at step %q: %v", name, stepName, err)
+	l.sendThreadReply(ctx, body)
+}
+
 func (l *threadLogger) sendThreadReply(ctx context.Context, body string) {
 	content := map[string]any{
 		"msgtype": "m.text",

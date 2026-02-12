@@ -58,7 +58,12 @@
       // last path component. We use --detach for the empty case to
       // avoid creating branches with arbitrary names — the agent can
       // check out or create whatever branch it needs.
+      //
+      // The when guard skips creation if the worktree already exists,
+      // making this step idempotent for pipeline retries after partial
+      // completion.
       "name": "create-worktree",
+      "when": "! test -d /workspace/${PROJECT}/${WORKTREE_PATH}/.git && ! test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.git",
       "run": "if [ -n \"${BRANCH}\" ]; then\n  git -C /workspace/${PROJECT}/.bare worktree add /workspace/${PROJECT}/${WORKTREE_PATH} \"${BRANCH}\"\nelse\n  git -C /workspace/${PROJECT}/.bare worktree add --detach /workspace/${PROJECT}/${WORKTREE_PATH}\nfi",
       "check": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}/.git || test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.git",
       "timeout": "5m"
@@ -82,6 +87,38 @@
       "run": "cd /workspace/${PROJECT}/${WORKTREE_PATH} && PROJECT=${PROJECT} WORKTREE_PATH=${WORKTREE_PATH} BRANCH=${BRANCH} .bureau/pipeline/worktree-init",
       "optional": true,
       "timeout": "10m"
+    },
+    {
+      "name": "publish-active",
+      "publish": {
+        "event_type": "m.bureau.worktree",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "state_key": "${WORKTREE_PATH}",
+        "content": {
+          "status": "active",
+          "project": "${PROJECT}",
+          "worktree_path": "${WORKTREE_PATH}",
+          "branch": "${BRANCH}",
+          "machine": "${MACHINE}"
+        }
+      }
+    }
+  ],
+
+  "on_failure": [
+    {
+      "name": "publish-failed",
+      "publish": {
+        "event_type": "m.bureau.worktree",
+        "room": "${WORKSPACE_ROOM_ID}",
+        "state_key": "${WORKTREE_PATH}",
+        "content": {
+          "status": "failed",
+          "project": "${PROJECT}",
+          "worktree_path": "${WORKTREE_PATH}",
+          "machine": "${MACHINE}"
+        }
+      }
     }
   ],
 

@@ -1,0 +1,22 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ticket",
+    srcs = [
+        "doc.go",
+        "index.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/ticket",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/schema"],
+)
+
+go_test(
+    name = "ticket_test",
+    srcs = ["index_test.go"],
+    embed = [":ticket"],
+    deps = ["//lib/schema"],
+)

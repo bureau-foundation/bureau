@@ -112,10 +112,58 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				Level: slog.LevelInfo,
 			}))
 
-			results := runDoctor(ctx, client, sess, serverName, storedCredentials, logger)
+			// Run checks, optionally fixing. In fix mode, loop until no
+			// new fixes are applied (or a cap of 5 iterations). This handles
+			// cascading dependencies: iteration 1 might create missing rooms,
+			// enabling iteration 2 to fix hierarchy, power levels, templates,
+			// and credentials that depend on those rooms existing. Typical
+			// convergence is 2 iterations.
+			const maxFixIterations = 5
+			repairedNames := make(map[string]bool)
+			var results []checkResult
 
-			if fix {
-				executeFixes(ctx, sess, results, dryRun)
+			for iteration := range maxFixIterations {
+				_ = iteration
+				results = runDoctor(ctx, client, sess, serverName, storedCredentials, session.CredentialFile, logger)
+
+				if !fix {
+					break
+				}
+
+				// Track every failing check name before fixing.
+				// Some fixes repair multiple failures at once (e.g.,
+				// a single credential file update fixes all stale
+				// room IDs). Tracking failing names before fixes run
+				// lets us mark all of them as repaired in the final
+				// output, not just the one that carried the fix closure.
+				for _, r := range results {
+					if r.Status == statusFail {
+						repairedNames[r.Name] = true
+					}
+				}
+
+				fixCount := executeFixes(ctx, sess, results, dryRun)
+				if fixCount == 0 || dryRun {
+					break
+				}
+
+				// Re-read credential file for the next iteration since
+				// a fix may have updated it.
+				if session.CredentialFile != "" {
+					storedCredentials, err = cli.ReadCredentialFile(session.CredentialFile)
+					if err != nil {
+						return fmt.Errorf("re-read credential file: %w", err)
+					}
+				}
+			}
+
+			// Mark checks that pass now but were failing in an
+			// earlier iteration — these were repaired by a fix even
+			// if they didn't directly carry the fix closure.
+			for i := range results {
+				if results[i].Status == statusPass && repairedNames[results[i].Name] {
+					results[i].Status = statusFixed
+				}
 			}
 
 			if jsonOutput {
@@ -203,12 +251,18 @@ var standardRooms = []standardRoom{
 		credentialKey: "MATRIX_SYSTEM_ROOM",
 	},
 	{
-		alias:                    "bureau/machine",
-		displayName:              "Bureau Machine",
-		topic:                    "Machine keys and status",
-		name:                     "machine room",
-		credentialKey:            "MATRIX_MACHINE_ROOM",
-		memberSettableEventTypes: []string{schema.EventTypeMachineKey, schema.EventTypeMachineStatus},
+		alias:         "bureau/machine",
+		displayName:   "Bureau Machine",
+		topic:         "Machine keys and status",
+		name:          "machine room",
+		credentialKey: "MATRIX_MACHINE_ROOM",
+		memberSettableEventTypes: []string{
+			schema.EventTypeMachineKey,
+			schema.EventTypeMachineInfo,
+			schema.EventTypeMachineStatus,
+			schema.EventTypeWebRTCOffer,
+			schema.EventTypeWebRTCAnswer,
+		},
 	},
 	{
 		alias:                    "bureau/service",
@@ -237,7 +291,11 @@ var standardRooms = []standardRoom{
 
 // runDoctor executes all health checks and returns the results. Fixable
 // failures carry fix closures that executeFixes can invoke.
-func runDoctor(ctx context.Context, client *messaging.Client, session *messaging.Session, serverName string, storedCredentials map[string]string, logger *slog.Logger) []checkResult {
+//
+// When credentialFilePath is non-empty, credential mismatches are reported
+// as fixable failures (the fix updates the credential file). When empty,
+// credential mismatches remain warnings since there is no file to update.
+func runDoctor(ctx context.Context, client *messaging.Client, session *messaging.Session, serverName string, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
 	var results []checkResult
 
 	// Section 1: Connectivity and authentication.
@@ -303,14 +361,55 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 		}
 	}
 
-	// Section 3: Credential file cross-reference.
+	// Section 3: Credential file cross-reference. When a credential file
+	// path is available, mismatches are fixable (the fix updates the file
+	// in place). Without a path, mismatches are informational warnings.
 	if storedCredentials != nil {
+		// Build the complete set of correct room IDs for a batch update.
+		// The fix closure captures this, so all credential issues are
+		// repaired in a single file write (same pattern as power levels).
+		correctRoomIDs := make(map[string]string)
 		if spaceRoomID != "" {
-			results = append(results, checkCredentialMatch("bureau space", "MATRIX_SPACE_ROOM", spaceRoomID, storedCredentials))
+			correctRoomIDs["MATRIX_SPACE_ROOM"] = spaceRoomID
 		}
 		for _, room := range standardRooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
-				results = append(results, checkCredentialMatch(room.name, room.credentialKey, roomID, storedCredentials))
+				correctRoomIDs[room.credentialKey] = roomID
+			}
+		}
+
+		var credentialFix fixAction
+		if credentialFilePath != "" {
+			credentialFix = func(ctx context.Context, session *messaging.Session) error {
+				return cli.UpdateCredentialFile(credentialFilePath, correctRoomIDs)
+			}
+		}
+		fixAttached := false
+
+		if spaceRoomID != "" {
+			result := checkCredentialMatch("bureau space", "MATRIX_SPACE_ROOM", spaceRoomID, storedCredentials)
+			if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
+				result.Status = statusFail
+				if !fixAttached {
+					result.FixHint = "update credential file"
+					result.fix = credentialFix
+					fixAttached = true
+				}
+			}
+			results = append(results, result)
+		}
+		for _, room := range standardRooms {
+			if roomID, ok := roomIDs[room.alias]; ok {
+				result := checkCredentialMatch(room.name, room.credentialKey, roomID, storedCredentials)
+				if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
+					result.Status = statusFail
+					if !fixAttached {
+						result.FixHint = "update credential file"
+						result.fix = credentialFix
+						fixAttached = true
+					}
+				}
+				results = append(results, result)
 			}
 		}
 	}
@@ -794,11 +893,13 @@ func checkBasePipelines(ctx context.Context, session *messaging.Session, pipelin
 }
 
 // executeFixes runs the fix action for each fixable failure, updating
-// results in place. In dry-run mode, no fixes are executed.
-func executeFixes(ctx context.Context, session *messaging.Session, results []checkResult, dryRun bool) {
+// results in place. Returns the number of successfully applied fixes.
+// In dry-run mode, no fixes are executed and 0 is returned.
+func executeFixes(ctx context.Context, session *messaging.Session, results []checkResult, dryRun bool) int {
 	if dryRun {
-		return
+		return 0
 	}
+	fixedCount := 0
 	for i := range results {
 		if results[i].Status != statusFail || results[i].fix == nil {
 			continue
@@ -807,8 +908,10 @@ func executeFixes(ctx context.Context, session *messaging.Session, results []che
 			results[i].Message = fmt.Sprintf("%s (fix failed: %v)", results[i].Message, err)
 		} else {
 			results[i].Status = statusFixed
+			fixedCount++
 		}
 	}
+	return fixedCount
 }
 
 // printChecklist prints check results as a human-readable checklist.

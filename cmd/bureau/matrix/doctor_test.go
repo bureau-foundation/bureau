@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -345,6 +346,8 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID st
 		events["m.bureau.machine_key"] = 0
 		events["m.bureau.machine_info"] = 0
 		events["m.bureau.machine_status"] = 0
+		events["m.bureau.webrtc_offer"] = 0
+		events["m.bureau.webrtc_answer"] = 0
 	case serviceID:
 		events["m.bureau.service"] = 0
 	}
@@ -411,7 +414,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == statusFail {
@@ -446,7 +449,10 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"machine room admin power",
 		"machine room state_default",
 		"machine room m.bureau.machine_key",
+		"machine room m.bureau.machine_info",
 		"machine room m.bureau.machine_status",
+		"machine room m.bureau.webrtc_offer",
+		"machine room m.bureau.webrtc_answer",
 		"service room admin power",
 		"service room state_default",
 		"service room m.bureau.service",
@@ -504,7 +510,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
 
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " credential") && result.Status != statusPass {
@@ -537,7 +543,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", credentials, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
 
 	found := false
 	for _, result := range results {
@@ -567,7 +573,7 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	if len(results) == 0 {
 		t.Fatal("expected at least one result")
@@ -612,7 +618,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	if results[0].Status != statusPass {
 		t.Errorf("expected homeserver PASS, got %s: %s", results[0].Status, results[0].Message)
@@ -651,7 +657,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	// Space child checks should fail with fix hints.
 	for _, result := range results {
@@ -711,7 +717,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	// System room join rules should fail.
 	var systemJoinRulesIndex int
@@ -785,7 +791,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	// Find the system room state_default check.
 	found := false
@@ -844,7 +850,7 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	// Services membership should fail (machine not in service room).
 	// The doctor constructs the full user ID from the localpart state key.
@@ -875,6 +881,123 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 	}
 }
 
+func TestRunDoctor_FixCredentialFile(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	server := mockBureauServer(t, adminUserID)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	// Write a credential file with stale room IDs and missing keys.
+	credentialFile := t.TempDir() + "/bureau-creds"
+	credentialContent := "# Bureau Matrix credentials\n" +
+		"MATRIX_HOMESERVER_URL=http://localhost:6167\n" +
+		"MATRIX_ADMIN_USER=" + adminUserID + "\n" +
+		"MATRIX_ADMIN_TOKEN=test-token\n" +
+		"MATRIX_SPACE_ROOM=!space:local\n" +
+		"MATRIX_SYSTEM_ROOM=!wrong:local\n"
+	if err := os.WriteFile(credentialFile, []byte(credentialContent), 0600); err != nil {
+		t.Fatalf("write credential file: %v", err)
+	}
+
+	storedCredentials, err := cli.ReadCredentialFile(credentialFile)
+	if err != nil {
+		t.Fatalf("ReadCredentialFile: %v", err)
+	}
+
+	results := runDoctor(t.Context(), client, session, "local", storedCredentials, credentialFile, testLogger())
+
+	// System room credential should be FAIL (was !wrong:local, should be !system:local).
+	// Missing keys (machine, service, template, pipeline) should also be FAIL.
+	credentialFailCount := 0
+	var firstCredentialFail *checkResult
+	for i, result := range results {
+		if strings.HasSuffix(result.Name, " credential") && result.Status == statusFail {
+			credentialFailCount++
+			if firstCredentialFail == nil {
+				firstCredentialFail = &results[i]
+			}
+		}
+	}
+	if credentialFailCount == 0 {
+		t.Fatal("expected at least one credential FAIL")
+	}
+	if firstCredentialFail.fix == nil {
+		t.Fatal("expected first credential failure to have a fix function")
+	}
+	if firstCredentialFail.FixHint != "update credential file" {
+		t.Errorf("expected FixHint 'update credential file', got %q", firstCredentialFail.FixHint)
+	}
+
+	// Execute the fix.
+	executeFixes(t.Context(), session, results, false)
+
+	// Verify the credential file was updated.
+	updatedCredentials, err := cli.ReadCredentialFile(credentialFile)
+	if err != nil {
+		t.Fatalf("read updated credential file: %v", err)
+	}
+
+	expectedRoomIDs := map[string]string{
+		"MATRIX_SPACE_ROOM":    "!space:local",
+		"MATRIX_SYSTEM_ROOM":   "!system:local",
+		"MATRIX_MACHINE_ROOM":  "!machine:local",
+		"MATRIX_SERVICE_ROOM":  "!service:local",
+		"MATRIX_TEMPLATE_ROOM": "!template:local",
+		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
+	}
+	for key, expectedValue := range expectedRoomIDs {
+		if updatedCredentials[key] != expectedValue {
+			t.Errorf("credential %s: expected %q, got %q", key, expectedValue, updatedCredentials[key])
+		}
+	}
+
+	// Verify non-room fields were preserved.
+	if updatedCredentials["MATRIX_ADMIN_TOKEN"] != "test-token" {
+		t.Errorf("expected admin token preserved, got %q", updatedCredentials["MATRIX_ADMIN_TOKEN"])
+	}
+}
+
+func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	server := mockBureauServer(t, adminUserID)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	// Credentials with missing keys but no file path — should remain WARN.
+	credentials := map[string]string{
+		"MATRIX_SPACE_ROOM":  "!space:local",
+		"MATRIX_SYSTEM_ROOM": "!system:local",
+	}
+
+	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
+
+	for _, result := range results {
+		if strings.HasSuffix(result.Name, " credential") && result.Status == statusWarn {
+			if result.fix != nil {
+				t.Errorf("credential %q has fix function but no file path was provided", result.Name)
+			}
+		}
+	}
+}
+
 func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	adminUserID := "@bureau-admin:local"
 	mock := newHealthyMock(adminUserID)
@@ -892,7 +1015,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	executeFixes(t.Context(), session, results, true)
 
@@ -925,7 +1048,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == statusFail && result.fix != nil && result.FixHint == "" {
@@ -1141,10 +1264,13 @@ func TestExecuteFixes(t *testing.T) {
 		fail("check3", "also broken"),
 	}
 
-	executeFixes(t.Context(), nil, results, false)
+	fixCount := executeFixes(t.Context(), nil, results, false)
 
 	if !called {
 		t.Error("fix function was not called")
+	}
+	if fixCount != 1 {
+		t.Errorf("expected fixCount=1, got %d", fixCount)
 	}
 	if results[0].Status != statusPass {
 		t.Errorf("check1 should still be PASS, got %s", results[0].Status)
@@ -1154,6 +1280,20 @@ func TestExecuteFixes(t *testing.T) {
 	}
 	if results[2].Status != statusFail {
 		t.Errorf("check3 should still be FAIL (no fix function), got %s", results[2].Status)
+	}
+}
+
+func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
+	results := []checkResult{
+		failWithFix("check1", "broken", "fix it", func(ctx context.Context, session *messaging.Session) error {
+			t.Error("fix should not be called in dry-run mode")
+			return nil
+		}),
+	}
+
+	fixCount := executeFixes(t.Context(), nil, results, true)
+	if fixCount != 0 {
+		t.Errorf("expected fixCount=0 in dry-run, got %d", fixCount)
 	}
 }
 

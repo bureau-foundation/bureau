@@ -33,6 +33,7 @@ go_test(
         "command_test.go",
         "local_machine_test.go",
         "operator_session_test.go",
+        "session_config_test.go",
         "suggest_test.go",
     ],
     embed = [":cli"],

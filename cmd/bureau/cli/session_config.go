@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -164,4 +165,55 @@ func ReadCredentialFile(path string) (map[string]string, error) {
 	}
 
 	return credentials, nil
+}
+
+// UpdateCredentialFile reads an existing credential file, updates or adds
+// the specified key=value pairs, and writes the file back. Existing keys
+// are updated in place (preserving ordering and comments). New keys are
+// appended before the final trailing newline. The file permissions are
+// preserved.
+func UpdateCredentialFile(path string, updates map[string]string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read credential file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	seen := make(map[string]bool)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, _, found := strings.Cut(trimmed, "=")
+		if !found {
+			continue
+		}
+		if newValue, ok := updates[key]; ok {
+			lines[i] = key + "=" + newValue
+			seen[key] = true
+		}
+	}
+
+	// Append any keys that weren't already in the file. Insert before
+	// the final empty line (trailing newline) if present.
+	var toAppend []string
+	for key, value := range updates {
+		if !seen[key] {
+			toAppend = append(toAppend, key+"="+value)
+		}
+	}
+	if len(toAppend) > 0 {
+		// Sort for deterministic output.
+		sort.Strings(toAppend)
+		// Find insertion point: before trailing empty lines.
+		insertAt := len(lines)
+		for insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) == "" {
+			insertAt--
+		}
+		lines = append(lines[:insertAt], append(toAppend, lines[insertAt:]...)...)
+	}
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600)
 }

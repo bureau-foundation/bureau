@@ -157,110 +157,68 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 	logger.Info("bureau space ready", "room_id", spaceRoomID)
 
-	// Step 3: Create standard rooms.
-	systemRoomID, err := ensureRoom(ctx, session, "bureau/system", "Bureau System", "Operational messages",
-		spaceRoomID, config.serverName, adminOnlyPowerLevels(session.UserID(), nil), logger)
-	if err != nil {
-		return fmt.Errorf("create system room: %w", err)
-	}
-	logger.Info("system room ready", "room_id", systemRoomID)
-
-	machineRoomID, err := ensureRoom(ctx, session, "bureau/machine", "Bureau Machine", "Machine keys and status",
-		spaceRoomID, config.serverName,
-		adminOnlyPowerLevels(session.UserID(), []string{
-			schema.EventTypeMachineKey,
-			schema.EventTypeMachineInfo,
-			schema.EventTypeMachineStatus,
-			schema.EventTypeWebRTCOffer,
-			schema.EventTypeWebRTCAnswer,
-		}), logger)
-	if err != nil {
-		return fmt.Errorf("create machine room: %w", err)
-	}
-	logger.Info("machine room ready", "room_id", machineRoomID)
-
-	serviceRoomID, err := ensureRoom(ctx, session, "bureau/service", "Bureau Service", "Service directory",
-		spaceRoomID, config.serverName,
-		adminOnlyPowerLevels(session.UserID(), []string{schema.EventTypeService}), logger)
-	if err != nil {
-		return fmt.Errorf("create service room: %w", err)
-	}
-	logger.Info("service room ready", "room_id", serviceRoomID)
-
-	templateRoomID, err := ensureRoom(ctx, session, "bureau/template", "Bureau Template", "Sandbox templates",
-		spaceRoomID, config.serverName, adminOnlyPowerLevels(session.UserID(), nil), logger)
-	if err != nil {
-		return fmt.Errorf("create template room: %w", err)
-	}
-	logger.Info("template room ready", "room_id", templateRoomID)
-
-	// Step 3b: Publish base templates into the template room.
-	if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
-		return fmt.Errorf("publish base templates: %w", err)
+	// Step 3: Create standard rooms. Room definitions come from
+	// standardRooms (doctor.go) — the single source of truth for room
+	// aliases, names, topics, and power level structures.
+	roomIDs := make(map[string]string, len(standardRooms))
+	for _, room := range standardRooms {
+		roomID, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
+			spaceRoomID, config.serverName, room.powerLevels(session.UserID()), logger)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", room.name, err)
+		}
+		logger.Info(room.name+" ready", "room_id", roomID)
+		roomIDs[room.alias] = roomID
 	}
 
-	pipelineRoomID, err := ensureRoom(ctx, session, "bureau/pipeline", "Bureau Pipeline", "Pipeline definitions",
-		spaceRoomID, config.serverName, schema.PipelineRoomPowerLevels(session.UserID()), logger)
-	if err != nil {
-		return fmt.Errorf("create pipeline room: %w", err)
+	// Publish base templates into the template room.
+	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
+		if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
+			return fmt.Errorf("publish base templates: %w", err)
+		}
 	}
-	logger.Info("pipeline room ready", "room_id", pipelineRoomID)
 
-	// Step 3c: Publish base pipelines into the pipeline room.
-	if err := publishBasePipelines(ctx, session, pipelineRoomID, logger); err != nil {
-		return fmt.Errorf("publish base pipelines: %w", err)
+	// Publish base pipelines into the pipeline room.
+	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
+		if err := publishBasePipelines(ctx, session, pipelineRoomID, logger); err != nil {
+			return fmt.Errorf("publish base pipelines: %w", err)
+		}
 	}
 
 	// Step 4: Invite users to all Bureau rooms.
 	if len(config.inviteUsers) > 0 {
-		allRooms := []struct {
-			name   string
-			roomID string
-		}{
-			{"bureau (space)", spaceRoomID},
-			{"bureau/system", systemRoomID},
-			{"bureau/machine", machineRoomID},
-			{"bureau/service", serviceRoomID},
-			{"bureau/template", templateRoomID},
-			{"bureau/pipeline", pipelineRoomID},
-		}
 		for _, userID := range config.inviteUsers {
-			for _, room := range allRooms {
-				if err := session.InviteUser(ctx, room.roomID, userID); err != nil {
-					if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-						logger.Info("user already in room or invite not needed",
-							"user_id", userID,
-							"room", room.name,
-						)
-						continue
-					}
-					return fmt.Errorf("invite %q to %s (%s): %w", userID, room.name, room.roomID, err)
+			// Invite to the space first.
+			if err := inviteIfNeeded(ctx, session, spaceRoomID, "bureau (space)", userID, logger); err != nil {
+				return err
+			}
+			for _, room := range standardRooms {
+				roomID, ok := roomIDs[room.alias]
+				if !ok {
+					continue
 				}
-				logger.Info("invited user to room",
-					"user_id", userID,
-					"room", room.name,
-					"room_id", room.roomID,
-				)
+				if err := inviteIfNeeded(ctx, session, roomID, room.alias, userID, logger); err != nil {
+					return err
+				}
 			}
 		}
 	}
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, systemRoomID, machineRoomID, serviceRoomID, templateRoomID, pipelineRoomID); err != nil {
+		spaceRoomID, roomIDs); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
 
-	logger.Info("bureau matrix setup complete",
+	logArgs := []any{
 		"admin_user", session.UserID(),
 		"space", spaceRoomID,
-		"system_room", systemRoomID,
-		"machine_room", machineRoomID,
-		"service_room", serviceRoomID,
-		"template_room", templateRoomID,
-		"pipeline_room", pipelineRoomID,
-	)
+	}
+	for _, room := range standardRooms {
+		logArgs = append(logArgs, room.name, roomIDs[room.alias])
+	}
+	logger.Info("bureau matrix setup complete", logArgs...)
 	return nil
 }
 
@@ -351,9 +309,30 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 	return response.RoomID, nil
 }
 
+// inviteIfNeeded invites a user to a room, ignoring "already joined" errors.
+func inviteIfNeeded(ctx context.Context, session *messaging.Session, roomID, roomName, userID string, logger *slog.Logger) error {
+	if err := session.InviteUser(ctx, roomID, userID); err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			logger.Info("user already in room or invite not needed",
+				"user_id", userID,
+				"room", roomName,
+			)
+			return nil
+		}
+		return fmt.Errorf("invite %q to %s (%s): %w", userID, roomName, roomID, err)
+	}
+	logger.Info("invited user to room",
+		"user_id", userID,
+		"room", roomName,
+		"room_id", roomID,
+	)
+	return nil
+}
+
 // writeCredentials writes Bureau credentials to a file in key=value format
-// compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machineRoomID, serviceRoomID, templateRoomID, pipelineRoomID string) error {
+// compatible with proxy/credentials.go:FileCredentialSource. Room IDs are
+// written in standardRooms order for consistency.
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID string, roomIDs map[string]string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -363,11 +342,11 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_ADMIN_TOKEN=%s\n", session.AccessToken())
 	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken.String())
 	fmt.Fprintf(&builder, "MATRIX_SPACE_ROOM=%s\n", spaceRoomID)
-	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
-	fmt.Fprintf(&builder, "MATRIX_MACHINE_ROOM=%s\n", machineRoomID)
-	fmt.Fprintf(&builder, "MATRIX_SERVICE_ROOM=%s\n", serviceRoomID)
-	fmt.Fprintf(&builder, "MATRIX_TEMPLATE_ROOM=%s\n", templateRoomID)
-	fmt.Fprintf(&builder, "MATRIX_PIPELINE_ROOM=%s\n", pipelineRoomID)
+	for _, room := range standardRooms {
+		if roomID, ok := roomIDs[room.alias]; ok {
+			fmt.Fprintf(&builder, "%s=%s\n", room.credentialKey, roomID)
+		}
+	}
 
 	return os.WriteFile(path, []byte(builder.String()), 0600)
 }

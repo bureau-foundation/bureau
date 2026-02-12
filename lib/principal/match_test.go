@@ -55,6 +55,7 @@ func TestMatchPattern(t *testing.T) {
 		{"interior doublestar two segments", "iree/**/pm", "iree/amdgpu/sub/pm", true},
 		{"interior doublestar no match suffix", "iree/**/pm", "iree/amdgpu/codegen", false},
 		{"interior doublestar no match prefix", "iree/**/pm", "home/amdgpu/pm", false},
+		{"interior doublestar rejects empty segment", "iree/**/pm", "iree//pm", false},
 
 		// Question mark wildcard.
 		{"question mark matches single char", "iree/amdgpu/p?", "iree/amdgpu/pm", true},

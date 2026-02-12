@@ -139,9 +139,11 @@ func runExecMode(b *bridge.Bridge, command []string) error {
 	err = cmd.Run()
 	signal.Stop(sigChan)
 
-	// Propagate exit code.
+	// Propagate exit code. Stop the bridge explicitly before os.Exit
+	// because os.Exit does not run deferred functions.
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			b.Stop()
 			os.Exit(exitErr.ExitCode())
 		}
 		return err

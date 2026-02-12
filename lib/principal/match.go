@@ -80,9 +80,10 @@ func MatchPattern(pattern, localpart string) bool {
 			return false
 		}
 		// Verify there's actual content between prefix and suffix
-		// (they don't overlap).
-		remaining := localpart[len(prefix)+1 : len(localpart)-len(suffix)-1]
-		return len(remaining) >= 0
+		// (they don't overlap or merely share a separator).
+		start := len(prefix) + 1
+		end := len(localpart) - len(suffix) - 1
+		return start < end
 	}
 
 	// Multiple ** segments or other complex patterns — not supported.

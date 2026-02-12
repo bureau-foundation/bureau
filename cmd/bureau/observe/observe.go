@@ -308,11 +308,15 @@ display their role identity.`,
 				return fmt.Errorf("tmux not found in PATH: %w", err)
 			}
 
-			attachArgs := append(tmuxArgs, "attach-session", "-t", sessionName)
+			// Build the full exec argv without mutating tmuxArgs.
 			// syscall.Exec replaces the process — the dashboard CLI
 			// becomes the tmux client. This is the standard pattern
 			// for "open a tmux session" commands.
-			return syscall.Exec(tmuxBinary, append([]string{"tmux"}, attachArgs...), os.Environ())
+			execArgs := make([]string, 0, 1+len(tmuxArgs)+3)
+			execArgs = append(execArgs, "tmux")
+			execArgs = append(execArgs, tmuxArgs...)
+			execArgs = append(execArgs, "attach-session", "-t", sessionName)
+			return syscall.Exec(tmuxBinary, execArgs, os.Environ())
 		},
 	}
 }

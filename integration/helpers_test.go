@@ -744,3 +744,77 @@ func assertMessagePresent(t *testing.T, events []messaging.Event, sender, expect
 		}
 	}
 }
+
+// --- Service Discovery Test Helpers ---
+
+// serviceDirectoryEntry mirrors proxy.ServiceDirectoryEntry for test decoding.
+// Defined locally to avoid importing the proxy package from integration tests.
+type serviceDirectoryEntry struct {
+	Localpart    string         `json:"localpart"`
+	Principal    string         `json:"principal"`
+	Machine      string         `json:"machine"`
+	Protocol     string         `json:"protocol"`
+	Description  string         `json:"description,omitempty"`
+	Capabilities []string       `json:"capabilities,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+// proxyServiceDiscovery queries GET /v1/services on the proxy's agent socket
+// with optional query parameters and returns the parsed service directory.
+// The queryParams string is appended as-is after "?" (e.g., "protocol=http").
+func proxyServiceDiscovery(t *testing.T, client *http.Client, queryParams string) []serviceDirectoryEntry {
+	t.Helper()
+
+	requestURL := "http://proxy/v1/services"
+	if queryParams != "" {
+		requestURL += "?" + queryParams
+	}
+
+	response, err := client.Get(requestURL)
+	if err != nil {
+		t.Fatalf("GET /v1/services: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("GET /v1/services status = %d: %s", response.StatusCode, body)
+	}
+
+	var entries []serviceDirectoryEntry
+	if err := json.NewDecoder(response.Body).Decode(&entries); err != nil {
+		t.Fatalf("decode service directory: %v", err)
+	}
+	return entries
+}
+
+// waitForServiceDiscovery polls a proxy's GET /v1/services endpoint until
+// the response satisfies the predicate or the timeout expires. Returns the
+// final set of entries that satisfied the predicate. Used for waiting on
+// async propagation through daemon /sync → pushServiceDirectory → proxy.
+func waitForServiceDiscovery(
+	t *testing.T,
+	client *http.Client,
+	queryParams string,
+	predicate func([]serviceDirectoryEntry) bool,
+	timeout time.Duration,
+) []serviceDirectoryEntry {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastEntries []serviceDirectoryEntry
+
+	for {
+		lastEntries = proxyServiceDiscovery(t, client, queryParams)
+		if predicate(lastEntries) {
+			return lastEntries
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for service discovery predicate (last response: %d entries)",
+				timeout, len(lastEntries))
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}

@@ -32,6 +32,7 @@ type testMachine struct {
 	ObserveSocket  string
 	RelaySocket    string
 	WorkspaceRoot  string
+	CacheRoot      string
 
 	// Populated by startMachine:
 	PublicKey     string // age public key from the machine_key state event
@@ -68,8 +69,9 @@ type principalAccount struct {
 
 // principalSpec describes a principal to deploy on a machine.
 type principalSpec struct {
-	Account      principalAccount
-	MatrixPolicy map[string]any // optional per-principal policy
+	Account           principalAccount
+	MatrixPolicy      map[string]any // optional per-principal policy
+	ServiceVisibility []string       // optional: glob patterns for service discovery
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
@@ -99,6 +101,7 @@ func newTestMachine(t *testing.T, name string) *testMachine {
 		ObserveSocket:  principal.ObserveSocketPath(runDir),
 		RelaySocket:    principal.RelaySocketPath(runDir),
 		WorkspaceRoot:  filepath.Join(stateDir, "workspace"),
+		CacheRoot:      filepath.Join(stateDir, "cache"),
 	}
 }
 
@@ -151,6 +154,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
+		"--cache-root", machine.CacheRoot,
 	}
 	if options.ProxyBinary != "" {
 		launcherArgs = append(launcherArgs, "--proxy-binary", options.ProxyBinary)
@@ -364,6 +368,9 @@ func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMach
 		}
 		if spec.MatrixPolicy != nil {
 			entry["matrix_policy"] = spec.MatrixPolicy
+		}
+		if spec.ServiceVisibility != nil {
+			entry["service_visibility"] = spec.ServiceVisibility
 		}
 		principalConfigs[i] = entry
 	}

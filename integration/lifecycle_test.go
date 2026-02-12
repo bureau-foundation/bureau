@@ -77,6 +77,7 @@ func TestMachineLifecycle(t *testing.T) {
 	runDir := tempSocketDir(t)
 	launcherSocket := principal.LauncherSocketPath(runDir)
 	workspaceRoot := filepath.Join(stateDir, "workspace")
+	cacheRoot := filepath.Join(stateDir, "cache")
 
 	// Run the launcher in first-boot-only mode. It should register, rotate
 	// the password, publish the key, and exit 0.
@@ -88,6 +89,7 @@ func TestMachineLifecycle(t *testing.T) {
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 	)
 	firstBootCmd.Stdout = os.Stderr
 	firstBootCmd.Stderr = os.Stderr
@@ -165,6 +167,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
 			"--workspace-root", workspaceRoot,
+			"--cache-root", cacheRoot,
 		)
 		waitForFile(t, launcherSocket, 15*time.Second)
 
@@ -227,6 +230,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
 			"--workspace-root", workspaceRoot,
+			"--cache-root", cacheRoot,
 		)
 		waitForFile(t, launcherSocket, 15*time.Second)
 
@@ -339,6 +343,7 @@ func TestTwoMachineFleet(t *testing.T) {
 		runDir        string
 		bootstrapPath string
 		workspaceRoot string
+		cacheRoot     string
 	}
 
 	setupMachine := func(name, stateDir, runDir, bootstrapPath string) machineSetup {
@@ -348,6 +353,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			runDir:        runDir,
 			bootstrapPath: bootstrapPath,
 			workspaceRoot: filepath.Join(stateDir, "workspace"),
+			cacheRoot:     filepath.Join(stateDir, "cache"),
 		}
 	}
 
@@ -364,6 +370,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--run-dir", machine.runDir,
 			"--state-dir", machine.stateDir,
 			"--workspace-root", machine.workspaceRoot,
+			"--cache-root", machine.cacheRoot,
 		)
 		firstBootCmd.Stdout = os.Stderr
 		firstBootCmd.Stderr = os.Stderr
@@ -400,6 +407,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--run-dir", machine.runDir,
 			"--state-dir", machine.stateDir,
 			"--workspace-root", machine.workspaceRoot,
+			"--cache-root", machine.cacheRoot,
 			"--proxy-binary", proxyBinary,
 		)
 		waitForFile(t, principal.LauncherSocketPath(machine.runDir), 15*time.Second)

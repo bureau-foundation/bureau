@@ -56,6 +56,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
 	runDir := tempSocketDir(t)
 	workspaceRoot := filepath.Join(stateDir, "workspace")
+	cacheRoot := filepath.Join(stateDir, "cache")
 	launcherSocket := principal.LauncherSocketPath(runDir)
 
 	runBureauOrFail(t, "machine", "provision", machineName,
@@ -77,6 +78,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 	)
 	firstBootCmd.Stdout = os.Stderr
 	firstBootCmd.Stderr = os.Stderr
@@ -99,6 +101,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 		"--proxy-binary", proxyBinary,
 	)
 	waitForFile(t, launcherSocket, 15*time.Second)

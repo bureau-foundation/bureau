@@ -115,6 +115,24 @@ Test binaries needed by integration tests are declared as `data` dependencies
 in BUILD.bazel and resolved at runtime via `testutil.DataBinary()` (which reads
 `RUNFILES_DIR` + `$(rlocationpath ...)` env vars). Tests do not call `go build`.
 
+## Testing
+
+**Unit tests** run with `bazel test //...` and require no external services.
+
+**Integration tests** are tagged `manual` and require Docker. They spin up a
+real Continuwuity homeserver, run the full daemon+launcher stack, and exercise
+end-to-end flows. They must be run explicitly:
+
+```bash
+# The bazel server must have docker group membership. If the server was
+# started without it, shut it down first so it restarts with the right groups.
+sg docker -c "bazel shutdown; bazel test //integration:integration_test"
+```
+
+Integration tests must pass before every commit. Run them after any change to:
+daemon, launcher, proxy, messaging, pipeline executor, workspace handling,
+observation, templates, schema, or bootstrap logic. When in doubt, run them.
+
 ## Conventions
 
 - Go is the primary language for infrastructure code

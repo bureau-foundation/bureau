@@ -1675,6 +1675,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 	events := AdminProtectedEvents()
 	events[EventTypeProject] = 100
 	events[EventTypeWorkspace] = 0
+	events[EventTypeWorktree] = 0
 	events[EventTypeLayout] = 0
 
 	return map[string]any{

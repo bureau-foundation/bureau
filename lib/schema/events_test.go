@@ -1017,15 +1017,13 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 		t.Errorf("m.room.power_levels power level = %v, want 100", events["m.room.power_levels"])
 	}
 
-	// Default-level events (PL 0): workspace state and layout. Room
-	// membership is the authorization boundary — the room is invite-only.
-	if events[EventTypeWorkspace] != 0 {
-		t.Errorf("%s power level = %v, want 0", EventTypeWorkspace, events[EventTypeWorkspace])
-	}
-
-	// Default-level events (PL 0).
-	if events[EventTypeLayout] != 0 {
-		t.Errorf("%s power level = %v, want 0", EventTypeLayout, events[EventTypeLayout])
+	// Default-level events (PL 0): workspace state, worktree lifecycle, and
+	// layout. Room membership is the authorization boundary — the room is
+	// invite-only.
+	for _, eventType := range []string{EventTypeWorkspace, EventTypeWorktree, EventTypeLayout} {
+		if events[eventType] != 0 {
+			t.Errorf("%s power level = %v, want 0", eventType, events[eventType])
+		}
 	}
 
 	// Room metadata events from AdminProtectedEvents should all be PL 100.

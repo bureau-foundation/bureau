@@ -608,6 +608,7 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 	// Step 2: Build variables and expand (this mirrors buildSandboxCommand).
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
+		"CACHE_ROOT":     "/var/bureau/cache",
 		"PROXY_SOCKET":   "/run/bureau/principal/iree/amdgpu/pm.sock",
 		"TERM":           "xterm-256color",
 	}
@@ -663,6 +664,87 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 	}
 }
 
+// TestSpecToProfile_CacheRootVariableExpansion verifies that CACHE_ROOT is
+// available for template mount expansion. The machine-level cache root
+// (/var/bureau/cache) is separate from the workspace cache
+// (/var/bureau/workspace/.cache): workspace cache is project-adjacent and
+// backed up with workspace data; cache root is machine infrastructure
+// managed by the sysadmin principal with tiered access (rw for sysadmin,
+// ro for agents).
+func TestSpecToProfile_CacheRootVariableExpansion(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		Command: []string{"/bin/bash"},
+		Filesystem: []schema.TemplateMount{
+			// Sysadmin-style: full cache rw.
+			{
+				Source: "${CACHE_ROOT}",
+				Dest:   "/cache",
+				Mode:   "rw",
+			},
+			// Agent-style: specific subdirectories ro.
+			{
+				Source:   "${CACHE_ROOT}/bin",
+				Dest:     "/usr/local/bin",
+				Mode:     "ro",
+				Optional: true,
+			},
+			{
+				Source:   "${CACHE_ROOT}/hf",
+				Dest:     "/cache/huggingface",
+				Mode:     "ro",
+				Optional: true,
+			},
+		},
+		EnvironmentVariables: map[string]string{
+			"HF_HOME": "/cache/huggingface",
+		},
+	}
+
+	profile := specToProfile(spec, "/run/bureau/principal/bureau/sysadmin.sock")
+
+	vars := sandbox.Variables{
+		"WORKSPACE_ROOT": "/var/bureau/workspace",
+		"CACHE_ROOT":     "/var/bureau/cache",
+		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
+		"TERM":           "xterm-256color",
+	}
+	project, worktreePath := workspaceContext("bureau/sysadmin")
+	if project != "" {
+		vars["PROJECT"] = project
+		vars["WORKTREE_PATH"] = worktreePath
+	}
+	expanded := vars.ExpandProfile(profile)
+
+	// Full cache mount (sysadmin tier).
+	if expanded.Filesystem[0].Source != "/var/bureau/cache" {
+		t.Errorf("cache mount source = %q, want /var/bureau/cache",
+			expanded.Filesystem[0].Source)
+	}
+	if expanded.Filesystem[0].Mode != "rw" {
+		t.Errorf("cache mount mode = %q, want rw", expanded.Filesystem[0].Mode)
+	}
+
+	// Read-only bin subdirectory (agent tier).
+	if expanded.Filesystem[1].Source != "/var/bureau/cache/bin" {
+		t.Errorf("bin mount source = %q, want /var/bureau/cache/bin",
+			expanded.Filesystem[1].Source)
+	}
+	if expanded.Filesystem[1].Mode != "ro" {
+		t.Errorf("bin mount mode = %q, want ro", expanded.Filesystem[1].Mode)
+	}
+	if !expanded.Filesystem[1].Optional {
+		t.Error("bin mount should be optional (subdirectory may not exist)")
+	}
+
+	// Read-only HuggingFace cache (agent tier).
+	if expanded.Filesystem[2].Source != "/var/bureau/cache/hf" {
+		t.Errorf("hf mount source = %q, want /var/bureau/cache/hf",
+			expanded.Filesystem[2].Source)
+	}
+}
+
 // TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars verifies that
 // single-segment principals (no slash) leave workspace variable references
 // unexpanded. Templates that incorrectly reference ${PROJECT} for such
@@ -687,6 +769,7 @@ func TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars(t *testing.T) {
 	// Build variables for a single-segment principal.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
+		"CACHE_ROOT":     "/var/bureau/cache",
 		"PROXY_SOCKET":   "/run/bureau/principal/sysadmin.sock",
 	}
 	project, worktreePath := workspaceContext("sysadmin")

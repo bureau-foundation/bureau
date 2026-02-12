@@ -32,7 +32,7 @@ RestartSec=5
 # user namespace creation.
 NoNewPrivileges=no
 ProtectSystem=strict
-ReadWritePaths=/var/lib/bureau /run/bureau /var/bureau/workspace /tmp
+ReadWritePaths=/var/lib/bureau /run/bureau /var/bureau/workspace /var/bureau/cache /tmp
 PrivateTmp=true
 
 [Install]

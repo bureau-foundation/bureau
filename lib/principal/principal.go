@@ -21,6 +21,21 @@ const (
 	// DefaultWorkspaceRoot is the default root for project workspaces.
 	DefaultWorkspaceRoot = "/var/bureau/workspace"
 
+	// DefaultCacheRoot is the default root for the machine-level tool
+	// and model cache. Unlike workspace/.cache/ (which is workspace-
+	// adjacent and backed up with workspace data), this is machine
+	// infrastructure managed by the sysadmin principal. Agents get
+	// read-only access to specific subdirectories via template mounts.
+	//
+	// Subdirectory conventions:
+	//   npm/   — npm global cache
+	//   pip/   — pip package cache
+	//   bin/   — installed tool binaries (claude, codex, etc.)
+	//   hf/    — HuggingFace model cache
+	//   go/    — Go module cache
+	//   nix/   — Nix store subset for agents needing nix-built tools
+	DefaultCacheRoot = "/var/bureau/cache"
+
 	// MaxLocalpartLength is the maximum allowed length for a Bureau
 	// principal localpart. Derived from the unix socket path limit with
 	// the default run directory:

@@ -157,7 +157,7 @@ func TestBootstrapScript(t *testing.T) {
 	t.Log("session and keypair files verified")
 
 	// Verify: directories created.
-	for _, directory := range []string{"/var/lib/bureau", "/run/bureau", "/var/bureau/workspace", "/etc/bureau"} {
+	for _, directory := range []string{"/var/lib/bureau", "/run/bureau", "/var/bureau/workspace", "/var/bureau/cache", "/etc/bureau"} {
 		dockerExecOrFail(t, containerID, "test", "-d", directory)
 	}
 	t.Log("directories verified")

@@ -56,6 +56,7 @@ func run() error {
 		stateDir              string
 		proxyBinaryPath       string
 		workspaceRoot         string
+		cacheRoot             string
 		showVersion           bool
 	)
 
@@ -69,6 +70,7 @@ func run() error {
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory for persistent state (keypair, session)")
 	flag.StringVar(&proxyBinaryPath, "proxy-binary", "", "path to bureau-proxy binary (auto-detected if empty)")
 	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
+	flag.StringVar(&cacheRoot, "cache-root", principal.DefaultCacheRoot, "root directory for machine-level tool and model cache")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -171,6 +173,17 @@ func run() error {
 	}
 	logger.Info("workspace root ready", "path", workspaceRoot)
 
+	// Ensure the machine-level cache root exists. This is separate from
+	// workspace/.cache/ (which is workspace-adjacent and backed up with
+	// workspace data). The cache root holds machine infrastructure:
+	// installed tools, model weights, package caches. The sysadmin
+	// principal has read-write access; other agents get read-only mounts
+	// to specific subdirectories via template configuration.
+	if err := os.MkdirAll(cacheRoot, 0755); err != nil {
+		return fmt.Errorf("creating cache root %s: %w", cacheRoot, err)
+	}
+	logger.Info("cache root ready", "path", cacheRoot)
+
 	// Start the IPC socket for daemon communication.
 	launcher := &Launcher{
 		session:         session,
@@ -182,6 +195,7 @@ func run() error {
 		stateDir:        stateDir,
 		proxyBinaryPath: proxyBinaryPath,
 		workspaceRoot:   workspaceRoot,
+		cacheRoot:       cacheRoot,
 		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(runDir), "/dev/null"),
 		sandboxes:       make(map[string]*managedSandbox),
 		failedExecPaths: make(map[string]bool),
@@ -640,7 +654,7 @@ type proxyCredentialPayload struct {
 // connections concurrently (each handleConnection runs in its own goroutine),
 // so all mutable state is protected by mu. Immutable-after-startup fields
 // (session, keypair, machineName, serverName, homeserverURL, runDir, stateDir,
-// workspaceRoot, binaryHash, binaryPath) are set before the listener starts
+// workspaceRoot, cacheRoot, binaryHash, binaryPath) are set before the listener starts
 // and are safe to read without the lock.
 type Launcher struct {
 	session       *messaging.Session
@@ -651,6 +665,7 @@ type Launcher struct {
 	runDir        string       // runtime directory for sockets (e.g., /run/bureau)
 	stateDir      string       // persistent state directory (e.g., /var/lib/bureau)
 	workspaceRoot string       // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
+	cacheRoot     string       // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
 	binaryHash    string       // SHA256 hex digest of the launcher binary, computed at startup
 	binaryPath    string       // absolute filesystem path of the running binary (for watchdog PreviousBinary)
 	tmuxServer    *tmux.Server // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
@@ -1324,6 +1339,7 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	// bwrap bind mounts translate host paths to sandbox paths.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": l.workspaceRoot,
+		"CACHE_ROOT":     l.cacheRoot,
 		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
 		"TERM":           os.Getenv("TERM"),
 		"MACHINE_NAME":   l.machineName,

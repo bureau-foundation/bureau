@@ -238,7 +238,7 @@ fi
 
 # Step 4: Create directories and run first boot.
 echo "[4/$TOTAL_STEPS] Running first boot..."
-sudo mkdir -p /var/lib/bureau /run/bureau /var/bureau/workspace /etc/bureau
+sudo mkdir -p /var/lib/bureau /run/bureau /var/bureau/workspace /var/bureau/cache /etc/bureau
 
 sudo bureau-launcher \
     --bootstrap-file "$BOOTSTRAP_CONFIG" \

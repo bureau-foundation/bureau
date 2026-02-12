@@ -149,6 +149,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 
 	// Start the launcher subprocess.
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	launcherCmd := exec.Command(launcherBinary,
 		"--machine-name", "machine/test",
 		"--run-dir", runDir,
@@ -157,6 +158,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 	)
 	launcherCmd.Stderr = os.Stderr
 	if err := launcherCmd.Start(); err != nil {
@@ -469,6 +471,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 	}
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	launcherCmd := exec.Command(launcherBinary,
 		"--machine-name", "machine/test",
 		"--run-dir", runDir,
@@ -477,6 +480,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 	)
 	launcherCmd.Stderr = os.Stderr
 	if err := launcherCmd.Start(); err != nil {
@@ -790,6 +794,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	}
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	launcherCmd := exec.Command(launcherBinary,
 		"--machine-name", "machine/test",
 		"--run-dir", runDir,
@@ -798,6 +803,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--homeserver", matrixServer.URL,
 		"--server-name", "bureau.local",
 		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
 	)
 	launcherCmd.Stderr = os.Stderr
 	if err := launcherCmd.Start(); err != nil {

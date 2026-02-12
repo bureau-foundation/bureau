@@ -19,7 +19,6 @@ go_library(
 go_test(
     name = "schema_test",
     srcs = [
-        "autoformat_test.go",
         "events_test.go",
         "pipeline_ref_test.go",
         "sandbox_spec_test.go",

@@ -125,9 +125,7 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 		return fmt.Errorf("generate random password: %w", err)
 	}
 	hexBytes := []byte(hex.EncodeToString(passwordBytes))
-	for index := range passwordBytes {
-		passwordBytes[index] = 0
-	}
+	secret.Zero(passwordBytes)
 	oneTimePassword, err := secret.NewFromBytes(hexBytes)
 	if err != nil {
 		return fmt.Errorf("protecting one-time password: %w", err)

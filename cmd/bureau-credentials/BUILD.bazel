@@ -15,6 +15,7 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
+        "//lib/secret",
         "//lib/version",
         "//messaging",
         "//proxy",

@@ -36,6 +36,7 @@ go_library(
         "//lib/nix",
         "//lib/principal",
         "//lib/schema",
+        "//lib/secret",
         "//lib/template",
         "//lib/tmux",
         "//lib/version",

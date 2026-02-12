@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/proxy"
@@ -191,12 +192,7 @@ func runProvision(args []string) error {
 	if err != nil {
 		return fmt.Errorf("reading credentials: %w", err)
 	}
-	defer func() {
-		// Zero the credential data after use.
-		for i := range credentialData {
-			credentialData[i] = 0
-		}
-	}()
+	defer func() { secret.Zero(credentialData) }()
 
 	if len(credentialData) == 0 {
 		return fmt.Errorf("no credential data provided (pipe JSON to stdin or use --from-file)")

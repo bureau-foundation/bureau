@@ -187,10 +187,7 @@ func (s *SystemdCredentialSource) Get(name string) *secret.Buffer {
 	// Credential files commonly have trailing newlines — strip whitespace
 	// before moving into mmap-backed memory.
 	trimmed := []byte(strings.TrimSpace(string(data)))
-	// Zero the original read before discarding it.
-	for index := range data {
-		data[index] = 0
-	}
+	secret.Zero(data)
 	if len(trimmed) == 0 {
 		return nil
 	}
@@ -344,12 +341,7 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 		return nil, fmt.Errorf("reading credential payload: %w", err)
 	}
 
-	// Ensure we zero the buffer regardless of parse outcome.
-	defer func() {
-		for i := range rawBuffer {
-			rawBuffer[i] = 0
-		}
-	}()
+	defer func() { secret.Zero(rawBuffer) }()
 
 	if len(rawBuffer) == 0 {
 		return nil, fmt.Errorf("credential payload is empty")

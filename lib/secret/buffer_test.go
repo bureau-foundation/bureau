@@ -164,6 +164,26 @@ func TestBuffer_String_PanicsAfterClose(t *testing.T) {
 	_ = buffer.String()
 }
 
+func TestZero(t *testing.T) {
+	data := []byte("sensitive-data-here")
+	Zero(data)
+	for index, value := range data {
+		if value != 0 {
+			t.Fatalf("byte %d not zeroed: got %d", index, value)
+		}
+	}
+}
+
+func TestZero_Nil(t *testing.T) {
+	// Should not panic on nil.
+	Zero(nil)
+}
+
+func TestZero_Empty(t *testing.T) {
+	// Should not panic on empty slice.
+	Zero([]byte{})
+}
+
 func TestNewFromString(t *testing.T) {
 	buffer, err := NewFromString("test-secret")
 	if err != nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -695,15 +696,10 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 
 	var data sessionData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
-		for index := range jsonData {
-			jsonData[index] = 0
-		}
+		secret.Zero(jsonData)
 		return nil, nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
 	}
-	// Zero the raw JSON which contains the access token in plaintext.
-	for index := range jsonData {
-		jsonData[index] = 0
-	}
+	secret.Zero(jsonData)
 
 	if data.AccessToken == "" {
 		return nil, nil, fmt.Errorf("session file %s has empty access token", sessionPath)

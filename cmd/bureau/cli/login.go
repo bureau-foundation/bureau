@@ -147,7 +147,7 @@ func readLoginPassword(passwordFile string) (*secret.Buffer, error) {
 
 	buffer, err := secret.NewFromBytes(passwordBytes)
 	if err != nil {
-		zeroByteSlice(passwordBytes)
+		secret.Zero(passwordBytes)
 		return nil, err
 	}
 	return buffer, nil
@@ -167,21 +167,14 @@ func readSecretFile(path string) (*secret.Buffer, error) {
 	}
 
 	if len(data) == 0 {
-		zeroByteSlice(data)
+		secret.Zero(data)
 		return nil, fmt.Errorf("file %s is empty (after stripping trailing newlines)", path)
 	}
 
 	buffer, err := secret.NewFromBytes(data)
 	if err != nil {
-		zeroByteSlice(data)
+		secret.Zero(data)
 		return nil, err
 	}
 	return buffer, nil
-}
-
-// zeroByteSlice overwrites a byte slice with zeros.
-func zeroByteSlice(data []byte) {
-	for index := range data {
-		data[index] = 0
-	}
 }

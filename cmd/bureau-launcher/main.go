@@ -259,9 +259,7 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 	if err == nil {
 		publicKeyData, err := os.ReadFile(publicKeyPath)
 		if err != nil {
-			for i := range privateKeyData {
-				privateKeyData[i] = 0
-			}
+			secret.Zero(privateKeyData)
 			return nil, false, fmt.Errorf("private key exists but public key missing at %s: %w", publicKeyPath, err)
 		}
 
@@ -272,9 +270,7 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 		// that NewFromBytes didn't reach.
 		trimmedKey := bytes.TrimSpace(privateKeyData)
 		privateKeyBuffer, bufferError := secret.NewFromBytes(trimmedKey)
-		for i := range privateKeyData {
-			privateKeyData[i] = 0
-		}
+		secret.Zero(privateKeyData)
 		if bufferError != nil {
 			return nil, false, fmt.Errorf("protecting private key: %w", bufferError)
 		}
@@ -564,8 +560,11 @@ func saveSession(stateDir string, homeserverURL string, session *messaging.Sessi
 	}
 
 	sessionPath := filepath.Join(stateDir, "session.json")
-	if err := os.WriteFile(sessionPath, jsonData, 0600); err != nil {
-		return fmt.Errorf("writing session to %s: %w", sessionPath, err)
+	writeError := os.WriteFile(sessionPath, jsonData, 0600)
+	secret.Zero(jsonData)
+
+	if writeError != nil {
+		return fmt.Errorf("writing session to %s: %w", sessionPath, writeError)
 	}
 
 	return nil
@@ -582,15 +581,10 @@ func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*m
 
 	var data sessionData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
-		for index := range jsonData {
-			jsonData[index] = 0
-		}
+		secret.Zero(jsonData)
 		return nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
 	}
-	// Zero the raw JSON which contains the access token in plaintext.
-	for index := range jsonData {
-		jsonData[index] = 0
-	}
+	secret.Zero(jsonData)
 
 	if data.AccessToken == "" {
 		return nil, fmt.Errorf("session file %s has empty access token", sessionPath)
@@ -1388,18 +1382,14 @@ func readSecret(path string) (*secret.Buffer, error) {
 
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
-		for index := range data {
-			data[index] = 0
-		}
+		secret.Zero(data)
 		return nil, fmt.Errorf("secret is empty")
 	}
 
 	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
 	buffer, err := secret.NewFromBytes(trimmed)
 	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
-	for index := range data {
-		data[index] = 0
-	}
+	secret.Zero(data)
 	if err != nil {
 		return nil, err
 	}
@@ -1494,11 +1484,14 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 			return 0, fmt.Errorf("marshaling credential payload: %w", err)
 		}
 
-		if _, err := stdinPipe.Write(payloadJSON); err != nil {
+		_, writeError := stdinPipe.Write(payloadJSON)
+		secret.Zero(payloadJSON)
+
+		if writeError != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
 			os.RemoveAll(configDir)
-			return 0, fmt.Errorf("writing credentials to proxy stdin: %w", err)
+			return 0, fmt.Errorf("writing credentials to proxy stdin: %w", writeError)
 		}
 		stdinPipe.Close()
 	}

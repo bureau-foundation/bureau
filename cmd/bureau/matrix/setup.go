@@ -538,18 +538,14 @@ func readSecret(path string) (*secret.Buffer, error) {
 
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
-		for index := range data {
-			data[index] = 0
-		}
+		secret.Zero(data)
 		return nil, fmt.Errorf("secret is empty")
 	}
 
 	// NewFromBytes copies into mmap-backed memory and zeros trimmed.
 	buffer, err := secret.NewFromBytes(trimmed)
 	// Zero remaining bytes (whitespace prefix/suffix) not covered by trimmed.
-	for index := range data {
-		data[index] = 0
-	}
+	secret.Zero(data)
 	if err != nil {
 		return nil, err
 	}

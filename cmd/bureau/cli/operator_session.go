@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // OperatorSession holds the operator's Matrix authentication state.
@@ -71,8 +73,10 @@ func LoadSessionFrom(path string) (*OperatorSession, error) {
 
 	var session OperatorSession
 	if err := json.Unmarshal(data, &session); err != nil {
+		secret.Zero(data)
 		return nil, fmt.Errorf("parsing session file %s: %w", path, err)
 	}
+	secret.Zero(data)
 
 	if session.UserID == "" {
 		return nil, fmt.Errorf("session file %s has no user_id", path)
@@ -106,11 +110,14 @@ func SaveSessionTo(session *OperatorSession, path string) error {
 
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0700); err != nil {
+		secret.Zero(data)
 		return fmt.Errorf("creating session directory %s: %w", directory, err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("writing session file %s: %w", path, err)
+	writeError := os.WriteFile(path, data, 0600)
+	secret.Zero(data)
+	if writeError != nil {
+		return fmt.Errorf("writing session file %s: %w", path, writeError)
 	}
 
 	return nil

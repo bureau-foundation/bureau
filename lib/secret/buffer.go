@@ -81,9 +81,7 @@ func NewFromBytes(source []byte) (*Buffer, error) {
 	copy(buffer.data, source)
 
 	// Zero the caller's copy.
-	for index := range source {
-		source[index] = 0
-	}
+	Zero(source)
 
 	return buffer, nil
 }
@@ -168,9 +166,7 @@ func NewFromReader(reader io.Reader, maxSize int) (*Buffer, error) {
 		return nil, fmt.Errorf("secret: reader produced no data")
 	}
 	if len(data) > maxSize {
-		for index := range data {
-			data[index] = 0
-		}
+		Zero(data)
 		return nil, fmt.Errorf("secret: reader exceeded maximum size of %d bytes", maxSize)
 	}
 
@@ -241,6 +237,15 @@ func (b *Buffer) WriteTo(writer io.Writer) (int64, error) {
 	return int64(written), err
 }
 
+// Zero overwrites a byte slice with zeros. Use this to scrub sensitive
+// data from heap-allocated buffers (JSON payloads, file contents, etc.)
+// after the data has been consumed or written. Safe to call on nil slices.
+func Zero(data []byte) {
+	for index := range data {
+		data[index] = 0
+	}
+}
+
 // Close zeros the buffer contents, unlocks and unmaps the memory.
 // After Close, any access to the buffer's Bytes() will panic.
 // Close is idempotent.
@@ -254,9 +259,7 @@ func (b *Buffer) Close() error {
 	b.closed = true
 
 	// Zero the contents before releasing.
-	for index := range b.data {
-		b.data[index] = 0
-	}
+	Zero(b.data)
 
 	// Unlock and unmap. Errors here are logged but not fatal —
 	// the memory will be released when the process exits regardless.

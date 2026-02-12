@@ -330,7 +330,7 @@ func readPassword(path string) (*secret.Buffer, error) {
 	second, err := term.ReadPassword(stdinFd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		zeroBytes(first)
+		secret.Zero(first)
 		return nil, fmt.Errorf("reading password confirmation: %w", err)
 	}
 
@@ -343,27 +343,20 @@ func readPassword(path string) (*secret.Buffer, error) {
 			}
 		}
 	}
-	zeroBytes(second)
+	secret.Zero(second)
 
 	if !match {
-		zeroBytes(first)
+		secret.Zero(first)
 		return nil, fmt.Errorf("passwords do not match")
 	}
 
 	// Move into mmap-backed buffer; NewFromBytes zeros the source.
 	buffer, err := secret.NewFromBytes(first)
 	if err != nil {
-		zeroBytes(first)
+		secret.Zero(first)
 		return nil, err
 	}
 	return buffer, nil
-}
-
-// zeroBytes overwrites a byte slice with zeros.
-func zeroBytes(data []byte) {
-	for index := range data {
-		data[index] = 0
-	}
 }
 
 // userListCommand returns the "user list" subcommand for listing Matrix users.

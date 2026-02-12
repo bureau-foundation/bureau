@@ -151,10 +151,7 @@ func Decrypt(ciphertext string, privateKey *secret.Buffer) (*secret.Buffer, erro
 
 	buffer, err := secret.NewFromBytes(plaintext)
 	if err != nil {
-		// Zero the plaintext before returning the error.
-		for index := range plaintext {
-			plaintext[index] = 0
-		}
+		secret.Zero(plaintext)
 		return nil, fmt.Errorf("protecting decrypted plaintext: %w", err)
 	}
 	return buffer, nil

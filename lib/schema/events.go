@@ -1407,23 +1407,6 @@ type LayoutMemberFilter struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// ConfigRoomPowerLevels returns power level content for a per-machine config
-// room. The admin has power level 100 (can set config and credentials). The
-// machine has power level 50, which is sufficient to invite and write layouts
-// (PL 0) but insufficient to modify config, credentials, or room metadata
-// (PL 100).
-//
-// IMPORTANT: Do not use this as PowerLevelContentOverride when the machine is
-// the room creator. The override is merged into the m.room.power_levels event
-// BEFORE the preset's subsequent events (join_rules, history_visibility, etc.)
-// are authorized. Since the machine would be PL 50 but state_default is 100,
-// the homeserver rejects the preset events as unauthorized. Instead, create
-// the room without an override (letting the preset give the creator PL 100),
-// then send this as a separate m.room.power_levels state event.
-//
-// When the admin creates the room (bureau-credentials), the admin gets PL 100
-// in the override, which satisfies all event PL requirements — so using this
-// as PowerLevelContentOverride is safe in that path.
 // WorkspaceRoomPowerLevels returns the power level structure for workspace
 // collaboration rooms. Unlike config rooms (events_default: 100, admin-only),
 // workspace rooms are collaboration spaces where agents send messages freely.
@@ -1478,6 +1461,23 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 	}
 }
 
+// ConfigRoomPowerLevels returns power level content for a per-machine config
+// room. The admin has power level 100 (can set config and credentials). The
+// machine has power level 50, which is sufficient to invite and write layouts
+// (PL 0) but insufficient to modify config, credentials, or room metadata
+// (PL 100).
+//
+// IMPORTANT: Do not use this as PowerLevelContentOverride when the machine is
+// the room creator. The override is merged into the m.room.power_levels event
+// BEFORE the preset's subsequent events (join_rules, history_visibility, etc.)
+// are authorized. Since the machine would be PL 50 but state_default is 100,
+// the homeserver rejects the preset events as unauthorized. Instead, create
+// the room without an override (letting the preset give the creator PL 100),
+// then send this as a separate m.room.power_levels state event.
+//
+// When the admin creates the room (bureau-credentials), the admin gets PL 100
+// in the override, which satisfies all event PL requirements — so using this
+// as PowerLevelContentOverride is safe in that path.
 func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 	users := map[string]any{
 		adminUserID: 100,

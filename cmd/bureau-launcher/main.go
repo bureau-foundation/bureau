@@ -1070,6 +1070,20 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 	return IPCResponse{OK: true}
 }
 
+// watchDisconnect monitors an IPC connection for closure in a background
+// goroutine. Returns a channel that is closed when the peer disconnects
+// (the Read returns any error, including EOF). Used by the wait-sandbox
+// and wait-proxy handlers to detect daemon crashes during long-running waits.
+func watchDisconnect(conn net.Conn) <-chan struct{} {
+	closed := make(chan struct{})
+	go func() {
+		buffer := make([]byte, 1)
+		conn.Read(buffer)
+		close(closed)
+	}()
+	return closed
+}
+
 // handleWaitSandbox blocks until the named sandbox exits (tmux session
 // ends), then responds with the exit code. This runs outside the launcher
 // mutex so that other IPC requests are not blocked during the (potentially
@@ -1111,16 +1125,7 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 	// actions.
 	conn.SetDeadline(time.Time{})
 
-	// Monitor connection closure in a background goroutine. If the
-	// daemon disconnects (crash, restart, context cancellation on the
-	// daemon side), the Read returns an error and we close connClosed.
-	// This prevents the handler from blocking on a dead connection.
-	connClosed := make(chan struct{})
-	go func() {
-		buffer := make([]byte, 1)
-		conn.Read(buffer)
-		close(connClosed)
-	}()
+	connClosed := watchDisconnect(conn)
 
 	select {
 	case <-sandbox.done:
@@ -1179,12 +1184,7 @@ func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *
 
 	conn.SetDeadline(time.Time{})
 
-	connClosed := make(chan struct{})
-	go func() {
-		buffer := make([]byte, 1)
-		conn.Read(buffer)
-		close(connClosed)
-	}()
+	connClosed := watchDisconnect(conn)
 
 	select {
 	case <-sandbox.proxyDone:

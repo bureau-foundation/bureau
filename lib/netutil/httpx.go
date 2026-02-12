@@ -1,14 +1,18 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package httpx provides HTTP utilities for Bureau's JSON API interactions.
+// Package netutil provides network and HTTP I/O utilities for Bureau.
 //
-// All response body reads are bounded at MaxResponseSize to prevent unbounded
-// memory allocation from a misbehaving or malicious server. This package is
-// for JSON API responses (Matrix client-server API, admin API, observe
-// handshakes) — not for streaming responses (SSE, chunked transfers) or large
-// binary downloads, which should be read incrementally with io.Copy.
-package httpx
+// HTTP response helpers (ReadResponse, DecodeResponse, ErrorBody) bound all
+// response body reads at MaxResponseSize to prevent unbounded memory
+// allocation from a misbehaving or malicious server. These are for JSON API
+// responses (Matrix client-server API, admin API, observe handshakes) — not
+// for streaming responses (SSE, chunked transfers) or large binary downloads,
+// which should be read incrementally with io.Copy.
+//
+// Connection error helpers (IsExpectedCloseError) classify errors that occur
+// during normal connection teardown in bidirectional bridges.
+package netutil
 
 import (
 	"encoding/json"

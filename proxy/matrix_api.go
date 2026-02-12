@@ -10,7 +10,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bureau-foundation/bureau/lib/httpx"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -113,7 +113,7 @@ func (h *Handler) resolveRoomAlias(r *http.Request, service *HTTPService, alias 
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolving alias %q: HTTP %d: %s", alias, response.StatusCode, httpx.ErrorBody(response.Body))
+		return "", fmt.Errorf("resolving alias %q: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
@@ -138,6 +138,18 @@ func (h *Handler) resolveRoom(r *http.Request, service *HTTPService, room string
 	return room, nil
 }
 
+// copyResponseBody copies an HTTP response body to the response writer.
+// Headers must already be written. Logs a warning if the copy fails for a
+// reason other than normal client disconnect (EOF, connection reset, etc.).
+func (h *Handler) copyResponseBody(w http.ResponseWriter, body io.Reader, endpoint string) {
+	if _, err := io.Copy(w, body); err != nil && !netutil.IsExpectedCloseError(err) {
+		h.logger.Warn("response body copy failed",
+			"endpoint", endpoint,
+			"error", err,
+		)
+	}
+}
+
 // HandleMatrixWhoami handles GET /v1/matrix/whoami. Returns the agent's
 // Matrix user ID by forwarding to /_matrix/client/v3/account/whoami.
 func (h *Handler) HandleMatrixWhoami(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +170,7 @@ func (h *Handler) HandleMatrixWhoami(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	h.copyResponseBody(w, response.Body, "whoami")
 }
 
 // HandleMatrixResolve handles GET /v1/matrix/resolve?alias=<alias>. Resolves
@@ -190,7 +202,7 @@ func (h *Handler) HandleMatrixResolve(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	h.copyResponseBody(w, response.Body, "resolve")
 }
 
 // HandleMatrixGetState handles GET /v1/matrix/state?room=<id>&type=<type>&key=<key>.
@@ -238,7 +250,7 @@ func (h *Handler) HandleMatrixGetState(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	h.copyResponseBody(w, response.Body, "get_state")
 }
 
 // HandleMatrixPutState handles POST /v1/matrix/state. Publishes a state event
@@ -306,7 +318,7 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	h.copyResponseBody(w, response.Body, "put_state")
 }
 
 // HandleMatrixSendMessage handles POST /v1/matrix/message. Sends a message
@@ -375,5 +387,5 @@ func (h *Handler) HandleMatrixSendMessage(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	h.copyResponseBody(w, response.Body, "send_message")
 }

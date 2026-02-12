@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bureau-foundation/bureau/lib/httpx"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
@@ -165,7 +165,7 @@ func run() int {
 
 // handleBufferedResponse handles a non-streaming JSON response.
 func handleBufferedResponse(body io.Reader) int {
-	data, err := httpx.ReadResponse(body)
+	data, err := netutil.ReadResponse(body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to read response: %v\n", err)
 		return 1

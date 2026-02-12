@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bureau-foundation/bureau/lib/httpx"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 )
 
 // proxyClient communicates with the Bureau proxy's structured /v1/matrix/*
@@ -47,7 +47,7 @@ func (p *proxyClient) whoami(ctx context.Context) error {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("whoami: HTTP %d: %s", response.StatusCode, httpx.ErrorBody(response.Body))
+		return fmt.Errorf("whoami: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
@@ -79,7 +79,7 @@ func (p *proxyClient) resolveAlias(ctx context.Context, alias string) (string, e
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolve alias %q: HTTP %d: %s", alias, response.StatusCode, httpx.ErrorBody(response.Body))
+		return "", fmt.Errorf("resolve alias %q: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
@@ -108,7 +108,7 @@ func (p *proxyClient) getState(ctx context.Context, room, eventType, stateKey st
 	}
 	defer response.Body.Close()
 
-	body, err := httpx.ReadResponse(response.Body)
+	body, err := netutil.ReadResponse(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("get state: reading response: %w", err)
 	}
@@ -141,7 +141,7 @@ func (p *proxyClient) putState(ctx context.Context, room, eventType, stateKey st
 	}
 	defer response.Body.Close()
 
-	body, _ := httpx.ReadResponse(response.Body)
+	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("put state %s/%s in %s: HTTP %d: %s", eventType, stateKey, room, response.StatusCode, body)
 	}
@@ -172,7 +172,7 @@ func (p *proxyClient) sendMessage(ctx context.Context, room string, content any)
 	}
 	defer response.Body.Close()
 
-	body, _ := httpx.ReadResponse(response.Body)
+	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("send message to %s: HTTP %d: %s", room, response.StatusCode, body)
 	}

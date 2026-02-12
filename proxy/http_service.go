@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/netutil"
 )
 
 // HTTPService proxies HTTP requests to an upstream API with credential injection.
@@ -255,16 +257,28 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// For regular responses, just copy
 		w.WriteHeader(resp.StatusCode)
-		bytesCopied, _ := io.Copy(w, resp.Body)
+		bytesCopied, copyError := io.Copy(w, resp.Body)
 
-		s.logger.Info("http proxy complete",
-			"service", s.name,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", resp.StatusCode,
-			"bytes", bytesCopied,
-			"duration", time.Since(startTime),
-		)
+		if copyError != nil && !netutil.IsExpectedCloseError(copyError) {
+			s.logger.Warn("http proxy response copy error",
+				"service", s.name,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", resp.StatusCode,
+				"bytes", bytesCopied,
+				"error", copyError,
+				"duration", time.Since(startTime),
+			)
+		} else {
+			s.logger.Info("http proxy complete",
+				"service", s.name,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", resp.StatusCode,
+				"bytes", bytesCopied,
+				"duration", time.Since(startTime),
+			)
+		}
 	}
 }
 

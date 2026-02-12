@@ -14,7 +14,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bureau-foundation/bureau/lib/httpx"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
@@ -266,7 +266,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, accessToken
 	}
 	defer response.Body.Close()
 
-	responseBody, err := httpx.ReadResponse(response.Body)
+	responseBody, err := netutil.ReadResponse(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: failed to read response body: %w", err)
 	}
@@ -310,7 +310,7 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, accessTo
 	}
 	defer response.Body.Close()
 
-	responseBody, err := httpx.ReadResponse(response.Body)
+	responseBody, err := netutil.ReadResponse(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: failed to read response body: %w", err)
 	}

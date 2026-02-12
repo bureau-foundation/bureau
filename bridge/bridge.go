@@ -5,13 +5,14 @@ package bridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/netutil"
 )
 
 // Bridge forwards TCP connections to a Unix socket.
@@ -141,7 +142,7 @@ func (b *Bridge) handleConnection(_ context.Context, tcpConn net.Conn, connectio
 	go func() {
 		defer waitGroup.Done()
 		bytesCopied, err := io.Copy(unixConn, tcpConn)
-		if b.Verbose && err != nil && !isClosedError(err) {
+		if b.Verbose && err != nil && !netutil.IsExpectedCloseError(err) {
 			log.Printf("bridge: [%d] tcp->unix error after %d bytes: %v", connectionID, bytesCopied, err)
 		}
 		if uc, ok := unixConn.(*net.UnixConn); ok {
@@ -153,7 +154,7 @@ func (b *Bridge) handleConnection(_ context.Context, tcpConn net.Conn, connectio
 	go func() {
 		defer waitGroup.Done()
 		bytesCopied, err := io.Copy(tcpConn, unixConn)
-		if b.Verbose && err != nil && !isClosedError(err) {
+		if b.Verbose && err != nil && !netutil.IsExpectedCloseError(err) {
 			log.Printf("bridge: [%d] unix->tcp error after %d bytes: %v", connectionID, bytesCopied, err)
 		}
 		if tc, ok := tcpConn.(*net.TCPConn); ok {
@@ -166,15 +167,4 @@ func (b *Bridge) handleConnection(_ context.Context, tcpConn net.Conn, connectio
 	if b.Verbose {
 		log.Printf("bridge: [%d] connection closed", connectionID)
 	}
-}
-
-// isClosedError checks if an error is due to a closed connection or EOF.
-func isClosedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-		return true
-	}
-	return false
 }

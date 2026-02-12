@@ -4,14 +4,17 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "httpx",
-    srcs = ["httpx.go"],
-    importpath = "github.com/bureau-foundation/bureau/lib/httpx",
+    name = "netutil",
+    srcs = [
+        "closed.go",
+        "httpx.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/netutil",
     visibility = ["//visibility:public"],
 )
 
 go_test(
-    name = "httpx_test",
+    name = "netutil_test",
     srcs = ["httpx_test.go"],
-    embed = [":httpx"],
+    embed = [":netutil"],
 )

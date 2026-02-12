@@ -13,6 +13,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/netutil"
 )
 
 // observeProxy transparently forwards observation requests from sandboxed
@@ -272,7 +274,13 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 	// The buffered readers may hold bytes read ahead during the JSON
 	// handshake. Use them as the read sources (not the raw connections)
 	// so those buffered bytes aren't lost.
-	bridgeReaders(agentConnection, agentReader, daemonConnection, daemonReader)
+	if err := bridgeReaders(agentConnection, agentReader, daemonConnection, daemonReader); err != nil {
+		proxy.logger.Warn("observe proxy: bridge error",
+			"principal", principal,
+			"observer", userIDBuffer.String(),
+			"error", err,
+		)
+	}
 
 	proxy.logger.Info("observe proxy: session ended",
 		"principal", principal,
@@ -322,23 +330,34 @@ func (proxy *observeProxy) stop() {
 
 // bridgeReaders copies data bidirectionally between two connections using
 // the provided readers (which may contain buffered data from the JSON
-// handshake). Blocks until either direction returns an error or EOF.
-func bridgeReaders(connectionA net.Conn, readerA io.Reader, connectionB net.Conn, readerB io.Reader) {
-	var once sync.Once
-	done := make(chan struct{})
+// handshake). Returns when either direction finishes. Both connections are
+// closed before returning. Returns the error from the direction that
+// terminated first, or nil if termination was due to normal connection closure.
+func bridgeReaders(connectionA net.Conn, readerA io.Reader, connectionB net.Conn, readerB io.Reader) error {
+	type copyResult struct {
+		bytesCopied int64
+		err         error
+	}
+	done := make(chan copyResult, 2)
 
 	go func() {
-		io.Copy(connectionB, readerA)
-		once.Do(func() { close(done) })
+		bytesCopied, err := io.Copy(connectionB, readerA)
+		done <- copyResult{bytesCopied, err}
 	}()
 
 	go func() {
-		io.Copy(connectionA, readerB)
-		once.Do(func() { close(done) })
+		bytesCopied, err := io.Copy(connectionA, readerB)
+		done <- copyResult{bytesCopied, err}
 	}()
 
-	<-done
-	// Close both connections to unblock the other goroutine.
+	// Wait for one direction to finish, then close both to unblock the other.
+	first := <-done
 	connectionA.Close()
 	connectionB.Close()
+	<-done
+
+	if first.err != nil && !netutil.IsExpectedCloseError(first.err) {
+		return first.err
+	}
+	return nil
 }

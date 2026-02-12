@@ -30,7 +30,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/httpx"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
@@ -676,7 +676,15 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 
 	// Bridge bytes zero-copy between client and relay. This blocks until
 	// one side disconnects or errors.
-	bridgeConnections(clientConnection, relayConnection)
+	if err := bridgeConnections(clientConnection, relayConnection); err != nil {
+		d.logger.Warn("observation bridge error",
+			"observer", request.Observer,
+			"principal", request.Principal,
+			"session", sessionName,
+			"mode", grantedMode,
+			"error", err,
+		)
+	}
 
 	// Clean up the relay process. Send SIGTERM first for graceful shutdown,
 	// escalate to SIGKILL after a timeout.
@@ -743,7 +751,7 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 		return
 	}
 
-	responseBody, _ := httpx.ReadResponse(httpResponse.Body)
+	responseBody, _ := netutil.ReadResponse(httpResponse.Body)
 	httpResponse.Body.Close()
 
 	var peerResponse observeResponse
@@ -780,7 +788,15 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 	// Bridge client ↔ remote daemon. Use bufferedConn to include any bytes
 	// the bufio.Reader read ahead beyond the HTTP response.
 	peerConn := &bufferedConn{reader: bufferedReader, Conn: rawConnection}
-	bridgeConnections(clientConnection, peerConn)
+	if err := bridgeConnections(clientConnection, peerConn); err != nil {
+		d.logger.Warn("remote observation bridge error",
+			"observer", request.Observer,
+			"principal", request.Principal,
+			"peer", peerAddress,
+			"mode", peerResponse.GrantedMode,
+			"error", err,
+		)
+	}
 
 	d.logger.Info("remote observation ended",
 		"observer", request.Observer,
@@ -948,7 +964,15 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	)
 
 	// Bridge the hijacked connection to the relay.
-	bridgeConnections(transportConnection, relayConnection)
+	if err := bridgeConnections(transportConnection, relayConnection); err != nil {
+		d.logger.Warn("transport observation bridge error",
+			"observer", request.Observer,
+			"principal", request.Principal,
+			"session", sessionName,
+			"mode", authz.GrantedMode,
+			"error", err,
+		)
+	}
 
 	// Clean up the relay process and log its exit status. If the bridge
 	// returned very quickly, the relay likely failed during initialization
@@ -1051,26 +1075,36 @@ func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok boo
 }
 
 // bridgeConnections copies bytes bidirectionally between two connections.
-// Returns when either direction finishes (EOF, error, or closed connection).
-// Both connections are closed before returning.
-func bridgeConnections(a, b net.Conn) {
-	done := make(chan struct{}, 2)
+// Returns when either direction finishes. Both connections are closed before
+// returning. Returns the error from the direction that terminated first, or
+// nil if termination was due to normal connection closure (EOF, peer disconnect).
+func bridgeConnections(a, b net.Conn) error {
+	type copyResult struct {
+		bytesCopied int64
+		err         error
+	}
+	done := make(chan copyResult, 2)
 
 	go func() {
-		io.Copy(a, b)
-		done <- struct{}{}
+		bytesCopied, err := io.Copy(a, b)
+		done <- copyResult{bytesCopied, err}
 	}()
 
 	go func() {
-		io.Copy(b, a)
-		done <- struct{}{}
+		bytesCopied, err := io.Copy(b, a)
+		done <- copyResult{bytesCopied, err}
 	}()
 
 	// Wait for one direction to finish, then close both to unblock the other.
-	<-done
+	first := <-done
 	a.Close()
 	b.Close()
 	<-done
+
+	if first.err != nil && !netutil.IsExpectedCloseError(first.err) {
+		return first.err
+	}
+	return nil
 }
 
 // cleanupRelayProcess sends SIGTERM and waits for the relay to exit.

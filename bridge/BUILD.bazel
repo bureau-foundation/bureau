@@ -11,4 +11,5 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/bridge",
     visibility = ["//visibility:public"],
+    deps = ["//lib/netutil"],
 )

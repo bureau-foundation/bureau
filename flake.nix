@@ -31,10 +31,115 @@
     # per-system wrapper. Callers pass their own pkgs to get the right
     # system's packages.
     {
-      lib.baseRunnerPackages = pkgs: [
-        pkgs.bubblewrap
-        pkgs.tmux
-      ];
+      lib = {
+        baseRunnerPackages = pkgs: [
+          pkgs.bubblewrap
+          pkgs.tmux
+        ];
+
+        # Tools for coding agents working on projects inside sandboxes.
+        # Extends baseRunnerPackages with a functional shell environment,
+        # language runtimes, package managers, and common developer utilities.
+        developerRunnerPackages =
+          pkgs:
+          self.lib.baseRunnerPackages pkgs
+          ++ [
+            # Shell foundation.
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.findutils
+            pkgs.gnugrep
+            pkgs.gnused
+            pkgs.gawk
+            pkgs.diffutils
+            pkgs.patch
+            pkgs.less
+            pkgs.file
+            pkgs.tree
+            pkgs.which
+            pkgs.nano
+
+            # Search.
+            pkgs.ripgrep
+            pkgs.fd
+
+            # Data processing.
+            pkgs.jq
+            pkgs.yq-go
+
+            # Version control.
+            pkgs.git
+            pkgs.gh
+
+            # Network.
+            pkgs.curl
+
+            # Language runtimes and package managers. Agents install
+            # additional tools on-demand into /var/bureau/cache/ via
+            # these package managers.
+            pkgs.nodejs
+            pkgs.python3
+            pkgs.uv
+            pkgs.bun
+
+            # Archives and compression.
+            pkgs.gnutar
+            pkgs.gzip
+            pkgs.xz
+            pkgs.zstd
+            pkgs.unzip
+            pkgs.zip
+
+            # Crypto.
+            pkgs.openssl
+          ];
+
+        # Full machine administration toolkit. Extends developerRunnerPackages
+        # with remote access, system inspection, debugging, and infrastructure
+        # management tools. The sysadmin agent uses this tier.
+        #
+        # The Nix CLI is NOT included here — it lives on the host at
+        # /nix/var/nix/profiles/default/bin/nix. The sysadmin template
+        # bind-mounts /nix/store (ro) and the nix profile so the sandbox
+        # uses the host's exact version. Same pattern for the Docker socket.
+        sysadminRunnerPackages =
+          pkgs:
+          self.lib.developerRunnerPackages pkgs
+          ++ [
+            # Remote access and network debugging.
+            pkgs.openssh
+            pkgs.rsync
+            pkgs.wget
+            pkgs.socat
+            pkgs.dnsutils
+            pkgs.nmap
+            pkgs.iproute2
+
+            # System inspection and debugging.
+            pkgs.procps
+            pkgs.htop
+            pkgs.strace
+            pkgs.lsof
+            pkgs.util-linux
+
+            # Infrastructure management.
+            pkgs.attic-client
+            pkgs.nixfmt
+            pkgs.docker-client
+            pkgs.docker-compose
+
+            # Encryption.
+            pkgs.age
+            pkgs.gnupg
+
+            # Additional compression.
+            pkgs.bzip2
+            pkgs.p7zip
+
+            # Utilities.
+            pkgs.gettext
+          ];
+      };
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -142,6 +247,25 @@
                 pkgs.bash
                 pkgs.coreutils
               ];
+            };
+
+            # Environment for coding agents working on projects. Includes
+            # shell tools, language runtimes (Node.js, Python), package
+            # managers (npm, uv, bun), search tools (ripgrep, fd), and
+            # common developer utilities.
+            developer-runner-env = pkgs.buildEnv {
+              name = "bureau-developer-runner-env";
+              paths = self.lib.developerRunnerPackages pkgs;
+            };
+
+            # Environment for the sysadmin agent. Includes everything in
+            # developer-runner-env plus machine administration tools:
+            # remote access (ssh, rsync), system inspection (htop, strace,
+            # lsof), network debugging (nmap, socat, dig), and
+            # infrastructure management (attic, docker, age).
+            sysadmin-runner-env = pkgs.buildEnv {
+              name = "bureau-sysadmin-runner-env";
+              paths = self.lib.sysadminRunnerPackages pkgs;
             };
           };
 

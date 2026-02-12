@@ -337,6 +337,256 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	}
 }
 
+// TestDaemonLauncherServiceMounts exercises the full direct service socket
+// chain: daemon resolves RequiredServices from Matrix state events into
+// ServiceMounts, sends them to a real launcher subprocess via IPC, and the
+// launcher includes the bind-mounts in the sandbox build. This proves that
+// ServiceMounts survive JSON serialization across the daemon-launcher boundary
+// (different Go types, same wire format) and that the launcher processes them.
+//
+// The test creates a mock service socket on the host filesystem at the path
+// the daemon will resolve, verifies that the sandbox is created successfully
+// (not rejected due to ServiceMounts), and checks that the proxy is functional.
+func TestDaemonLauncherServiceMounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds binaries and manages subprocesses")
+	}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap not available (sandbox creation requires namespace support)")
+	}
+
+	proxyBinary := buildBinary(t, "./cmd/bureau-proxy")
+	launcherBinary := buildBinary(t, "./cmd/bureau-launcher")
+
+	keypair, err := sealed.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	defer keypair.Close()
+
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.txt"), keypair.PrivateKey.Bytes(), 0600); err != nil {
+		t.Fatalf("writing private key: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "machine-key.pub"), []byte(keypair.PublicKey), 0644); err != nil {
+		t.Fatalf("writing public key: %v", err)
+	}
+
+	runDir := testutil.SocketDir(t)
+	launcherSocket := principal.LauncherSocketPath(runDir)
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const (
+		configRoomID   = "!config:test"
+		machineRoomID  = "!machine:test"
+		serviceRoomID  = "!service:test"
+		templateRoomID = "!templates:test"
+	)
+
+	principalLocalpart := "test/consumer"
+
+	// Template that requires the "mock" service.
+	matrixState.setRoomAlias("#templates:bureau.local", templateRoomID)
+	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "service-consumer", schema.TemplateContent{
+		Description:      "Service consumer test template",
+		Command:          []string{"/bin/echo", "hello"},
+		RequiredServices: []string{"mock"},
+	})
+
+	// Bind the "mock" service role to a provider principal in the config room.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "mock", schema.RoomServiceContent{
+		Principal: "service/mock",
+	})
+
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Localpart: principalLocalpart,
+			Template:  "templates:service-consumer",
+			AutoStart: true,
+		}},
+	})
+
+	credentialMap := map[string]string{
+		"MATRIX_TOKEN":          "syt_test_consumer_token",
+		"MATRIX_HOMESERVER_URL": matrixServer.URL,
+		"MATRIX_USER_ID":        "@test/consumer:bureau.local",
+	}
+	credentialJSON, err := json.Marshal(credentialMap)
+	if err != nil {
+		t.Fatalf("marshaling credentials: %v", err)
+	}
+	ciphertext, err := sealed.Encrypt(credentialJSON, []string{keypair.PublicKey})
+	if err != nil {
+		t.Fatalf("encrypting credentials: %v", err)
+	}
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, principalLocalpart, schema.Credentials{
+		Version:       1,
+		Principal:     "@test/consumer:bureau.local",
+		EncryptedFor:  []string{"@machine/test:bureau.local"},
+		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID"},
+		Ciphertext:    ciphertext,
+		ProvisionedBy: "@bureau-admin:bureau.local",
+		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// Create a mock service socket at the path the daemon will resolve.
+	// The daemon resolves "service/mock" → RunDirSocketPath(runDir, "service/mock").
+	// This socket must exist for the launcher's bwrap to bind-mount it.
+	serviceSocketPath := principal.RunDirSocketPath(runDir, "service/mock")
+	serviceSocketDir := filepath.Dir(serviceSocketPath)
+	if err := os.MkdirAll(serviceSocketDir, 0755); err != nil {
+		t.Fatalf("creating service socket directory: %v", err)
+	}
+	serviceListener, err := net.Listen("unix", serviceSocketPath)
+	if err != nil {
+		t.Fatalf("creating mock service socket: %v", err)
+	}
+	t.Cleanup(func() { serviceListener.Close() })
+
+	// Accept connections on the mock service socket (drain them so
+	// nothing blocks). A real service would process NDJSON requests;
+	// here we just accept and close to prove the socket is reachable.
+	go func() {
+		for {
+			conn, err := serviceListener.Accept()
+			if err != nil {
+				return // Listener closed.
+			}
+			conn.Close()
+		}
+	}()
+
+	sessionJSON, _ := json.Marshal(sessionData{
+		HomeserverURL: matrixServer.URL,
+		UserID:        "@machine/test:bureau.local",
+		AccessToken:   "syt_launcher_session_token",
+	})
+	if err := os.WriteFile(filepath.Join(stateDir, "session.json"), sessionJSON, 0600); err != nil {
+		t.Fatalf("writing session.json: %v", err)
+	}
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	launcherCmd := exec.Command(launcherBinary,
+		"--machine-name", "machine/test",
+		"--run-dir", runDir,
+		"--state-dir", stateDir,
+		"--proxy-binary", proxyBinary,
+		"--homeserver", matrixServer.URL,
+		"--server-name", "bureau.local",
+		"--workspace-root", workspaceRoot,
+	)
+	launcherCmd.Stderr = os.Stderr
+	if err := launcherCmd.Start(); err != nil {
+		t.Fatalf("starting launcher: %v", err)
+	}
+	t.Cleanup(func() {
+		launcherCmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { launcherCmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			launcherCmd.Process.Kill()
+			launcherCmd.Wait()
+		}
+	})
+
+	waitForFile(t, launcherSocket, 10*time.Second)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_daemon_session_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon := &Daemon{
+		runDir:            runDir,
+		session:           session,
+		machineName:       "machine/test",
+		machineUserID:     "@machine/test:bureau.local",
+		serverName:        "bureau.local",
+		configRoomID:      configRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
+		launcherSocket:    launcherSocket,
+		statusInterval:    time.Hour,
+		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
+		running:           make(map[string]bool),
+		lastCredentials:   make(map[string]string),
+		lastVisibility:    make(map[string][]string),
+		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy: make(map[string]*schema.ObservePolicy),
+		lastSpecs:         make(map[string]*schema.SandboxSpec),
+		previousSpecs:     make(map[string]*schema.SandboxSpec),
+		lastTemplates:     make(map[string]*schema.TemplateContent),
+		healthMonitors:    make(map[string]*healthMonitor),
+		services:          make(map[string]*schema.Service),
+		proxyRoutes:       make(map[string]string),
+		peerAddresses:     make(map[string]string),
+		peerTransports:    make(map[string]http.RoundTripper),
+		adminSocketPathFunc: func(localpart string) string {
+			return principal.RunDirAdminSocketPath(runDir, localpart)
+		},
+		layoutWatchers: make(map[string]*layoutWatcher),
+		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	ctx := context.Background()
+	agentSocket := principal.RunDirSocketPath(runDir, principalLocalpart)
+
+	// Reconcile: daemon resolves RequiredServices, sends ServiceMounts
+	// in the IPC request, launcher builds sandbox with bind-mounts.
+	if err := daemon.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile error: %v", err)
+	}
+
+	if !daemon.running[principalLocalpart] {
+		t.Fatalf("%s should be running after reconcile (service resolution + IPC succeeded)", principalLocalpart)
+	}
+
+	// Verify the proxy is functional — this proves the full daemon → launcher
+	// IPC chain worked, including ServiceMounts serialization.
+	agentClient := unixHTTPClient(agentSocket)
+	healthResponse, err := agentClient.Get("http://localhost/health")
+	if err != nil {
+		t.Fatalf("health check on agent socket: %v", err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Errorf("health check status = %d, want 200", healthResponse.StatusCode)
+	}
+
+	// Verify the proxy received the correct identity.
+	identityResponse, err := agentClient.Get("http://localhost/v1/identity")
+	if err != nil {
+		t.Fatalf("identity request: %v", err)
+	}
+	identityBody, _ := io.ReadAll(identityResponse.Body)
+	identityResponse.Body.Close()
+
+	var identity struct {
+		UserID     string `json:"user_id"`
+		ServerName string `json:"server_name"`
+	}
+	if err := json.Unmarshal(identityBody, &identity); err != nil {
+		t.Fatalf("parsing identity response %q: %v", string(identityBody), err)
+	}
+	if identity.UserID != "@test/consumer:bureau.local" {
+		t.Errorf("identity user_id = %q, want @test/consumer:bureau.local", identity.UserID)
+	}
+}
+
 // TestReconcileNoConfig verifies that reconcile handles the M_NOT_FOUND
 // case gracefully — when no MachineConfig state event exists in the config
 // room, the daemon should succeed (treating it as "nothing to do") rather

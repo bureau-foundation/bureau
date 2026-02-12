@@ -52,6 +52,8 @@ secrets/
 deploy/matrix/bureau-creds
 deploy/matrix/.env-attic-token
 deploy/test/bureau-creds
+# Forgejo app.ini contains generated secrets after first boot
+deploy/forgejo/app.ini
 
 # Beads (local workstream tracking)
 .beads/

@@ -1,0 +1,28 @@
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:13-rootless
+    container_name: bureau-forgejo
+    restart: unless-stopped
+    environment:
+      # Match volume ownership. The rootless image runs as UID/GID 1000 by
+      # default; override here if the host user differs.
+      USER_UID: "${BUREAU_FORGEJO_UID:-1000}"
+      USER_GID: "${BUREAU_FORGEJO_GID:-1000}"
+    volumes:
+      - forgejo-data:/var/lib/gitea
+      - ./app.ini:/var/lib/gitea/custom/conf/app.ini
+    ports:
+      - "${BUREAU_FORGEJO_HTTP_PORT:-3000}:3000"
+      - "${BUREAU_FORGEJO_SSH_PORT:-2222}:2222"
+    healthcheck:
+      # During first boot Forgejo serves the install wizard and returns 404
+      # for API endpoints. Check the root path, which returns 200 in both
+      # install mode and normal operation.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  forgejo-data:

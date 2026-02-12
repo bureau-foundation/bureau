@@ -1,0 +1,56 @@
+; Bureau Forgejo Configuration
+;
+; Copy this file to app.ini before first boot:
+;   cp app.ini.example app.ini
+;
+; Forgejo modifies app.ini on first boot (adding generated secrets and
+; install wizard settings). The copy is yours to edit; the template
+; stays clean in version control.
+;
+; For LAN access, change DOMAIN, SSH_DOMAIN, and ROOT_URL to the
+; machine's hostname or IP. The ports here are container-internal;
+; host-side port mapping is in docker-compose.yaml via .env.
+
+[server]
+DOMAIN = localhost
+SSH_DOMAIN = localhost
+ROOT_URL = http://localhost:3000/
+HTTP_PORT = 3000
+SSH_PORT = 2222
+SSH_LISTEN_PORT = 2222
+START_SSH_SERVER = true
+; No CDN, no Gravatar, no external requests. Everything stays on-network.
+OFFLINE_MODE = true
+LFS_START_SERVER = true
+
+[database]
+DB_TYPE = sqlite3
+; WAL mode gives concurrent reads during writes — better for a forge where
+; browsing and pushing happen simultaneously.
+SQLITE_JOURNAL_MODE = WAL
+
+[service]
+; Registration is off by default. The admin account is created on first
+; boot via Forgejo's install wizard. Additional accounts are created by
+; the admin through the web UI or the forgejo CLI.
+DISABLE_REGISTRATION = true
+REQUIRE_SIGNIN_VIEW = false
+DEFAULT_KEEP_EMAIL_PRIVATE = true
+DEFAULT_ALLOW_CREATE_ORGANIZATION = true
+DEFAULT_ENABLE_TIMETRACKING = true
+NO_REPLY_ADDRESS = noreply.localhost
+
+[repository]
+DEFAULT_BRANCH = main
+DEFAULT_PRIVATE = private
+DEFAULT_PUSH_CREATE_PRIVATE = true
+
+[federation]
+ENABLED = false
+
+[openid]
+ENABLE_OPENID_SIGNIN = false
+ENABLE_OPENID_SIGNUP = false
+
+[other]
+SHOW_FOOTER_VERSION = false

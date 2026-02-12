@@ -880,10 +880,32 @@ type launcherIPCRequest struct {
 	// has no associated event content (room-existence-only checks).
 	TriggerContent json.RawMessage `json:"trigger_content,omitempty"`
 
+	// ServiceMounts lists service sockets that the launcher should
+	// bind-mount into the sandbox. The daemon populates this by
+	// resolving the SandboxSpec's RequiredServices against
+	// m.bureau.room_service state events in the principal's rooms.
+	// Each entry maps a service role to a host-side socket path.
+	ServiceMounts []launcherServiceMount `json:"service_mounts,omitempty"`
+
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path and switches its proxy
 	// binary for future sandbox creation.
 	BinaryPath string `json:"binary_path,omitempty"`
+}
+
+// launcherServiceMount describes a service socket to bind-mount into a
+// sandbox. The daemon resolves these from RequiredServices and passes
+// them to the launcher via IPC. The launcher creates a bind-mount at
+// /run/bureau/service/<Role>.sock inside the sandbox.
+type launcherServiceMount struct {
+	// Role is the service role name (e.g., "ticket", "rag"). Determines
+	// the in-sandbox socket path: /run/bureau/service/<role>.sock.
+	Role string `json:"role"`
+
+	// SocketPath is the host-side socket path to bind-mount. For local
+	// services this is the provider's principal socket; for remote
+	// services this is the daemon's tunnel socket for that service.
+	SocketPath string `json:"socket_path"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.

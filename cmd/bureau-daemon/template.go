@@ -23,14 +23,15 @@ func resolveTemplate(ctx context.Context, session *messaging.Session, templateRe
 // environment, extra env vars, payload).
 func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.PrincipalAssignment) *schema.SandboxSpec {
 	spec := &schema.SandboxSpec{
-		Command:         template.Command,
-		Filesystem:      template.Filesystem,
-		Namespaces:      template.Namespaces,
-		Resources:       template.Resources,
-		Security:        template.Security,
-		EnvironmentPath: template.Environment,
-		Roles:           template.Roles,
-		CreateDirs:      template.CreateDirs,
+		Command:          template.Command,
+		Filesystem:       template.Filesystem,
+		Namespaces:       template.Namespaces,
+		Resources:        template.Resources,
+		Security:         template.Security,
+		EnvironmentPath:  template.Environment,
+		Roles:            template.Roles,
+		CreateDirs:       template.CreateDirs,
+		RequiredServices: template.RequiredServices,
 	}
 
 	// Copy environment variables so overrides don't mutate the template.

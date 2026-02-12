@@ -140,6 +140,19 @@ const (
 	// State key: pipeline name (e.g., "dev-workspace-init", "dev-worktree-teardown")
 	// Room: pipeline room (e.g., #bureau/pipeline:<server>)
 	EventTypePipeline = "m.bureau.pipeline"
+
+	// EventTypeRoomService declares which service principal handles a
+	// given service role in a room. This is a general mechanism for
+	// room-scoped service binding — any service type (tickets, CI, code
+	// review, RAG) uses the same event type with different state keys.
+	//
+	// The daemon reads these events at sandbox creation time to resolve
+	// a template's RequiredServices to concrete service principals and
+	// their socket paths.
+	//
+	// State key: service role name (e.g., "ticket", "rag", "ci")
+	// Room: any room that uses the service
+	EventTypeRoomService = "m.bureau.room_service"
 )
 
 // Matrix m.room.message msgtype constants for Bureau command messages.
@@ -782,6 +795,18 @@ type TemplateContent struct {
 	// event and refuses to start the sandbox if any are missing.
 	RequiredCredentials []string `json:"required_credentials,omitempty"`
 
+	// RequiredServices lists service roles (e.g., "ticket", "rag")
+	// that must be available when a sandbox is created from this
+	// template. The daemon resolves each role to a concrete service
+	// principal by reading m.bureau.room_service state events in the
+	// principal's rooms, then bind-mounts the service's Unix socket
+	// into the sandbox at /run/bureau/service/<role>.sock. If any
+	// required service cannot be resolved, sandbox creation fails.
+	//
+	// During template inheritance, child RequiredServices are appended
+	// to parent RequiredServices (duplicates removed).
+	RequiredServices []string `json:"required_services,omitempty"`
+
 	// DefaultPayload is the default agent payload merged under
 	// PrincipalAssignment.Payload at resolution time (instance values
 	// win on conflict). Written to /run/bureau/payload.json inside the
@@ -1265,6 +1290,19 @@ type Service struct {
 	// into the fixed fields (e.g., supported languages, model version,
 	// max batch size). Consumers can filter on these.
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// RoomServiceContent is the content of an EventTypeRoomService state event.
+// It binds a service role to a specific service principal in a room. The
+// daemon reads these when resolving a template's RequiredServices to
+// determine which service sockets to bind-mount into a sandbox.
+//
+// State key: the service role name (e.g., "ticket", "rag", "ci")
+type RoomServiceContent struct {
+	// Principal is the full Matrix user ID of the service instance
+	// that handles this role in this room (e.g.,
+	// "@service/ticket/iree:bureau.local").
+	Principal string `json:"principal"`
 }
 
 // WebRTCSignal is the content of both EventTypeWebRTCOffer and

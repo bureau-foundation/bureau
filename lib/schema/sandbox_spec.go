@@ -87,4 +87,13 @@ type SandboxSpec struct {
 	// after applying filesystem mounts but before exec. Duplicates have
 	// been removed during template resolution.
 	CreateDirs []string `json:"create_dirs,omitempty"`
+
+	// RequiredServices lists service roles (e.g., "ticket", "rag")
+	// that must be resolved to concrete service sockets before sandbox
+	// creation. The daemon reads this after template resolution,
+	// resolves each role via m.bureau.room_service state events in the
+	// principal's rooms, and passes the resolved socket paths to the
+	// launcher as ServiceMounts. If any role cannot be resolved,
+	// sandbox creation fails.
+	RequiredServices []string `json:"required_services,omitempty"`
 }

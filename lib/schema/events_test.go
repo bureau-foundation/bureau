@@ -808,6 +808,31 @@ func TestServiceOmitsOptionalFields(t *testing.T) {
 	}
 }
 
+func TestRoomServiceContentRoundTrip(t *testing.T) {
+	original := RoomServiceContent{
+		Principal: "@service/ticket/iree:bureau.local",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "principal", "@service/ticket/iree:bureau.local")
+
+	var decoded RoomServiceContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Principal != original.Principal {
+		t.Errorf("Principal: got %q, want %q", decoded.Principal, original.Principal)
+	}
+}
+
 func TestConfigRoomPowerLevels(t *testing.T) {
 	adminUserID := "@bureau-admin:bureau.local"
 	machineUserID := "@machine/workstation:bureau.local"

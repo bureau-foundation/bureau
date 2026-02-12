@@ -19,7 +19,8 @@
 //   - Scalars (Description, Command, Environment): child replaces
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload): merged,
 //     child wins on key conflict
-//   - Slices (Filesystem, CreateDirs): child appended, deduplicated
+//   - Slices (Filesystem, CreateDirs, RequiredCredentials,
+//     RequiredServices): child appended, deduplicated
 //   - Pointers (Namespaces, Resources, Security): child replaces
 //   - Inherits is cleared after resolution
 //

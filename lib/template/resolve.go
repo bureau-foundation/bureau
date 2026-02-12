@@ -94,8 +94,9 @@ func Fetch(ctx context.Context, session *messaging.Session, ref schema.TemplateR
 // Merge rules:
 //   - Scalars (Description, Command, Environment): child replaces parent if non-zero
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload): merged, child values win on conflict
-//   - Slices (Filesystem, CreateDirs, RequiredCredentials): child appended after parent,
-//     deduplicated where applicable (Filesystem by Dest, strings by value)
+//   - Slices (Filesystem, CreateDirs, RequiredCredentials, RequiredServices):
+//     child appended after parent, deduplicated where applicable
+//     (Filesystem by Dest, strings by value)
 //   - Pointers (Namespaces, Resources, Security, HealthCheck): child replaces parent if non-nil
 //   - Inherits is always cleared (consumed during resolution)
 func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
@@ -123,6 +124,7 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result.Filesystem = mergeMounts(parent.Filesystem, child.Filesystem)
 	result.CreateDirs = mergeStringSlices(parent.CreateDirs, child.CreateDirs)
 	result.RequiredCredentials = mergeStringSlices(parent.RequiredCredentials, child.RequiredCredentials)
+	result.RequiredServices = mergeStringSlices(parent.RequiredServices, child.RequiredServices)
 
 	// Pointers: child wins if non-nil.
 	if child.Namespaces != nil {
@@ -216,7 +218,7 @@ func mergeMounts(parent, child []schema.TemplateMount) []schema.TemplateMount {
 }
 
 // mergeStringSlices appends child strings after parent strings, removing
-// duplicates. Used for CreateDirs and RequiredCredentials.
+// duplicates. Used for CreateDirs, RequiredCredentials, and RequiredServices.
 func mergeStringSlices(parent, child []string) []string {
 	if len(parent) == 0 {
 		return child

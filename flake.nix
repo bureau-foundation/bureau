@@ -322,6 +322,15 @@
           env.TMPDIR = "/tmp";
 
           shellHook = ''
+            # nix develop replaces PATH with the dev shell's packages,
+            # but the nix-daemon.sh profile script uses a guard variable
+            # (__ETC_PROFILE_NIX_SOURCED) to run only once per shell.
+            # The guard survives into the subshell while the PATH it added
+            # does not, so the base nix binary disappears. Re-add it.
+            if ! command -v nix > /dev/null 2>&1; then
+              export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+            fi
+
             # Install pre-commit hooks on first shell entry.
             if [ -f .pre-commit-config.yaml ] && [ -d .git ]; then
               pre-commit install --install-hooks > /dev/null 2>&1 || true

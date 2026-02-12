@@ -1492,6 +1492,23 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			"principal", localpart,
 			"error", err,
 		)
+		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("FAILED to recover %s after proxy crash: %v", localpart, err),
+		))
+	} else {
+		d.reconcileMu.Lock()
+		recovered := d.running[localpart]
+		d.reconcileMu.Unlock()
+
+		if recovered {
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("Recovered %s after proxy crash", localpart),
+			))
+		} else {
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("FAILED to recover %s after proxy crash: principal not in desired state", localpart),
+			))
+		}
 	}
 	d.notifyReconcile()
 }

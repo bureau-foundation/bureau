@@ -394,9 +394,13 @@ func TestCredentialRotation(t *testing.T) {
 		t.Fatal("login returned the same token as registration (expected a new device token)")
 	}
 
-	// Record the proxy socket's inode before rotation. After the daemon
-	// destroys and recreates the proxy, the new socket file will have a
-	// different inode — this is how we detect that rotation completed.
+	// Record the proxy socket's identity before rotation. After the daemon
+	// destroys and recreates the proxy, the new socket file will differ.
+	// We compare both inode number AND ctime (nanosecond precision) because
+	// the filesystem can reuse the same inode number for the new file when
+	// the destroy+create cycle completes within milliseconds. Ctime is
+	// always different because it's set at inode allocation time.
+	//
 	// We can't use waitForFileGone+waitForFile because the destroy+create
 	// cycle runs within a single reconcile call and completes in ~5ms,
 	// too fast for any practical poll interval to catch the gap.
@@ -404,7 +408,9 @@ func TestCredentialRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat original proxy socket: %v", err)
 	}
-	originalInode := originalInfo.Sys().(*syscall.Stat_t).Ino
+	originalStat := originalInfo.Sys().(*syscall.Stat_t)
+	originalInode := originalStat.Ino
+	originalCtim := originalStat.Ctim
 
 	// Push new credentials. The ciphertext will differ because:
 	//   (a) the token payload is different, and
@@ -413,8 +419,8 @@ func TestCredentialRotation(t *testing.T) {
 	// a destroy+create when it changes.
 	pushCredentials(t, admin, machine, rotated)
 
-	// Poll until the proxy socket's inode changes, meaning the old proxy
-	// was destroyed and a new one was created at the same path.
+	// Poll until the proxy socket is recreated. Detection uses both inode
+	// number and ctime: either changing means a new file exists at the path.
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		info, statError := os.Stat(proxySocket)
@@ -426,13 +432,14 @@ func TestCredentialRotation(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		currentInode := info.Sys().(*syscall.Stat_t).Ino
-		if currentInode != originalInode {
-			t.Logf("proxy socket inode changed: %d → %d (credential rotation complete)", originalInode, currentInode)
+		currentStat := info.Sys().(*syscall.Stat_t)
+		if currentStat.Ino != originalInode || currentStat.Ctim != originalCtim {
+			t.Logf("proxy socket changed: inode %d→%d, ctime %v→%v (credential rotation complete)",
+				originalInode, currentStat.Ino, originalCtim, currentStat.Ctim)
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for proxy socket inode to change after credential push")
+			t.Fatal("timed out waiting for proxy socket to change after credential push")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

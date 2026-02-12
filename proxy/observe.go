@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -274,7 +273,7 @@ func (proxy *observeProxy) handleConnection(agentConnection net.Conn) {
 	// The buffered readers may hold bytes read ahead during the JSON
 	// handshake. Use them as the read sources (not the raw connections)
 	// so those buffered bytes aren't lost.
-	if err := bridgeReaders(agentConnection, agentReader, daemonConnection, daemonReader); err != nil {
+	if err := netutil.BridgeReaders(agentConnection, agentReader, daemonConnection, daemonReader); err != nil {
 		proxy.logger.Warn("observe proxy: bridge error",
 			"principal", principal,
 			"observer", userIDBuffer.String(),
@@ -332,38 +331,4 @@ func (proxy *observeProxy) stop() {
 	// no goroutine holds borrowed *secret.Buffer pointers from the credential
 	// source, so the caller can safely close the credential source.
 	proxy.activeConnections.Wait()
-}
-
-// bridgeReaders copies data bidirectionally between two connections using
-// the provided readers (which may contain buffered data from the JSON
-// handshake). Returns when either direction finishes. Both connections are
-// closed before returning. Returns the error from the direction that
-// terminated first, or nil if termination was due to normal connection closure.
-func bridgeReaders(connectionA net.Conn, readerA io.Reader, connectionB net.Conn, readerB io.Reader) error {
-	type copyResult struct {
-		bytesCopied int64
-		err         error
-	}
-	done := make(chan copyResult, 2)
-
-	go func() {
-		bytesCopied, err := io.Copy(connectionB, readerA)
-		done <- copyResult{bytesCopied, err}
-	}()
-
-	go func() {
-		bytesCopied, err := io.Copy(connectionA, readerB)
-		done <- copyResult{bytesCopied, err}
-	}()
-
-	// Wait for one direction to finish, then close both to unblock the other.
-	first := <-done
-	connectionA.Close()
-	connectionB.Close()
-	<-done
-
-	if first.err != nil && !netutil.IsExpectedCloseError(first.err) {
-		return first.err
-	}
-	return nil
 }

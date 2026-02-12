@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -676,7 +675,7 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 
 	// Bridge bytes zero-copy between client and relay. This blocks until
 	// one side disconnects or errors.
-	if err := bridgeConnections(clientConnection, relayConnection); err != nil {
+	if err := netutil.BridgeConnections(clientConnection, relayConnection); err != nil {
 		d.logger.Warn("observation bridge error",
 			"observer", request.Observer,
 			"principal", request.Principal,
@@ -788,7 +787,7 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 	// Bridge client ↔ remote daemon. Use bufferedConn to include any bytes
 	// the bufio.Reader read ahead beyond the HTTP response.
 	peerConn := &bufferedConn{reader: bufferedReader, Conn: rawConnection}
-	if err := bridgeConnections(clientConnection, peerConn); err != nil {
+	if err := netutil.BridgeConnections(clientConnection, peerConn); err != nil {
 		d.logger.Warn("remote observation bridge error",
 			"observer", request.Observer,
 			"principal", request.Principal,
@@ -964,7 +963,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	)
 
 	// Bridge the hijacked connection to the relay.
-	if err := bridgeConnections(transportConnection, relayConnection); err != nil {
+	if err := netutil.BridgeConnections(transportConnection, relayConnection); err != nil {
 		d.logger.Warn("transport observation bridge error",
 			"observer", request.Observer,
 			"principal", request.Principal,
@@ -1072,39 +1071,6 @@ func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok boo
 		return address, true
 	}
 	return "", false
-}
-
-// bridgeConnections copies bytes bidirectionally between two connections.
-// Returns when either direction finishes. Both connections are closed before
-// returning. Returns the error from the direction that terminated first, or
-// nil if termination was due to normal connection closure (EOF, peer disconnect).
-func bridgeConnections(a, b net.Conn) error {
-	type copyResult struct {
-		bytesCopied int64
-		err         error
-	}
-	done := make(chan copyResult, 2)
-
-	go func() {
-		bytesCopied, err := io.Copy(a, b)
-		done <- copyResult{bytesCopied, err}
-	}()
-
-	go func() {
-		bytesCopied, err := io.Copy(b, a)
-		done <- copyResult{bytesCopied, err}
-	}()
-
-	// Wait for one direction to finish, then close both to unblock the other.
-	first := <-done
-	a.Close()
-	b.Close()
-	<-done
-
-	if first.err != nil && !netutil.IsExpectedCloseError(first.err) {
-		return first.err
-	}
-	return nil
 }
 
 // cleanupRelayProcess sends SIGTERM and waits for the relay to exit.

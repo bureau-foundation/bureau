@@ -5,7 +5,7 @@ environments with credential isolation, live observation, and structured messagi
 
 ## Architecture
 
-Five primitives (see `.notes/design/FUNDAMENTALS.md`):
+Five primitives (see `docs/design/fundamentals.md`):
 
 1. **Sandbox** — bwrap namespace isolation (`sandbox/`)
 2. **Proxy** — credential injection via HTTP proxy (`proxy/`)
@@ -64,7 +64,7 @@ cmd/           Binary entry points:
   bureau-test-agent/     Minimal test agent for integration tests
 integration/   End-to-end integration tests (real homeserver, full daemon+launcher stack)
 deploy/        Deployment configurations (matrix/, buildbarn/, systemd/, test/)
-docs/          Checked-in documentation (infra/)
+docs/          Documentation (design/ for architecture, infra/ for operations)
 script/        Dev environment setup (Nix installer, version pins)
 ```
 
@@ -93,7 +93,7 @@ and `script/nix-expected-version` (expected `nix --version` output). These are
 committed to the repo. Upgrading Nix means updating both files and re-running
 `script/setup-nix --force`.
 
-See `.notes/design/NIX.md` for the full build and distribution architecture.
+See `docs/design/nix.md` for the full build and distribution architecture.
 
 ## Build
 
@@ -144,20 +144,52 @@ observation, templates, schema, or bootstrap logic. When in doubt, run them.
 
 ## Documentation map
 
-Design documents live in `.notes/design/` and describe the target architecture
-for each subsystem. Each Go package also has a `doc.go` with implementation-level
+Design documents live in `docs/design/` (see `docs/design/README.md` for the
+full reading guide). Each Go package also has a `doc.go` with implementation-level
 documentation.
 
-- `OVERVIEW.md` — What Bureau is: infrastructure for running organizations of AI agents
-- `FUNDAMENTALS.md` — The five primitives: sandbox, proxy, bridge, observation, messaging
-- `ARCHITECTURE.md` — Runtime topology: launcher/daemon/proxy processes, IPC, sandbox contract, naming, service discovery
-- `INFORMATION_ARCHITECTURE.md` — Matrix hierarchy: spaces, rooms, threads, state events, agent memory, artifacts
-- `CREDENTIALS.md` — age encryption, TPM/keyring, launcher/daemon privilege separation for secrets
-- `OBSERVATION.md` — Relay architecture, wire protocol, ring buffer, layouts, dashboard composition
-- `PIPELINES.md` — Pipeline primitive: step types (shell, publish, healthcheck, guard), variables, execution model
-- `WORKSPACE.md` — Workspace lifecycle: git worktrees, setup/teardown principals, project templates, sysadmin agent
-- `NIX.md` — Build and distribution: Bazel compilation, Nix packaging, flake structure, binary cache
-- `TICKETS.md` — Ticket system: Matrix-native coordination primitive, direct service sockets, CLI
+**Core architecture** (read first):
+- `overview.md` — What Bureau is and why it exists
+- `fundamentals.md` — The five primitives: sandbox, proxy, bridge, observation, messaging
+- `architecture.md` — Runtime topology: launcher, daemon, proxy processes, IPC, naming
+- `information-architecture.md` — Matrix data model: spaces, rooms, threads, state events
+
+**Primitive deep-dives** (read when working on a subsystem):
+- `credentials.md` — age encryption, TPM/keyring, privilege separation
+- `observation.md` — Relay architecture, wire protocol, ring buffer, layouts
+- `pipelines.md` — Step types, variable substitution, thread logging
+- `nix.md` — Bazel compilation, Nix packaging, binary cache
+
+**Services** (built on the primitives):
+- `tickets.md` — Work items, dependencies, gates, notes, attachments
+- `artifacts.md` — CAS, BLAKE3 hashing, CDC chunking, FUSE mount
+- `workspace.md` — Git worktrees, setup/teardown pipelines, sysadmin agent
+- `fleet.md` — Multi-machine service placement, HA, batch scheduling
+- `authorization.md` — Grants, denials, allowances, credential provisioning
+
+**Applications** (patterns built from everything above):
+- `dev-team.md` — Self-hosted development team, role taxonomy, review pipeline
+- `agent-layering.md` — Agent runtime integration, session management, MCP, quota
+- `forgejo.md` — External service connector pattern
+
+## Design document rules
+
+Design documents are code. They describe the target architecture and must be
+kept accurate as the system evolves.
+
+- **When you touch a subsystem, check its design document.** If the
+  implementation has diverged, update the document or file a ticket
+  explaining the divergence.
+- **Open questions belong in tickets, not documents.** A question buried in
+  a document becomes invisible the moment someone stops reading it. File a
+  bead or ticket so it stays in the queue.
+- **No transient references.** No bead IDs, no "as of Feb 2026", no "phase 2"
+  language. Design documents are timeless. If the architecture changes, update
+  the document.
+- **Cross-references use document names, not paths.** Write "fundamentals.md"
+  not "docs/design/fundamentals.md". Paths change; names are stable.
+- **One document per concept.** Don't split a subsystem across documents.
+  Don't merge unrelated subsystems into one.
 
 <!-- br-agent-instructions-v1 -->
 

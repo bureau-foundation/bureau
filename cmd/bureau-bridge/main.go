@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/bureau-foundation/bureau/bridge"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -111,9 +110,6 @@ func runExecMode(b *bridge.Bridge, command []string) error {
 		return err
 	}
 	defer b.Stop()
-
-	// Give the bridge a moment to be ready.
-	time.Sleep(10 * time.Millisecond)
 
 	cmdPath, err := exec.LookPath(command[0])
 	if err != nil {

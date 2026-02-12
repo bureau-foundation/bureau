@@ -16,12 +16,14 @@
 //   - [EventTypeService] -- service directory
 //   - [EventTypeWebRTCOffer], [EventTypeWebRTCAnswer] -- signaling
 //   - [EventTypeLayout] -- tmux session structure for observation
+//   - [EventTypeArtifact], [EventTypeArtifactTag] -- CAS blob metadata
 //
 // [SandboxSpec] is the fully-resolved sandbox configuration sent over
 // the daemon-to-launcher IPC socket. [TemplateRef] and
 // [ParseTemplateRef] handle template reference strings for cross-room
-// template inheritance. [ConfigRoomPowerLevels] and
-// [WorkspaceRoomPowerLevels] produce Matrix power level content for
+// template inheritance. [ConfigRoomPowerLevels],
+// [WorkspaceRoomPowerLevels], [PipelineRoomPowerLevels], and
+// [ArtifactRoomPowerLevels] produce Matrix power level content for
 // Bureau's room types.
 //
 // This package depends on no other Bureau packages.

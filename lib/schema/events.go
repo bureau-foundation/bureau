@@ -3,6 +3,13 @@
 
 package schema
 
+import (
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+)
+
 // Matrix state event type constants. These are the "type" field in Matrix
 // state events. The state_key for each is the principal's localpart.
 const (
@@ -153,6 +160,28 @@ const (
 	// State key: service role name (e.g., "ticket", "rag", "ci")
 	// Room: any room that uses the service
 	EventTypeRoomService = "m.bureau.room_service"
+
+	// EventTypeArtifact is published to #bureau/artifact when an
+	// artifact is stored in the content-addressable store. Contains
+	// metadata: BLAKE3 hash, content type, size, chunk/container
+	// counts, compression algorithm, lifecycle policy. The artifact
+	// data itself lives in the CAS filesystem; this event is the
+	// metadata index.
+	//
+	// State key: artifact reference (e.g., "art-a3f9b2c1e7d4")
+	// Room: #bureau/artifact:<server>
+	EventTypeArtifact = "m.bureau.artifact"
+
+	// EventTypeArtifactTag is published to #bureau/artifact when a
+	// named mutable pointer to an artifact is created or updated.
+	// Tags provide stable URIs for changing content (e.g.,
+	// "iree/resnet50/compiled/latest" always points to the most
+	// recent compiled model). Tag updates are compare-and-swap by
+	// default to detect concurrent writes.
+	//
+	// State key: tag name (e.g., "iree/resnet50/compiled/latest")
+	// Room: #bureau/artifact:<server>
+	EventTypeArtifactTag = "m.bureau.artifact_tag"
 )
 
 // Matrix m.room.message msgtype constants for Bureau command messages.
@@ -191,6 +220,24 @@ const (
 	// workspace.restore, principal.spawn. Requires admin status in the
 	// room (PL 100).
 	PowerLevelAdmin = 100
+)
+
+// Schema version constants. CanModify methods compare the event's Version
+// field against these constants to prevent silent data loss during rolling
+// upgrades where different service instances run different code versions.
+const (
+	// ArtifactContentVersion is the current schema version for
+	// ArtifactContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	ArtifactContentVersion = 1
+
+	// ArtifactTagVersion is the current schema version for
+	// ArtifactTag events.
+	ArtifactTagVersion = 1
+
+	// CredentialsVersion is the current schema version for
+	// Credentials events.
+	CredentialsVersion = 1
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.
@@ -1223,7 +1270,7 @@ type PipelineLog struct {
 // Contains an age-encrypted credential bundle for a specific principal
 // on a specific machine. See CREDENTIALS.md for the full lifecycle.
 type Credentials struct {
-	// Version is the schema version. Currently 1.
+	// Version is the schema version (see CredentialsVersion).
 	Version int `json:"version"`
 
 	// Principal is the full Matrix user ID of the principal these
@@ -1589,4 +1636,300 @@ type CommandMessage struct {
 	// example, principal.spawn includes "template" and "payload"
 	// fields. The daemon passes these through to the handler.
 	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+// ArtifactContent is the content of an EventTypeArtifact state event.
+// Published to #bureau/artifact when an artifact is stored in the
+// content-addressable store. Contains the metadata index: BLAKE3 hash,
+// content type, size, chunking details, compression algorithm, lifecycle
+// policy, and provenance.
+//
+// The artifact data itself lives in the CAS filesystem
+// (/var/bureau/artifact/containers/). This state event is the metadata
+// layer — it tells consumers what the artifact is, who created it, how
+// it should be cached, and when it expires. The artifact service is the
+// primary writer; daemons and CLI read.
+//
+// Multiple artifact service instances in a fleet operate on the same
+// #bureau/artifact room. The Version field and CanModify guard prevent
+// silent data loss during rolling upgrades where different instances run
+// different code versions. See CanModify for details.
+type ArtifactContent struct {
+	// Version is the schema version (see ArtifactContentVersion).
+	// Code that modifies this event must call CanModify() first; if
+	// Version exceeds ArtifactContentVersion, the modification is
+	// refused to prevent silent field loss. Readers may process any
+	// version (unknown fields are harmlessly ignored by Go's JSON
+	// unmarshaler).
+	Version int `json:"version"`
+
+	// Hash is the full BLAKE3 file hash (64 hex characters). For
+	// artifacts below the chunking threshold (single chunk), this
+	// equals the chunk hash. For chunked artifacts, this is the
+	// Merkle root over all chunk hashes.
+	Hash string `json:"hash"`
+
+	// ContentType is the MIME type (e.g., "text/plain",
+	// "image/png", "application/octet-stream").
+	ContentType string `json:"content_type"`
+
+	// Filename is the original filename, if known. Informational
+	// only — the artifact reference is the canonical identifier.
+	Filename string `json:"filename,omitempty"`
+
+	// Size is the uncompressed content size in bytes.
+	Size int64 `json:"size"`
+
+	// ChunkCount is the number of content-defined chunks. 1 for
+	// small artifacts (below the chunking threshold).
+	ChunkCount int `json:"chunk_count"`
+
+	// ContainerCount is the number of containers holding this
+	// artifact's chunks. 1 for small artifacts.
+	ContainerCount int `json:"container_count"`
+
+	// Compression is the compression algorithm applied to this
+	// artifact's chunks within their containers. Values: "none",
+	// "lz4", "zstd", "bg4_lz4". Empty means the compression
+	// algorithm is not recorded in metadata (check the container's
+	// per-chunk compression tags instead).
+	Compression string `json:"compression,omitempty"`
+
+	// Source records where externally-imported artifacts came from
+	// (e.g., "https://huggingface.co/meta-llama/Llama-3-8B",
+	// "s3://bucket/key"). Empty for artifacts produced within
+	// Bureau (pipeline outputs, agent logs). Informational — not
+	// validated or dereferenced by the artifact service.
+	Source string `json:"source,omitempty"`
+
+	// Description is an optional human-readable summary.
+	Description string `json:"description,omitempty"`
+
+	// Labels are free-form tags for discovery and lifecycle
+	// management (e.g., "ci-output", "model-weights", "ephemeral").
+	Labels []string `json:"labels,omitempty"`
+
+	// Visibility controls encryption requirements when artifacts
+	// leave the Bureau network. "public" artifacts are not encrypted
+	// for external storage. "private" (default when empty) artifacts
+	// are encrypted with age before any external transfer.
+	Visibility string `json:"visibility,omitempty"`
+
+	// CreatedBy is the Matrix user ID of the uploader
+	// (e.g., "@service/artifact/main:bureau.local").
+	CreatedBy string `json:"created_by"`
+
+	// CreatedAt is an ISO 8601 timestamp.
+	CreatedAt string `json:"created_at"`
+
+	// TTL is an optional time-to-live duration string (e.g., "168h"
+	// for 7 days). After CreatedAt + TTL, the artifact is eligible
+	// for garbage collection unless pinned or referenced by a tag
+	// or ticket attachment.
+	TTL string `json:"ttl,omitempty"`
+
+	// CachePolicy controls how aggressively this artifact is cached
+	// across the fleet. Values: "default" (normal LRU), "pin" (keep
+	// in shared cache), "ephemeral" (local only, lower eviction
+	// priority), "replicate" (push to all shared caches). Empty is
+	// treated as "default".
+	CachePolicy string `json:"cache_policy,omitempty"`
+
+	// Extra is a documented extension namespace for experimental or
+	// preview fields before promotion to top-level schema fields in
+	// a version bump. Keys are field names; values are arbitrary
+	// JSON. Application code should not read or write Extra directly
+	// in production — it exists for forward compatibility and field
+	// staging. Extra is NOT a round-trip preservation mechanism for
+	// unknown top-level fields; the Version/CanModify guard handles
+	// that by refusing modification of events with unrecognized
+	// versions.
+	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// Validate checks that all required fields are present and well-formed.
+// Returns an error describing the first invalid field found, or nil if
+// the content is valid.
+func (a *ArtifactContent) Validate() error {
+	if a.Version < 1 {
+		return fmt.Errorf("artifact content: version must be >= 1, got %d", a.Version)
+	}
+	if a.Hash == "" {
+		return errors.New("artifact content: hash is required")
+	}
+	if len(a.Hash) != 64 {
+		return fmt.Errorf("artifact content: hash must be 64 hex characters, got %d", len(a.Hash))
+	}
+	if _, err := hex.DecodeString(a.Hash); err != nil {
+		return fmt.Errorf("artifact content: hash is not valid hex: %w", err)
+	}
+	if a.ContentType == "" {
+		return errors.New("artifact content: content_type is required")
+	}
+	if a.Size <= 0 {
+		return fmt.Errorf("artifact content: size must be positive, got %d", a.Size)
+	}
+	if a.ChunkCount < 1 {
+		return fmt.Errorf("artifact content: chunk_count must be >= 1, got %d", a.ChunkCount)
+	}
+	if a.ContainerCount < 1 {
+		return fmt.Errorf("artifact content: container_count must be >= 1, got %d", a.ContainerCount)
+	}
+	if a.CreatedBy == "" {
+		return errors.New("artifact content: created_by is required")
+	}
+	if a.CreatedAt == "" {
+		return errors.New("artifact content: created_at is required")
+	}
+	if a.Compression != "" {
+		switch a.Compression {
+		case "none", "lz4", "zstd", "bg4_lz4":
+			// Valid.
+		default:
+			return fmt.Errorf("artifact content: unknown compression %q", a.Compression)
+		}
+	}
+	if a.Visibility != "" {
+		switch a.Visibility {
+		case "public", "private":
+			// Valid.
+		default:
+			return fmt.Errorf("artifact content: unknown visibility %q", a.Visibility)
+		}
+	}
+	if a.CachePolicy != "" {
+		switch a.CachePolicy {
+		case "default", "pin", "ephemeral", "replicate":
+			// Valid.
+		default:
+			return fmt.Errorf("artifact content: unknown cache_policy %q", a.CachePolicy)
+		}
+	}
+	return nil
+}
+
+// CanModify checks whether this code version can safely perform a
+// read-modify-write cycle on this event. Returns nil if safe, or an
+// error explaining why modification would risk data loss.
+//
+// If the event's Version exceeds ArtifactContentVersion, this code does
+// not understand all fields in the event. Marshaling the modified struct
+// back to JSON would silently drop the unknown fields. The caller must
+// either upgrade the artifact service or refuse the operation.
+//
+// Read-only access does not require CanModify — unknown fields are
+// harmlessly ignored during display, routing, and service discovery.
+func (a *ArtifactContent) CanModify() error {
+	if a.Version > ArtifactContentVersion {
+		return fmt.Errorf(
+			"artifact content version %d exceeds supported version %d: "+
+				"modification would lose fields added in newer versions; "+
+				"upgrade the artifact service before modifying this event",
+			a.Version, ArtifactContentVersion,
+		)
+	}
+	return nil
+}
+
+// ArtifactTag is the content of an EventTypeArtifactTag state event.
+// A named mutable pointer to an artifact, providing stable URIs for
+// changing content. Tag names use hierarchical paths (same convention as
+// principal localparts): "iree/resnet50/compiled/latest".
+//
+// Tag updates are compare-and-swap by default: the caller specifies
+// PreviousRef (the expected current target), and the update fails if
+// another writer changed it concurrently. This prevents lost updates
+// without requiring distributed locks. An explicit optimistic mode
+// (last-writer-wins) is available for tags where concurrent writes are
+// expected and acceptable.
+type ArtifactTag struct {
+	// Version is the schema version (see ArtifactTagVersion). Same
+	// semantics as ArtifactContent.Version — call CanModify() before
+	// any read-modify-write cycle.
+	Version int `json:"version"`
+
+	// Ref is the artifact reference this tag currently points to
+	// (e.g., "art-a3f9b2c1e7d4").
+	Ref string `json:"ref"`
+
+	// PreviousRef is the ref this tag pointed to before this update.
+	// Enables conflict detection (compare-and-swap) and provides an
+	// audit trail of tag history. Empty for the initial tag creation.
+	PreviousRef string `json:"previous_ref,omitempty"`
+
+	// UpdatedBy is the Matrix user ID that last updated the tag.
+	UpdatedBy string `json:"updated_by"`
+
+	// UpdatedAt is an ISO 8601 timestamp of the last update.
+	UpdatedAt string `json:"updated_at"`
+
+	// Extra is a documented extension namespace. Same semantics as
+	// ArtifactContent.Extra.
+	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// Validate checks that all required fields are present and well-formed.
+func (a *ArtifactTag) Validate() error {
+	if a.Version < 1 {
+		return fmt.Errorf("artifact tag: version must be >= 1, got %d", a.Version)
+	}
+	if a.Ref == "" {
+		return errors.New("artifact tag: ref is required")
+	}
+	if a.UpdatedBy == "" {
+		return errors.New("artifact tag: updated_by is required")
+	}
+	if a.UpdatedAt == "" {
+		return errors.New("artifact tag: updated_at is required")
+	}
+	return nil
+}
+
+// CanModify checks whether this code version can safely modify this tag
+// event. Same semantics as ArtifactContent.CanModify.
+func (a *ArtifactTag) CanModify() error {
+	if a.Version > ArtifactTagVersion {
+		return fmt.Errorf(
+			"artifact tag version %d exceeds supported version %d: "+
+				"modification would lose fields added in newer versions; "+
+				"upgrade the artifact service before modifying this event",
+			a.Version, ArtifactTagVersion,
+		)
+	}
+	return nil
+}
+
+// ArtifactRoomPowerLevels returns the power level structure for the
+// artifact metadata room (#bureau/artifact). Artifact service principals
+// need to write EventTypeArtifact and EventTypeArtifactTag state events
+// at PL 0 (they are invited members, not admins). Daemons are also
+// members (for reading artifact state via /sync) but do not write
+// artifact events.
+//
+// Room membership is invite-only — the admin invites artifact service
+// principals and machine daemons during setup. The PL 0 write access
+// for artifact events is safe because only invited members can write,
+// and event state keys (artifact references and tag names) are scoped
+// per-artifact, so one service cannot overwrite another's metadata.
+func ArtifactRoomPowerLevels(adminUserID string) map[string]any {
+	events := AdminProtectedEvents()
+	events[EventTypeArtifact] = 0
+	events[EventTypeArtifactTag] = 0
+
+	return map[string]any{
+		"users": map[string]any{
+			adminUserID: 100,
+		},
+		"users_default":  0,
+		"events":         events,
+		"events_default": 100,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         100,
+		"redact":         100,
+		"notifications": map[string]any{
+			"room": 100,
+		},
+	}
 }

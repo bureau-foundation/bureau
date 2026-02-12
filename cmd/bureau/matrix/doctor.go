@@ -287,6 +287,14 @@ var standardRooms = []standardRoom{
 		credentialKey:   "MATRIX_PIPELINE_ROOM",
 		powerLevelsFunc: schema.PipelineRoomPowerLevels,
 	},
+	{
+		alias:           "bureau/artifact",
+		displayName:     "Bureau Artifact",
+		topic:           "Artifact metadata and tags",
+		name:            "artifact room",
+		credentialKey:   "MATRIX_ARTIFACT_ROOM",
+		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
+	},
 }
 
 // runDoctor executes all health checks and returns the results. Fixable

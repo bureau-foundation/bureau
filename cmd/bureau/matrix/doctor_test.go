@@ -41,6 +41,7 @@ type mockDoctorServer struct {
 	serviceID  string
 	templateID string
 	pipelineID string
+	artifactID string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
@@ -70,6 +71,7 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		serviceID:   "!service:local",
 		templateID:  "!template:local",
 		pipelineID:  "!pipeline:local",
+		artifactID:  "!artifact:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -130,6 +132,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				"#bureau/service:local":  m.serviceID,
 				"#bureau/template:local": m.templateID,
 				"#bureau/pipeline:local": m.pipelineID,
+				"#bureau/artifact:local": m.artifactID,
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -203,7 +206,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID, m.artifactID))
 			return
 		}
 
@@ -291,6 +294,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 						m.serviceID:  true,
 						m.templateID: true,
 						m.pipelineID: true,
+						m.artifactID: true,
 					}
 				}
 				for childID := range childIDs {
@@ -328,10 +332,14 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID string) map[string]any {
+func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, artifactID string) map[string]any {
 	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
+	}
+	// Artifact room uses ArtifactRoomPowerLevels (events_default: 100).
+	if roomID == artifactID {
+		return schema.ArtifactRoomPowerLevels(adminUserID)
 	}
 
 	events := map[string]any{
@@ -382,6 +390,9 @@ func extractRoomIDFromStatePath(path string) string {
 	}
 	if strings.Contains(path, "%21pipeline%3Alocal") || strings.Contains(path, "!pipeline:local") {
 		return "!pipeline:local"
+	}
+	if strings.Contains(path, "%21artifact%3Alocal") || strings.Contains(path, "!artifact:local") {
+		return "!artifact:local"
 	}
 	return ""
 }
@@ -468,6 +479,11 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"pipeline room admin power",
 		"pipeline room state_default",
 		"pipeline room join rules",
+		"artifact room",
+		"artifact room in space",
+		"artifact room admin power",
+		"artifact room state_default",
+		"artifact room join rules",
 		`template "base"`,
 		`template "base-networked"`,
 	}
@@ -508,6 +524,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
+		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -541,6 +558,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
+		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -684,8 +702,8 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 			spaceChildCount++
 		}
 	}
-	if spaceChildCount != 5 {
-		t.Errorf("expected 5 m.space.child state events, got %d", spaceChildCount)
+	if spaceChildCount != 6 {
+		t.Errorf("expected 6 m.space.child state events, got %d", spaceChildCount)
 	}
 
 	// Verify results updated to fixed.
@@ -953,6 +971,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
+		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
 	}
 	for key, expectedValue := range expectedRoomIDs {
 		if updatedCredentials[key] != expectedValue {

@@ -14,7 +14,11 @@ require (
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/klauspost/compress v1.18.4 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
+	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.0 // indirect
 	github.com/pion/ice/v4 v4.2.0 // indirect
@@ -31,6 +35,8 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/time v0.10.0 // indirect

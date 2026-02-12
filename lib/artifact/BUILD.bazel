@@ -1,0 +1,36 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "artifact",
+    srcs = [
+        "chunker.go",
+        "compress.go",
+        "container.go",
+        "doc.go",
+        "hash.go",
+        "reconstruction.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/artifact",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_fxamacker_cbor_v2//:cbor",
+        "@com_github_klauspost_compress//zstd",
+        "@com_github_pierrec_lz4_v4//:lz4",
+        "@com_github_zeebo_blake3//:blake3",
+    ],
+)
+
+go_test(
+    name = "artifact_test",
+    srcs = [
+        "chunker_test.go",
+        "compress_test.go",
+        "container_test.go",
+        "hash_test.go",
+        "reconstruction_test.go",
+    ],
+    embed = [":artifact"],
+)

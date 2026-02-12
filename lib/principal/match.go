@@ -18,7 +18,9 @@ import (
 //   - Interior recursive: "iree/**/pm" matches "iree/pm", "iree/amdgpu/pm", etc.
 //   - Character wildcards: "?" matches a single non-slash character
 //
-// The single-segment wildcard "*" does not match "/" — this is the standard
+// Wildcards in * and ? work in all positions, including around **. For
+// example, "team-*/**/build-?" matches "team-a/sub/build-x". The
+// single-segment wildcard "*" does not match "/" — this is the standard
 // path.Match behavior and matches the gitignore convention. Use "**" to
 // match across hierarchy boundaries.
 //
@@ -43,52 +45,111 @@ func MatchPattern(pattern, localpart string) bool {
 
 	// Pattern contains **. Handle the three cases: suffix, prefix, interior.
 
-	// Suffix: "iree/**" — match the prefix exactly, then anything after.
+	// Suffix: "iree/**" or "team-*/**" — match the prefix (with glob
+	// wildcards), then anything after.
 	if strings.HasSuffix(pattern, "/**") {
 		prefix := pattern[:len(pattern)-3]
-		// "iree/**" matches "iree" itself and anything under "iree/".
-		return localpart == prefix || strings.HasPrefix(localpart, prefix+"/")
+		// ** matches zero additional segments: entire localpart is the prefix.
+		if matchGlob(prefix, localpart) {
+			return true
+		}
+		// ** matches one or more additional segments.
+		return hasMatchingPrefix(prefix, localpart)
 	}
 
-	// Prefix: "**/pm" — match anything before, then the suffix exactly.
+	// Prefix: "**/pm" or "**/build-*" — match anything before, then the
+	// suffix (with glob wildcards).
 	if strings.HasPrefix(pattern, "**/") {
 		suffix := pattern[3:]
-		return localpart == suffix || strings.HasSuffix(localpart, "/"+suffix)
+		// ** matches zero additional segments: entire localpart is the suffix.
+		if matchGlob(suffix, localpart) {
+			return true
+		}
+		// ** matches one or more additional segments.
+		return hasMatchingSuffix(suffix, localpart)
 	}
 
-	// Interior: "iree/**/pm" — split on the first /**, match prefix
-	// and suffix independently. The ** can match zero or more segments.
+	// Interior: "iree/**/pm" or "team-*/**/build-?" — split on the first
+	// /**, match prefix and suffix independently with glob wildcards.
 	separatorIndex := strings.Index(pattern, "/**/")
 	if separatorIndex >= 0 {
 		prefix := pattern[:separatorIndex]
 		suffix := pattern[separatorIndex+4:]
 
-		// The localpart must start with the prefix and end with the suffix.
-		// The ** matches zero or more path segments between them.
-
-		// Zero-segment case: "iree/**/pm" matches "iree/pm".
-		if matched, _ := path.Match(prefix+"/"+suffix, localpart); matched {
+		// Zero-segment case: ** matches nothing, prefix and suffix
+		// are adjacent. "iree/**/pm" matches "iree/pm".
+		if matchGlob(prefix+"/"+suffix, localpart) {
 			return true
 		}
 
-		// Multi-segment case: prefix must match the start, suffix must
-		// match the end, and there must be content between them.
-		if !strings.HasPrefix(localpart, prefix+"/") {
+		// Multi-segment case: prefix matches the start, suffix matches
+		// the end, with at least one segment between for ** to consume.
+		prefixDepth := strings.Count(prefix, "/") + 1
+		suffixDepth := strings.Count(suffix, "/") + 1
+		segments := strings.Split(localpart, "/")
+
+		if len(segments) < prefixDepth+1+suffixDepth {
 			return false
 		}
-		if !strings.HasSuffix(localpart, "/"+suffix) {
+
+		prefixCandidate := strings.Join(segments[:prefixDepth], "/")
+		if !matchGlob(prefix, prefixCandidate) {
 			return false
 		}
-		// Verify there's actual content between prefix and suffix
-		// (they don't overlap or merely share a separator).
-		start := len(prefix) + 1
-		end := len(localpart) - len(suffix) - 1
-		return start < end
+
+		suffixCandidate := strings.Join(segments[len(segments)-suffixDepth:], "/")
+		if !matchGlob(suffix, suffixCandidate) {
+			return false
+		}
+
+		// Verify segments consumed by ** are all non-empty (reject
+		// localparts with consecutive slashes between prefix and suffix).
+		for _, segment := range segments[prefixDepth : len(segments)-suffixDepth] {
+			if segment == "" {
+				return false
+			}
+		}
+		return true
 	}
 
 	// Multiple ** segments or other complex patterns — not supported.
 	// Deny by default.
 	return false
+}
+
+// matchGlob matches a pattern against a string using path.Match semantics
+// (wildcards * and ? do not cross / boundaries). Returns false for
+// malformed patterns.
+func matchGlob(pattern, s string) bool {
+	matched, err := path.Match(pattern, s)
+	return err == nil && matched
+}
+
+// hasMatchingPrefix reports whether the localpart starts with segments
+// that match the given glob pattern, with at least one additional segment
+// after the matched portion. The pattern's depth (number of /-separated
+// segments) determines how many leading segments of localpart are tested.
+func hasMatchingPrefix(pattern, localpart string) bool {
+	depth := strings.Count(pattern, "/") + 1
+	segments := strings.SplitN(localpart, "/", depth+1)
+	if len(segments) <= depth {
+		return false
+	}
+	candidate := strings.Join(segments[:depth], "/")
+	return matchGlob(pattern, candidate)
+}
+
+// hasMatchingSuffix reports whether the localpart ends with segments
+// that match the given glob pattern, with at least one additional segment
+// before the matched portion.
+func hasMatchingSuffix(pattern, localpart string) bool {
+	depth := strings.Count(pattern, "/") + 1
+	segments := strings.Split(localpart, "/")
+	if len(segments) <= depth {
+		return false
+	}
+	candidate := strings.Join(segments[len(segments)-depth:], "/")
+	return matchGlob(pattern, candidate)
 }
 
 // MatchAnyPattern checks whether a localpart matches any of the given

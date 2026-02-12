@@ -23,6 +23,7 @@ go_test(
         "machine_test.go",
         "messaging_test.go",
         "pipeline_test.go",
+        "powerlevel_test.go",
         "quickstart_test.go",
         "restart_test.go",
         "setup_test.go",

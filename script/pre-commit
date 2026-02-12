@@ -1,0 +1,60 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Git pre-commit hook with auto-restage. Runs pre-commit hooks and, if
+# hooks only modified files (auto-formatting by gofmt, buildifier,
+# license insertion, gazelle), restages the changes and retries once.
+#
+# Pre-commit intentionally fails when hooks modify files so that humans
+# can review the changes. For fully deterministic auto-fixers this
+# review step has zero value — the fix is always "stage and retry."
+# This script eliminates that roundtrip.
+#
+# Install: symlink or copy to .git/hooks/pre-commit, or call from a
+# global hook chain (core.hooksPath).
+
+set -euo pipefail
+
+# Capture which files are staged before hooks run. Only these files
+# should be restaged if hooks modify them — never accidentally stage
+# unrelated working tree changes.
+staged_files="$(git diff --cached --name-only --diff-filter=d)"
+
+if [ -z "$staged_files" ]; then
+    # Nothing staged (e.g., --allow-empty). Let pre-commit decide.
+    exec pre-commit run --config=.pre-commit-config.yaml
+fi
+
+# First attempt.
+if pre-commit run --config=.pre-commit-config.yaml; then
+    exit 0
+fi
+
+# Pre-commit failed. Check if any of the originally-staged files were
+# modified by hooks (auto-formatting). Files modified by hooks appear
+# as unstaged changes on files that were staged.
+modified=""
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    if ! git diff --quiet -- "$file" 2>/dev/null; then
+        modified="${modified}${file}"$'\n'
+    fi
+done <<< "$staged_files"
+
+if [ -z "$modified" ]; then
+    # No staged files were modified — this is a real hook failure
+    # (lint error, build failure, test failure). Report it as-is.
+    exit 1
+fi
+
+# Restage the auto-fixed files and retry.
+echo ""
+echo "Auto-formatting hooks modified files. Restaging and retrying..."
+echo "$modified" | while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    git add "$file"
+done
+
+# Second attempt. If this fails, it's a real error.
+exec pre-commit run --config=.pre-commit-config.yaml

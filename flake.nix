@@ -335,9 +335,19 @@
               export PATH="/nix/var/nix/profiles/default/bin:$PATH"
             fi
 
-            # Install pre-commit hooks on first shell entry.
-            if [ -f .pre-commit-config.yaml ] && [ -d .git ]; then
-              pre-commit install --install-hooks > /dev/null 2>&1 || true
+            # Install pre-commit hook on first shell entry. Uses the
+            # checked-in script/pre-commit which auto-restages files
+            # modified by formatting hooks (gofmt, buildifier, gazelle)
+            # instead of failing and requiring a manual re-add cycle.
+            # Note: pre-commit install can't run with core.hooksPath set.
+            if [ -f script/pre-commit ] && [ -d .git ]; then
+              hook=".git/hooks/pre-commit"
+              mkdir -p "$(dirname "$hook")"
+              expected='exec "$(git rev-parse --show-toplevel)/script/pre-commit" "$@"'
+              if ! grep -qF "$expected" "$hook" 2>/dev/null; then
+                printf '#!/bin/bash\n%s\n' "$expected" > "$hook"
+                chmod +x "$hook"
+              fi
             fi
           '';
         };

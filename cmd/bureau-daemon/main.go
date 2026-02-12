@@ -580,7 +580,25 @@ type Daemon struct {
 	// for cancellation.
 	shutdownCtx context.Context
 
+	// reconcileNotify receives a signal after each asynchronous
+	// reconcile completes (sandbox exit, proxy crash recovery, health
+	// rollback). Tests use this to wait for state changes without
+	// polling. Nil in production — notifications are skipped.
+	reconcileNotify chan struct{}
+
 	logger *slog.Logger
+}
+
+// notifyReconcile sends a non-blocking signal on reconcileNotify.
+// No-op when the channel is nil (production).
+func (d *Daemon) notifyReconcile() {
+	if d.reconcileNotify == nil {
+		return
+	}
+	select {
+	case d.reconcileNotify <- struct{}{}:
+	default:
+	}
 }
 
 // statusLoop periodically publishes MachineStatus heartbeats.

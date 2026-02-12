@@ -400,4 +400,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 
 	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
 		fmt.Sprintf("Rolled back %s to previous working configuration after health check failure.", localpart)))
+
+	d.notifyReconcile()
 }

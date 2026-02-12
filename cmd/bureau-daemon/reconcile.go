@@ -1034,6 +1034,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 			"error", err,
 		)
 	}
+	d.notifyReconcile()
 }
 
 // launcherIPCRequest mirrors the launcher's IPCRequest type. Defined here to
@@ -1522,4 +1523,5 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			"error", err,
 		)
 	}
+	d.notifyReconcile()
 }

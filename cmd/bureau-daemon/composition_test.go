@@ -846,6 +846,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 
 	daemon := &Daemon{
 		clock:             clock.Real(),
+		reconcileNotify:   make(chan struct{}, 10),
 		runDir:            runDir,
 		session:           session,
 		machineName:       "machine/test",
@@ -952,40 +953,24 @@ func TestProxyCrashRecovery(t *testing.T) {
 
 	// --- Phase 3: Wait for detection and recovery. ---
 
-	// The watchProxyExit goroutine should detect the proxy death, destroy
-	// the orphaned sandbox, clear running state, and trigger re-reconcile
-	// which recreates the sandbox. Poll until running goes false→true.
-
-	// First, wait for the daemon to detect the crash (running becomes false).
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		daemon.reconcileMu.Lock()
-		running := daemon.running[principalLocalpart]
-		daemon.reconcileMu.Unlock()
-		if !running {
-			t.Log("proxy crash detected: principal no longer running")
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for daemon to detect proxy crash")
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The watchProxyExit goroutine detects the proxy death via the
+	// launcher's wait-proxy IPC (blocking read that returns when the
+	// process exits). It then destroys the orphaned sandbox, clears
+	// running state, and calls reconcile() which recreates the sandbox.
+	// The reconcileNotify channel fires after the reconcile completes,
+	// so we can wait on it instead of polling daemon.running.
+	select {
+	case <-daemon.reconcileNotify:
+		t.Log("proxy crash recovery reconcile completed")
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for proxy crash recovery")
 	}
 
-	// The re-reconcile should recreate the sandbox. Wait for it to
-	// become running again with a functional proxy.
-	for {
-		daemon.reconcileMu.Lock()
-		running := daemon.running[principalLocalpart]
-		daemon.reconcileMu.Unlock()
-		if running {
-			t.Log("principal is running again after recovery")
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for daemon to recreate sandbox after proxy crash")
-		}
-		time.Sleep(50 * time.Millisecond)
+	daemon.reconcileMu.Lock()
+	running := daemon.running[principalLocalpart]
+	daemon.reconcileMu.Unlock()
+	if !running {
+		t.Fatal("principal should be running after proxy crash recovery")
 	}
 
 	// Verify the new proxy is functional.

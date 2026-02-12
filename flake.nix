@@ -246,6 +246,7 @@
           "bureau-proxy-call"
           "bureau-observe-relay"
           "bureau-pipeline-executor"
+          "bureau-ticket-service"
           "bureau-test-agent"
         ];
       in

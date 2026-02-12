@@ -1,0 +1,30 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "service",
+    srcs = [
+        "doc.go",
+        "registration.go",
+        "session.go",
+        "socket.go",
+        "sync.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/service",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/clock",
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/secret",
+        "//messaging",
+    ],
+)
+
+go_test(
+    name = "service_test",
+    srcs = ["socket_test.go"],
+    embed = [":service"],
+)

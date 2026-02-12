@@ -228,13 +228,13 @@ func runProvision(args []string) error {
 	}
 
 	// Fetch the machine's public key.
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machines room: %w", err)
+		return fmt.Errorf("resolving machine room: %w", err)
 	}
 
-	machineKeyContent, err := session.GetStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName)
+	machineKeyContent, err := session.GetStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		return fmt.Errorf("fetching machine key for %q: %w", machineName, err)
 	}

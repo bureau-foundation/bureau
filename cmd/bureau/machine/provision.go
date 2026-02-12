@@ -150,32 +150,32 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	defer adminSession.Close()
 
 	// Invite the machine to the global rooms.
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := adminSession.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machines room %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
 	}
-	if err := adminSession.InviteUser(ctx, machinesRoomID, machineUserID); err != nil {
+	if err := adminSession.InviteUser(ctx, machineRoomID, machineUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return fmt.Errorf("invite machine to machines room: %w", err)
+			return fmt.Errorf("invite machine to machine room: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", machinesAlias)
+		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", machineAlias)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", machinesAlias)
+		fmt.Fprintf(os.Stderr, "  Invited to %s\n", machineAlias)
 	}
 
-	servicesAlias := principal.RoomAlias("bureau/services", serverName)
-	servicesRoomID, err := adminSession.ResolveAlias(ctx, servicesAlias)
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		return fmt.Errorf("resolve services room %q: %w", servicesAlias, err)
+		return fmt.Errorf("resolve service room %q: %w", serviceAlias, err)
 	}
-	if err := adminSession.InviteUser(ctx, servicesRoomID, machineUserID); err != nil {
+	if err := adminSession.InviteUser(ctx, serviceRoomID, machineUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return fmt.Errorf("invite machine to services room: %w", err)
+			return fmt.Errorf("invite machine to service room: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", servicesAlias)
+		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", serviceAlias)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", servicesAlias)
+		fmt.Fprintf(os.Stderr, "  Invited to %s\n", serviceAlias)
 	}
 
 	// Create the per-machine config room. The admin creates it (not the

@@ -7,7 +7,7 @@
 // Subcommands:
 //
 //   - setup: one-time bootstrap that creates the admin account, Bureau
-//     space, global rooms (system, machines, services), and base
+//     space, global rooms (system, machine, service), and base
 //     sandbox templates. Routes directly to the Matrix homeserver
 //     since no proxy exists yet during initial deployment.
 //   - room: create, list, delete, and inspect room membership.

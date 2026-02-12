@@ -19,7 +19,7 @@ a bootstrap config file. Transfer this file to the new machine and start
 the launcher with --bootstrap-file to complete registration.
 
 The "list" subcommand shows all machines that have published keys to the
-fleet's machines room.
+fleet's machine room.
 
 The "decommission" subcommand removes a machine from the fleet: clears
 its state events, kicks it from all rooms, and cleans up its config room.`,

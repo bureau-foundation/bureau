@@ -242,9 +242,9 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		switch roomID {
 		case d.configRoomID:
 			needsReconcile = true
-		case d.machinesRoomID:
+		case d.machineRoomID:
 			needsPeerSync = true
-		case d.servicesRoomID:
+		case d.serviceRoomID:
 			needsServiceSync = true
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
@@ -262,14 +262,14 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	}
 
 	if needsPeerSync {
-		d.logger.Info("machines room state changed, syncing peer addresses")
+		d.logger.Info("machine room state changed, syncing peer addresses")
 		if err := d.syncPeerAddresses(ctx); err != nil {
 			d.logger.Error("peer address sync failed", "error", err)
 		}
 	}
 
 	if needsServiceSync {
-		d.logger.Info("services room state changed, syncing service directory")
+		d.logger.Info("service room state changed, syncing service directory")
 		added, removed, updated, err := d.syncServiceDirectory(ctx)
 		if err != nil {
 			d.logger.Error("service directory sync failed", "error", err)

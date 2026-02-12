@@ -31,7 +31,7 @@ func listCommand() *cli.Command {
 		Description: `List all machines that have published keys to the Bureau fleet.
 
 Shows each machine's name, public key, and last status heartbeat
-(if available). Reads from the #bureau/machines room state.`,
+(if available). Reads from the #bureau/machine room state.`,
 		Usage: "bureau machine list [flags]",
 		Flags: func() *pflag.FlagSet {
 			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
@@ -71,15 +71,15 @@ type machineEntry struct {
 }
 
 func runList(ctx context.Context, session *messaging.Session, serverName string) error {
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machines room %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
 	}
 
-	events, err := session.GetRoomState(ctx, machinesRoomID)
+	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return fmt.Errorf("get machines room state: %w", err)
+		return fmt.Errorf("get machine room state: %w", err)
 	}
 
 	// Index machine keys, statuses, and hardware info by state_key (machine name).

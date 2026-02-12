@@ -86,8 +86,8 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 
 	// Set up machine config so reconcile finds something.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
@@ -116,8 +116,8 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -177,12 +177,12 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 
-	// Set up the services room with one service via GetRoomState.
+	// Set up the service room with one service via GetRoomState.
 	serviceKey := "service/stt/whisper"
-	matrixState.setRoomState(servicesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
@@ -214,8 +214,8 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -231,12 +231,12 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Construct a sync response with a services room state change.
+	// Construct a sync response with a service room state change.
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
 			Join: map[string]messaging.JoinedRoom{
-				servicesRoomID: {
+				serviceRoomID: {
 					Timeline: messaging.TimelineSection{
 						Events: []messaging.Event{
 							{
@@ -278,12 +278,12 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 
-	// Set up the machines room with one peer's status.
+	// Set up the machine room with one peer's status.
 	peerKey := "machine/peer"
-	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerKey,
@@ -313,8 +313,8 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -330,12 +330,12 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Construct a sync response with a machines room state change.
+	// Construct a sync response with a machine room state change.
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
 			Join: map[string]messaging.JoinedRoom{
-				machinesRoomID: {
+				machineRoomID: {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
@@ -374,11 +374,11 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
 
-	const machinesRoomID = "!machines:test"
+	const machineRoomID = "!machine:test"
 
 	// State events: only peerA is present. peerB will be stale.
 	peerAKey := "machine/peer-a"
-	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
@@ -403,9 +403,9 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 
 	// Pre-populate with two peers. peerB is stale (not in state events).
 	daemon := &Daemon{
-		machineUserID:  "@machine/test:bureau.local",
-		session:        session,
-		machinesRoomID: machinesRoomID,
+		machineUserID: "@machine/test:bureau.local",
+		session:       session,
+		machineRoomID: machineRoomID,
 		peerAddresses: map[string]string{
 			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
 			"@machine/peer-b:bureau.local": "10.0.0.2:9090",
@@ -457,11 +457,11 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
 
-	const machinesRoomID = "!machines:test"
+	const machineRoomID = "!machine:test"
 
 	// State events: peerA has a new address.
 	peerAKey := "machine/peer-a"
-	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
@@ -485,9 +485,9 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	daemon := &Daemon{
-		machineUserID:  "@machine/test:bureau.local",
-		session:        session,
-		machinesRoomID: machinesRoomID,
+		machineUserID: "@machine/test:bureau.local",
+		session:       session,
+		machineRoomID: machineRoomID,
 		peerAddresses: map[string]string{
 			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
 		},
@@ -530,11 +530,11 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
 
-	const machinesRoomID = "!machines:test"
+	const machineRoomID = "!machine:test"
 
 	// Only peerA remains. peerB (same address) is gone.
 	peerAKey := "machine/peer-a"
-	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
@@ -560,9 +560,9 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	// Two peers sharing the same address (e.g., behind a load balancer).
 	sharedAddress := "10.0.0.1:9090"
 	daemon := &Daemon{
-		machineUserID:  "@machine/test:bureau.local",
-		session:        session,
-		machinesRoomID: machinesRoomID,
+		machineUserID: "@machine/test:bureau.local",
+		session:       session,
+		machineRoomID: machineRoomID,
 		peerAddresses: map[string]string{
 			"@machine/peer-a:bureau.local": sharedAddress,
 			"@machine/peer-b:bureau.local": sharedAddress,
@@ -618,8 +618,8 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      "!config:test",
-		machinesRoomID:    "!machines:test",
-		servicesRoomID:    "!services:test",
+		machineRoomID:     "!machine:test",
+		serviceRoomID:     "!service:test",
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -663,8 +663,8 @@ func TestInitialSync(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 
 	// Set up machine config.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
@@ -674,9 +674,9 @@ func TestInitialSync(t *testing.T) {
 		}},
 	})
 
-	// Set up machines room state for GetRoomState (used by syncPeerAddresses).
+	// Set up machine room state for GetRoomState (used by syncPeerAddresses).
 	peerKey := "machine/peer"
-	matrixState.setRoomState(machinesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerKey,
@@ -687,9 +687,9 @@ func TestInitialSync(t *testing.T) {
 		},
 	})
 
-	// Set up services room state.
+	// Set up service room state.
 	serviceKey := "service/tts/piper"
-	matrixState.setRoomState(servicesRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
@@ -721,8 +721,8 @@ func TestInitialSync(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		statusInterval:    time.Hour,
 		running:           make(map[string]bool),
@@ -796,8 +796,8 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 
 	// Set up machine config so reconcile sets lastConfig.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
@@ -826,8 +826,8 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -881,8 +881,8 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 	const workspaceRoomID = "!workspace:test"
 
 	// Set up machine config so reconcile has something to process.
@@ -912,8 +912,8 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -964,8 +964,8 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const configRoomID = "!config:test"
-	const machinesRoomID = "!machines:test"
-	const servicesRoomID = "!services:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
 	const workspaceRoomID = "!workspace:test"
 
 	// Set up machine config.
@@ -999,8 +999,8 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    "/nonexistent/launcher.sock",
 		statusInterval:    time.Hour,
 		running:           make(map[string]bool),

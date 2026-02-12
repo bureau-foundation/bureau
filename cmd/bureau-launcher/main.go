@@ -358,47 +358,47 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	}
 	logger.Info("machine account ready", "user_id", session.UserID())
 
-	// Join the machines room and publish the public key.
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	// Join the machine room and publish the public key.
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machines room alias %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
 	}
 
-	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
+	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
 		// If we're already joined, JoinRoom may return an error on some
 		// homeservers. Try to continue regardless.
-		logger.Warn("join machines room returned error (may already be joined)", "error", err)
+		logger.Warn("join machine room returned error (may already be joined)", "error", err)
 	}
 
 	machineKeyContent := schema.MachineKey{
 		Algorithm: "age-x25519",
 		PublicKey: keypair.PublicKey,
 	}
-	_, err = session.SendStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
 	if err != nil {
 		return fmt.Errorf("publishing machine key: %w", err)
 	}
 	logger.Info("machine public key published",
-		"room", machinesRoomID,
+		"room", machineRoomID,
 		"public_key", keypair.PublicKey,
 	)
 
-	// Join the services room so the daemon can read service directory state
+	// Join the service room so the daemon can read service directory state
 	// events via /sync and GetRoomState. Like machines, this requires an
 	// admin invitation (the room is invite-only). Non-fatal because the
 	// daemon will retry on every startup.
-	servicesAlias := principal.RoomAlias("bureau/services", serverName)
-	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		logger.Warn("could not resolve services room (daemon will retry on startup)",
-			"alias", servicesAlias, "error", err)
+		logger.Warn("could not resolve service room (daemon will retry on startup)",
+			"alias", serviceAlias, "error", err)
 	} else {
-		if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
-			logger.Warn("join services room failed (may need admin invitation)",
-				"room_id", servicesRoomID, "error", err)
+		if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
+			logger.Warn("join service room failed (may need admin invitation)",
+				"room_id", serviceRoomID, "error", err)
 		} else {
-			logger.Info("joined services room", "room_id", servicesRoomID)
+			logger.Info("joined service room", "room_id", serviceRoomID)
 		}
 	}
 
@@ -468,43 +468,43 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	}
 	logger.Info("rotated one-time password to permanent password")
 
-	// Join the machines room and publish the public key — same as the
+	// Join the machine room and publish the public key — same as the
 	// registration-token first boot path.
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machines room alias %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
 	}
 
-	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
-		logger.Warn("join machines room returned error (may already be joined)", "error", err)
+	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
+		logger.Warn("join machine room returned error (may already be joined)", "error", err)
 	}
 
 	machineKeyContent := schema.MachineKey{
 		Algorithm: "age-x25519",
 		PublicKey: keypair.PublicKey,
 	}
-	_, err = session.SendStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
 	if err != nil {
 		return fmt.Errorf("publishing machine key: %w", err)
 	}
 	logger.Info("machine public key published",
-		"room", machinesRoomID,
+		"room", machineRoomID,
 		"public_key", keypair.PublicKey,
 	)
 
-	// Join the services room (non-fatal, daemon retries on startup).
-	servicesAlias := principal.RoomAlias("bureau/services", serverName)
-	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
+	// Join the service room (non-fatal, daemon retries on startup).
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		logger.Warn("could not resolve services room (daemon will retry on startup)",
-			"alias", servicesAlias, "error", err)
+		logger.Warn("could not resolve service room (daemon will retry on startup)",
+			"alias", serviceAlias, "error", err)
 	} else {
-		if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
-			logger.Warn("join services room failed (may need admin invitation)",
-				"room_id", servicesRoomID, "error", err)
+		if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
+			logger.Warn("join service room failed (may need admin invitation)",
+				"room_id", serviceRoomID, "error", err)
 		} else {
-			logger.Info("joined services room", "room_id", servicesRoomID)
+			logger.Info("joined service room", "room_id", serviceRoomID)
 		}
 	}
 

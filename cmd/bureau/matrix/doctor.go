@@ -172,11 +172,11 @@ func skip(name, message string) checkResult {
 
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
 type standardRoom struct {
-	alias                    string   // local alias (e.g., "bureau/machines")
-	displayName              string   // room name for CreateRoom (e.g., "Bureau Machines")
+	alias                    string   // local alias (e.g., "bureau/machine")
+	displayName              string   // room name for CreateRoom (e.g., "Bureau Machine")
 	topic                    string   // room topic for CreateRoom
 	name                     string   // human name for check output
-	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINES_ROOM")
+	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINE_ROOM")
 	memberSettableEventTypes []string // event types that members should be able to set
 
 	// powerLevelsFunc overrides the default power level generation. When
@@ -203,19 +203,19 @@ var standardRooms = []standardRoom{
 		credentialKey: "MATRIX_SYSTEM_ROOM",
 	},
 	{
-		alias:                    "bureau/machines",
-		displayName:              "Bureau Machines",
+		alias:                    "bureau/machine",
+		displayName:              "Bureau Machine",
 		topic:                    "Machine keys and status",
-		name:                     "machines room",
-		credentialKey:            "MATRIX_MACHINES_ROOM",
+		name:                     "machine room",
+		credentialKey:            "MATRIX_MACHINE_ROOM",
 		memberSettableEventTypes: []string{schema.EventTypeMachineKey, schema.EventTypeMachineStatus},
 	},
 	{
-		alias:                    "bureau/services",
-		displayName:              "Bureau Services",
+		alias:                    "bureau/service",
+		displayName:              "Bureau Service",
 		topic:                    "Service directory",
-		name:                     "services room",
-		credentialKey:            "MATRIX_SERVICES_ROOM",
+		name:                     "service room",
+		credentialKey:            "MATRIX_SERVICE_ROOM",
 		memberSettableEventTypes: []string{schema.EventTypeService},
 	},
 	{
@@ -623,8 +623,8 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 }
 
 // checkMachineMembership verifies that active machine accounts (those with
-// non-empty m.bureau.machine_key state in the machines room) are members of
-// the services room. Machines don't need to be in the system room — they
+// non-empty m.bureau.machine_key state in the machine room) are members of
+// the service room. Machines don't need to be in the system room — they
 // receive instructions through per-machine config rooms, not system room
 // membership. Missing memberships are fixable via invite.
 //
@@ -637,7 +637,7 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 // These are skipped — only machines with a non-empty "key" field are
 // considered active.
 func checkMachineMembership(ctx context.Context, session *messaging.Session, serverName string, roomIDs map[string]string) []checkResult {
-	machinesRoomID, ok := roomIDs["bureau/machines"]
+	machineRoomID, ok := roomIDs["bureau/machine"]
 	if !ok {
 		return nil
 	}
@@ -645,9 +645,9 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 	// Find active machine users from m.bureau.machine_key state events.
 	// The state key is the machine's localpart. Skip events with empty
 	// content (decommissioned machines).
-	events, err := session.GetRoomState(ctx, machinesRoomID)
+	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return []checkResult{fail("machine membership", fmt.Sprintf("cannot read machines room state: %v", err))}
+		return []checkResult{fail("machine membership", fmt.Sprintf("cannot read machine room state: %v", err))}
 	}
 
 	type machineEntry struct {
@@ -675,14 +675,14 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 
 	var results []checkResult
 
-	servicesRoomID, ok := roomIDs["bureau/services"]
+	serviceRoomID, ok := roomIDs["bureau/service"]
 	if !ok {
 		return nil
 	}
 
-	members, err := session.GetRoomMembers(ctx, servicesRoomID)
+	members, err := session.GetRoomMembers(ctx, serviceRoomID)
 	if err != nil {
-		return []checkResult{fail("services room membership", fmt.Sprintf("cannot read members: %v", err))}
+		return []checkResult{fail("service room membership", fmt.Sprintf("cannot read members: %v", err))}
 	}
 
 	memberSet := make(map[string]bool)
@@ -693,17 +693,17 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 	}
 
 	for _, machine := range machines {
-		checkName := fmt.Sprintf("%s in services room", machine.userID)
+		checkName := fmt.Sprintf("%s in service room", machine.userID)
 		if memberSet[machine.userID] {
 			results = append(results, pass(checkName, "member"))
 		} else {
 			capturedUserID := machine.userID
 			results = append(results, failWithFix(
 				checkName,
-				"not a member of services room",
-				fmt.Sprintf("invite %s to services room", capturedUserID),
+				"not a member of service room",
+				fmt.Sprintf("invite %s to service room", capturedUserID),
 				func(ctx context.Context, session *messaging.Session) error {
-					return session.InviteUser(ctx, servicesRoomID, capturedUserID)
+					return session.InviteUser(ctx, serviceRoomID, capturedUserID)
 				},
 			))
 		}

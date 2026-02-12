@@ -109,8 +109,8 @@ cat ./bureau-creds
 
 Expected keys: `MATRIX_HOMESERVER_URL`, `MATRIX_ADMIN_USER`,
 `MATRIX_ADMIN_TOKEN`, `MATRIX_REGISTRATION_TOKEN`, `MATRIX_SPACE_ROOM`,
-`MATRIX_AGENTS_ROOM`, `MATRIX_SYSTEM_ROOM`, `MATRIX_MACHINES_ROOM`,
-`MATRIX_SERVICES_ROOM`.
+`MATRIX_AGENTS_ROOM`, `MATRIX_SYSTEM_ROOM`, `MATRIX_MACHINE_ROOM`,
+`MATRIX_SERVICE_ROOM`.
 
 ## 4. Verify Bootstrap with Doctor
 
@@ -393,17 +393,17 @@ State events are persistent room configuration. Bureau uses custom state
 events for machine keys, service registration, and layout.
 
 ```bash
-# Read power levels for the machines room.
+# Read power levels for the machine room.
 bureau matrix state get \
   --credential-file ./bureau-creds \
-  '#bureau/machines:bureau.local' \
+  '#bureau/machine:bureau.local' \
   m.room.power_levels | jq .
 
-# Write a test Bureau state event to the services room.
+# Write a test Bureau state event to the service room.
 bureau matrix state set \
   --credential-file ./bureau-creds \
   --key 'test/echo' \
-  '#bureau/services:bureau.local' \
+  '#bureau/service:bureau.local' \
   m.bureau.service \
   '{"name": "echo", "version": "0.1.0", "endpoint": "unix:///run/bureau/principal/test/echo.sock"}'
 ```
@@ -414,7 +414,7 @@ Read it back:
 bureau matrix state get \
   --credential-file ./bureau-creds \
   --key 'test/echo' \
-  '#bureau/services:bureau.local' \
+  '#bureau/service:bureau.local' \
   m.bureau.service | jq .
 ```
 

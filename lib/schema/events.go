@@ -6,15 +6,15 @@ package schema
 // Matrix state event type constants. These are the "type" field in Matrix
 // state events. The state_key for each is the principal's localpart.
 const (
-	// EventTypeMachineKey is published to #bureau/machines when a machine
+	// EventTypeMachineKey is published to #bureau/machine when a machine
 	// first boots. Contains the machine's age public key for credential
 	// encryption.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
-	// Room: #bureau/machines:<server>
+	// Room: #bureau/machine:<server>
 	EventTypeMachineKey = "m.bureau.machine_key"
 
-	// EventTypeMachineInfo is published to #bureau/machines when a
+	// EventTypeMachineInfo is published to #bureau/machine when a
 	// machine's daemon starts (or when hardware configuration changes).
 	// Contains static system inventory: CPU topology, total memory,
 	// GPU hardware, board identity. Unlike MachineStatus (periodic
@@ -22,14 +22,14 @@ const (
 	// and only updated if the hardware inventory changes.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
-	// Room: #bureau/machines:<server>
+	// Room: #bureau/machine:<server>
 	EventTypeMachineInfo = "m.bureau.machine_info"
 
-	// EventTypeMachineStatus is published to #bureau/machines by each
+	// EventTypeMachineStatus is published to #bureau/machine by each
 	// machine's daemon as a periodic heartbeat with resource stats.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
-	// Room: #bureau/machines:<server>
+	// Room: #bureau/machine:<server>
 	EventTypeMachineStatus = "m.bureau.machine_status"
 
 	// EventTypeMachineConfig is published to a per-machine config room
@@ -47,14 +47,14 @@ const (
 	// Room: #bureau/config/<machine-localpart>:<server>
 	EventTypeCredentials = "m.bureau.credentials"
 
-	// EventTypeService is published to #bureau/services when a principal
+	// EventTypeService is published to #bureau/service when a principal
 	// starts providing a service. Used for service discovery.
 	//
 	// State key: principal localpart (e.g., "service/stt/whisper")
-	// Room: #bureau/services:<server>
+	// Room: #bureau/service:<server>
 	EventTypeService = "m.bureau.service"
 
-	// EventTypeWebRTCOffer is published to #bureau/machines when a daemon
+	// EventTypeWebRTCOffer is published to #bureau/machine when a daemon
 	// wants to establish a WebRTC PeerConnection to another daemon. The
 	// offerer gathers all ICE candidates (vanilla ICE), generates a
 	// complete SDP offer, and publishes it as a state event. The target
@@ -64,7 +64,7 @@ const (
 	// The pipe character is not valid in Matrix localparts, so it
 	// unambiguously separates the two machine identities.
 	//
-	// Room: #bureau/machines:<server>
+	// Room: #bureau/machine:<server>
 	EventTypeWebRTCOffer = "m.bureau.webrtc_offer"
 
 	// EventTypeWebRTCAnswer is published by the target daemon in response
@@ -72,7 +72,7 @@ const (
 	// the offerer can poll for answers to its outstanding offers.
 	//
 	// State key: "<offerer-localpart>|<target-localpart>"
-	// Room: #bureau/machines:<server>
+	// Room: #bureau/machine:<server>
 	EventTypeWebRTCAnswer = "m.bureau.webrtc_answer"
 
 	// EventTypeLayout describes the tmux session structure for an
@@ -283,7 +283,7 @@ type GPUStatus struct {
 }
 
 // MachineInfo is the content of an EventTypeMachineInfo state event.
-// Published once at daemon startup to #bureau/machines. Contains static
+// Published once at daemon startup to #bureau/machine. Contains static
 // system inventory that does not change between heartbeats: CPU topology,
 // total memory, GPU hardware, board identity. Consumers use this to
 // understand the fleet's hardware composition without requiring ssh access
@@ -1232,7 +1232,7 @@ type Credentials struct {
 }
 
 // Service is the content of an EventTypeService state event.
-// Published to #bureau/services when a principal provides a service
+// Published to #bureau/service when a principal provides a service
 // that other principals can consume.
 type Service struct {
 	// Principal is the full Matrix user ID of the service provider

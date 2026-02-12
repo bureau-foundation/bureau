@@ -63,7 +63,7 @@ type Handler struct {
 // ServiceDirectoryEntry describes a service in the Bureau service directory.
 // The daemon maintains the authoritative directory from Matrix state events
 // and pushes it to each proxy. Agents query the proxy to discover services
-// without needing direct access to the Matrix services room.
+// without needing direct access to the Matrix service room.
 type ServiceDirectoryEntry struct {
 	// Localpart is the service identifier (the Matrix state key),
 	// e.g., "service/stt/whisper".

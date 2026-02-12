@@ -18,16 +18,16 @@ import (
 )
 
 // syncServiceDirectory fetches all m.bureau.service state events from the
-// services room and updates the local cache. Returns the set of service
+// service room and updates the local cache. Returns the set of service
 // localparts that were added, removed, or changed since the last sync.
 //
 // This is the foundation for service routing: the daemon needs to know what
 // services exist and where they run before it can configure proxies to route
 // to them.
 func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, updated []string, err error) {
-	events, err := d.session.GetRoomState(ctx, d.servicesRoomID)
+	events, err := d.session.GetRoomState(ctx, d.serviceRoomID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("fetching services room state: %w", err)
+		return nil, nil, nil, fmt.Errorf("fetching service room state: %w", err)
 	}
 
 	// Build the new directory from state events.

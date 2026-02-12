@@ -141,28 +141,28 @@ func run() error {
 	// defensively re-joins on every startup to handle membership recovery
 	// (e.g., homeserver reset, account re-creation).
 
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := session.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machines room alias %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
 	}
-	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
-		logger.Warn("failed to join machines room (requires admin invitation)",
-			"room_id", machinesRoomID, "alias", machinesAlias, "error", err)
+	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
+		logger.Warn("failed to join machine room (requires admin invitation)",
+			"room_id", machineRoomID, "alias", machineAlias, "error", err)
 	}
 
-	servicesAlias := principal.RoomAlias("bureau/services", serverName)
-	servicesRoomID, err := session.ResolveAlias(ctx, servicesAlias)
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		return fmt.Errorf("resolving services room alias %q: %w", servicesAlias, err)
+		return fmt.Errorf("resolving service room alias %q: %w", serviceAlias, err)
 	}
-	if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
-		logger.Warn("failed to join services room (requires admin invitation)",
-			"room_id", servicesRoomID, "alias", servicesAlias, "error", err)
+	if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
+		logger.Warn("failed to join service room (requires admin invitation)",
+			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
 	logger.Info("global rooms ready",
-		"machines_room", machinesRoomID,
-		"services_room", servicesRoomID,
+		"machine_room", machineRoomID,
+		"service_room", serviceRoomID,
 	)
 
 	// Check the watchdog from a previous exec() attempt. This detects
@@ -189,8 +189,8 @@ func run() error {
 		machineUserID:     machineUserID,
 		serverName:        serverName,
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		runDir:            runDir,
 		launcherSocket:    principal.LauncherSocketPath(runDir),
 		statusInterval:    statusInterval,
@@ -308,8 +308,8 @@ type Daemon struct {
 	machineUserID  string
 	serverName     string
 	configRoomID   string
-	machinesRoomID string
-	servicesRoomID string
+	machineRoomID  string
+	serviceRoomID  string
 	runDir         string // runtime directory for sockets (e.g., /run/bureau)
 	launcherSocket string
 	statusInterval time.Duration
@@ -429,7 +429,7 @@ type Daemon struct {
 	gpuCollectors []hwinfo.GPUCollector
 
 	// services is the cached service directory, built from m.bureau.service
-	// state events in #bureau/services. Keyed by service localpart (the
+	// state events in #bureau/service. Keyed by service localpart (the
 	// state_key of the Matrix event, e.g., "service/stt/whisper").
 	services map[string]*schema.Service
 
@@ -477,7 +477,7 @@ type Daemon struct {
 	relayServer *http.Server
 
 	// peerAddresses maps machine user IDs to their transport addresses,
-	// populated from MachineStatus state events in #bureau/machines.
+	// populated from MachineStatus state events in #bureau/machine.
 	// Used by the relay handler to find where to forward requests.
 	peerAddresses map[string]string
 
@@ -576,7 +576,7 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 	}
 }
 
-// publishStatus sends a MachineStatus state event to the machines room.
+// publishStatus sends a MachineStatus state event to the machine room.
 func (d *Daemon) publishStatus(ctx context.Context) {
 	d.reconcileMu.RLock()
 	runningCount := 0
@@ -610,7 +610,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		TransportAddress: transportAddress,
 	}
 
-	_, err := d.session.SendStateEvent(ctx, d.machinesRoomID, schema.EventTypeMachineStatus, d.machineName, status)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machineName, status)
 	if err != nil {
 		d.logger.Error("publishing machine status", "error", err)
 		return
@@ -629,7 +629,7 @@ func (d *Daemon) publishMachineInfo(ctx context.Context) {
 	info := hwinfo.Probe(d.machineUserID, amdProber, nvidiaProber)
 	info.DaemonVersion = version.Info()
 
-	_, err := d.session.SendStateEvent(ctx, d.machinesRoomID, schema.EventTypeMachineInfo, d.machineName, info)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machineName, info)
 	if err != nil {
 		d.logger.Error("publishing machine info", "error", err)
 		return

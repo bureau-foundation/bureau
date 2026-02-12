@@ -119,7 +119,7 @@ HMAC without needing to know individual machine identities.
 | Machine public key | — | — | published to Matrix | — |
 
 Workers generate their own keypair at first boot (launcher). The public
-key is published as a Matrix state event in `#bureau/machines`. The
+key is published as a Matrix state event in `#bureau/machine`. The
 private key stays on the machine (ideally TPM-sealed, currently filesystem).
 
 Credential bundles for principals are age-encrypted to the machine's

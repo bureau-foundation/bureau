@@ -128,10 +128,10 @@ func TestUserCreate_Operator_NewUser(t *testing.T) {
 	}
 
 	expectedRooms := map[string]bool{
-		"!space:bureau.local":    false,
-		"!system:bureau.local":   false,
-		"!machines:bureau.local": false,
-		"!services:bureau.local": false,
+		"!space:bureau.local":   false,
+		"!system:bureau.local":  false,
+		"!machine:bureau.local": false,
+		"!service:bureau.local": false,
 	}
 	for _, roomID := range invitedRoomIDs {
 		if _, ok := expectedRooms[roomID]; !ok {
@@ -492,8 +492,8 @@ func writeTestCredentials(t *testing.T, homeserverURL string) string {
 		"MATRIX_REGISTRATION_TOKEN=test-registration-token",
 		"MATRIX_SPACE_ROOM=!space:bureau.local",
 		"MATRIX_SYSTEM_ROOM=!system:bureau.local",
-		"MATRIX_MACHINES_ROOM=!machines:bureau.local",
-		"MATRIX_SERVICES_ROOM=!services:bureau.local",
+		"MATRIX_MACHINE_ROOM=!machine:bureau.local",
+		"MATRIX_SERVICE_ROOM=!service:bureau.local",
 	}, "\n")
 
 	path := filepath.Join(t.TempDir(), "bureau-creds")

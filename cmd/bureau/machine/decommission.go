@@ -29,7 +29,7 @@ func decommissionCommand() *cli.Command {
 		Summary: "Remove a machine from the fleet",
 		Description: `Decommission a machine by cleaning up its state from the Bureau fleet.
 
-This removes the machine's key and status from the machines room, clears
+This removes the machine's key and status from the machine room, clears
 its config room state events (machine_config, credentials), and kicks
 the machine account from all Bureau rooms.
 
@@ -104,26 +104,26 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 	fmt.Fprintf(os.Stderr, "Decommissioning %s (%s)...\n", machineName, machineUserID)
 
-	// Clear machine_key and machine_status state events in the machines room.
+	// Clear machine_key and machine_status state events in the machine room.
 	// Sending empty content effectively "deletes" state events in Matrix.
-	machinesAlias := principal.RoomAlias("bureau/machines", serverName)
-	machinesRoomID, err := adminSession.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machines room %q: %w", machinesAlias, err)
+		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machinesRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_key from %s\n", machinesAlias)
+		fmt.Fprintf(os.Stderr, "  Cleared machine_key from %s\n", machineAlias)
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machinesRoomID, schema.EventTypeMachineStatus, machineName, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineName, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_status from %s\n", machinesAlias)
+		fmt.Fprintf(os.Stderr, "  Cleared machine_status from %s\n", machineAlias)
 	}
 
 	// Clean up the config room: clear machine_config and all credentials.
@@ -157,23 +157,23 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 	}
 
 	// Kick from global rooms.
-	err = adminSession.KickUser(ctx, machinesRoomID, machineUserID, "machine decommissioned")
+	err = adminSession.KickUser(ctx, machineRoomID, machineUserID, "machine decommissioned")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not kick from machines room: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: could not kick from machine room: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Kicked from %s\n", machinesAlias)
+		fmt.Fprintf(os.Stderr, "  Kicked from %s\n", machineAlias)
 	}
 
-	servicesAlias := principal.RoomAlias("bureau/services", serverName)
-	servicesRoomID, err := adminSession.ResolveAlias(ctx, servicesAlias)
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not resolve services room: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: could not resolve service room: %v\n", err)
 	} else {
-		err = adminSession.KickUser(ctx, servicesRoomID, machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, serviceRoomID, machineUserID, "machine decommissioned")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from services room: %v\n", err)
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from service room: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", servicesAlias)
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", serviceAlias)
 		}
 	}
 

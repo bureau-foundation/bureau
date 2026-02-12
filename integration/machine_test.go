@@ -33,9 +33,9 @@ type testMachine struct {
 	WorkspaceRoot  string
 
 	// Populated by startMachine:
-	PublicKey      string // age public key from the machine_key state event
-	ConfigRoomID   string // per-machine config room (#bureau/config/<name>)
-	MachinesRoomID string // global #bureau/machines room
+	PublicKey     string // age public key from the machine_key state event
+	ConfigRoomID  string // per-machine config room (#bureau/config/<name>)
+	MachineRoomID string // global #bureau/machine room
 }
 
 // PrincipalSocketPath returns the proxy socket path for a principal on
@@ -104,7 +104,7 @@ func newTestMachine(t *testing.T, name string) *testMachine {
 // startMachine boots the launcher and daemon for a machine, waits for
 // readiness signals (launcher socket, machine key publication, status
 // heartbeat, config room creation), and populates the machine's PublicKey,
-// ConfigRoomID, and MachinesRoomID fields.
+// ConfigRoomID, and MachineRoomID fields.
 func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
 	t.Helper()
 
@@ -124,21 +124,21 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	}
 
 	// Resolve global rooms and invite the machine.
-	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve machines room: %v", err)
+		t.Fatalf("resolve machine room: %v", err)
 	}
-	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve services room: %v", err)
+		t.Fatalf("resolve service room: %v", err)
 	}
-	machine.MachinesRoomID = machinesRoomID
+	machine.MachineRoomID = machineRoomID
 
-	if err := admin.InviteUser(ctx, machinesRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to machines room: %v", err)
+	if err := admin.InviteUser(ctx, machineRoomID, machine.UserID); err != nil {
+		t.Fatalf("invite machine to machine room: %v", err)
 	}
-	if err := admin.InviteUser(ctx, servicesRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to services room: %v", err)
+	if err := admin.InviteUser(ctx, serviceRoomID, machine.UserID); err != nil {
+		t.Fatalf("invite machine to service room: %v", err)
 	}
 
 	// Start the launcher.
@@ -159,7 +159,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	waitForFile(t, machine.LauncherSocket, 15*time.Second)
 
 	// Retrieve the machine's public key from Matrix.
-	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+	machineKeyJSON := waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_key", machine.Name, 10*time.Second)
 	var machineKey struct {
 		PublicKey string `json:"public_key"`
@@ -200,7 +200,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	startProcess(t, machine.Name+"-daemon", options.DaemonBinary, daemonArgs...)
 
 	// Wait for daemon readiness (MachineStatus heartbeat).
-	waitForStateEvent(t, admin, machinesRoomID,
+	waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_status", machine.Name, 15*time.Second)
 
 	// Resolve the per-machine config room and join as admin.

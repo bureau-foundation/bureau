@@ -172,7 +172,7 @@ func run(config Config) error {
 	defer admin.Close()
 
 	// Determine the machine name. If not specified, detect from the launcher
-	// by resolving the machines room and looking for a machine_key event
+	// by resolving the machine room and looking for a machine_key event
 	// whose key matches this RunDir.
 	machineName := config.MachineName
 	if machineName == "" {
@@ -251,13 +251,13 @@ func run(config Config) error {
 	sysadminSession.Close()
 
 	// Retrieve the machine's public key for credential sealing.
-	machinesAlias := principal.RoomAlias("bureau/machines", config.ServerName)
-	machinesRoomID, err := admin.ResolveAlias(ctx, machinesAlias)
+	machineAlias := principal.RoomAlias("bureau/machine", config.ServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machines room: %w", err)
+		return fmt.Errorf("resolve machine room: %w", err)
 	}
 
-	machineKeyJSON, err := admin.GetStateEvent(ctx, machinesRoomID,
+	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 		schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		return fmt.Errorf("get machine key for %s: %w", machineName, err)

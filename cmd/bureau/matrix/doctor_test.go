@@ -36,8 +36,8 @@ type mockDoctorServer struct {
 	// Room IDs.
 	spaceID    string
 	systemID   string
-	machinesID string
-	servicesID string
+	machineID  string
+	serviceID  string
 	templateID string
 	pipelineID string
 
@@ -45,7 +45,7 @@ type mockDoctorServer struct {
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
 	joinRules     map[string]string         // roomID -> join_rule; nil = "invite" for all
 	powerLevels   map[string]map[string]any // roomID -> PL content; nil = correct defaults
-	machineUsers  []string                  // users with m.bureau.machine_key state events in machines room
+	machineUsers  []string                  // users with m.bureau.machine_key state events in machine room
 	roomMembers   map[string][]string       // roomID -> joined member user IDs; nil = admin only
 
 	// Mutation tracking.
@@ -65,8 +65,8 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		adminUserID: adminUserID,
 		spaceID:     "!space:local",
 		systemID:    "!system:local",
-		machinesID:  "!machines:local",
-		servicesID:  "!services:local",
+		machineID:   "!machine:local",
+		serviceID:   "!service:local",
 		templateID:  "!template:local",
 		pipelineID:  "!pipeline:local",
 		invitesSent: make(map[string][]string),
@@ -125,8 +125,8 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			aliasMap := map[string]string{
 				"#bureau:local":          m.spaceID,
 				"#bureau/system:local":   m.systemID,
-				"#bureau/machines:local": m.machinesID,
-				"#bureau/services:local": m.servicesID,
+				"#bureau/machine:local":  m.machineID,
+				"#bureau/service:local":  m.serviceID,
 				"#bureau/template:local": m.templateID,
 				"#bureau/pipeline:local": m.pipelineID,
 			}
@@ -202,7 +202,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machinesID, m.servicesID, m.pipelineID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID))
 			return
 		}
 
@@ -286,8 +286,8 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				if childIDs == nil {
 					childIDs = map[string]bool{
 						m.systemID:   true,
-						m.machinesID: true,
-						m.servicesID: true,
+						m.machineID:  true,
+						m.serviceID:  true,
 						m.templateID: true,
 						m.pipelineID: true,
 					}
@@ -303,7 +303,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				return
 			}
 
-			if roomID == m.machinesID {
+			if roomID == m.machineID {
 				var events []messaging.Event
 				for _, machineUser := range m.machineUsers {
 					user := machineUser
@@ -327,7 +327,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID, pipelineID string) map[string]any {
+func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID string) map[string]any {
 	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
@@ -341,11 +341,11 @@ func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID, pipelineID 
 	}
 
 	switch roomID {
-	case machinesID:
+	case machineID:
 		events["m.bureau.machine_key"] = 0
 		events["m.bureau.machine_info"] = 0
 		events["m.bureau.machine_status"] = 0
-	case servicesID:
+	case serviceID:
 		events["m.bureau.service"] = 0
 	}
 
@@ -362,11 +362,11 @@ func powerLevelsForRoom(adminUserID, roomID, machinesID, servicesID, pipelineID 
 // /rooms/{roomId}/state/{type}/{key}. Since room IDs are URL-encoded,
 // this checks a few known patterns.
 func extractRoomIDFromStatePath(path string) string {
-	if strings.Contains(path, "%21machines%3Alocal") || strings.Contains(path, "!machines:local") {
-		return "!machines:local"
+	if strings.Contains(path, "%21machine%3Alocal") || strings.Contains(path, "!machine:local") {
+		return "!machine:local"
 	}
-	if strings.Contains(path, "%21services%3Alocal") || strings.Contains(path, "!services:local") {
-		return "!services:local"
+	if strings.Contains(path, "%21service%3Alocal") || strings.Contains(path, "!service:local") {
+		return "!service:local"
 	}
 	if strings.Contains(path, "%21system%3Alocal") || strings.Contains(path, "!system:local") {
 		return "!system:local"
@@ -374,7 +374,7 @@ func extractRoomIDFromStatePath(path string) string {
 	if strings.Contains(path, "%21space%3Alocal") || strings.Contains(path, "!space:local") {
 		return "!space:local"
 	}
-	if strings.Contains(path, "%21templates%3Alocal") || strings.Contains(path, "!template:local") {
+	if strings.Contains(path, "%21template%3Alocal") || strings.Contains(path, "!template:local") {
 		return "!template:local"
 	}
 	if strings.Contains(path, "%21pipeline%3Alocal") || strings.Contains(path, "!pipeline:local") {
@@ -432,30 +432,30 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"authentication",
 		"bureau space",
 		"system room",
-		"machines room",
-		"services room",
+		"machine room",
+		"service room",
 		"template room",
 		"system room in space",
-		"machines room in space",
-		"services room in space",
+		"machine room in space",
+		"service room in space",
 		"template room in space",
 		"bureau space admin power",
 		"bureau space state_default",
 		"system room admin power",
 		"system room state_default",
-		"machines room admin power",
-		"machines room state_default",
-		"machines room m.bureau.machine_key",
-		"machines room m.bureau.machine_status",
-		"services room admin power",
-		"services room state_default",
-		"services room m.bureau.service",
+		"machine room admin power",
+		"machine room state_default",
+		"machine room m.bureau.machine_key",
+		"machine room m.bureau.machine_status",
+		"service room admin power",
+		"service room state_default",
+		"service room m.bureau.service",
 		"template room admin power",
 		"template room state_default",
 		"bureau space join rules",
 		"system room join rules",
-		"machines room join rules",
-		"services room join rules",
+		"machine room join rules",
+		"service room join rules",
 		"template room join rules",
 		"pipeline room",
 		"pipeline room in space",
@@ -498,8 +498,8 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
 		"MATRIX_SYSTEM_ROOM":   "!system:local",
-		"MATRIX_MACHINES_ROOM": "!machines:local",
-		"MATRIX_SERVICES_ROOM": "!services:local",
+		"MATRIX_MACHINE_ROOM":  "!machine:local",
+		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
@@ -531,8 +531,8 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
 		"MATRIX_SYSTEM_ROOM":   "!wrong:local",
-		"MATRIX_MACHINES_ROOM": "!machines:local",
-		"MATRIX_SERVICES_ROOM": "!services:local",
+		"MATRIX_MACHINE_ROOM":  "!machine:local",
+		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 	}
@@ -735,7 +735,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 
 	// Other rooms should still pass.
 	for _, result := range results {
-		if result.Name == "bureau space join rules" || result.Name == "machines room join rules" || result.Name == "services room join rules" {
+		if result.Name == "bureau space join rules" || result.Name == "machine room join rules" || result.Name == "service room join rules" {
 			if result.Status != statusPass {
 				t.Errorf("expected %s to PASS, got %s", result.Name, result.Status)
 			}
@@ -828,8 +828,8 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 	// from these using the server name.
 	mock.machineUsers = []string{"machine/workstation"}
 	mock.roomMembers = map[string][]string{
-		"!services:local": {adminUserID},
-		"!machines:local": {adminUserID, "@machine/workstation:local"},
+		"!service:local": {adminUserID},
+		"!machine:local": {adminUserID, "@machine/workstation:local"},
 	}
 	server := mock.httpServer(t)
 	defer server.Close()
@@ -846,9 +846,9 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 
 	results := runDoctor(t.Context(), client, session, "local", nil, testLogger())
 
-	// Services membership should fail (machine not in services room).
+	// Services membership should fail (machine not in service room).
 	// The doctor constructs the full user ID from the localpart state key.
-	servicesCheckName := "@machine/workstation:local in services room"
+	servicesCheckName := "@machine/workstation:local in service room"
 	var servicesResult *checkResult
 	for i, result := range results {
 		if result.Name == servicesCheckName {
@@ -868,10 +868,10 @@ func TestRunDoctor_FixMachineMembership(t *testing.T) {
 
 	executeFixes(t.Context(), session, results, false)
 
-	// Verify invite was sent to services room with the full user ID.
-	servicesInvites := mock.getInvites("!services:local")
-	if len(servicesInvites) != 1 || servicesInvites[0] != "@machine/workstation:local" {
-		t.Errorf("expected invite to services room for @machine/workstation:local, got %v", servicesInvites)
+	// Verify invite was sent to service room with the full user ID.
+	serviceInvites := mock.getInvites("!service:local")
+	if len(serviceInvites) != 1 || serviceInvites[0] != "@machine/workstation:local" {
+		t.Errorf("expected invite to service room for @machine/workstation:local, got %v", serviceInvites)
 	}
 }
 

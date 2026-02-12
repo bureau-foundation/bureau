@@ -39,7 +39,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	ctx := t.Context()
 
 	// Verify machine key algorithm and value.
-	machineKeyJSON, err := admin.GetStateEvent(ctx, machine.MachinesRoomID,
+	machineKeyJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
 		"m.bureau.machine_key", machine.Name)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
@@ -59,7 +59,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	}
 
 	// Verify MachineStatus contents.
-	statusJSON, err := admin.GetStateEvent(ctx, machine.MachinesRoomID,
+	statusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
 		"m.bureau.machine_status", machine.Name)
 	if err != nil {
 		t.Fatalf("get machine status: %v", err)
@@ -140,7 +140,7 @@ func TestPrincipalAssignment(t *testing.T) {
 	ctx := t.Context()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		statusJSON, err := admin.GetStateEvent(ctx, machine.MachinesRoomID,
+		statusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
 			"m.bureau.machine_status", machine.Name)
 		if err == nil {
 			var status struct {
@@ -512,15 +512,15 @@ func TestCrossMachineObservation(t *testing.T) {
 		},
 	})
 
-	// Publish a service entry in #bureau/services so the consumer daemon
+	// Publish a service entry in #bureau/service so the consumer daemon
 	// can discover the principal on the provider machine. In production,
 	// services are registered by the daemon or admin; here we simulate
 	// that by pushing the state event directly.
-	servicesRoomID, err := admin.ResolveAlias(ctx, "#bureau/services:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve services room: %v", err)
+		t.Fatalf("resolve service room: %v", err)
 	}
-	_, err = admin.SendStateEvent(ctx, servicesRoomID, "m.bureau.service",
+	_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
 		observed.Localpart, map[string]any{
 			"principal":   observed.UserID,
 			"machine":     provider.UserID,
@@ -758,7 +758,7 @@ func TestConfigReconciliation(t *testing.T) {
 		// count reaches zero (the previous heartbeat may still show 1).
 		deadline := time.Now().Add(15 * time.Second)
 		for {
-			statusJSON, err := admin.GetStateEvent(t.Context(), machine.MachinesRoomID,
+			statusJSON, err := admin.GetStateEvent(t.Context(), machine.MachineRoomID,
 				"m.bureau.machine_status", machine.Name)
 			if err == nil {
 				var status struct {

@@ -42,8 +42,8 @@ func TestRoomsExistViaAPI(t *testing.T) {
 	expectedAliases := []string{
 		"#bureau:" + testServerName,
 		"#bureau/system:" + testServerName,
-		"#bureau/machines:" + testServerName,
-		"#bureau/services:" + testServerName,
+		"#bureau/machine:" + testServerName,
+		"#bureau/service:" + testServerName,
 		"#bureau/template:" + testServerName,
 	}
 
@@ -84,8 +84,8 @@ func TestSpaceHierarchy(t *testing.T) {
 	// Verify each standard room is a child of the space.
 	childRooms := []string{
 		"#bureau/system:" + testServerName,
-		"#bureau/machines:" + testServerName,
-		"#bureau/services:" + testServerName,
+		"#bureau/machine:" + testServerName,
+		"#bureau/service:" + testServerName,
 		"#bureau/template:" + testServerName,
 	}
 
@@ -149,8 +149,8 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 	rooms := []string{
 		"#bureau:" + testServerName,
 		"#bureau/system:" + testServerName,
-		"#bureau/machines:" + testServerName,
-		"#bureau/services:" + testServerName,
+		"#bureau/machine:" + testServerName,
+		"#bureau/service:" + testServerName,
 		"#bureau/template:" + testServerName,
 	}
 

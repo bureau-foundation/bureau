@@ -22,7 +22,7 @@
 //
 // Signaling is abstracted behind the [Signaler] interface, which publishes
 // and polls SDP offers and answers. [MatrixSignaler] uses Matrix state
-// events in the #bureau/machines room for production signaling, with
+// events in the #bureau/machine room for production signaling, with
 // pipe-separated state keys (offerer|target) for routing.
 // [MemorySignaler] provides an in-process implementation for tests.
 // [SignalMessage] carries the SDP payload and ICE candidates in vanilla

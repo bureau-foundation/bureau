@@ -7,7 +7,7 @@ import "context"
 
 // Signaler abstracts the mechanism for exchanging WebRTC session
 // descriptions between peer daemons. The production implementation
-// uses Matrix state events in #bureau/machines; tests use in-process
+// uses Matrix state events in #bureau/machine; tests use in-process
 // channels.
 //
 // The signaling model is vanilla ICE: all ICE candidates are gathered

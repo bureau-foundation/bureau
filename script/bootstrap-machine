@@ -32,7 +32,7 @@
 #
 # After successful bootstrap:
 #   - bureau-launcher and bureau-daemon services are running
-#   - The machine has published its key to #bureau/machines
+#   - The machine has published its key to #bureau/machine
 #   - The one-time password has been rotated
 #   - The bootstrap config file has been deleted
 

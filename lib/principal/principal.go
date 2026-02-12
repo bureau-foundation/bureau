@@ -144,7 +144,7 @@ func RoomAlias(localAlias, serverName string) string {
 // because colons cannot appear in room alias localparts (same invariant as
 // Matrix user ID localparts), but server names may contain ports.
 //
-//	RoomAliasLocalpart("#bureau/machines:bureau.local") → "bureau/machines"
+//	RoomAliasLocalpart("#bureau/machine:bureau.local") → "bureau/machine"
 //	RoomAliasLocalpart("#bureau/config/machine/workstation:bureau.local") → "bureau/config/machine/workstation"
 //	RoomAliasLocalpart("#agents:example.org:8448") → "agents"
 func RoomAliasLocalpart(fullAlias string) string {

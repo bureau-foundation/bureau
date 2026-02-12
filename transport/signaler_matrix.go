@@ -26,13 +26,13 @@ const signalingSeparator = "|"
 var _ Signaler = (*MatrixSignaler)(nil)
 
 // MatrixSignaler implements Signaler using Matrix state events in the
-// machines room (#bureau/machines). Offers and answers are published as
+// machine room (#bureau/machine). Offers and answers are published as
 // state events with event types m.bureau.webrtc_offer and
 // m.bureau.webrtc_answer respectively.
 type MatrixSignaler struct {
-	session        *messaging.Session
-	machinesRoomID string
-	logger         *slog.Logger
+	session       *messaging.Session
+	machineRoomID string
+	logger        *slog.Logger
 
 	// lastSeen tracks the most recent timestamp we've processed for each
 	// peer's signals. This prevents re-processing old offers/answers.
@@ -40,14 +40,14 @@ type MatrixSignaler struct {
 	lastSeen map[string]time.Time // key: state_key of the signal event
 }
 
-// NewMatrixSignaler creates a Matrix-backed signaler. machinesRoomID is the
-// room ID for #bureau/machines where signaling state events are published.
-func NewMatrixSignaler(session *messaging.Session, machinesRoomID string, logger *slog.Logger) *MatrixSignaler {
+// NewMatrixSignaler creates a Matrix-backed signaler. machineRoomID is the
+// room ID for #bureau/machine where signaling state events are published.
+func NewMatrixSignaler(session *messaging.Session, machineRoomID string, logger *slog.Logger) *MatrixSignaler {
 	return &MatrixSignaler{
-		session:        session,
-		machinesRoomID: machinesRoomID,
-		logger:         logger,
-		lastSeen:       make(map[string]time.Time),
+		session:       session,
+		machineRoomID: machineRoomID,
+		logger:        logger,
+		lastSeen:      make(map[string]time.Time),
 	}
 }
 
@@ -58,7 +58,7 @@ func (s *MatrixSignaler) PublishOffer(ctx context.Context, localpart, targetLoca
 		SDP:       sdp,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	_, err := s.session.SendStateEvent(ctx, s.machinesRoomID,
+	_, err := s.session.SendStateEvent(ctx, s.machineRoomID,
 		schema.EventTypeWebRTCOffer, stateKey, content)
 	if err != nil {
 		return fmt.Errorf("publishing WebRTC offer (state_key=%s): %w", stateKey, err)
@@ -73,7 +73,7 @@ func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererLocalpart, lo
 		SDP:       sdp,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	_, err := s.session.SendStateEvent(ctx, s.machinesRoomID,
+	_, err := s.session.SendStateEvent(ctx, s.machineRoomID,
 		schema.EventTypeWebRTCAnswer, stateKey, content)
 	if err != nil {
 		return fmt.Errorf("publishing WebRTC answer (state_key=%s): %w", stateKey, err)
@@ -83,7 +83,7 @@ func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererLocalpart, lo
 
 // PollOffers returns new SDP offers directed at this machine.
 func (s *MatrixSignaler) PollOffers(ctx context.Context, localpart string) ([]SignalMessage, error) {
-	events, err := s.session.GetRoomState(ctx, s.machinesRoomID)
+	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching room state: %w", err)
 	}
@@ -133,7 +133,7 @@ func (s *MatrixSignaler) PollOffers(ctx context.Context, localpart string) ([]Si
 
 // PollAnswers returns new SDP answers to offers originated by this machine.
 func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]SignalMessage, error) {
-	events, err := s.session.GetRoomState(ctx, s.machinesRoomID)
+	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching room state: %w", err)
 	}

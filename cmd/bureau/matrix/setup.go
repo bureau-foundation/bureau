@@ -52,8 +52,8 @@ exposing secrets in CLI arguments, process listings, or shell history.
 
 Standard rooms created:
   bureau/system      Operational messages
-  bureau/machines    Machine keys and status
-  bureau/services    Service directory
+  bureau/machine     Machine keys and status
+  bureau/service     Service directory
   bureau/template    Sandbox templates (base, base-networked)
   bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)`,
 		Usage: "bureau matrix setup [flags]",
@@ -167,7 +167,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 	logger.Info("system room ready", "room_id", systemRoomID)
 
-	machinesRoomID, err := ensureRoom(ctx, session, "bureau/machines", "Bureau Machines", "Machine keys and status",
+	machineRoomID, err := ensureRoom(ctx, session, "bureau/machine", "Bureau Machine", "Machine keys and status",
 		spaceRoomID, config.serverName,
 		adminOnlyPowerLevels(session.UserID(), []string{
 			schema.EventTypeMachineKey,
@@ -177,17 +177,17 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			schema.EventTypeWebRTCAnswer,
 		}), logger)
 	if err != nil {
-		return fmt.Errorf("create machines room: %w", err)
+		return fmt.Errorf("create machine room: %w", err)
 	}
-	logger.Info("machines room ready", "room_id", machinesRoomID)
+	logger.Info("machine room ready", "room_id", machineRoomID)
 
-	servicesRoomID, err := ensureRoom(ctx, session, "bureau/services", "Bureau Services", "Service directory",
+	serviceRoomID, err := ensureRoom(ctx, session, "bureau/service", "Bureau Service", "Service directory",
 		spaceRoomID, config.serverName,
 		adminOnlyPowerLevels(session.UserID(), []string{schema.EventTypeService}), logger)
 	if err != nil {
-		return fmt.Errorf("create services room: %w", err)
+		return fmt.Errorf("create service room: %w", err)
 	}
-	logger.Info("services room ready", "room_id", servicesRoomID)
+	logger.Info("service room ready", "room_id", serviceRoomID)
 
 	templateRoomID, err := ensureRoom(ctx, session, "bureau/template", "Bureau Template", "Sandbox templates",
 		spaceRoomID, config.serverName, adminOnlyPowerLevels(session.UserID(), nil), logger)
@@ -221,8 +221,8 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		}{
 			{"bureau (space)", spaceRoomID},
 			{"bureau/system", systemRoomID},
-			{"bureau/machines", machinesRoomID},
-			{"bureau/services", servicesRoomID},
+			{"bureau/machine", machineRoomID},
+			{"bureau/service", serviceRoomID},
 			{"bureau/template", templateRoomID},
 			{"bureau/pipeline", pipelineRoomID},
 		}
@@ -249,7 +249,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID, pipelineRoomID); err != nil {
+		spaceRoomID, systemRoomID, machineRoomID, serviceRoomID, templateRoomID, pipelineRoomID); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -258,8 +258,8 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		"admin_user", session.UserID(),
 		"space", spaceRoomID,
 		"system_room", systemRoomID,
-		"machines_room", machinesRoomID,
-		"services_room", servicesRoomID,
+		"machine_room", machineRoomID,
+		"service_room", serviceRoomID,
 		"template_room", templateRoomID,
 		"pipeline_room", pipelineRoomID,
 	)
@@ -354,7 +354,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machinesRoomID, servicesRoomID, templateRoomID, pipelineRoomID string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID, systemRoomID, machineRoomID, serviceRoomID, templateRoomID, pipelineRoomID string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -365,8 +365,8 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken.String())
 	fmt.Fprintf(&builder, "MATRIX_SPACE_ROOM=%s\n", spaceRoomID)
 	fmt.Fprintf(&builder, "MATRIX_SYSTEM_ROOM=%s\n", systemRoomID)
-	fmt.Fprintf(&builder, "MATRIX_MACHINES_ROOM=%s\n", machinesRoomID)
-	fmt.Fprintf(&builder, "MATRIX_SERVICES_ROOM=%s\n", servicesRoomID)
+	fmt.Fprintf(&builder, "MATRIX_MACHINE_ROOM=%s\n", machineRoomID)
+	fmt.Fprintf(&builder, "MATRIX_SERVICE_ROOM=%s\n", serviceRoomID)
 	fmt.Fprintf(&builder, "MATRIX_TEMPLATE_ROOM=%s\n", templateRoomID)
 	fmt.Fprintf(&builder, "MATRIX_PIPELINE_ROOM=%s\n", pipelineRoomID)
 
@@ -474,10 +474,11 @@ func baseTemplates() []namedTemplate {
 // perform administrative actions. Members at power level 0 can send messages.
 //
 // memberSettableEventTypes lists state event types that members at power level
-// 0 are allowed to set. This is used for Bureau-specific events: machines
-// publish m.bureau.machine_key, m.bureau.machine_info, and
+// 0 are allowed to set. This is used for Bureau-specific events: machine room
+// members publish m.bureau.machine_key, m.bureau.machine_info, and
 // m.bureau.machine_status; daemons exchange WebRTC signaling
-// (m.bureau.webrtc_offer/answer); and services register via m.bureau.service.
+// (m.bureau.webrtc_offer/answer); and service room members register via
+// m.bureau.service.
 func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string) map[string]any {
 	events := map[string]any{
 		"m.room.avatar":             100,

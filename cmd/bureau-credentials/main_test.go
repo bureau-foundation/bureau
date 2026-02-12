@@ -24,8 +24,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		},
 		{
 			name:      "simple alias",
-			fullAlias: "#bureau/machines:bureau.local",
-			expected:  "bureau/machines",
+			fullAlias: "#bureau/machine:bureau.local",
+			expected:  "bureau/machine",
 		},
 		{
 			name:      "no prefix or suffix",

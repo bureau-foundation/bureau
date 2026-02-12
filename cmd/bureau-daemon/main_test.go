@@ -22,8 +22,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 	}{
 		{
 			name:      "simple alias",
-			fullAlias: "#bureau/machines:bureau.local",
-			expected:  "bureau/machines",
+			fullAlias: "#bureau/machine:bureau.local",
+			expected:  "bureau/machine",
 		},
 		{
 			name:      "nested config alias",
@@ -37,13 +37,13 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		},
 		{
 			name:      "no # prefix",
-			fullAlias: "bureau/machines:bureau.local",
-			expected:  "bureau/machines",
+			fullAlias: "bureau/machine:bureau.local",
+			expected:  "bureau/machine",
 		},
 		{
 			name:      "no server suffix",
-			fullAlias: "#bureau/machines",
-			expected:  "bureau/machines",
+			fullAlias: "#bureau/machine",
+			expected:  "bureau/machine",
 		},
 	}
 

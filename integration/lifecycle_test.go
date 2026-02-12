@@ -44,9 +44,9 @@ func TestMachineLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve machines room: %v", err)
+		t.Fatalf("resolve machine room: %v", err)
 	}
 
 	// --- Phase 1: Provision via CLI ---
@@ -117,8 +117,8 @@ func TestMachineLifecycle(t *testing.T) {
 		t.Fatal("public key file is empty")
 	}
 
-	// Verify the machine key was published to #bureau/machines.
-	machineKeyJSON := waitForStateEvent(t, admin, machinesRoomID,
+	// Verify the machine key was published to #bureau/machine.
+	machineKeyJSON := waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_key", machineName, 10*time.Second)
 	var machineKey struct {
 		Algorithm string `json:"algorithm"`
@@ -173,7 +173,7 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 
 		// Wait for MachineStatus heartbeat.
-		statusJSON := waitForStateEvent(t, admin, machinesRoomID,
+		statusJSON := waitForStateEvent(t, admin, machineRoomID,
 			"m.bureau.machine_status", machineName, 15*time.Second)
 		var status struct {
 			Principal string `json:"principal"`
@@ -236,7 +236,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
 		// Poll until we get a status with a newer timestamp.
-		waitForStateEvent(t, admin, machinesRoomID,
+		waitForStateEvent(t, admin, machineRoomID,
 			"m.bureau.machine_status", machineName, 15*time.Second)
 		t.Log("machine reconnected and published status after restart")
 	})
@@ -248,7 +248,7 @@ func TestMachineLifecycle(t *testing.T) {
 	)
 
 	// Verify machine key was cleared (empty content).
-	clearedKeyJSON, err := admin.GetStateEvent(ctx, machinesRoomID,
+	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 		"m.bureau.machine_key", machineName)
 	if err != nil {
 		t.Fatalf("get machine key after decommission: %v", err)
@@ -261,7 +261,7 @@ func TestMachineLifecycle(t *testing.T) {
 	}
 
 	// Verify machine status was cleared.
-	clearedStatusJSON, err := admin.GetStateEvent(ctx, machinesRoomID,
+	clearedStatusJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 		"m.bureau.machine_status", machineName)
 	if err != nil {
 		t.Fatalf("get machine status after decommission: %v", err)
@@ -300,9 +300,9 @@ func TestTwoMachineFleet(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machinesRoomID, err := admin.ResolveAlias(ctx, "#bureau/machines:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
 	if err != nil {
-		t.Fatalf("resolve machines room: %v", err)
+		t.Fatalf("resolve machine room: %v", err)
 	}
 
 	// --- Provision both machines ---
@@ -379,9 +379,9 @@ func TestTwoMachineFleet(t *testing.T) {
 	publicKeyB := readPublicKey(stateDirB)
 
 	// Verify both machine keys are published.
-	waitForStateEvent(t, admin, machinesRoomID,
+	waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_key", machineAName, 10*time.Second)
-	waitForStateEvent(t, admin, machinesRoomID,
+	waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_key", machineBName, 10*time.Second)
 
 	// --- Start both launcher+daemon pairs ---
@@ -413,17 +413,17 @@ func TestTwoMachineFleet(t *testing.T) {
 	startMachineProcesses(t, machineB)
 
 	// Wait for both daemons to publish MachineStatus heartbeats.
-	waitForStateEvent(t, admin, machinesRoomID,
+	waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_status", machineAName, 15*time.Second)
-	waitForStateEvent(t, admin, machinesRoomID,
+	waitForStateEvent(t, admin, machineRoomID,
 		"m.bureau.machine_status", machineBName, 15*time.Second)
 	t.Log("both daemons running and publishing status")
 
 	// --- Verify mutual visibility ---
-	// Both machines should see each other's keys in #bureau/machines.
-	events, err := admin.GetRoomState(ctx, machinesRoomID)
+	// Both machines should see each other's keys in #bureau/machine.
+	events, err := admin.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		t.Fatalf("get machines room state: %v", err)
+		t.Fatalf("get machine room state: %v", err)
 	}
 	keyCount := 0
 	for _, event := range events {
@@ -441,7 +441,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	// other tests that ran earlier in the same homeserver, but at minimum
 	// these two must be present).
 	if keyCount < 2 {
-		t.Errorf("expected at least 2 machine keys in #bureau/machines, got %d", keyCount)
+		t.Errorf("expected at least 2 machine keys in #bureau/machine, got %d", keyCount)
 	}
 
 	// --- Register principals and encrypt credentials ---
@@ -608,7 +608,7 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	// Verify both machine keys are cleared.
 	for _, name := range []string{machineAName, machineBName} {
-		keyJSON, err := admin.GetStateEvent(ctx, machinesRoomID,
+		keyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 			"m.bureau.machine_key", name)
 		if err != nil {
 			t.Fatalf("get machine key for %s after decommission: %v", name, err)

@@ -84,9 +84,9 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	// Room IDs used throughout the test. The mock matches on these exactly
 	// (after URL-decoding the request path).
 	const (
-		configRoomID   = "!config:test"
-		machinesRoomID = "!machines:test"
-		servicesRoomID = "!services:test"
+		configRoomID  = "!config:test"
+		machineRoomID = "!machine:test"
+		serviceRoomID = "!service:test"
 	)
 
 	// Configure mock Matrix: assign one principal with AutoStart.
@@ -200,8 +200,8 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      configRoomID,
-		machinesRoomID:    machinesRoomID,
-		servicesRoomID:    servicesRoomID,
+		machineRoomID:     machineRoomID,
+		serviceRoomID:     serviceRoomID,
 		launcherSocket:    launcherSocket,
 		statusInterval:    time.Hour,
 		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
@@ -365,8 +365,8 @@ func TestReconcileNoConfig(t *testing.T) {
 		machineUserID:     "@machine/test:bureau.local",
 		serverName:        "bureau.local",
 		configRoomID:      "!config:test",
-		machinesRoomID:    "!machines:test",
-		servicesRoomID:    "!services:test",
+		machineRoomID:     "!machine:test",
+		serviceRoomID:     "!service:test",
 		launcherSocket:    "/nonexistent/launcher.sock",
 		running:           make(map[string]bool),
 		lastCredentials:   make(map[string]string),
@@ -399,7 +399,7 @@ func TestReconcileNoConfig(t *testing.T) {
 }
 
 // TestDaemonJoinsGlobalRooms verifies that the daemon startup path (as
-// implemented in run()) explicitly joins the machines and services rooms.
+// implemented in run()) explicitly joins the machines and service rooms.
 // This is a unit-level test that exercises joinGlobalRooms directly with a
 // mock Matrix server, verifying that both rooms receive JoinRoom calls.
 func TestDaemonJoinsGlobalRooms(t *testing.T) {
@@ -410,8 +410,8 @@ func TestDaemonJoinsGlobalRooms(t *testing.T) {
 	t.Cleanup(matrixServer.Close)
 
 	const (
-		machinesRoomID = "!machines:test"
-		servicesRoomID = "!services:test"
+		machineRoomID = "!machine:test"
+		serviceRoomID = "!service:test"
 	)
 
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
@@ -428,20 +428,20 @@ func TestDaemonJoinsGlobalRooms(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Join machines room.
-	if _, err := session.JoinRoom(ctx, machinesRoomID); err != nil {
+	// Join machine room.
+	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
 		t.Fatalf("JoinRoom machines: %v", err)
 	}
-	if !matrixState.hasJoined(machinesRoomID) {
-		t.Error("machines room should have been joined")
+	if !matrixState.hasJoined(machineRoomID) {
+		t.Error("machine room should have been joined")
 	}
 
-	// Join services room.
-	if _, err := session.JoinRoom(ctx, servicesRoomID); err != nil {
+	// Join service room.
+	if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
 		t.Fatalf("JoinRoom services: %v", err)
 	}
-	if !matrixState.hasJoined(servicesRoomID) {
-		t.Error("services room should have been joined")
+	if !matrixState.hasJoined(serviceRoomID) {
+		t.Error("service room should have been joined")
 	}
 }
 

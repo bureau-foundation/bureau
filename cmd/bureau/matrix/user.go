@@ -252,8 +252,8 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 	}{
 		{"bureau (space)", "MATRIX_SPACE_ROOM"},
 		{"bureau/system", "MATRIX_SYSTEM_ROOM"},
-		{"bureau/machines", "MATRIX_MACHINES_ROOM"},
-		{"bureau/services", "MATRIX_SERVICES_ROOM"},
+		{"bureau/machine", "MATRIX_MACHINE_ROOM"},
+		{"bureau/service", "MATRIX_SERVICE_ROOM"},
 	}
 
 	for _, room := range bureauRooms {
@@ -376,7 +376,7 @@ authenticated user has joined.`,
 		Examples: []cli.Example{
 			{
 				Description: "List members of a specific room",
-				Command:     "bureau matrix user list --room '#bureau/machines:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user list --room '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
 			{
 				Description: "List all known users across joined rooms",
@@ -487,12 +487,12 @@ func userInviteCommand() *cli.Command {
 		Name:    "invite",
 		Summary: "Invite a user to a room",
 		Description: `Invite a Matrix user to a room. The room can be specified by alias
-(e.g., "#bureau/machines:bureau.local") or by room ID.`,
+(e.g., "#bureau/machine:bureau.local") or by room ID.`,
 		Usage: "bureau matrix user invite <user-id> --room <room> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Invite a user to a room by alias",
-				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/machines:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {
@@ -554,11 +554,11 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Examples: []cli.Example{
 			{
 				Description: "Kick a user from a room",
-				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machines:bureau.local' --credential-file ./creds",
+				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
 			{
 				Description: "Kick with a reason",
-				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machines:bureau.local' --reason 'decommissioned' --credential-file ./creds",
+				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machine:bureau.local' --reason 'decommissioned' --credential-file ./creds",
 			},
 		},
 		Flags: func() *pflag.FlagSet {

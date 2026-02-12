@@ -24,7 +24,7 @@ import (
 // communication) and the relay Unix socket (for consumer proxy outbound
 // routing). The WebRTC transport handles both inbound and outbound
 // connections via the same pool of PeerConnections; signaling is done
-// through Matrix state events in the machines room.
+// through Matrix state events in the machine room.
 func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) error {
 	// Fetch initial TURN credentials from the homeserver.
 	turn, err := d.session.TURNCredentials(ctx)
@@ -35,7 +35,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 	iceConfig := transport.ICEConfigFromTURN(turn)
 
 	// Create the Matrix signaler for SDP exchange.
-	signaler := transport.NewMatrixSignaler(d.session, d.machinesRoomID, d.logger)
+	signaler := transport.NewMatrixSignaler(d.session, d.machineRoomID, d.logger)
 
 	// Create the WebRTC transport (implements both Listener and Dialer).
 	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machineName, iceConfig, d.logger)
@@ -259,9 +259,9 @@ func (d *Daemon) handleTransportInbound(w http.ResponseWriter, r *http.Request) 
 	proxy.ServeHTTP(w, r)
 }
 
-// syncPeerAddresses reads MachineStatus state events from the machines room
+// syncPeerAddresses reads MachineStatus state events from the machine room
 // to discover transport addresses of peer daemons. Called on initial sync and
-// whenever the machines room has state changes, so the relay handler has
+// whenever the machine room has state changes, so the relay handler has
 // up-to-date routing information.
 //
 // Builds the complete set of current peers from state events, then reconciles
@@ -269,9 +269,9 @@ func (d *Daemon) handleTransportInbound(w http.ResponseWriter, r *http.Request) 
 // and removing peers that are no longer present. Cached HTTP transports for
 // stale addresses are closed to release connections.
 func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
-	events, err := d.session.GetRoomState(ctx, d.machinesRoomID)
+	events, err := d.session.GetRoomState(ctx, d.machineRoomID)
 	if err != nil {
-		return fmt.Errorf("fetching machines room state: %w", err)
+		return fmt.Errorf("fetching machine room state: %w", err)
 	}
 
 	// Build the authoritative set of peer addresses from state events.

@@ -1,0 +1,84 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Reject direct time package calls in test files. Tests must use lib/clock
+# (FakeClock for deterministic time, Real for documented exceptions).
+#
+# Banned calls: time.Now, time.Sleep, time.After, time.NewTimer,
+# time.NewTicker, time.AfterFunc, time.Since, time.Until.
+#
+# These create wall-clock dependencies that cause flaky tests, slow CI, and
+# nondeterministic behavior. The fake clock at lib/clock provides
+# deterministic replacements for all of them.
+#
+# Bureau is event-driven (Matrix /sync). Tests — including integration
+# tests — should be event-driven too. Polling loops and sleep-based waits
+# are never the right answer.
+#
+# Exemptions:
+#   - lib/clock/ itself (implements the clock abstraction)
+#   - Lines with //nolint:realclock (for timeout safety valves and kernel
+#     I/O deadlines where wall time is genuinely required)
+#
+# Only checks lines ADDED in the staged diff, so existing violations do not
+# block commits. New violations must either use the fake clock or justify
+# the real clock with //nolint:realclock.
+
+set -euo pipefail
+
+# Each banned function is a separate alternation so the error message can
+# name the specific call.
+banned='time\.(Now|Sleep|After|NewTimer|NewTicker|AfterFunc|Since|Until)\b'
+
+# Get added lines from staged test files, excluding only lib/clock/.
+# Format: filename:lineno:content
+violations=$(
+    git diff --cached --unified=0 --diff-filter=ACM -- '*_test.go' \
+        ':!lib/clock/' |
+    awk '
+        # Track which file we are in.
+        /^--- /    { next }
+        /^\+\+\+ / { file = substr($0, 7); next }
+        # Track hunk line numbers. Format: @@ -old,count +new,count @@
+        /^@@ /     { split($3, a, /[,+]/); lineno = a[2] - 1; next }
+        # Only look at added lines (start with +, not +++).
+        /^\+[^+]/ {
+            lineno++
+            line = substr($0, 2)
+            print file ":" lineno ":" line
+            next
+        }
+        # Context and removed lines still advance the line counter for
+        # added-side tracking.
+        /^ / { lineno++; next }
+    ' |
+    grep -E "$banned" |
+    grep -v '//nolint:realclock' || true
+)
+
+if [ -z "$violations" ]; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Direct time package calls in test files."
+echo ""
+echo "Tests must use lib/clock.FakeClock for deterministic time control."
+echo "Bureau is event-driven — tests should be too. Polling loops and"
+echo "sleep-based waits are never the right answer."
+echo ""
+echo "See lib/clock/doc.go for the wiring pattern and cmd/bureau-daemon/"
+echo "token_refresh_test.go for an exemplary test."
+echo ""
+echo "Violations:"
+while IFS= read -r line; do
+    echo "  $line"
+done <<< "$violations"
+echo ""
+echo "To fix: inject a clock.Clock into the code under test and use"
+echo "clock.Fake() in the test. If real wall time is genuinely required"
+echo "(timeout safety valves, kernel I/O deadlines), add //nolint:realclock"
+echo "with a brief justification on the same line."
+echo ""
+exit 1

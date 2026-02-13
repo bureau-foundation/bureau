@@ -226,6 +226,18 @@ repos:
         pass_filenames: false
         always_run: true
 
+  # Reject direct time package calls in test files. Tests must use
+  # lib/clock.FakeClock. Only checks added lines in the staged diff so
+  # existing violations do not block commits.
+  - repo: local
+    hooks:
+      - id: no-real-clock-in-tests
+        name: no real clock in tests
+        entry: script/check-real-clock
+        language: script
+        pass_filenames: false
+        files: _test\.go$
+
   # Flush beads to JSONL before commit (graceful no-op if bd not installed).
   - repo: local
     hooks:

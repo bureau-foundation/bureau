@@ -48,7 +48,7 @@ func TestDiagCBOR(t *testing.T) {
 			}
 
 			var output bytes.Buffer
-			if err := diagCBOR(bytes.NewReader(cborData), &output); err != nil {
+			if err := diagCBOR(cborData, &output); err != nil {
 				t.Fatalf("diagCBOR: %v", err)
 			}
 
@@ -77,7 +77,7 @@ func TestDiagCBOR_IntegerKeys(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := diagCBOR(bytes.NewReader(cborData), &output); err != nil {
+	if err := diagCBOR(cborData, &output); err != nil {
 		t.Fatalf("diagCBOR: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestDiagCBOR_Sequence(t *testing.T) {
 	sequence = append(sequence, item2...)
 
 	var output bytes.Buffer
-	if err := diagCBOR(bytes.NewReader(sequence), &output); err != nil {
+	if err := diagCBOR(sequence, &output); err != nil {
 		t.Fatalf("diagCBOR: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestDiagCBOR_Sequence(t *testing.T) {
 
 func TestDiagCBOR_EmptyInput(t *testing.T) {
 	var output bytes.Buffer
-	err := diagCBOR(bytes.NewReader(nil), &output)
+	err := diagCBOR(nil, &output)
 	if err == nil {
 		t.Fatal("expected error for empty input")
 	}

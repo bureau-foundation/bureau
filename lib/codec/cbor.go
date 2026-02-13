@@ -77,3 +77,16 @@ func NewEncoder(w io.Writer) *Encoder {
 func NewDecoder(r io.Reader) *Decoder {
 	return decMode.NewDecoder(r)
 }
+
+// Diagnose returns the CBOR diagnostic notation (RFC 8949 §8) for the
+// entire contents of data.
+func Diagnose(data []byte) (string, error) {
+	return cbor.Diagnose(data)
+}
+
+// DiagnoseFirst returns the CBOR diagnostic notation for the first
+// data item in data, along with the remaining unconsumed bytes. Use
+// this to process CBOR sequences one item at a time.
+func DiagnoseFirst(data []byte) (string, []byte, error) {
+	return cbor.DiagnoseFirst(data)
+}

@@ -32,14 +32,16 @@ func init() {
 
 func decodeCommand() *cli.Command {
 	var (
-		compact bool
-		slurp   bool
+		compact  bool
+		slurp    bool
+		hexInput bool
 	)
 
 	return &cli.Command{
 		Name:    "decode",
-		Summary: "Convert CBOR on stdin to JSON on stdout",
-		Description: `Read CBOR data from stdin and write the equivalent JSON to stdout.
+		Summary: "Convert CBOR to JSON",
+		Description: `Read CBOR data from stdin (or a file argument) and write the equivalent
+JSON to stdout.
 
 By default, output is pretty-printed with 2-space indentation. Use -c
 for compact single-line output.
@@ -49,36 +51,47 @@ keys in JSON (e.g., "1", "2") since JSON requires string keys. Use
 "bureau cbor diag" for a representation that preserves CBOR types.
 
 With -s, reads a CBOR sequence (multiple consecutive items) and outputs
-them as a JSON array.`,
-		Usage: "bureau cbor decode [-c] [-s]",
+them as a JSON array.
+
+With --hex, treats input as hex-encoded CBOR (e.g., from xxd or
+protocol documentation) rather than raw binary.`,
+		Usage: "bureau cbor decode [-c] [-s] [-x] [file]",
 		Examples: []cli.Example{
 			{
 				Description: "Decode a CBOR file to pretty JSON",
+				Command:     "bureau cbor decode message.cbor",
+			},
+			{
+				Description: "Decode CBOR from stdin",
 				Command:     "bureau cbor decode < message.cbor",
 			},
 			{
+				Description: "Decode hex-encoded CBOR",
+				Command:     "echo 'a1636b657963766174' | bureau cbor decode --hex",
+			},
+			{
 				Description: "Decode a CBOR sequence to a JSON array",
-				Command:     "bureau cbor decode -s < sequence.cbor",
+				Command:     "bureau cbor decode -s sequence.cbor",
 			},
 		},
-		Flags: cborFlags(&compact, &slurp, nil),
+		Flags: cborFlags(&compact, &slurp, nil, &hexInput),
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("decode takes no positional arguments, got %q", args[0])
+			data, remainingArgs, err := readInput(args, hexInput)
+			if err != nil {
+				return err
 			}
-			return decodeCBOR(os.Stdin, os.Stdout, compact, slurp)
+			if len(remainingArgs) > 0 {
+				return fmt.Errorf("decode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+			}
+			return decodeCBOR(data, os.Stdout, compact, slurp)
 		},
 	}
 }
 
-// decodeCBOR reads CBOR from r and writes JSON to w.
-func decodeCBOR(r io.Reader, w io.Writer, compact bool, slurp bool) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("read input: %w", err)
-	}
+// decodeCBOR decodes CBOR data and writes JSON to w.
+func decodeCBOR(data []byte, w io.Writer, compact bool, slurp bool) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data on stdin")
+		return fmt.Errorf("empty input: expected CBOR data")
 	}
 
 	if slurp {
@@ -110,7 +123,7 @@ func decodeSlurp(data []byte, w io.Writer, compact bool) error {
 	}
 
 	if len(items) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data on stdin")
+		return fmt.Errorf("empty input: expected CBOR data")
 	}
 
 	return writeJSON(w, items, compact)

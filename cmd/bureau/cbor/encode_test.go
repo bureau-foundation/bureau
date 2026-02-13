@@ -98,7 +98,7 @@ func TestEncodeCBOR(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer
-			if err := encodeCBOR(strings.NewReader(tt.json), &output); err != nil {
+			if err := encodeCBOR([]byte(tt.json), &output); err != nil {
 				t.Fatalf("encodeCBOR: %v", err)
 			}
 			tt.check(t, output.Bytes())
@@ -113,10 +113,10 @@ func TestEncodeCBOR_Deterministic(t *testing.T) {
 	json2 := `{"a":"one","b":"two"}`
 
 	var output1, output2 bytes.Buffer
-	if err := encodeCBOR(strings.NewReader(json1), &output1); err != nil {
+	if err := encodeCBOR([]byte(json1), &output1); err != nil {
 		t.Fatalf("encode json1: %v", err)
 	}
-	if err := encodeCBOR(strings.NewReader(json2), &output2); err != nil {
+	if err := encodeCBOR([]byte(json2), &output2); err != nil {
 		t.Fatalf("encode json2: %v", err)
 	}
 
@@ -131,13 +131,13 @@ func TestEncodeCBOR_RoundTrip(t *testing.T) {
 
 	// Encode JSON → CBOR.
 	var cborBuffer bytes.Buffer
-	if err := encodeCBOR(strings.NewReader(original), &cborBuffer); err != nil {
+	if err := encodeCBOR([]byte(original), &cborBuffer); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 
 	// Decode CBOR → JSON.
 	var jsonBuffer bytes.Buffer
-	if err := decodeCBOR(bytes.NewReader(cborBuffer.Bytes()), &jsonBuffer, true, false); err != nil {
+	if err := decodeCBOR(cborBuffer.Bytes(), &jsonBuffer, true, false); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
@@ -221,11 +221,22 @@ func TestConvertNumbers(t *testing.T) {
 
 func TestEncodeCBOR_InvalidJSON(t *testing.T) {
 	var output bytes.Buffer
-	err := encodeCBOR(strings.NewReader("not json at all"), &output)
+	err := encodeCBOR([]byte("not json at all"), &output)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 	if !strings.Contains(err.Error(), "decode JSON") {
 		t.Errorf("error = %q, want to contain \"decode JSON\"", err.Error())
+	}
+}
+
+func TestEncodeCBOR_EmptyInput(t *testing.T) {
+	var output bytes.Buffer
+	err := encodeCBOR(nil, &output)
+	if err == nil {
+		t.Fatal("expected error for empty input")
+	}
+	if !strings.Contains(err.Error(), "empty input") {
+		t.Errorf("error = %q, want to contain \"empty input\"", err.Error())
 	}
 }

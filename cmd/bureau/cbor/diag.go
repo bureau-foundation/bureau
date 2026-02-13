@@ -9,54 +9,63 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/fxamacker/cbor/v2"
+	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
 func diagCommand() *cli.Command {
+	var hexInput bool
+
 	return &cli.Command{
 		Name:    "diag",
-		Summary: "Convert CBOR on stdin to diagnostic notation",
-		Description: `Read CBOR from stdin and write RFC 8949 Extended Diagnostic Notation
-(EDN) to stdout.
+		Summary: "Convert CBOR to diagnostic notation",
+		Description: `Read CBOR from stdin (or a file argument) and write RFC 8949 Extended
+Diagnostic Notation (EDN) to stdout.
 
 Unlike JSON output, diagnostic notation preserves CBOR type information:
 integer vs float, byte strings vs text strings, integer map keys, and
 tagged values. This is useful for inspecting the exact wire representation
 of Bureau protocol messages.
 
+With --hex, treats input as hex-encoded CBOR rather than raw binary.
+
 Examples of diagnostic notation:
 
   {"action": "status", "count": 42}       text keys, integer value
   {1: "subject", 2: "machine"}            integer keys (keyasint encoding)
   h'a1636b6579'                           byte string in hex`,
-		Usage: "bureau cbor diag",
+		Usage: "bureau cbor diag [-x] [file]",
 		Examples: []cli.Example{
 			{
 				Description: "Show diagnostic notation for a CBOR file",
-				Command:     "bureau cbor diag < message.cbor",
+				Command:     "bureau cbor diag message.cbor",
+			},
+			{
+				Description: "Decode hex-encoded CBOR to diagnostic notation",
+				Command:     "echo 'a1636b657963766174' | bureau cbor diag --hex",
 			},
 			{
 				Description: "Encode JSON and inspect the CBOR structure",
 				Command:     "echo '{\"count\":42}' | bureau cbor encode | bureau cbor diag",
 			},
 		},
+		Flags: cborFlags(nil, nil, nil, &hexInput),
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("diag takes no positional arguments, got %q", args[0])
+			data, remainingArgs, err := readInput(args, hexInput)
+			if err != nil {
+				return err
 			}
-			return diagCBOR(os.Stdin, os.Stdout)
+			if len(remainingArgs) > 0 {
+				return fmt.Errorf("diag takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+			}
+			return diagCBOR(data, os.Stdout)
 		},
 	}
 }
 
-// diagCBOR reads CBOR from r and writes diagnostic notation to w.
-func diagCBOR(r io.Reader, w io.Writer) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("read input: %w", err)
-	}
+// diagCBOR writes diagnostic notation for CBOR data to w.
+func diagCBOR(data []byte, w io.Writer) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data on stdin")
+		return fmt.Errorf("empty input: expected CBOR data")
 	}
 
 	// Process as a sequence: diagnose each item and print on its
@@ -64,7 +73,7 @@ func diagCBOR(r io.Reader, w io.Writer) error {
 	// sequences (RFC 8742) it produces one line per item.
 	remaining := data
 	for len(remaining) > 0 {
-		notation, rest, err := cbor.DiagnoseFirst(remaining)
+		notation, rest, err := codec.DiagnoseFirst(remaining)
 		if err != nil {
 			offset := len(data) - len(remaining)
 			return fmt.Errorf("diagnose CBOR at byte %d: %w", offset, err)

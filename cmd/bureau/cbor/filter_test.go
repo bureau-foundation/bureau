@@ -70,7 +70,7 @@ func TestFilterCBOR(t *testing.T) {
 			// separately. The decode part is covered by decode
 			// tests; here we verify that jq receives valid JSON.
 			var jsonOutput bytes.Buffer
-			if err := decodeCBOR(bytes.NewReader(cborData), &jsonOutput, true, false); err != nil {
+			if err := decodeCBOR(cborData, &jsonOutput, true, false); err != nil {
 				t.Fatalf("decode for filter: %v", err)
 			}
 

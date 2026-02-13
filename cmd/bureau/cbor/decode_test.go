@@ -60,7 +60,7 @@ func TestDecodeCBOR(t *testing.T) {
 			}
 
 			var output bytes.Buffer
-			if err := decodeCBOR(bytes.NewReader(cborData), &output, tt.compact, false); err != nil {
+			if err := decodeCBOR(cborData, &output, tt.compact, false); err != nil {
 				t.Fatalf("decodeCBOR: %v", err)
 			}
 
@@ -90,7 +90,7 @@ func TestDecodeCBOR_IntegerKeys(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := decodeCBOR(bytes.NewReader(cborData), &output, false, false); err != nil {
+	if err := decodeCBOR(cborData, &output, false, false); err != nil {
 		t.Fatalf("decodeCBOR: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestDecodeCBOR_Slurp(t *testing.T) {
 	sequence = append(sequence, item2...)
 
 	var output bytes.Buffer
-	if err := decodeCBOR(bytes.NewReader(sequence), &output, true, true); err != nil {
+	if err := decodeCBOR(sequence, &output, true, true); err != nil {
 		t.Fatalf("decodeCBOR slurp: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestDecodeCBOR_CompactFormat(t *testing.T) {
 
 	// Compact: single line, no indentation.
 	var compact bytes.Buffer
-	if err := decodeCBOR(bytes.NewReader(cborData), &compact, true, false); err != nil {
+	if err := decodeCBOR(cborData, &compact, true, false); err != nil {
 		t.Fatalf("decodeCBOR compact: %v", err)
 	}
 	compactStr := strings.TrimSpace(compact.String())
@@ -176,7 +176,7 @@ func TestDecodeCBOR_CompactFormat(t *testing.T) {
 
 	// Pretty: has indentation.
 	var pretty bytes.Buffer
-	if err := decodeCBOR(bytes.NewReader(cborData), &pretty, false, false); err != nil {
+	if err := decodeCBOR(cborData, &pretty, false, false); err != nil {
 		t.Fatalf("decodeCBOR pretty: %v", err)
 	}
 	prettyStr := strings.TrimSpace(pretty.String())
@@ -187,7 +187,7 @@ func TestDecodeCBOR_CompactFormat(t *testing.T) {
 
 func TestDecodeCBOR_EmptyInput(t *testing.T) {
 	var output bytes.Buffer
-	err := decodeCBOR(bytes.NewReader(nil), &output, false, false)
+	err := decodeCBOR(nil, &output, false, false)
 	if err == nil {
 		t.Fatal("expected error for empty input")
 	}

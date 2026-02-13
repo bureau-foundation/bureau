@@ -4,6 +4,7 @@
 package cbor
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,20 +17,25 @@ import (
 func encodeCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "encode",
-		Summary: "Convert JSON on stdin to CBOR on stdout",
-		Description: `Read JSON from stdin and write the equivalent CBOR to stdout using
-Bureau's Core Deterministic Encoding (RFC 8949 S4.2).
+		Summary: "Convert JSON to CBOR",
+		Description: `Read JSON from stdin (or a file argument) and write the equivalent CBOR
+to stdout using Bureau's Core Deterministic Encoding (RFC 8949 §4.2).
 
 JSON integers are preserved as CBOR integers (not floats). This matters
 for interoperability with Bureau services that use integer map keys and
 typed numeric fields.
 
 The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
-		Usage: "bureau cbor encode",
+		Usage: "bureau cbor encode [file]",
+		Flags: cborFlags(nil, nil, nil, nil),
 		Examples: []cli.Example{
 			{
 				Description: "Encode JSON to CBOR",
 				Command:     "echo '{\"action\":\"status\"}' | bureau cbor encode > request.cbor",
+			},
+			{
+				Description: "Encode a JSON file to CBOR",
+				Command:     "bureau cbor encode input.json > output.cbor",
 			},
 			{
 				Description: "Round-trip: encode then decode",
@@ -37,17 +43,25 @@ The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
 			},
 		},
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("encode takes no positional arguments, got %q", args[0])
+			data, remainingArgs, err := readInput(args, false)
+			if err != nil {
+				return err
 			}
-			return encodeCBOR(os.Stdin, os.Stdout)
+			if len(remainingArgs) > 0 {
+				return fmt.Errorf("encode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+			}
+			return encodeCBOR(data, os.Stdout)
 		},
 	}
 }
 
-// encodeCBOR reads JSON from r and writes CBOR to w.
-func encodeCBOR(r io.Reader, w io.Writer) error {
-	decoder := json.NewDecoder(r)
+// encodeCBOR encodes JSON data as CBOR and writes it to w.
+func encodeCBOR(data []byte, w io.Writer) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty input: expected JSON data")
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 
 	var value any
@@ -57,12 +71,12 @@ func encodeCBOR(r io.Reader, w io.Writer) error {
 
 	value = convertNumbers(value)
 
-	data, err := codec.Marshal(value)
+	cborData, err := codec.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode CBOR: %w", err)
 	}
 
-	_, err = w.Write(data)
+	_, err = w.Write(cborData)
 	return err
 }
 

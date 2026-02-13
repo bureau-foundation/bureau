@@ -5,6 +5,7 @@ package codec
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -184,6 +185,63 @@ func BenchmarkMarshal(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		Marshal(message)
+	}
+}
+
+func TestDiagnose(t *testing.T) {
+	data, err := Marshal(map[string]any{"action": "status"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	notation, err := Diagnose(data)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+
+	if !strings.Contains(notation, `"action"`) {
+		t.Errorf("notation %q does not contain \"action\"", notation)
+	}
+	if !strings.Contains(notation, `"status"`) {
+		t.Errorf("notation %q does not contain \"status\"", notation)
+	}
+}
+
+func TestDiagnoseFirst(t *testing.T) {
+	item1, err := Marshal("hello")
+	if err != nil {
+		t.Fatalf("Marshal item 1: %v", err)
+	}
+	item2, err := Marshal(int64(42))
+	if err != nil {
+		t.Fatalf("Marshal item 2: %v", err)
+	}
+
+	var sequence []byte
+	sequence = append(sequence, item1...)
+	sequence = append(sequence, item2...)
+
+	notation, remaining, err := DiagnoseFirst(sequence)
+	if err != nil {
+		t.Fatalf("DiagnoseFirst: %v", err)
+	}
+
+	if !strings.Contains(notation, `"hello"`) {
+		t.Errorf("first item notation %q does not contain \"hello\"", notation)
+	}
+	if len(remaining) == 0 {
+		t.Fatal("expected remaining bytes after first item")
+	}
+
+	notation2, remaining2, err := DiagnoseFirst(remaining)
+	if err != nil {
+		t.Fatalf("DiagnoseFirst second: %v", err)
+	}
+	if !strings.Contains(notation2, "42") {
+		t.Errorf("second item notation %q does not contain \"42\"", notation2)
+	}
+	if len(remaining2) != 0 {
+		t.Errorf("expected no remaining bytes, got %d", len(remaining2))
 	}
 }
 

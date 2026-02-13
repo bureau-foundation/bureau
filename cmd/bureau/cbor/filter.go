@@ -7,23 +7,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 )
 
-// filterCBOR decodes CBOR from r, converts to JSON, and pipes it
-// through jq with the given filter expression and extra arguments.
-// The jqArgs slice should contain the filter as the first element,
-// followed by any additional jq flags (already extracted by the
-// caller). Output from jq goes directly to stdout/stderr.
-func filterCBOR(r io.Reader, jqArgs []string) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("read input: %w", err)
-	}
+// filterCBOR decodes CBOR data, converts to JSON, and pipes it through
+// jq with the given filter expression and extra arguments. The jqArgs
+// slice should contain the filter as the first element, followed by any
+// additional jq flags (already extracted by the caller). Output from jq
+// goes directly to stdout/stderr.
+func filterCBOR(data []byte, jqArgs []string) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data on stdin")
+		return fmt.Errorf("empty input: expected CBOR data")
 	}
 
 	var value any

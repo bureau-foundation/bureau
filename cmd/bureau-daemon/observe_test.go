@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -59,7 +60,7 @@ func connectObserve(t *testing.T, socketPath string, request observeRequest) (ne
 		t.Fatalf("dial observe socket: %v", err)
 	}
 
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		connection.Close()
@@ -89,7 +90,7 @@ func connectObserve(t *testing.T, socketPath string, request observeRequest) (ne
 // connection. Returns the message type and payload.
 func readObserveMessage(t *testing.T, connection net.Conn) (byte, []byte) {
 	t.Helper()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 	defer connection.SetDeadline(time.Time{})
 
 	var header [5]byte
@@ -111,7 +112,7 @@ func readObserveMessage(t *testing.T, connection net.Conn) (byte, []byte) {
 // connection.
 func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, payload []byte) {
 	t.Helper()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 	defer connection.SetDeadline(time.Time{})
 
 	var header [5]byte
@@ -182,7 +183,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.client = client
-	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, logger)
+	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{
 		DefaultObservePolicy: &schema.ObservePolicy{
 			AllowedObservers:   []string{"**"},
@@ -221,7 +222,7 @@ func connectList(t *testing.T, socketPath string, observable bool) observe.ListR
 	}
 	defer connection.Close()
 
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	request := observeRequest{Action: "list", Observable: observable, Token: testObserverToken}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
@@ -531,14 +532,10 @@ func TestObserveRelayCleanupOnClientDisconnect(t *testing.T) {
 	// finishes), which triggers the relay process to exit.
 	connection.Close()
 
-	// Give the cleanup goroutine time to run. The relay should exit promptly
-	// when its socket closes. If cleanup is broken, the test will just take
-	// longer and still pass — but the process will be gone.
-	time.Sleep(200 * time.Millisecond)
-
 	// Verify the daemon is still accepting new connections (not wedged by
 	// a stuck relay cleanup). Open a new connection and verify it gets a
-	// response.
+	// response. The listener accepts independently of cleanup goroutines,
+	// so this succeeds even if cleanup is still in progress.
 	verifyConnection, verifyResponse := connectObserve(t, daemon.observeSocketPath, observeRequest{
 		Principal: "test/echo",
 		Mode:      "readwrite",

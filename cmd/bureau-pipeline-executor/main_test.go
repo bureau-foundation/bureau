@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -365,9 +366,10 @@ func TestTimeout(t *testing.T) {
 
 	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 
-	startTime := time.Now()
+	wallClock := clock.Real()
+	startTime := wallClock.Now()
 	err := run()
-	elapsed := time.Since(startTime)
+	elapsed := wallClock.Now().Sub(startTime)
 
 	if err == nil {
 		t.Fatal("expected error from timeout")
@@ -1112,9 +1114,10 @@ func TestGracefulTerminationSendsSIGTERM(t *testing.T) {
 	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 
 	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	startTime := time.Now()
+	wallClock := clock.Real()
+	startTime := wallClock.Now()
 	err := run()
-	elapsed := time.Since(startTime)
+	elapsed := wallClock.Now().Sub(startTime)
 
 	// The step should fail (timeout exceeded), but the process got SIGTERM.
 	if err == nil {
@@ -1154,9 +1157,10 @@ func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
 	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 
 	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	startTime := time.Now()
+	wallClock := clock.Real()
+	startTime := wallClock.Now()
 	err := run()
-	elapsed := time.Since(startTime)
+	elapsed := wallClock.Now().Sub(startTime)
 
 	if err == nil {
 		t.Fatal("expected error from timeout")

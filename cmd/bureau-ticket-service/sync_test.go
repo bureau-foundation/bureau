@@ -23,7 +23,7 @@ import (
 func newTestService() *TicketService {
 	return &TicketService{
 		clock:     clock.Real(),
-		startedAt: time.Now(),
+		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:     make(map[string]*roomState),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

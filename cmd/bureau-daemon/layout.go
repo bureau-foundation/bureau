@@ -34,7 +34,14 @@ import (
 // layoutWatcher tracks a running layout sync goroutine for a single principal.
 type layoutWatcher struct {
 	cancel context.CancelFunc
-	done   chan struct{}
+
+	// ready is closed when the ControlClient is attached and any initial
+	// layout restore from Matrix has completed. Callers can wait on this
+	// before triggering tmux operations that should produce layout events.
+	ready chan struct{}
+
+	// done is closed when the goroutine exits (either cleanly or on error).
+	done chan struct{}
 }
 
 // startLayoutWatcher begins monitoring the tmux session for a principal.
@@ -60,11 +67,12 @@ func (d *Daemon) startLayoutWatcher(ctx context.Context, localpart string) {
 	watchContext, cancel := context.WithCancel(ctx)
 	watcher := &layoutWatcher{
 		cancel: cancel,
+		ready:  make(chan struct{}),
 		done:   make(chan struct{}),
 	}
 	d.layoutWatchers[localpart] = watcher
 
-	go d.runLayoutWatcher(watchContext, localpart, watcher.done)
+	go d.runLayoutWatcher(watchContext, localpart, watcher.ready, watcher.done)
 }
 
 // stopLayoutWatcher cancels the layout watcher for a principal and waits
@@ -81,6 +89,33 @@ func (d *Daemon) stopLayoutWatcher(localpart string) {
 
 	watcher.cancel()
 	<-watcher.done
+}
+
+// layoutWatcherReady returns the ready channel for a watcher, or nil
+// if no watcher exists for the given principal. The ready channel
+// closes when the ControlClient is attached and any initial layout
+// restore has completed.
+func (d *Daemon) layoutWatcherReady(localpart string) <-chan struct{} {
+	d.layoutWatchersMu.Lock()
+	defer d.layoutWatchersMu.Unlock()
+	watcher, exists := d.layoutWatchers[localpart]
+	if !exists {
+		return nil
+	}
+	return watcher.ready
+}
+
+// layoutWatcherDone returns the done channel for a watcher, or nil
+// if no watcher exists for the given principal. The done channel
+// closes when the watcher goroutine exits.
+func (d *Daemon) layoutWatcherDone(localpart string) <-chan struct{} {
+	d.layoutWatchersMu.Lock()
+	defer d.layoutWatchersMu.Unlock()
+	watcher, exists := d.layoutWatchers[localpart]
+	if !exists {
+		return nil
+	}
+	return watcher.done
 }
 
 // stopAllLayoutWatchers cancels all running layout watchers and waits for
@@ -107,7 +142,7 @@ func (d *Daemon) stopAllLayoutWatchers() {
 // runLayoutWatcher is the main goroutine for a single principal's layout
 // sync. It restores the layout from Matrix (if available), then watches
 // for changes and publishes updates.
-func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done chan struct{}) {
+func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, done chan struct{}) {
 	defer close(done)
 
 	sessionName := "bureau/" + localpart
@@ -122,6 +157,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done ch
 			"principal", localpart,
 			"error", err,
 		)
+		close(ready)
 		return
 	}
 	defer controlClient.Stop()
@@ -149,6 +185,10 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, done ch
 			"error", err,
 		)
 	}
+
+	// Signal that initialization is complete: the ControlClient is attached
+	// and any restore from Matrix has been applied.
+	close(ready)
 
 	// Watch for layout changes and publish to Matrix.
 	for range controlClient.Events() {

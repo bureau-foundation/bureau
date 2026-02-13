@@ -11,7 +11,7 @@ import (
 func TestBlacklist_RevokeAndCheck(t *testing.T) {
 	blacklist := NewBlacklist()
 
-	tokenExpiry := time.Now().Add(5 * time.Minute)
+	tokenExpiry := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	blacklist.Revoke("token-1", tokenExpiry)
 
 	if !blacklist.IsRevoked("token-1") {
@@ -76,7 +76,8 @@ func TestBlacklist_Cleanup(t *testing.T) {
 
 func TestBlacklist_CleanupNoEntries(t *testing.T) {
 	blacklist := NewBlacklist()
-	removed := blacklist.Cleanup(time.Now())
+	cleanupTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	removed := blacklist.Cleanup(cleanupTime)
 	if removed != 0 {
 		t.Errorf("Cleanup on empty blacklist removed = %d, want 0", removed)
 	}
@@ -85,7 +86,7 @@ func TestBlacklist_CleanupNoEntries(t *testing.T) {
 func TestBlacklist_DuplicateRevoke(t *testing.T) {
 	blacklist := NewBlacklist()
 
-	expiry := time.Now().Add(5 * time.Minute)
+	expiry := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	blacklist.Revoke("token-1", expiry)
 	blacklist.Revoke("token-1", expiry) // duplicate
 

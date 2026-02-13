@@ -60,6 +60,10 @@ type ControlClient struct {
 	// cancel stops the control mode subprocess and all goroutines.
 	cancel context.CancelFunc
 
+	// ready is closed when the control mode subprocess is attached
+	// and the notification reader goroutine has started scanning.
+	ready chan struct{}
+
 	// done is closed when the reader goroutine exits. Wait on this
 	// after cancelling to ensure clean shutdown.
 	done chan struct{}
@@ -91,6 +95,7 @@ func NewControlClient(ctx context.Context, server *tmux.Server, sessionName stri
 		debounceInterval: DefaultDebounceInterval,
 		events:           make(chan LayoutChanged, 16),
 		cancel:           cancel,
+		ready:            make(chan struct{}),
 		done:             make(chan struct{}),
 	}
 	for _, option := range options {
@@ -108,6 +113,14 @@ func NewControlClient(ctx context.Context, server *tmux.Server, sessionName stri
 // The channel is closed when the client stops.
 func (client *ControlClient) Events() <-chan LayoutChanged {
 	return client.events
+}
+
+// Ready returns a channel that closes when the control mode subprocess
+// is attached and the notification reader is actively scanning. Callers
+// can wait on this before triggering tmux operations that produce layout
+// notifications.
+func (client *ControlClient) Ready() <-chan struct{} {
+	return client.ready
 }
 
 // Stop shuts down the control mode client. Blocks until the reader
@@ -149,6 +162,8 @@ func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Re
 	defer close(client.events)
 	defer stdin.Close()
 	defer cmd.Wait()
+
+	close(client.ready)
 
 	scanner := bufio.NewScanner(stdout)
 

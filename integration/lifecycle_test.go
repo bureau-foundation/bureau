@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -560,7 +561,7 @@ func TestTwoMachineFleet(t *testing.T) {
 				"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
 				"ciphertext":     ciphertext,
 				"provisioned_by": "@bureau-admin:" + testServerName,
-				"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+				"provisioned_at": "2026-01-01T00:00:00Z",
 			})
 		if err != nil {
 			t.Fatalf("push credentials for %s: %v", p.localpart, err)
@@ -620,11 +621,11 @@ func TestTwoMachineFleet(t *testing.T) {
 	proxyJoinRoom(t, clientB, sharedRoom.RoomID)
 
 	// Principal A sends a message.
-	messageFromA := "Hello from fleet-a at " + time.Now().Format(time.RFC3339Nano)
+	messageFromA := testutil.UniqueID("hello-from-fleet-a")
 	proxySendMessage(t, clientA, sharedRoom.RoomID, messageFromA)
 
 	// Principal B sends a message.
-	messageFromB := "Hello from fleet-b at " + time.Now().Format(time.RFC3339Nano)
+	messageFromB := testutil.UniqueID("hello-from-fleet-b")
 	proxySendMessage(t, clientB, sharedRoom.RoomID, messageFromB)
 
 	// Verify principal B can see A's message (and vice versa).

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -47,8 +48,8 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 
 	go transportB.Serve(ctx, handler)
 
-	// Give the signaling poller time to start.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the signaling poller to start.
+	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
 	// Transport A dials Transport B.
 	roundTripper := HTTPTransport(transportA, "machine/beta")
@@ -73,13 +74,9 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 	}
 
 	// Verify the server received the correct path.
-	select {
-	case path := <-received:
-		if path != "/http/test-service/v1/hello" {
-			t.Errorf("server received path = %q, want %q", path, "/http/test-service/v1/hello")
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("server did not receive request")
+	path := testutil.RequireReceive(t, received, 5*time.Second, "server received request")
+	if path != "/http/test-service/v1/hello" {
+		t.Errorf("server received path = %q, want %q", path, "/http/test-service/v1/hello")
 	}
 }
 
@@ -107,7 +104,7 @@ func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 	defer cancel()
 	go transportB.Serve(ctx, handler)
 
-	time.Sleep(100 * time.Millisecond)
+	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
 	roundTripper := HTTPTransport(transportA, "machine/beta")
 	client := &http.Client{
@@ -156,7 +153,7 @@ func TestWebRTCTransport_ConcurrentDials(t *testing.T) {
 	defer cancel()
 	go transportB.Serve(ctx, handler)
 
-	time.Sleep(100 * time.Millisecond)
+	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
 	const concurrency = 5
 	var waitGroup sync.WaitGroup
@@ -254,7 +251,8 @@ func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 	go transportA.Serve(ctx, handlerA)
 	go transportB.Serve(ctx, handlerB)
 
-	time.Sleep(100 * time.Millisecond)
+	testutil.RequireClosed(t, transportA.Ready(), 5*time.Second, "transportA ready")
+	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
 	// A → B
 	clientAtoB := &http.Client{

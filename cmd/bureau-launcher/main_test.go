@@ -730,20 +730,18 @@ func TestWaitForSocket(t *testing.T) {
 
 		processDone := make(chan struct{})
 
-		// Create the socket after a short delay.
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			listener, err := net.Listen("unix", socketPath)
-			if err != nil {
-				return
-			}
-			defer listener.Close()
-			// Keep the socket alive until the test finishes.
-			<-processDone
-		}()
-		defer close(processDone)
+		// Create the socket before calling waitForSocket. The function
+		// polls via os.Stat so it will find the socket on the first tick.
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			t.Fatalf("creating test socket: %v", err)
+		}
+		t.Cleanup(func() {
+			listener.Close()
+			close(processDone)
+		})
 
-		if err := waitForSocket(socketPath, make(chan struct{}), 5*time.Second); err != nil {
+		if err := waitForSocket(socketPath, processDone, 5*time.Second); err != nil {
 			t.Errorf("waitForSocket() error: %v", err)
 		}
 	})
@@ -1032,11 +1030,7 @@ func TestProxyLifecycle_CrashedProcessRecreation(t *testing.T) {
 	launcher.destroyTmuxSession("test/crash")
 
 	// Wait for the session watcher to detect the tmux session is gone.
-	select {
-	case <-sandbox.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for session watcher to close done channel")
-	}
+	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 
 	// Attempting to create the same sandbox should succeed because the
 	// sandbox has exited (the launcher detects this and cleans up).
@@ -1590,11 +1584,7 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	sandbox := launcher.sandboxes["test/crash"]
 	launcher.destroyTmuxSession("test/crash")
 
-	select {
-	case <-sandbox.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for session watcher to close done channel")
-	}
+	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 
 	// Re-creating the sandbox should clean up the old sandbox
 	// (via cleanupSandbox) and create a new one.
@@ -1765,7 +1755,7 @@ func sendIPCRequest(t *testing.T, socketPath string, request IPCRequest) IPCResp
 		t.Fatalf("dial launcher: %v", err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		t.Fatalf("encode request: %v", err)
@@ -1921,11 +1911,13 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 		close(handleDone)
 	}()
 
-	// Verify wait-sandbox is actually blocking: no response yet.
+	// Verify wait-sandbox is actually blocking: a non-blocking poll on
+	// the response channel should yield nothing because the sandbox is
+	// still alive and the handler is waiting on its done channel.
 	select {
 	case <-responseChan:
 		t.Fatal("wait-sandbox returned before process exit")
-	case <-time.After(100 * time.Millisecond):
+	default:
 		// Expected: still blocking.
 	}
 
@@ -1935,21 +1927,17 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 	launcher.destroyTmuxSession("test/waitnormal")
 
 	// wait-sandbox should now return.
-	select {
-	case response := <-responseChan:
-		if !response.OK {
-			t.Fatalf("wait-sandbox failed: %s", response.Error)
-		}
-		if response.ExitCode == nil {
-			t.Fatal("ExitCode should be set")
-		}
-		// No exit-code file was written (bare shell, no sandbox script),
-		// so the session watcher reports -1.
-		if *response.ExitCode != -1 {
-			t.Errorf("expected exit code -1 (no exit-code file), got %d", *response.ExitCode)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait-sandbox did not return after sandbox exit")
+	response := testutil.RequireReceive(t, responseChan, 5*time.Second, "wait-sandbox response after sandbox exit")
+	if !response.OK {
+		t.Fatalf("wait-sandbox failed: %s", response.Error)
+	}
+	if response.ExitCode == nil {
+		t.Fatal("ExitCode should be set")
+	}
+	// No exit-code file was written (bare shell, no sandbox script),
+	// so the session watcher reports -1.
+	if *response.ExitCode != -1 {
+		t.Errorf("expected exit code -1 (no exit-code file), got %d", *response.ExitCode)
 	}
 
 	<-handleDone
@@ -1977,11 +1965,7 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 	sandbox := launcher.sandboxes["test/waitalready"]
 	launcher.destroyTmuxSession("test/waitalready")
 
-	select {
-	case <-sandbox.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for session watcher to close done channel")
-	}
+	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 
 	// Now call wait-sandbox — should return immediately since the
 	// sandbox has already exited.
@@ -2024,16 +2008,12 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 	}
 	launcher.handleConnection(context.Background(), conn)
 
-	select {
-	case response := <-responseChan:
-		if !response.OK {
-			t.Fatalf("wait-sandbox failed: %s", response.Error)
-		}
-		if response.ExitCode == nil {
-			t.Fatal("ExitCode should be set")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait-sandbox did not return for already-exited process")
+	response := testutil.RequireReceive(t, responseChan, 5*time.Second, "wait-sandbox response for already-exited process")
+	if !response.OK {
+		t.Fatalf("wait-sandbox failed: %s", response.Error)
+	}
+	if response.ExitCode == nil {
+		t.Fatal("ExitCode should be set")
 	}
 }
 
@@ -2093,11 +2073,10 @@ func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
 		t.Fatalf("Encode wait: %v", encodeErr)
 	}
 
-	// Give the handler a moment to start blocking.
-	time.Sleep(50 * time.Millisecond)
-
 	// While wait-sandbox is blocking, send a status request — it should
-	// succeed without being blocked by the wait.
+	// succeed without being blocked by the wait. The accept loop runs
+	// each connection in its own goroutine, so the status request gets
+	// independent handling regardless of the wait-sandbox handler's state.
 	statusResponse := sendIPCRequest(t, socketPath, IPCRequest{Action: "status"})
 	if !statusResponse.OK {
 		t.Fatalf("status request blocked by wait-sandbox: %s", statusResponse.Error)

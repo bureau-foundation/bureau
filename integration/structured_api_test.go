@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -143,7 +143,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	const testStateKey = "integration"
 	testStateContent := map[string]any{
 		"description": "structured API integration test",
-		"timestamp":   time.Now().Unix(),
+		"timestamp":   1735689600,
 	}
 
 	t.Run("PublishState", func(t *testing.T) {
@@ -307,7 +307,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	})
 
 	// --- Sub-test: POST /v1/matrix/message ---
-	messageBody := "Hello from structured API at " + time.Now().Format(time.RFC3339Nano)
+	messageBody := testutil.UniqueID("hello-from-structured-api")
 
 	t.Run("SendMessage", func(t *testing.T) {
 		requestBody := map[string]any{
@@ -344,7 +344,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	})
 
 	// --- Sub-test: POST /v1/matrix/message with room alias ---
-	aliasMessageBody := "Hello via alias at " + time.Now().Format(time.RFC3339Nano)
+	aliasMessageBody := "Hello via alias"
 
 	t.Run("SendMessageByAlias", func(t *testing.T) {
 		requestBody := map[string]any{

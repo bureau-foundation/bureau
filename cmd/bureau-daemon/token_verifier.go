@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -24,6 +25,7 @@ import (
 type tokenVerifier struct {
 	client *messaging.Client
 	logger *slog.Logger
+	clock  clock.Clock
 
 	// cacheDuration controls how long successful verifications are cached.
 	// After expiry, the next request triggers a fresh whoami call.
@@ -41,11 +43,13 @@ type tokenCacheEntry struct {
 
 // newTokenVerifier creates a verifier that caches successful results for
 // the given duration. The messaging.Client is used to create temporary
-// sessions for whoami calls.
-func newTokenVerifier(client *messaging.Client, cacheDuration time.Duration, logger *slog.Logger) *tokenVerifier {
+// sessions for whoami calls. The clock controls time for cache expiry
+// checks — production code passes clock.Real(), tests pass clock.Fake().
+func newTokenVerifier(client *messaging.Client, cacheDuration time.Duration, clk clock.Clock, logger *slog.Logger) *tokenVerifier {
 	return &tokenVerifier{
 		client:        client,
 		logger:        logger,
+		clock:         clk,
 		cacheDuration: cacheDuration,
 		cache:         make(map[[sha256.Size]byte]tokenCacheEntry),
 	}
@@ -70,7 +74,7 @@ func (v *tokenVerifier) Verify(ctx context.Context, token string) (string, error
 	entry, found := v.cache[key]
 	v.mu.RUnlock()
 
-	if found && time.Now().Before(entry.expiresAt) {
+	if found && v.clock.Now().Before(entry.expiresAt) {
 		return entry.userID, nil
 	}
 
@@ -93,7 +97,7 @@ func (v *tokenVerifier) Verify(ctx context.Context, token string) (string, error
 	v.mu.Lock()
 	v.cache[key] = tokenCacheEntry{
 		userID:    userID,
-		expiresAt: time.Now().Add(v.cacheDuration),
+		expiresAt: v.clock.Now().Add(v.cacheDuration),
 	}
 	v.mu.Unlock()
 
@@ -104,7 +108,7 @@ func (v *tokenVerifier) Verify(ctx context.Context, token string) (string, error
 // evictExpired removes expired entries from the cache. Called periodically
 // by the daemon to prevent unbounded growth.
 func (v *tokenVerifier) evictExpired() {
-	now := time.Now()
+	now := v.clock.Now()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 

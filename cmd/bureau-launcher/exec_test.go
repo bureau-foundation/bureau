@@ -229,12 +229,7 @@ func TestReconnectSandboxes(t *testing.T) {
 	// This also exercises the "sandbox exits because session is gone"
 	// path that happens after exec() reconnection when the tmux server
 	// has died.
-	select {
-	case <-sandbox.done:
-		// Session watcher detected no tmux session.
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for session watcher to close done channel")
-	}
+	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 }
 
 func TestReconnectDeadProcess(t *testing.T) {
@@ -529,7 +524,7 @@ func TestPerformExecFailure(t *testing.T) {
 	watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 	watchdog.Write(watchdogPath, watchdog.State{
 		Component: "launcher",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 
 	execCallCount := 0
@@ -621,7 +616,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 			Component:      "launcher",
 			PreviousBinary: "/old/launcher",
 			NewBinary:      "/new/launcher",
-			Timestamp:      time.Now(),
+			Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 		})
 
 		failedPath := checkLauncherWatchdog(watchdogPath, "/new/launcher", logger)
@@ -644,7 +639,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 			Component:      "launcher",
 			PreviousBinary: "/old/launcher",
 			NewBinary:      "/new/launcher",
-			Timestamp:      time.Now(),
+			Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 		})
 
 		failedPath := checkLauncherWatchdog(watchdogPath, "/old/launcher", logger)
@@ -667,7 +662,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 			Component:      "launcher",
 			PreviousBinary: "/old/launcher",
 			NewBinary:      "/new/launcher",
-			Timestamp:      time.Now(),
+			Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 		})
 
 		failedPath := checkLauncherWatchdog(watchdogPath, "/completely/different", logger)
@@ -690,7 +685,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 			Component:      "launcher",
 			PreviousBinary: "/old/launcher",
 			NewBinary:      "/new/launcher",
-			Timestamp:      time.Now().Add(-10 * time.Minute), // Expired.
+			Timestamp:      time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 		})
 
 		failedPath := checkLauncherWatchdog(watchdogPath, "/old/launcher", logger)

@@ -45,12 +45,13 @@ func TestWriteRead(t *testing.T) {
 
 func TestWriteOverwritesExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
+	baseTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	first := State{
 		Component:      "daemon",
 		PreviousBinary: "/old/v1",
 		NewBinary:      "/new/v2",
-		Timestamp:      time.Now(),
+		Timestamp:      baseTime,
 	}
 	if err := Write(path, first); err != nil {
 		t.Fatalf("Write first: %v", err)
@@ -60,7 +61,7 @@ func TestWriteOverwritesExisting(t *testing.T) {
 		Component:      "launcher",
 		PreviousBinary: "/old/v2",
 		NewBinary:      "/new/v3",
-		Timestamp:      time.Now().Add(time.Minute),
+		Timestamp:      baseTime.Add(time.Minute),
 	}
 	if err := Write(path, second); err != nil {
 		t.Fatalf("Write second: %v", err)
@@ -82,7 +83,7 @@ func TestWriteFilePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {
@@ -106,7 +107,7 @@ func TestWriteNoTemporaryFileLeftBehind(t *testing.T) {
 	path := filepath.Join(directory, "watchdog.cbor")
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {
@@ -123,7 +124,7 @@ func TestWriteParentDirectoryMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent", "subdir", "watchdog.cbor")
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	err := Write(path, state)
@@ -162,11 +163,14 @@ func TestReadCorruptCBOR(t *testing.T) {
 
 func TestCheckRecent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
+
+	// Far-future timestamp: the elapsed duration is negative, which is
+	// always less than maxAge. Deterministic regardless of wall clock.
 	state := State{
 		Component:      "daemon",
 		PreviousBinary: "/old",
 		NewBinary:      "/new",
-		Timestamp:      time.Now(),
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {
@@ -187,9 +191,12 @@ func TestCheckRecent(t *testing.T) {
 
 func TestCheckStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
+
+	// Far-past timestamp: the elapsed duration is large and positive,
+	// always exceeding maxAge. Deterministic regardless of wall clock.
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now().Add(-10 * time.Minute),
+		Timestamp: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {
@@ -233,7 +240,7 @@ func TestClearExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {
@@ -261,7 +268,7 @@ func TestClearIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
-		Timestamp: time.Now(),
+		Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := Write(path, state); err != nil {

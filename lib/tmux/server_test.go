@@ -6,9 +6,9 @@ package tmux_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -35,10 +35,13 @@ func TestNewSessionWithCommand(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	// Give tmux a moment to notice the command exited.
-	deadline := time.Now().Add(5 * time.Second)
-	for server.HasSession("ephemeral") && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
+	// Wait for tmux to notice the command exited, bounded by the
+	// test context timeout.
+	for server.HasSession("ephemeral") {
+		if t.Context().Err() != nil {
+			break
+		}
+		runtime.Gosched()
 	}
 
 	if server.HasSession("ephemeral") {

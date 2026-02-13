@@ -52,7 +52,7 @@ func TestCheckDaemonWatchdog_SuccessfulExec(t *testing.T) {
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
 		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
-		Timestamp:      time.Now(),
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("writing watchdog: %v", err)
@@ -85,7 +85,7 @@ func TestCheckDaemonWatchdog_FailedExec(t *testing.T) {
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
 		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
-		Timestamp:      time.Now(),
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("writing watchdog: %v", err)
@@ -120,7 +120,7 @@ func TestCheckDaemonWatchdog_StaleWatchdog(t *testing.T) {
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
 		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
-		Timestamp:      time.Now().Add(-10 * time.Minute),
+		Timestamp:      time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("writing watchdog: %v", err)
@@ -148,7 +148,7 @@ func TestCheckDaemonWatchdog_NeitherMatch(t *testing.T) {
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
 		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
-		Timestamp:      time.Now(),
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("writing watchdog: %v", err)
@@ -181,7 +181,7 @@ func TestCheckDaemonWatchdog_ReportsToMatrix(t *testing.T) {
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
 		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
-		Timestamp:      time.Now(),
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("writing watchdog: %v", err)

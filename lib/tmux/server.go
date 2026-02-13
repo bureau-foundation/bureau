@@ -119,8 +119,12 @@ func (s *Server) KillServer() error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		outputString := strings.TrimSpace(string(output))
-		// "no server running" is benign during cleanup.
-		if strings.Contains(outputString, "no server running") {
+		// "no server running" and "server exited unexpectedly" are benign
+		// during cleanup: the server is already gone, which is what we wanted.
+		// The "server exited unexpectedly" message appears when the socket
+		// file lingers briefly after the server process has exited.
+		if strings.Contains(outputString, "no server running") ||
+			strings.Contains(outputString, "server exited unexpectedly") {
 			return nil
 		}
 		return fmt.Errorf("tmux kill-server: %w (%s)", err, outputString)

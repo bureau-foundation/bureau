@@ -22,7 +22,8 @@ func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 func TestMintAndVerify(t *testing.T) {
 	public, private := testKeypair(t)
 
-	now := time.Now()
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:  "iree/amdgpu/pm",
 		Machine:  "machine/workstation",
@@ -32,8 +33,8 @@ func TestMintAndVerify(t *testing.T) {
 			{Actions: []string{"ticket/close"}, Targets: []string{"iree/**"}},
 		},
 		ID:        "a1b2c3d4e5f6",
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -46,9 +47,10 @@ func TestMintAndVerify(t *testing.T) {
 		t.Fatalf("token too short: %d bytes", len(tokenBytes))
 	}
 
-	verified, err := Verify(public, tokenBytes)
+	verifyTime := time.Unix(issuedAt+1800, 0) // midpoint between issued and expiry
+	verified, err := VerifyAt(public, tokenBytes, verifyTime)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf("VerifyAt: %v", err)
 	}
 
 	if verified.Subject != "iree/amdgpu/pm" {
@@ -74,13 +76,15 @@ func TestMintAndVerify(t *testing.T) {
 func TestVerify_TamperedPayload(t *testing.T) {
 	public, private := testKeypair(t)
 
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:   "agent",
 		Machine:   "machine",
 		Audience:  "ticket",
 		ID:        "id1",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -91,9 +95,10 @@ func TestVerify_TamperedPayload(t *testing.T) {
 	// Tamper with a payload byte.
 	tokenBytes[0] ^= 0xFF
 
-	_, err = Verify(public, tokenBytes)
+	verifyTime := time.Unix(issuedAt+1800, 0)
+	_, err = VerifyAt(public, tokenBytes, verifyTime)
 	if !errors.Is(err, ErrInvalidSignature) {
-		t.Errorf("Verify tampered token: got %v, want ErrInvalidSignature", err)
+		t.Errorf("VerifyAt tampered token: got %v, want ErrInvalidSignature", err)
 	}
 }
 
@@ -101,13 +106,15 @@ func TestVerify_WrongKey(t *testing.T) {
 	_, private := testKeypair(t)
 	otherPublic, _ := testKeypair(t)
 
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:   "agent",
 		Machine:   "machine",
 		Audience:  "ticket",
 		ID:        "id1",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -115,23 +122,25 @@ func TestVerify_WrongKey(t *testing.T) {
 		t.Fatalf("Mint: %v", err)
 	}
 
-	_, err = Verify(otherPublic, tokenBytes)
+	verifyTime := time.Unix(issuedAt+1800, 0)
+	_, err = VerifyAt(otherPublic, tokenBytes, verifyTime)
 	if !errors.Is(err, ErrInvalidSignature) {
-		t.Errorf("Verify with wrong key: got %v, want ErrInvalidSignature", err)
+		t.Errorf("VerifyAt with wrong key: got %v, want ErrInvalidSignature", err)
 	}
 }
 
 func TestVerify_ExpiredToken(t *testing.T) {
 	public, private := testKeypair(t)
 
-	now := time.Now()
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:   "agent",
 		Machine:   "machine",
 		Audience:  "ticket",
 		ID:        "id1",
-		IssuedAt:  now.Add(-10 * time.Minute).Unix(),
-		ExpiresAt: now.Add(-5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -139,9 +148,11 @@ func TestVerify_ExpiredToken(t *testing.T) {
 		t.Fatalf("Mint: %v", err)
 	}
 
-	_, err = Verify(public, tokenBytes)
+	// Verify at a time after expiry.
+	verifyTime := time.Unix(expiresAt+3600, 0)
+	_, err = VerifyAt(public, tokenBytes, verifyTime)
 	if !errors.Is(err, ErrTokenExpired) {
-		t.Errorf("Verify expired token: got %v, want ErrTokenExpired", err)
+		t.Errorf("VerifyAt expired token: got %v, want ErrTokenExpired", err)
 	}
 }
 
@@ -201,13 +212,15 @@ func TestVerifyAt_Deterministic(t *testing.T) {
 func TestVerifyForService(t *testing.T) {
 	public, private := testKeypair(t)
 
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:   "agent",
 		Machine:   "machine",
 		Audience:  "ticket",
 		ID:        "id1",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -215,19 +228,21 @@ func TestVerifyForService(t *testing.T) {
 		t.Fatalf("Mint: %v", err)
 	}
 
+	verifyTime := time.Unix(issuedAt+1800, 0)
+
 	// Correct audience.
-	verified, err := VerifyForService(public, tokenBytes, "ticket")
+	verified, err := VerifyForServiceAt(public, tokenBytes, "ticket", verifyTime)
 	if err != nil {
-		t.Fatalf("VerifyForService correct audience: %v", err)
+		t.Fatalf("VerifyForServiceAt correct audience: %v", err)
 	}
 	if verified.Subject != "agent" {
 		t.Errorf("Subject = %q, want agent", verified.Subject)
 	}
 
 	// Wrong audience.
-	_, err = VerifyForService(public, tokenBytes, "artifact")
+	_, err = VerifyForServiceAt(public, tokenBytes, "artifact", verifyTime)
 	if !errors.Is(err, ErrAudienceMismatch) {
-		t.Errorf("VerifyForService wrong audience: got %v, want ErrAudienceMismatch", err)
+		t.Errorf("VerifyForServiceAt wrong audience: got %v, want ErrAudienceMismatch", err)
 	}
 }
 
@@ -297,13 +312,15 @@ func TestGrantsAllow_EmptyGrants(t *testing.T) {
 func TestMintVerify_NoGrants(t *testing.T) {
 	public, private := testKeypair(t)
 
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
 		Subject:   "agent",
 		Machine:   "machine",
 		Audience:  "ticket",
 		ID:        "id1",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
 	}
 
 	tokenBytes, err := Mint(private, token)
@@ -311,9 +328,10 @@ func TestMintVerify_NoGrants(t *testing.T) {
 		t.Fatalf("Mint: %v", err)
 	}
 
-	verified, err := Verify(public, tokenBytes)
+	verifyTime := time.Unix(issuedAt+1800, 0)
+	verified, err := VerifyAt(public, tokenBytes, verifyTime)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf("VerifyAt: %v", err)
 	}
 
 	if len(verified.Grants) != 0 {

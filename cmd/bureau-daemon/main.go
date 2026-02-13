@@ -214,7 +214,7 @@ func run() error {
 		session:                session,
 		clock:                  clock.Real(),
 		client:                 client,
-		tokenVerifier:          newTokenVerifier(client, 5*time.Minute, logger),
+		tokenVerifier:          newTokenVerifier(client, 5*time.Minute, clock.Real(), logger),
 		tokenSigningPublicKey:  tokenSigningPublicKey,
 		tokenSigningPrivateKey: tokenSigningPrivateKey,
 		authorizationIndex:     authorization.NewIndex(),

@@ -40,5 +40,6 @@ go_test(
         "//lib/codec",
         "//lib/schema",
         "//lib/servicetoken",
+        "//lib/testutil",
     ],
 )

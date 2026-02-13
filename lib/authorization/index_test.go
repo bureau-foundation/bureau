@@ -58,11 +58,10 @@ func TestIndex_SetPrincipalPreservesTemporalGrants(t *testing.T) {
 	})
 
 	// Add a temporal grant.
-	future := time.Now().Add(time.Hour).Format(time.RFC3339)
 	ok := index.AddTemporalGrant("agent", schema.Grant{
 		Actions:   []string{"observe"},
 		Targets:   []string{"service/db/**"},
-		ExpiresAt: future,
+		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-test",
 	})
 	if !ok {
@@ -94,11 +93,10 @@ func TestIndex_RemovePrincipalCleansTemporalGrants(t *testing.T) {
 
 	index.SetPrincipal("agent", schema.AuthorizationPolicy{})
 
-	future := time.Now().Add(time.Hour).Format(time.RFC3339)
 	index.AddTemporalGrant("agent", schema.Grant{
 		Actions:   []string{"observe"},
 		Targets:   []string{"**"},
-		ExpiresAt: future,
+		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-1",
 	})
 
@@ -131,7 +129,7 @@ func TestIndex_AddTemporalGrant_RequiresExpiryAndTicket(t *testing.T) {
 	// No Ticket: should fail.
 	ok = index.AddTemporalGrant("agent", schema.Grant{
 		Actions:   []string{"observe"},
-		ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339),
+		ExpiresAt: "2099-01-01T00:00:00Z",
 	})
 	if ok {
 		t.Error("AddTemporalGrant without Ticket should return false")
@@ -155,17 +153,16 @@ func TestIndex_RevokeTemporalGrant(t *testing.T) {
 		Grants: []schema.Grant{{Actions: []string{"ticket/create"}}},
 	})
 
-	future := time.Now().Add(time.Hour).Format(time.RFC3339)
 	index.AddTemporalGrant("agent", schema.Grant{
 		Actions:   []string{"observe"},
 		Targets:   []string{"service/db/**"},
-		ExpiresAt: future,
+		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-revoke-me",
 	})
 	index.AddTemporalGrant("agent", schema.Grant{
 		Actions:   []string{"interrupt"},
 		Targets:   []string{"service/db/**"},
-		ExpiresAt: future,
+		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-keep-me",
 	})
 
@@ -272,7 +269,8 @@ func TestIndex_SweepExpired_NoTemporalGrants(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal("agent", schema.AuthorizationPolicy{})
 
-	affected := index.SweepExpired(time.Now())
+	sweepTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	affected := index.SweepExpired(sweepTime)
 	if affected != nil {
 		t.Errorf("sweep with no temporal grants = %v, want nil", affected)
 	}
@@ -282,13 +280,13 @@ func TestIndex_SweepExpired_NoneExpired(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal("agent", schema.AuthorizationPolicy{})
 
-	future := time.Now().Add(time.Hour).Format(time.RFC3339)
 	index.AddTemporalGrant("agent", schema.Grant{
 		Actions: []string{"observe"}, Targets: []string{"**"},
-		ExpiresAt: future, Ticket: "tkt-1",
+		ExpiresAt: "2099-01-01T00:00:00Z", Ticket: "tkt-1",
 	})
 
-	affected := index.SweepExpired(time.Now())
+	sweepTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	affected := index.SweepExpired(sweepTime)
 	if affected != nil {
 		t.Errorf("sweep with no expired grants = %v, want nil", affected)
 	}

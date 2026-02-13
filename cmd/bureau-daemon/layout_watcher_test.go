@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -68,14 +70,35 @@ func createTestTmuxSession(t *testing.T, server *tmux.Server, sessionName string
 		t.Fatalf("create tmux session %q: %v", sessionName, err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if server.HasSession(sessionName) {
-			return
+	found := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		for {
+			if server.HasSession(sessionName) {
+				close(found)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				runtime.Gosched()
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
+	}()
+	testutil.RequireClosed(t, found, 5*time.Second, "tmux session %q not ready", sessionName)
+}
+
+// waitForWatcherReady waits for the layout watcher's ControlClient to
+// attach and any layout restore to complete.
+func waitForWatcherReady(t *testing.T, daemon *Daemon, localpart string) {
+	t.Helper()
+	ready := daemon.layoutWatcherReady(localpart)
+	if ready == nil {
+		t.Fatalf("no layout watcher found for %q", localpart)
 	}
-	t.Fatalf("tmux session %q not ready after 5 seconds", sessionName)
+	testutil.RequireClosed(t, ready, 5*time.Second, "layout watcher ready for %q", localpart)
 }
 
 // TestLayoutWatcherPublishOnChange verifies that splitting a pane triggers the
@@ -94,19 +117,26 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Set up a notification channel so we can detect when the layout
+	// event is published to the mock Matrix server.
+	layoutPublished := make(chan string, 4)
+	matrixState.mu.Lock()
+	matrixState.stateEventWritten = layoutPublished
+	matrixState.mu.Unlock()
+
 	daemon.startLayoutWatcher(ctx, localpart)
 	defer daemon.stopLayoutWatcher(localpart)
 
 	// Wait for the ControlClient to attach.
-	time.Sleep(300 * time.Millisecond)
+	waitForWatcherReady(t, daemon, localpart)
 
 	// Split a pane to trigger a layout change.
 	if _, err := tmuxServer.Run("split-window", "-t", sessionName, "-h", "cat"); err != nil {
 		t.Fatalf("split-window: %v", err)
 	}
 
-	// Wait for debounce (500ms) + publish.
-	time.Sleep(2 * time.Second)
+	// Wait for the layout to be published (debounce + Matrix PUT).
+	testutil.RequireReceive(t, layoutPublished, 10*time.Second, "waiting for layout publish")
 
 	// Verify the layout was published to the mock Matrix.
 	key := "!config:test\x00" + schema.EventTypeLayout + "\x00" + localpart
@@ -177,8 +207,8 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 	daemon.startLayoutWatcher(ctx, localpart)
 	defer daemon.stopLayoutWatcher(localpart)
 
-	// Wait for the restore to complete.
-	time.Sleep(2 * time.Second)
+	// Wait for the restore to complete (signaled by the ready channel).
+	waitForWatcherReady(t, daemon, localpart)
 
 	// Verify the tmux session now has 2 windows.
 	output, err := tmuxServer.Run("list-windows",
@@ -211,7 +241,7 @@ func TestLayoutWatcherStopCleanup(t *testing.T) {
 	defer cancel()
 
 	daemon.startLayoutWatcher(ctx, localpart)
-	time.Sleep(300 * time.Millisecond)
+	waitForWatcherReady(t, daemon, localpart)
 
 	// Stop should return promptly and remove from map.
 	done := make(chan struct{})
@@ -220,12 +250,7 @@ func TestLayoutWatcherStopCleanup(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		// Good.
-	case <-time.After(5 * time.Second):
-		t.Fatal("stopLayoutWatcher hung for 5 seconds")
-	}
+	testutil.RequireClosed(t, done, 5*time.Second, "stopLayoutWatcher hung")
 
 	daemon.layoutWatchersMu.Lock()
 	_, exists := daemon.layoutWatchers[localpart]
@@ -254,7 +279,7 @@ func TestLayoutWatcherIdempotentStart(t *testing.T) {
 
 	daemon.startLayoutWatcher(ctx, localpart)
 	defer daemon.stopLayoutWatcher(localpart)
-	time.Sleep(300 * time.Millisecond)
+	waitForWatcherReady(t, daemon, localpart)
 
 	// Second start should be a no-op.
 	daemon.startLayoutWatcher(ctx, localpart)
@@ -288,7 +313,9 @@ func TestLayoutWatcherStopAll(t *testing.T) {
 	for _, name := range principals {
 		daemon.startLayoutWatcher(ctx, name)
 	}
-	time.Sleep(300 * time.Millisecond)
+	for _, name := range principals {
+		waitForWatcherReady(t, daemon, name)
+	}
 
 	// Stop all should complete promptly.
 	done := make(chan struct{})
@@ -297,12 +324,7 @@ func TestLayoutWatcherStopAll(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		// Good.
-	case <-time.After(10 * time.Second):
-		t.Fatal("stopAllLayoutWatchers hung for 10 seconds")
-	}
+	testutil.RequireClosed(t, done, 10*time.Second, "stopAllLayoutWatchers hung")
 
 	daemon.layoutWatchersMu.Lock()
 	count := len(daemon.layoutWatchers)
@@ -329,20 +351,21 @@ func TestLayoutWatcherNoTmuxSession(t *testing.T) {
 	// will fail to attach, and the goroutine should exit.
 	daemon.startLayoutWatcher(ctx, "test/nonexistent")
 
-	// The watcher should exit quickly since the tmux session doesn't exist.
-	time.Sleep(2 * time.Second)
+	// Wait for the watcher goroutine to exit (it should exit quickly
+	// since the tmux session doesn't exist and ControlClient creation
+	// fails). The done channel closes when the goroutine returns.
+	watcherDone := daemon.layoutWatcherDone("test/nonexistent")
+	if watcherDone == nil {
+		t.Fatal("no layout watcher found for test/nonexistent")
+	}
+	testutil.RequireClosed(t, watcherDone, 5*time.Second, "watcher goroutine exit for nonexistent session")
 
-	// stopLayoutWatcher should not hang.
+	// stopLayoutWatcher should not hang since the goroutine already exited.
 	done := make(chan struct{})
 	go func() {
 		daemon.stopLayoutWatcher("test/nonexistent")
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		// Good — the goroutine already exited.
-	case <-time.After(5 * time.Second):
-		t.Fatal("stopLayoutWatcher hung for a watcher with no tmux session")
-	}
+	testutil.RequireClosed(t, done, 5*time.Second, "stopLayoutWatcher for nonexistent session")
 }

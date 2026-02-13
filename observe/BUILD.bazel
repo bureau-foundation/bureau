@@ -48,6 +48,7 @@ go_test(
     embed = [":observe"],
     deps = [
         "//lib/schema",
+        "//lib/testutil",
         "//lib/tmux",
     ],
 )

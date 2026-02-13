@@ -183,11 +183,7 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("stopHealthMonitor did not return within 5 seconds")
-	}
+	testutil.RequireClosed(t, done, 5*time.Second, "stopHealthMonitor did not return")
 
 	// Verify the monitor is deregistered.
 	daemon.healthMonitorsMu.Lock()
@@ -268,11 +264,7 @@ func TestStopAllHealthMonitors(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("stopAllHealthMonitors did not return within 5 seconds")
-	}
+	testutil.RequireClosed(t, done, 5*time.Second, "stopAllHealthMonitors did not return")
 
 	daemon.healthMonitorsMu.Lock()
 	if len(daemon.healthMonitors) != 0 {
@@ -427,23 +419,13 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	// First tick → first health check (failure 1).
 	fakeClock.Advance(1 * time.Second)
-	select {
-	case <-checkHandled:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for first health check")
-	}
+	testutil.RequireReceive(t, checkHandled, 5*time.Second, "waiting for first health check")
 
 	// Second tick → second health check (failure 2 → rollback).
 	fakeClock.Advance(1 * time.Second)
 
 	// Wait for rollback to complete (destroy + create IPC).
-	select {
-	case <-rollbackDone:
-	case <-time.After(5 * time.Second):
-		launcherMu.Lock()
-		t.Fatalf("timed out waiting for rollback, IPC actions: %v", ipcActions)
-		launcherMu.Unlock() //nolint:govet // unreachable but symmetry
-	}
+	testutil.RequireReceive(t, rollbackDone, 5*time.Second, "waiting for rollback")
 
 	// Verify the create-sandbox used the previous spec.
 	launcherMu.Lock()
@@ -977,11 +959,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	// fail, fail, succeed, fail, fail, succeed
 	for check := 1; check <= 6; check++ {
 		fakeClock.Advance(1 * time.Second)
-		select {
-		case <-checkHandled:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("timed out waiting for health check %d", check)
-		}
+		testutil.RequireReceive(t, checkHandled, 5*time.Second, "waiting for health check %d", check)
 	}
 
 	// If rollback had been triggered, rollbackPrincipal would attempt
@@ -1053,11 +1031,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 
 	// Drive one health check to confirm the monitor is in the polling loop.
 	fakeClock.Advance(1 * time.Second)
-	select {
-	case <-checkHandled:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for first health check")
-	}
+	testutil.RequireReceive(t, checkHandled, 5*time.Second, "waiting for first health check")
 
 	// Cancel the context while the monitor is in its polling loop.
 	// This exercises the ctx.Done branch in the ticker select
@@ -1072,11 +1046,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("health monitor did not stop within 5 seconds after context cancellation")
-	}
+	testutil.RequireClosed(t, done, 5*time.Second, "health monitor did not stop after context cancellation")
 
 	// No rollback should have occurred — ctx.Done exits cleanly.
 	if !daemon.running[localpart] {

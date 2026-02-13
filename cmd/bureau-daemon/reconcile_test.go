@@ -1028,11 +1028,8 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 	}
 
 	// Clean up the held connection so the goroutine exits.
-	select {
-	case conn := <-accepted:
-		conn.Close()
-	case <-time.After(time.Second):
-	}
+	conn := testutil.RequireReceive(t, accepted, time.Second, "waiting for accepted connection")
+	conn.Close()
 }
 
 func TestMergeAuthorizationPolicy(t *testing.T) {
@@ -1359,8 +1356,7 @@ func TestMintServiceTokens(t *testing.T) {
 
 	stateDir := t.TempDir()
 
-	daemon, fakeClock := newTestDaemon(t)
-	fakeClock.Advance(time.Since(testDaemonEpoch))
+	daemon, _ := newTestDaemon(t)
 	daemon.machineName = "machine/test"
 	daemon.stateDir = stateDir
 	daemon.tokenSigningPrivateKey = privateKey
@@ -1393,9 +1389,10 @@ func TestMintServiceTokens(t *testing.T) {
 		t.Fatal("token file should not be empty")
 	}
 
-	// Verify the token is valid (can be decoded and verified).
+	// Verify the token is valid (can be decoded and verified). Use VerifyAt
+	// with the daemon's fake clock so the token isn't rejected as expired.
 	publicKey := privateKey.Public().(ed25519.PublicKey)
-	token, err := servicetoken.Verify(publicKey, tokenBytes)
+	token, err := servicetoken.VerifyAt(publicKey, tokenBytes, daemon.clock.Now())
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}

@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // TestControlClientDebounce verifies that rapid layout notifications
@@ -29,8 +31,8 @@ func TestControlClientDebounce(t *testing.T) {
 	}
 	defer client.Stop()
 
-	// Give the control client time to attach before triggering events.
-	time.Sleep(300 * time.Millisecond)
+	// Wait for the control client to attach before triggering events.
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Split the window three times in rapid succession. Each split
 	// produces a %layout-change notification. With 1s debounce,
@@ -40,7 +42,7 @@ func TestControlClientDebounce(t *testing.T) {
 	}
 
 	// Wait for exactly one event.
-	event := receiveEvent(t, client, 5*time.Second)
+	event := testutil.RequireReceive(t, client.Events(), 5*time.Second, "waiting for layout change event")
 	if event.SessionName != sessionName {
 		t.Errorf("event session = %q, want %q", event.SessionName, sessionName)
 	}
@@ -66,11 +68,11 @@ func TestControlClientWindowAdd(t *testing.T) {
 	}
 	defer client.Stop()
 
-	time.Sleep(300 * time.Millisecond)
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Create a new window — triggers %window-add.
 	mustTmux(t, server, "new-window", "-t", sessionName)
-	receiveEvent(t, client, 3*time.Second)
+	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-add event")
 }
 
 // TestControlClientWindowRename verifies that renaming a window
@@ -90,10 +92,10 @@ func TestControlClientWindowRename(t *testing.T) {
 	}
 	defer client.Stop()
 
-	time.Sleep(300 * time.Millisecond)
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	mustTmux(t, server, "rename-window", "-t", sessionName, "renamed")
-	receiveEvent(t, client, 3*time.Second)
+	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-rename event")
 }
 
 // TestControlClientWindowClose verifies that closing a window triggers
@@ -117,7 +119,7 @@ func TestControlClientWindowClose(t *testing.T) {
 	}
 	defer client.Stop()
 
-	time.Sleep(300 * time.Millisecond)
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Find the index of the second window. We can't hardcode it because
 	// the starting index depends on base-index (0 by default).
@@ -133,7 +135,7 @@ func TestControlClientWindowClose(t *testing.T) {
 	// session; when we kill a non-current window, tmux sends
 	// %unlinked-window-close.
 	mustTmux(t, server, "kill-window", "-t", sessionName+":"+secondWindowIndex)
-	receiveEvent(t, client, 3*time.Second)
+	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-close event")
 }
 
 // TestControlClientIgnoresNonLayoutEvents verifies that notifications
@@ -153,9 +155,9 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 	}
 	defer client.Stop()
 
-	// Give time to attach, then send keystrokes. This generates
+	// Wait for attach, then send keystrokes. This generates
 	// %output notifications but no layout changes.
-	time.Sleep(300 * time.Millisecond)
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 	TmuxSendKeys(t, server, sessionName, "hello")
 
 	assertNoEvent(t, client, 500*time.Millisecond)
@@ -186,12 +188,7 @@ func TestControlClientCleanShutdown(t *testing.T) {
 		close(stopped)
 	}()
 
-	select {
-	case <-stopped:
-		// Good — clean shutdown.
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop did not return within 5 seconds after context cancel")
-	}
+	testutil.RequireClosed(t, stopped, 5*time.Second, "Stop should return after context cancel")
 
 	// Verify the events channel is closed.
 	_, open := <-client.Events()
@@ -226,12 +223,7 @@ func TestControlClientSessionExit(t *testing.T) {
 		close(stopped)
 	}()
 
-	select {
-	case <-stopped:
-		// Good.
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop did not return within 5 seconds after session kill")
-	}
+	testutil.RequireClosed(t, stopped, 5*time.Second, "Stop should return after session kill")
 }
 
 // TestControlClientNoSizeConstraint verifies that the control mode
@@ -251,14 +243,14 @@ func TestControlClientNoSizeConstraint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := NewControlClient(ctx, server, "control/size",
+	client, err := NewControlClient(ctx, server, "control/size",
 		WithDebounceInterval(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
 
-	// Give the control client time to attach.
-	time.Sleep(300 * time.Millisecond)
+	// Wait for the control client to attach.
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Verify the window dimensions are unchanged.
 	dimensions := mustTmuxTrimmed(t, server, "display-message",
@@ -288,12 +280,12 @@ func TestControlClientResponseBlockFiltering(t *testing.T) {
 
 	// Wait for initial attach to complete. No layout events should
 	// fire from the control mode attach sequence.
-	time.Sleep(500 * time.Millisecond)
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 	assertNoEvent(t, client, 300*time.Millisecond)
 
 	// Now trigger a real layout change to prove events still work.
 	mustTmux(t, server, "split-window", "-t", sessionName, "-v")
-	receiveEvent(t, client, 3*time.Second)
+	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for layout change event")
 }
 
 // TestIsLayoutNotification exercises the notification classifier.
@@ -336,28 +328,26 @@ func TestIsLayoutNotification(t *testing.T) {
 // the timeout. Fails the test if no event arrives.
 func receiveEvent(t *testing.T, client *ControlClient, timeout time.Duration) LayoutChanged {
 	t.Helper()
-	select {
-	case event, ok := <-client.Events():
-		if !ok {
-			t.Fatal("events channel closed while waiting for event")
-		}
-		return event
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for layout change event")
-		return LayoutChanged{} // unreachable
-	}
+	return testutil.RequireReceive(t, client.Events(), timeout, "waiting for layout change event")
 }
 
 // assertNoEvent verifies that no LayoutChanged event arrives within
-// the timeout.
+// the timeout. This is a negative assertion: we genuinely need to wait
+// a wall-clock interval to confirm nothing happens, so we use
+// testutil.RequireReceive on a timer channel for the duration.
 func assertNoEvent(t *testing.T, client *ControlClient, timeout time.Duration) {
 	t.Helper()
+	timer := make(chan struct{})
+	go func() {
+		<-time.After(timeout) //nolint:realclock negative assertion requires wall-clock wait
+		close(timer)
+	}()
 	select {
 	case event, ok := <-client.Events():
 		if ok {
 			t.Fatalf("unexpected layout change event: %+v", event)
 		}
-	case <-time.After(timeout):
+	case <-timer:
 		// Good — no event.
 	}
 }

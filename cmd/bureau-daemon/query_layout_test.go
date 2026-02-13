@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -78,7 +79,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.client = matrixClient
-	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, logger)
+	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{
 		DefaultObservePolicy: &schema.ObservePolicy{
 			AllowedObservers:   []string{"**"},
@@ -113,7 +114,7 @@ func sendQueryLayout(t *testing.T, socketPath, channel string) observe.QueryLayo
 	}
 	defer connection.Close()
 
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	request := observe.QueryLayoutRequest{
 		Action:   "query_layout",
@@ -299,7 +300,7 @@ func TestQueryLayoutUnknownAction(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	request := map[string]string{"action": "bogus", "token": testObserverToken}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
@@ -604,7 +605,7 @@ func TestQueryLayoutBackwardCompatibility(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Send a classic observe request (no action field) with auth token.
 	request := map[string]string{

@@ -4,9 +4,9 @@
 package observe
 
 import (
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -329,12 +329,35 @@ func TestApplyThenReadRoundTrip(t *testing.T) {
 		t.Fatalf("ApplyLayout: %v", err)
 	}
 
-	// Give tmux a moment to settle (process creation, pane rendering).
-	time.Sleep(200 * time.Millisecond)
-
-	readBack, err := ReadTmuxLayout(server, "test-roundtrip")
-	if err != nil {
-		t.Fatalf("ReadTmuxLayout: %v", err)
+	// Poll until tmux settles: read back the layout and verify that
+	// both windows have the expected pane counts before checking values.
+	var readBack *Layout
+	for {
+		layout, err := ReadTmuxLayout(server, "test-roundtrip")
+		if err != nil {
+			if t.Context().Err() != nil {
+				t.Fatalf("ReadTmuxLayout: %v", err)
+			}
+			runtime.Gosched()
+			continue
+		}
+		if len(layout.Windows) == len(original.Windows) {
+			allMatch := true
+			for windowIndex, window := range original.Windows {
+				if len(layout.Windows[windowIndex].Panes) != len(window.Panes) {
+					allMatch = false
+					break
+				}
+			}
+			if allMatch {
+				readBack = layout
+				break
+			}
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for layout to settle")
+		}
+		runtime.Gosched()
 	}
 
 	// Verify structural equivalence.

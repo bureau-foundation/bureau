@@ -660,7 +660,7 @@ func TestPostPipelineResult(t *testing.T) {
 
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd1",
-			command, timeNow(), 0, "", entries)
+			command, fixedTestTime, 0, "", entries)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {
@@ -703,7 +703,7 @@ func TestPostPipelineResult(t *testing.T) {
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd2",
 			schema.CommandMessage{Command: "pipeline.execute"},
-			timeNow(), 1, "exit status 1", entries)
+			fixedTestTime, 1, "exit status 1", entries)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {
@@ -728,7 +728,7 @@ func TestPostPipelineResult(t *testing.T) {
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd3",
 			schema.CommandMessage{Command: "pipeline.execute"},
-			timeNow(), 137, "killed by signal 9", nil)
+			fixedTestTime, 137, "killed by signal 9", nil)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {
@@ -746,11 +746,10 @@ func TestPostPipelineResult(t *testing.T) {
 	})
 }
 
-// timeNow returns a time.Time for testing (the duration will be tiny
-// since tests run fast, which is fine for verifying structure).
-func timeNow() time.Time {
-	return time.Now()
-}
+// fixedTestTime is a deterministic time.Time for pipeline tests. The
+// postPipelineResult function computes elapsed duration from the start parameter,
+// which will yield a near-zero value — fine for verifying structure.
+var fixedTestTime = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 // TestPipelineResultSerialization verifies that pipelineResultEntry
 // can round-trip through JSON (matching the executor's output format).

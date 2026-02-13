@@ -7,7 +7,9 @@ go_library(
     name = "testutil",
     srcs = [
         "doc.go",
+        "require.go",
         "tempdir.go",
+        "unique.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/testutil",
     visibility = ["//visibility:public"],

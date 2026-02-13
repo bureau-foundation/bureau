@@ -17,7 +17,18 @@
 // an absolute path. This avoids calling "go build" from tests and
 // ensures reproducible builds through Bazel's dependency graph.
 //
-// Both helpers call t.Fatalf on failure rather than returning errors,
+// [RequireReceive], [RequireSend], and [RequireClosed] encapsulate the
+// timeout safety valve pattern (select with time.After fallback) so
+// that individual tests do not need direct time.After calls. These are
+// the only place in the test suite where real wall-clock timeouts are
+// used; see script/check-real-clock for the rationale.
+//
+// [UniqueID] generates monotonically increasing identifiers for test
+// disambiguation. Use it instead of time.Now() when tests need unique
+// transaction IDs, request IDs, or message bodies distinguishable in
+// shared rooms.
+//
+// All helpers call t.Fatalf on failure rather than returning errors,
 // since test setup failures are not recoverable.
 //
 // This package has no Bureau-internal dependencies.

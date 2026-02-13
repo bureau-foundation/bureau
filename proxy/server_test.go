@@ -19,15 +19,16 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // mockService is a test service that returns predictable output.
 type mockService struct {
-	name       string
-	stdout     string
-	stderr     string
-	exitCode   int
-	sleepChunk time.Duration // Sleep between chunks for streaming test
+	name      string
+	stdout    string
+	stderr    string
+	exitCode  int
+	chunkGate chan struct{} // Gate between chunks for streaming tests (nil = no gating)
 }
 
 func (s *mockService) Name() string {
@@ -51,8 +52,12 @@ func (s *mockService) ExecuteStream(ctx context.Context, args []string, input st
 				stdout.Write([]byte("\n"))
 			}
 			stdout.Write([]byte(line))
-			if s.sleepChunk > 0 {
-				time.Sleep(s.sleepChunk)
+			if s.chunkGate != nil {
+				select {
+				case <-s.chunkGate:
+				case <-ctx.Done():
+					return 1, ctx.Err()
+				}
 			}
 		}
 	}
@@ -65,8 +70,12 @@ func (s *mockService) ExecuteStream(ctx context.Context, args []string, input st
 				stderr.Write([]byte("\n"))
 			}
 			stderr.Write([]byte(line))
-			if s.sleepChunk > 0 {
-				time.Sleep(s.sleepChunk)
+			if s.chunkGate != nil {
+				select {
+				case <-s.chunkGate:
+				case <-ctx.Done():
+					return 1, ctx.Err()
+				}
 			}
 		}
 	}
@@ -121,8 +130,8 @@ func TestServerIntegration(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	// Give server time to start
-	time.Sleep(10 * time.Millisecond)
+	// Wait for listeners to bind.
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	// Create client
 	client := &http.Client{
@@ -295,7 +304,7 @@ func TestServerStreamingFallback(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -364,7 +373,7 @@ func TestServerWithCLIService(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -471,7 +480,7 @@ func TestServerWithFilter(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -573,7 +582,7 @@ func TestServerWithCredentials(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -650,7 +659,7 @@ func TestFileBasedCredentials(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -723,7 +732,7 @@ func TestFileCredentialCleanup(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -780,7 +789,7 @@ func TestIdentityEndpoint(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -918,7 +927,7 @@ func TestServerErrorHandling(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -966,7 +975,7 @@ func TestAdminEndpoints(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -1240,6 +1249,8 @@ func TestUnixSocketUpstream(t *testing.T) {
 	}
 	defer provider.Shutdown(context.Background())
 
+	testutil.RequireClosed(t, provider.Ready(), 5*time.Second, "provider ready")
+
 	// --- Consumer proxy: forwards to provider proxy via Unix socket ---
 	consumerSocket := filepath.Join(tempDir, "consumer.sock")
 	consumerAdmin := filepath.Join(tempDir, "consumer-admin.sock")
@@ -1257,7 +1268,7 @@ func TestUnixSocketUpstream(t *testing.T) {
 	}
 	defer consumer.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, consumer.Ready(), 5*time.Second, "consumer ready")
 
 	// Register the service route on the consumer proxy via admin API.
 	// The upstream URL includes the /http/service-stt-whisper path prefix
@@ -1539,7 +1550,7 @@ func TestServiceDirectory(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -1878,7 +1889,7 @@ func TestServiceVisibility(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -2135,7 +2146,7 @@ func TestAdminSetAuthorization(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -2211,7 +2222,7 @@ func TestGrantsBasedMatrixPolicy(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -2357,7 +2368,7 @@ func TestGrantsBasedServiceDiscovery(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	adminClient := &http.Client{
 		Transport: &http.Transport{
@@ -2487,7 +2498,7 @@ func TestDefaultDenyWithoutGrants(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	agentClient := &http.Client{
 		Transport: &http.Transport{

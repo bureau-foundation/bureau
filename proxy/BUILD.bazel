@@ -48,5 +48,6 @@ go_test(
         "//lib/ipc",
         "//lib/schema",
         "//lib/secret",
+        "//lib/testutil",
     ],
 )

@@ -4,9 +4,9 @@
 package observe
 
 import (
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
@@ -85,17 +85,21 @@ func TestDashboardObservePanes(t *testing.T) {
 		t.Fatal("session not created")
 	}
 
-	// Give processes a moment to start so pane_start_command is populated.
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify panes were created. The bureau observe commands will fail
-	// (no daemon running), but the panes survive (remain-on-exit).
-	paneOutput := mustTmuxTrimmed(t, server, "list-panes",
-		"-t", "observe/iree/amdgpu/general",
-		"-F", "#{pane_start_command}")
-	paneLines := splitLines(paneOutput)
-	if len(paneLines) != 2 {
-		t.Fatalf("pane count = %d, want 2", len(paneLines))
+	// Poll until pane_start_command is populated. Processes need a
+	// moment to start after Dashboard returns.
+	var paneLines []string
+	for {
+		paneOutput := mustTmuxTrimmed(t, server, "list-panes",
+			"-t", "observe/iree/amdgpu/general",
+			"-F", "#{pane_start_command}")
+		paneLines = splitLines(paneOutput)
+		if len(paneLines) == 2 && paneLines[0] != "" && paneLines[1] != "" {
+			break
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for pane start commands (last: %v)", paneLines)
+		}
+		runtime.Gosched()
 	}
 
 	// First pane should have the bureau observe command for iree/amdgpu/pm.
@@ -174,14 +178,8 @@ func TestDashboardRolePaneShowsIdentity(t *testing.T) {
 		t.Fatalf("Dashboard: %v", err)
 	}
 
-	// Give the echo command time to execute.
-	time.Sleep(300 * time.Millisecond)
-
-	// Capture the pane content — it should show the role name.
-	content := TmuxCapturePane(t, server, "observe/role-test")
-	if !strings.Contains(content, "role: agent") {
-		t.Errorf("pane content should contain 'role: agent', got:\n%s", content)
-	}
+	// Poll until the echo command has executed and the role name appears.
+	pollTmuxContent(t, server, "observe/role-test", "role: agent")
 }
 
 func TestDashboardNilLayoutError(t *testing.T) {

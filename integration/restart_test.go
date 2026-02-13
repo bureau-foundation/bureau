@@ -18,6 +18,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -176,7 +177,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 			"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
 			"ciphertext":     ciphertext,
 			"provisioned_by": "@bureau-admin:" + testServerName,
-			"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+			"provisioned_at": "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("push credentials: %v", err)
@@ -224,14 +225,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	daemon1.Process.Signal(syscall.SIGTERM)
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- daemon1.Wait() }()
-	select {
-	case <-waitDone:
-		t.Log("daemon exited")
-	case <-time.After(5 * time.Second):
-		daemon1.Process.Kill()
-		<-waitDone
-		t.Log("daemon killed after timeout")
-	}
+	testutil.RequireReceive(t, waitDone, 5*time.Second, "daemon did not exit after SIGTERM")
+	t.Log("daemon exited")
 
 	// Verify the launcher socket and proxy socket still exist.
 	if _, err := os.Stat(launcherSocket); err != nil {
@@ -272,12 +267,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		daemon2.Process.Signal(syscall.SIGTERM)
 		done := make(chan error, 1)
 		go func() { done <- daemon2.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			daemon2.Process.Kill()
-			<-done
-		}
+		testutil.RequireReceive(t, done, 5*time.Second, "daemon2 did not exit during cleanup")
 	})
 
 	// --- Phase 5: Verify recovery ---

@@ -35,6 +35,7 @@ go_test(
     embed = [":transport"],
     deps = [
         "//lib/schema",
+        "//lib/testutil",
         "//messaging",
     ],
 )

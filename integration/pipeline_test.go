@@ -5,9 +5,7 @@ package integration_test
 
 import (
 	"os"
-	"strconv"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -50,7 +48,7 @@ func TestPipelineExecution(t *testing.T) {
 	// Send a pipeline.execute command to the config room. The admin has
 	// PL 100 (set by the daemon during room creation), satisfying the
 	// PowerLevelAdmin requirement for pipeline.execute.
-	requestID := "test-pipeline-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	requestID := "test-pipeline-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
@@ -161,7 +159,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 
 	ctx := t.Context()
 
-	requestID := "test-pipeline-fail-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	requestID := "test-pipeline-fail-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
@@ -265,7 +263,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 
 	ctx := t.Context()
 
-	requestID := "test-pipeline-params-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	requestID := "test-pipeline-params-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,

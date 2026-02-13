@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // mockDaemonObserve creates a mock daemon observation socket that verifies
@@ -153,7 +155,7 @@ func TestObserveProxyInjectsCredentials(t *testing.T) {
 		t.Fatalf("dial observe proxy: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Send a request without observer/token (the proxy adds them).
 	request := map[string]string{
@@ -211,7 +213,7 @@ func TestObserveProxyBridgesData(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Handshake.
 	json.NewEncoder(connection).Encode(map[string]string{
@@ -264,7 +266,7 @@ func TestObserveProxyForwardsDaemonError(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	json.NewEncoder(connection).Encode(map[string]string{
 		"principal": "nonexistent",
@@ -316,7 +318,7 @@ func TestObserveProxyNoCredentials(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	json.NewEncoder(connection).Encode(map[string]string{
 		"principal": "test",
@@ -367,7 +369,7 @@ func TestObserveProxyDaemonUnreachable(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	json.NewEncoder(connection).Encode(map[string]string{
 		"principal": "test",
@@ -451,7 +453,7 @@ func TestObserveProxyStripsAgentCredentials(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Agent tries to send its own credentials (which should be replaced).
 	agentRequest := map[string]string{
@@ -513,7 +515,7 @@ func TestObserveProxyConcurrentConnections(t *testing.T) {
 				return
 			}
 			defer connection.Close()
-			connection.SetDeadline(time.Now().Add(5 * time.Second))
+			connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 			json.NewEncoder(connection).Encode(map[string]string{
 				"principal": "test/agent",
@@ -567,7 +569,7 @@ func TestObserveProxyInvalidJSON(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Send invalid JSON.
 	connection.Write([]byte("not json\n"))
@@ -616,7 +618,7 @@ func TestObserveProxyStopDrainsActiveBridges(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(10 * time.Second))
+	connection.SetDeadline(time.Now().Add(10 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	json.NewEncoder(connection).Encode(map[string]string{
 		"principal": "test/agent",
@@ -652,12 +654,7 @@ func TestObserveProxyStopDrainsActiveBridges(t *testing.T) {
 		close(stopDone)
 	}()
 
-	select {
-	case <-stopDone:
-		// stop() returned — goroutines have drained.
-	case <-time.After(5 * time.Second):
-		t.Fatal("stop() did not return within 5 seconds — goroutines not draining")
-	}
+	testutil.RequireClosed(t, stopDone, 5*time.Second, "stop() draining goroutines")
 
 	// Close the credential source AFTER stop(). Before the fix, this
 	// would cause a panic in a handleConnection goroutine that was still

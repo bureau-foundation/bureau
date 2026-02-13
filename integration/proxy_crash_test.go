@@ -186,7 +186,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 			"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
 			"ciphertext":     ciphertext,
 			"provisioned_by": "@bureau-admin:" + testServerName,
-			"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+			"provisioned_at": "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("push credentials: %v", err)
@@ -279,7 +279,7 @@ func launcherListProxyPID(t *testing.T, launcherSocket, principalLocalpart strin
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	request := ipc.Request{Action: "list-sandboxes"}
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {

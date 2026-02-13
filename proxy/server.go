@@ -29,6 +29,7 @@ type Server struct {
 	observeProxy    *observeProxy
 	observeConfig   *observeProxyConfig
 	logger          *slog.Logger
+	ready           chan struct{}
 }
 
 // ServerConfig holds configuration for creating a new Server.
@@ -159,8 +160,14 @@ func (s *Server) SetObserveConfig(socketPath, daemonSocket string, credential Cr
 	}
 }
 
+// Ready returns a channel that closes when all listeners are bound and
+// the server is accepting connections. The channel is nil before Start
+// is called.
+func (s *Server) Ready() <-chan struct{} { return s.ready }
+
 // Start begins listening on the Unix socket and optionally TCP.
 func (s *Server) Start() error {
+	s.ready = make(chan struct{})
 	// Remove existing socket file if present
 	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove existing socket: %w", err)
@@ -250,6 +257,11 @@ func (s *Server) Start() error {
 
 	// Notify systemd that we're ready (no-op if not running under systemd)
 	notifySystemd(s.logger, "READY=1")
+
+	// Signal that all listeners are bound and serving. The kernel
+	// accepts connections into the backlog from the moment net.Listen
+	// returns, so callers waiting on Ready can immediately connect.
+	close(s.ready)
 
 	return nil
 }

@@ -4,9 +4,9 @@
 package observe
 
 import (
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
@@ -42,16 +42,17 @@ func TmuxSession(t *testing.T, server *tmux.Server, sessionName, command string)
 	}
 
 	// Wait for the session to be ready. tmux -d returns immediately but
-	// the session may not be queryable yet.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	// the session may not be queryable yet. Use the test context for the
+	// overall deadline and yield between polls.
+	for {
 		if server.HasSession(sessionName) {
 			return sessionName
 		}
-		time.Sleep(50 * time.Millisecond)
+		if t.Context().Err() != nil {
+			t.Fatalf("tmux session %q not ready before test deadline", sessionName)
+		}
+		runtime.Gosched()
 	}
-	t.Fatalf("tmux session %q not ready after 5 seconds", sessionName)
-	return sessionName
 }
 
 // TmuxSendKeys sends keystrokes to a tmux pane on the test server.
@@ -99,4 +100,24 @@ func countPanes(t *testing.T, server *tmux.Server, sessionName string) int {
 	t.Helper()
 	output := mustTmuxTrimmed(t, server, "list-panes", "-t", sessionName)
 	return len(splitLines(output))
+}
+
+// pollTmuxContent polls a tmux pane until the expected substring appears
+// in the captured content, or the test deadline expires. This is for
+// waiting on external tmux process output that has no event-based
+// notification mechanism.
+func pollTmuxContent(t *testing.T, server *tmux.Server, target, expected string) {
+	t.Helper()
+	var lastContent string
+	for {
+		lastContent = TmuxCapturePane(t, server, target)
+		if strings.Contains(lastContent, expected) {
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for %q in tmux pane %s (last capture: %q)",
+				expected, target, lastContent)
+		}
+		runtime.Gosched()
+	}
 }

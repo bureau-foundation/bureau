@@ -42,7 +42,7 @@ func testService(t *testing.T) *ArtifactService {
 		metadataStore: metadataStore,
 		refIndex:      artifact.NewRefIndex(),
 		clock:         clock.Real(),
-		startedAt:     time.Now(),
+		startedAt:     time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:         make(map[string]*artifactRoomState),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -577,7 +577,7 @@ func storeTestArtifactWithMeta(t *testing.T, as *ArtifactService, content []byte
 		ChunkCount:     result.ChunkCount,
 		ContainerCount: result.ContainerCount,
 		Compression:    result.Compression.String(),
-		StoredAt:       time.Now(),
+		StoredAt:       time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 	if err := as.metadataStore.Write(meta); err != nil {
 		t.Fatalf("writing test metadata: %v", err)

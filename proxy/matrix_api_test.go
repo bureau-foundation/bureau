@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // mockMatrixHandler serves canned Matrix API responses for testing the
@@ -173,7 +175,7 @@ func setupMatrixProxyTest(t *testing.T) (*http.Client, *mockMatrixHandler) {
 	}
 	t.Cleanup(func() { server.Shutdown(context.Background()) })
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -676,7 +678,7 @@ func TestMatrixServiceNotConfigured(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{

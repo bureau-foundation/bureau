@@ -6,18 +6,20 @@ package observe
 import (
 	"encoding/json"
 	"net"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
 // readMessageTimeout reads a single message from conn with a deadline.
 func readMessageTimeout(t *testing.T, conn net.Conn, timeout time.Duration) Message {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	defer conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Now().Add(timeout)) //nolint:realclock // kernel I/O deadline
+	defer conn.SetReadDeadline(time.Time{})       //nolint:realclock // kernel I/O deadline clear
 	message, err := ReadMessage(conn)
 	if err != nil {
 		t.Fatalf("read message: %v", err)
@@ -26,13 +28,14 @@ func readMessageTimeout(t *testing.T, conn net.Conn, timeout time.Duration) Mess
 }
 
 // readDataUntil reads data messages from conn until the accumulated output
-// contains the expected substring, or the timeout expires.
+// contains the expected substring, or the timeout expires. The timeout is
+// enforced via conn.SetReadDeadline (kernel I/O deadline).
 func readDataUntil(t *testing.T, conn net.Conn, expected string, timeout time.Duration) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	conn.SetReadDeadline(time.Now().Add(timeout)) //nolint:realclock // kernel I/O deadline
+	defer conn.SetReadDeadline(time.Time{})       //nolint:realclock // kernel I/O deadline clear
 	var collected strings.Builder
-	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline)
+	for {
 		message, err := ReadMessage(conn)
 		if err != nil {
 			t.Fatalf("read data message: %v (collected so far: %q)", err, collected.String())
@@ -40,13 +43,10 @@ func readDataUntil(t *testing.T, conn net.Conn, expected string, timeout time.Du
 		if message.Type == MessageTypeData {
 			collected.Write(message.Payload)
 			if strings.Contains(collected.String(), expected) {
-				conn.SetReadDeadline(time.Time{})
 				return collected.String()
 			}
 		}
 	}
-	t.Fatalf("timed out waiting for %q in output (collected: %q)", expected, collected.String())
-	return ""
 }
 
 // startRelay launches Relay in a goroutine and returns the error channel.
@@ -198,8 +198,11 @@ func TestRelayReadOnly(t *testing.T) {
 		t.Fatalf("send input: %v", err)
 	}
 
-	// Give time for the input to potentially propagate (it shouldn't).
-	time.Sleep(500 * time.Millisecond)
+	// Type something visible in tmux so we know the relay is alive and
+	// forwarding output, then verify the blocked input didn't appear.
+	TmuxSendKeys(t, server, sessionName, "visible-marker")
+	TmuxSendKeys(t, server, sessionName, "Enter")
+	readDataUntil(t, clientConn, "visible-marker", 5*time.Second)
 
 	content := TmuxCapturePane(t, server, sessionName)
 	if strings.Contains(content, "SHOULD-NOT-APPEAR") {
@@ -238,14 +241,18 @@ func TestRelayResize(t *testing.T) {
 		t.Fatalf("send resize: %v", err)
 	}
 
-	// Wait for tmux to process the resize and then check the client dimensions.
-	time.Sleep(500 * time.Millisecond)
-
-	clientDimensions := mustTmuxTrimmed(t, server, "list-clients",
-		"-t", sessionName,
-		"-F", "#{client_width} #{client_height}")
-	if !strings.Contains(clientDimensions, "100 50") {
-		t.Errorf("client dimensions = %q, want to contain %q", clientDimensions, "100 50")
+	// Poll tmux until the resize propagates.
+	for {
+		clientDimensions := mustTmuxTrimmed(t, server, "list-clients",
+			"-t", sessionName,
+			"-F", "#{client_width} #{client_height}")
+		if strings.Contains(clientDimensions, "100 50") {
+			break
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for resize to propagate (last: %q)", clientDimensions)
+		}
+		runtime.Gosched()
 	}
 
 	clientConn.Close()
@@ -269,13 +276,9 @@ func TestRelaySessionEnd(t *testing.T) {
 	// Kill the tmux session. The relay should detect the exit and shut down.
 	mustTmux(t, server, "kill-session", "-t", sessionName)
 
-	select {
-	case err := <-relayResult:
-		if err != nil {
-			t.Errorf("relay returned error on session end: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("relay did not shut down within 10 seconds after session was killed")
+	relayError := testutil.RequireReceive(t, relayResult, 10*time.Second, "relay did not shut down after session kill")
+	if relayError != nil {
+		t.Errorf("relay returned error on session end: %v", relayError)
 	}
 }
 
@@ -293,12 +296,8 @@ func TestRelayConnectionClose(t *testing.T) {
 	// shut down, killing the tmux attach process.
 	clientConn.Close()
 
-	select {
-	case err := <-relayResult:
-		if err != nil {
-			t.Errorf("relay returned error on connection close: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("relay did not shut down within 10 seconds after connection closed")
+	relayError := testutil.RequireReceive(t, relayResult, 10*time.Second, "relay did not shut down after connection close")
+	if relayError != nil {
+		t.Errorf("relay returned error on connection close: %v", relayError)
 	}
 }

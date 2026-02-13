@@ -10,11 +10,13 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
@@ -114,7 +116,7 @@ func setupIntegration(t *testing.T, sessionName string, readOnly bool) *integrat
 	}
 
 	// Wait for the session to fully establish before returning.
-	pollForContent(t, &output, "Connected to", 5*time.Second)
+	pollForContent(t, &output, "Connected to")
 
 	return fixture
 }
@@ -123,21 +125,13 @@ func setupIntegration(t *testing.T, sessionName string, readOnly bool) *integrat
 // the test if either returns an error or does not return within 10 seconds.
 func (fixture *integrationFixture) awaitShutdown(t *testing.T) {
 	t.Helper()
-	select {
-	case err := <-fixture.runResult:
-		if err != nil {
-			t.Errorf("session.Run returned error: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("session.Run did not return within 10 seconds")
+	runError := testutil.RequireReceive(t, fixture.runResult, 10*time.Second, "session.Run did not return")
+	if runError != nil {
+		t.Errorf("session.Run returned error: %v", runError)
 	}
-	select {
-	case err := <-fixture.relayResult:
-		if err != nil {
-			t.Errorf("relay returned error: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("relay did not shut down within 10 seconds")
+	relayError := testutil.RequireReceive(t, fixture.relayResult, 10*time.Second, "relay did not shut down")
+	if relayError != nil {
+		t.Errorf("relay returned error: %v", relayError)
 	}
 }
 
@@ -219,34 +213,25 @@ func startObservationBridge(t *testing.T, relayPipe net.Conn, sessionName string
 }
 
 // pollForContent polls the safeBuffer until the expected substring appears
-// or the timeout expires.
-func pollForContent(t *testing.T, buffer *safeBuffer, expected string, timeout time.Duration) {
+// or the test deadline expires. Yields to the scheduler between checks.
+func pollForContent(t *testing.T, buffer *safeBuffer, expected string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for {
 		if strings.Contains(buffer.String(), expected) {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for %q in output (collected so far: %q)", expected, buffer.String())
+		}
+		runtime.Gosched()
 	}
-	t.Fatalf("timed out waiting for %q in output (collected so far: %q)", expected, buffer.String())
 }
 
 // pollForTmuxContent polls a tmux pane until the expected substring appears
-// in the captured content or the timeout expires.
-func pollForTmuxContent(t *testing.T, server *tmux.Server, target, expected string, timeout time.Duration) {
+// in the captured content or the test deadline expires.
+func pollForTmuxContent(t *testing.T, server *tmux.Server, target, expected string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var lastContent string
-	for time.Now().Before(deadline) {
-		lastContent = TmuxCapturePane(t, server, target)
-		if strings.Contains(lastContent, expected) {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %q in tmux pane %s (last capture: %q)",
-		expected, target, lastContent)
+	pollTmuxContent(t, server, target, expected)
 }
 
 // TestIntegrationRoundTrip verifies the full observation data path:
@@ -281,17 +266,16 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	}
 
 	// Verify the input appeared in the tmux pane.
-	pollForTmuxContent(t, fixture.server, fixture.sessionName,
-		"e2e-input-test", 5*time.Second)
+	pollForTmuxContent(t, fixture.server, fixture.sessionName, "e2e-input-test")
 
 	// Verify the echoed output came back through the full return path:
 	// tmux → PTY → relay → bridge → Session.Run → output buffer.
-	pollForContent(t, fixture.output, "e2e-input-test", 5*time.Second)
+	pollForContent(t, fixture.output, "e2e-input-test")
 
 	// Type directly in tmux and verify it reaches the client.
 	TmuxSendKeys(t, fixture.server, fixture.sessionName, "tmux-direct-output")
 	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
-	pollForContent(t, fixture.output, "tmux-direct-output", 5*time.Second)
+	pollForContent(t, fixture.output, "tmux-direct-output")
 
 	// Clean shutdown: close the input pipe so Session.Run's input
 	// goroutine reads EOF, which triggers the shutdown cascade through
@@ -313,8 +297,12 @@ func TestIntegrationReadOnly(t *testing.T) {
 		t.Fatalf("write input: %v", err)
 	}
 
-	// Give time for the input to potentially propagate (it should not).
-	time.Sleep(500 * time.Millisecond)
+	// Type something visible in tmux so we know the relay is alive
+	// and forwarding output, then verify the blocked input did not
+	// appear in the pane.
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "visible-marker")
+	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
+	pollForContent(t, fixture.output, "visible-marker")
 
 	content := TmuxCapturePane(t, fixture.server, fixture.sessionName)
 	if strings.Contains(content, "SHOULD-NOT-APPEAR") {
@@ -324,7 +312,7 @@ func TestIntegrationReadOnly(t *testing.T) {
 	// Verify output still flows: type directly in tmux → relay → client.
 	TmuxSendKeys(t, fixture.server, fixture.sessionName, "readonly-output-test")
 	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
-	pollForContent(t, fixture.output, "readonly-output-test", 5*time.Second)
+	pollForContent(t, fixture.output, "readonly-output-test")
 
 	fixture.inputWriter.Close()
 	fixture.awaitShutdown(t)
@@ -342,20 +330,30 @@ func TestIntegrationResize(t *testing.T) {
 		t.Fatalf("send resize: %v", err)
 	}
 
-	// Wait for tmux to process the resize.
-	time.Sleep(500 * time.Millisecond)
-
-	// Query tmux for the attached client's dimensions.
-	clientDimensions := mustTmuxTrimmed(t, fixture.server, "list-clients",
-		"-t", fixture.sessionName,
-		"-F", "#{client_width} #{client_height}")
-	if !strings.Contains(clientDimensions, "120 40") {
-		t.Errorf("client dimensions = %q, want to contain %q",
-			clientDimensions, "120 40")
-	}
+	// Poll tmux for the resize to propagate.
+	pollTmuxClientDimensions(t, fixture.server, fixture.sessionName, "120 40")
 
 	fixture.inputWriter.Close()
 	fixture.awaitShutdown(t)
+}
+
+// pollTmuxClientDimensions polls tmux until the attached client's
+// dimensions contain the expected value, or the test deadline expires.
+func pollTmuxClientDimensions(t *testing.T, server *tmux.Server, sessionName, expected string) {
+	t.Helper()
+	for {
+		clientDimensions := mustTmuxTrimmed(t, server, "list-clients",
+			"-t", sessionName,
+			"-F", "#{client_width} #{client_height}")
+		if strings.Contains(clientDimensions, expected) {
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for client dimensions to contain %q (last: %q)",
+				expected, clientDimensions)
+		}
+		runtime.Gosched()
+	}
 }
 
 // TestIntegrationSessionEnd verifies that killing the tmux session

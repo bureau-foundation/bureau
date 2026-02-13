@@ -25,7 +25,7 @@ func sendMachineLayout(t *testing.T, socketPath string) observe.QueryLayoutRespo
 	}
 	defer connection.Close()
 
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	connection.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	request := observe.MachineLayoutRequest{
 		Action:   "query_machine_layout",

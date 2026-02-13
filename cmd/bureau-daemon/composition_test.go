@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -134,7 +135,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID", "API_KEY"},
 		Ciphertext:    ciphertext,
 		ProvisionedBy: "@bureau-admin:bureau.local",
-		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+		ProvisionedAt: "2026-01-01T00:00:00Z",
 	})
 
 	// Write session.json for the launcher. The launcher loads this on startup
@@ -167,16 +168,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 		t.Fatalf("starting launcher: %v", err)
 	}
 	t.Cleanup(func() {
-		// Send SIGTERM so the launcher can gracefully shut down its proxies.
-		launcherCmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { launcherCmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			launcherCmd.Process.Kill()
-			launcherCmd.Wait()
-		}
+		terminateProcess(t, launcherCmd)
 	})
 
 	// Wait for the launcher's IPC socket to appear.
@@ -418,7 +410,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID"},
 		Ciphertext:    ciphertext,
 		ProvisionedBy: "@bureau-admin:bureau.local",
-		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+		ProvisionedAt: "2026-01-01T00:00:00Z",
 	})
 
 	// Create a mock service socket at the path the daemon will resolve.
@@ -474,15 +466,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 		t.Fatalf("starting launcher: %v", err)
 	}
 	t.Cleanup(func() {
-		launcherCmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { launcherCmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			launcherCmd.Process.Kill()
-			launcherCmd.Wait()
-		}
+		terminateProcess(t, launcherCmd)
 	})
 
 	waitForFile(t, launcherSocket, 10*time.Second)
@@ -750,7 +734,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		Keys:          []string{"MATRIX_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_USER_ID"},
 		Ciphertext:    ciphertext,
 		ProvisionedBy: "@bureau-admin:bureau.local",
-		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+		ProvisionedAt: "2026-01-01T00:00:00Z",
 	})
 
 	sessionJSON, _ := json.Marshal(service.SessionData{
@@ -779,15 +763,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		t.Fatalf("starting launcher: %v", err)
 	}
 	t.Cleanup(func() {
-		launcherCmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { launcherCmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			launcherCmd.Process.Kill()
-			launcherCmd.Wait()
-		}
+		terminateProcess(t, launcherCmd)
 	})
 
 	waitForFile(t, launcherSocket, 10*time.Second)
@@ -906,12 +882,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// running state, and calls reconcile() which recreates the sandbox.
 	// The reconcileNotify channel fires after the reconcile completes,
 	// so we can wait on it instead of polling daemon.running.
-	select {
-	case <-daemon.reconcileNotify:
-		t.Log("proxy crash recovery reconcile completed")
-	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for proxy crash recovery")
-	}
+	testutil.RequireReceive(t, daemon.reconcileNotify, 15*time.Second, "waiting for proxy crash recovery reconcile")
 
 	daemon.reconcileMu.Lock()
 	running := daemon.running[principalLocalpart]
@@ -964,19 +935,40 @@ func buildBinary(t *testing.T, pkg string) string {
 	return testutil.DataBinary(t, envName)
 }
 
-// waitForFile polls until a file appears at the given path.
+// waitForFile blocks until a file appears at the given path. Polls in
+// a background goroutine and uses testutil.RequireClosed for the
+// timeout safety valve.
 func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
+	found := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	go func() {
+		for {
+			if _, err := os.Stat(path); err == nil {
+				close(found)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				runtime.Gosched()
+			}
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %v waiting for %s", timeout, path)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	}()
+	testutil.RequireClosed(t, found, timeout, "waiting for file %s", path)
+}
+
+// terminateProcess sends SIGTERM and waits for the process to exit.
+// If it doesn't exit within 5 seconds (bounded by testutil.RequireClosed),
+// the test fails. A deferred SIGKILL ensures cleanup even on timeout.
+func terminateProcess(t *testing.T, command *exec.Cmd) {
+	t.Helper()
+	command.Process.Signal(syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() { command.Wait(); close(done) }()
+	testutil.RequireClosed(t, done, 5*time.Second, "waiting for process %d to exit after SIGTERM", command.Process.Pid)
 }
 
 // unixHTTPClient creates an HTTP client that connects via the given Unix socket.
@@ -1013,6 +1005,11 @@ type mockMatrixState struct {
 
 	// roomMembers maps room IDs to member lists for GetRoomMembers.
 	roomMembers map[string][]mockRoomMember
+
+	// stateEventWritten is signaled (non-blocking) whenever a PUT state
+	// event arrives. Tests can wait on this to detect when production
+	// code publishes a state event. Nil means no notification.
+	stateEventWritten chan string
 
 	// joinedRooms tracks which rooms each user has joined via the JoinRoom
 	// endpoint. Key: room ID, value: set of user IDs that called join.
@@ -1300,7 +1297,16 @@ func (m *mockMatrixState) handlePutStateEvent(w http.ResponseWriter, r *http.Req
 	m.mu.Lock()
 	key := roomID + "\x00" + eventType + "\x00" + stateKey
 	m.stateEvents[key] = json.RawMessage(body)
+	writeNotify := m.stateEventWritten
 	m.mu.Unlock()
+
+	// Signal listeners that a state event was written (non-blocking).
+	if writeNotify != nil {
+		select {
+		case writeNotify <- key:
+		default:
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestHTTPServiceBasicProxy(t *testing.T) {
@@ -148,7 +150,6 @@ func TestHTTPServiceSSEStreaming(t *testing.T) {
 		for _, event := range events {
 			fmt.Fprintf(w, "%s\n\n", event)
 			flusher.Flush()
-			time.Sleep(10 * time.Millisecond) // Simulate streaming delay
 		}
 	}))
 	defer upstream.Close()
@@ -373,7 +374,7 @@ func TestHTTPServiceIntegration(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	// Create client that connects via Unix socket
 	client := &http.Client{
@@ -436,7 +437,6 @@ func TestHTTPServiceSSEIntegration(t *testing.T) {
 		for _, chunk := range chunks {
 			fmt.Fprintf(w, "%s\n\n", chunk)
 			flusher.Flush()
-			time.Sleep(5 * time.Millisecond)
 		}
 	}))
 	defer upstream.Close()
@@ -469,7 +469,7 @@ func TestHTTPServiceSSEIntegration(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -541,7 +541,7 @@ func TestHTTPServiceUnknownService(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -660,7 +660,7 @@ func TestMatrixProxyIntegration(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	time.Sleep(10 * time.Millisecond)
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
 
 	client := &http.Client{
 		Transport: &http.Transport{

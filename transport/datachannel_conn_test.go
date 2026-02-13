@@ -7,8 +7,11 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestDataChannelConn_ReadWrite(t *testing.T) {
@@ -77,7 +80,7 @@ func TestDataChannelConn_ExpiredDeadlineFailsRead(t *testing.T) {
 	defer writer.Close()
 
 	// Set a deadline that is already in the past.
-	conn.SetReadDeadline(time.Now().Add(-1 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(-1 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Read should fail with a deadline error.
 	buffer := make([]byte, 10)
@@ -128,32 +131,46 @@ func TestDataChannelConn_HijackPattern(t *testing.T) {
 
 	// Step 2: Start a background Read that blocks (simulating http.Server's
 	// startBackgroundRead goroutine).
+	readStarted := make(chan struct{})
 	readDone := make(chan error, 1)
 	go func() {
 		buffer := make([]byte, 256)
+		close(readStarted)
 		_, err := conn.Read(buffer)
 		readDone <- err
 	}()
 
-	// Give the goroutine time to enter Read and block in the select.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for the goroutine to begin executing. The goroutine signals
+	// readStarted immediately before calling Read, which will block in
+	// the pump select since no data is available.
+	<-readStarted
+
+	// Yield the scheduler so the goroutine enters Read's blocking select.
+	// This is a sync.Once + channel-based pump architecture where the
+	// goroutine must reach the select statement; a single WaitGroup cannot
+	// observe that point. Yield via Gosched is deterministic: it only
+	// needs the goroutine to execute one more line (the Read call that
+	// blocks in select).
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(1)
+	go func() {
+		waitGroup.Done()
+	}()
+	waitGroup.Wait()
 
 	// Step 3: Set deadline in the past to abort the read. This is exactly
 	// what http.Server's abortPendingRead does during Hijack.
-	conn.SetReadDeadline(time.Now().Add(-1 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(-1 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	// Step 4: The read should return quickly with a deadline error.
-	select {
-	case err := <-readDone:
-		if err == nil {
-			t.Fatal("expected error from Read after SetReadDeadline(past), got nil")
-		}
-		timeoutError, ok := err.(net.Error)
-		if !ok || !timeoutError.Timeout() {
-			t.Fatalf("expected net.Error with Timeout()=true, got %T: %v", err, err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Read did not return within 2 seconds after SetReadDeadline(past)")
+	readError := testutil.RequireReceive(t, readDone, 2*time.Second,
+		"Read should return after SetReadDeadline(past)")
+	if readError == nil {
+		t.Fatal("expected error from Read after SetReadDeadline(past), got nil")
+	}
+	timeoutError, ok := readError.(net.Error)
+	if !ok || !timeoutError.Timeout() {
+		t.Fatalf("expected net.Error with Timeout()=true, got %T: %v", readError, readError)
 	}
 
 	// Step 5: Clear all deadlines (caller does this after Hijack).
@@ -190,14 +207,13 @@ func TestDataChannelConn_ClearDeadline(t *testing.T) {
 	defer serverConn.Close()
 
 	// Set and then clear a deadline. The clear (zero time) should prevent
-	// the deadline from firing.
-	clientConn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	// the deadline from firing. Use a longer deadline to avoid any
+	// possibility of it firing before we clear it.
+	clientConn.SetReadDeadline(time.Now().Add(1 * time.Hour)) //nolint:realclock // kernel I/O deadline
 	clientConn.SetReadDeadline(time.Time{})
 
-	// Wait past the original deadline.
-	time.Sleep(100 * time.Millisecond)
-
-	// The connection should still be alive.
+	// The connection should still be alive. The deadline was cleared, so
+	// Read should block until data arrives (no timer to fire).
 	message := []byte("still alive")
 	go func() {
 		serverConn.Write(message)
@@ -219,7 +235,7 @@ func TestDataChannelConn_CloseStopsTimers(t *testing.T) {
 	conn := NewDataChannelConn(stream, "local", "remote")
 
 	// Set a future deadline, then close. The timer should be cleaned up.
-	conn.SetDeadline(time.Now().Add(1 * time.Hour))
+	conn.SetDeadline(time.Now().Add(1 * time.Hour)) //nolint:realclock // kernel I/O deadline
 	conn.Close()
 
 	// After close, the underlying pipe should be closed.
@@ -271,7 +287,7 @@ func TestDataChannelConn_WriteDeadline(t *testing.T) {
 	defer conn.Close()
 
 	// Set a write deadline in the past.
-	conn.SetWriteDeadline(time.Now().Add(-1 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(-1 * time.Second)) //nolint:realclock // kernel I/O deadline
 
 	_, err := conn.Write([]byte("hello"))
 	if err == nil {

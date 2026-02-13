@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // sendRequest connects to a Unix socket, sends a CBOR request, and
@@ -382,11 +384,12 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger(), nil)
 
-	// Handler that takes a moment to complete.
+	// Handler that blocks until released.
 	handlerStarted := make(chan struct{})
+	handlerRelease := make(chan struct{})
 	server.Handle("slow", func(ctx context.Context, raw []byte) (any, error) {
 		close(handlerStarted)
-		time.Sleep(100 * time.Millisecond)
+		<-handlerRelease
 		return map[string]any{"completed": true}, nil
 	})
 
@@ -405,8 +408,9 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 		responseChan <- sendRequest(t, socketPath, map[string]string{"action": "slow"})
 	}()
 
-	// Wait for the handler to start, then cancel.
+	// Wait for the handler to start, then release it and cancel.
 	<-handlerStarted
+	close(handlerRelease)
 	cancel()
 
 	// The slow request should still complete.
@@ -421,13 +425,8 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 	}
 
 	// Serve should return after the in-flight request completes.
-	select {
-	case err := <-serveDone:
-		if err != nil {
-			t.Errorf("Serve returned error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return after cancellation")
+	if err := testutil.RequireReceive(t, serveDone, 5*time.Second, "Serve did not return after cancellation"); err != nil {
+		t.Errorf("Serve returned error: %v", err)
 	}
 
 	// Socket file should be cleaned up.
@@ -880,16 +879,17 @@ func TestSocketServerAuthWrongAudience(t *testing.T) {
 	wg.Wait()
 }
 
-// waitForSocket polls until the socket file exists. Fails the test
-// after a timeout.
+// waitForSocket polls until the socket file exists. Bounded by the
+// test context timeout (no wall-clock access).
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		if t.Context().Err() != nil {
+			t.Fatalf("socket %s did not appear before test context expired", path)
+		}
+		runtime.Gosched()
 	}
-	t.Fatalf("socket %s did not appear within timeout", path)
 }

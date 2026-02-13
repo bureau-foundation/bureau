@@ -24,12 +24,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -245,19 +247,17 @@ func waitForHealthy(timeout time.Duration) error {
 	defer cancel()
 
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return fmt.Errorf("timeout after %s waiting for %s", timeout, testHomeserverURL)
-		default:
-			response, err := http.Get(testHomeserverURL + "/_matrix/client/versions")
-			if err == nil {
-				response.Body.Close()
-				if response.StatusCode == http.StatusOK {
-					return nil
-				}
-			}
-			time.Sleep(500 * time.Millisecond)
 		}
+		response, err := http.Get(testHomeserverURL + "/_matrix/client/versions")
+		if err == nil {
+			response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		runtime.Gosched()
 	}
 }
 
@@ -408,14 +408,9 @@ func startProcess(t *testing.T, name, binary string, args ...string) {
 		cmd.Process.Signal(syscall.SIGTERM)
 		done := make(chan error, 1)
 		go func() { done <- cmd.Wait() }()
-		select {
-		case <-done:
-			t.Logf("%s stopped", name)
-		case <-time.After(5 * time.Second):
-			cmd.Process.Kill()
-			<-done
-			t.Logf("%s killed after timeout", name)
-		}
+		testutil.RequireReceive(t, done, 5*time.Second,
+			fmt.Sprintf("%s did not exit after SIGTERM", name))
+		t.Logf("%s stopped", name)
 	})
 }
 
@@ -802,7 +797,7 @@ func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, st
 // event ID assigned by the homeserver.
 func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) string {
 	t.Helper()
-	transactionID := fmt.Sprintf("txn-%d", time.Now().UnixNano())
+	transactionID := testutil.UniqueID("txn")
 	messageJSON, _ := json.Marshal(messaging.NewTextMessage(body))
 	requestURL := fmt.Sprintf("http://proxy/http/matrix/_matrix/client/v3/rooms/%s/send/%s/%s",
 		url.PathEscape(roomID), schema.MatrixEventTypeMessage, url.PathEscape(transactionID))

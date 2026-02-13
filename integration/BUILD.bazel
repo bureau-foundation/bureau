@@ -66,6 +66,7 @@ go_test(
         "//lib/schema",
         "//lib/sealed",
         "//lib/secret",
+        "//lib/testutil",
         "//messaging",
         "//observe",
         "@org_golang_x_sys//unix",

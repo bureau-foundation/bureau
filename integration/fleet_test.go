@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -501,7 +502,6 @@ func TestCrossMachineObservation(t *testing.T) {
 		//   (c) Auth policy: consumer reconciled its MachineConfig and
 		//       has a DefaultObservePolicy loaded
 		var response *observe.ListResponse
-		deadline := time.Now().Add(30 * time.Second)
 		for {
 			var listError error
 			response, listError = observe.ListTargets(consumer.ObserveSocket, observe.ListRequest{
@@ -520,7 +520,7 @@ func TestCrossMachineObservation(t *testing.T) {
 				}
 			}
 
-			if time.Now().After(deadline) {
+			if t.Context().Err() != nil {
 				t.Logf("last list response: %d principals, %d machines",
 					len(response.Principals), len(response.Machines))
 				for _, principal := range response.Principals {
@@ -533,7 +533,7 @@ func TestCrossMachineObservation(t *testing.T) {
 				}
 				t.Fatal("timed out waiting for remote principal to appear as observable")
 			}
-			time.Sleep(500 * time.Millisecond)
+			runtime.Gosched()
 		}
 	discovered:
 

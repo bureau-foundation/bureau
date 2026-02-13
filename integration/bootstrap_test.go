@@ -4,11 +4,13 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -415,19 +417,22 @@ func containerHasBwrap(t *testing.T, containerID string) bool {
 }
 
 // waitForFileInContainer polls until a file exists inside the container.
+// Bounded by a context derived from the test context with the given timeout.
 func waitForFileInContainer(t *testing.T, containerID, path string, timeout time.Duration) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+
 	for {
 		code := dockerExecExitCode(t, containerID, "test", "-e", path)
 		if code == 0 {
 			return
 		}
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil {
 			t.Fatalf("timed out after %s waiting for file in container: %s", timeout, path)
 		}
-		time.Sleep(100 * time.Millisecond)
+		runtime.Gosched()
 	}
 }
 

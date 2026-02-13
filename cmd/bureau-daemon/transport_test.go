@@ -212,13 +212,9 @@ func TestRelayHandler(t *testing.T) {
 	}
 
 	// Verify the peer received the correct path.
-	select {
-	case peerRequest := <-peerReceived:
-		if peerRequest.URL.Path != "/http/service-stt-whisper/v1/transcribe" {
-			t.Errorf("peer received path = %q, want /http/service-stt-whisper/v1/transcribe", peerRequest.URL.Path)
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("peer did not receive request")
+	peerRequest := testutil.RequireReceive(t, peerReceived, 5*time.Second, "peer did not receive request")
+	if peerRequest.URL.Path != "/http/service-stt-whisper/v1/transcribe" {
+		t.Errorf("peer received path = %q, want /http/service-stt-whisper/v1/transcribe", peerRequest.URL.Path)
 	}
 }
 

@@ -75,8 +75,8 @@ func (daemon *mockDaemon) sendData(t *testing.T, data []byte) {
 
 func (daemon *mockDaemon) readMessage(t *testing.T, timeout time.Duration) Message {
 	t.Helper()
-	daemon.conn.SetReadDeadline(time.Now().Add(timeout))
-	defer daemon.conn.SetReadDeadline(time.Time{})
+	daemon.conn.SetReadDeadline(time.Now().Add(timeout)) //nolint:realclock // kernel I/O deadline
+	defer daemon.conn.SetReadDeadline(time.Time{})       //nolint:realclock // kernel I/O deadline clear
 	message, err := ReadMessage(daemon.conn)
 	if err != nil {
 		t.Fatalf("mock daemon: read message: %v", err)
@@ -85,8 +85,9 @@ func (daemon *mockDaemon) readMessage(t *testing.T, timeout time.Duration) Messa
 }
 
 // newTestDaemon creates a mock daemon and a unix socket for the client to
-// connect to. Returns the daemon, socket path, and a cleanup function.
-func newTestDaemon(t *testing.T, metadata MetadataPayload, history []byte) (*mockDaemon, string) {
+// connect to. Returns the daemon, socket path, and a channel that closes
+// when a client connection has been accepted (and daemon.conn is set).
+func newTestDaemon(t *testing.T, metadata MetadataPayload, history []byte) (*mockDaemon, string, <-chan struct{}) {
 	t.Helper()
 	socketPath := filepath.Join(t.TempDir(), "observe.sock")
 
@@ -119,7 +120,7 @@ func newTestDaemon(t *testing.T, metadata MetadataPayload, history []byte) (*moc
 		}
 	})
 
-	return daemon, socketPath
+	return daemon, socketPath, accepted
 }
 
 var testMetadata = MetadataPayload{
@@ -133,14 +134,13 @@ var testMetadata = MetadataPayload{
 
 func TestConnectSuccess(t *testing.T) {
 	t.Parallel()
-	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
+	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, nil)
 
-	// Run the handshake in a goroutine since Connect blocks until it
-	// finishes reading the metadata.
+	// Run the handshake in a goroutine. Wait for the connection to be
+	// accepted before calling handshake (which reads from daemon.conn).
 	handshakeDone := make(chan ObserveRequest, 1)
 	go func() {
-		// Wait for the connection to be accepted before running handshake.
-		time.Sleep(100 * time.Millisecond)
+		<-accepted
 		handshakeDone <- daemon.handshake(t)
 	}()
 
@@ -219,13 +219,13 @@ func TestConnectNoSocket(t *testing.T) {
 
 func TestSessionRunReceivesHistory(t *testing.T) {
 	t.Parallel()
-	daemon, socketPath := newTestDaemon(t, testMetadata, []byte("previous output\r\n"))
+	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, []byte("previous output\r\n"))
 
+	// Wait for the connection to be accepted, then run the handshake
+	// and close the connection to trigger Session.Run to return.
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		<-accepted
 		daemon.handshake(t)
-		// Close after handshake to end the session.
-		time.Sleep(200 * time.Millisecond)
 		daemon.conn.Close()
 	}()
 
@@ -255,14 +255,13 @@ func TestSessionRunReceivesHistory(t *testing.T) {
 
 func TestSessionRunRelaysData(t *testing.T) {
 	t.Parallel()
-	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
+	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, nil)
 
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		<-accepted
 		daemon.handshake(t)
-		// Send some terminal output.
+		// Send some terminal output, then close to trigger EOF.
 		daemon.sendData(t, []byte("remote terminal output"))
-		time.Sleep(200 * time.Millisecond)
 		daemon.conn.Close()
 	}()
 
@@ -289,10 +288,10 @@ func TestSessionRunRelaysData(t *testing.T) {
 
 func TestSessionRunSendsInput(t *testing.T) {
 	t.Parallel()
-	daemon, socketPath := newTestDaemon(t, testMetadata, nil)
+	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, nil)
 
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		<-accepted
 		daemon.handshake(t)
 
 		// Read input from the client.
@@ -320,9 +319,11 @@ func TestSessionRunSendsInput(t *testing.T) {
 	inputReader, inputWriter := io.Pipe()
 	go func() {
 		inputWriter.Write([]byte("keyboard input"))
-		// Keep the pipe open until the session ends; closing it would
-		// trigger the input goroutine to exit.
-		time.Sleep(1 * time.Second)
+		// Close the pipe after writing so Session.Run's input goroutine
+		// sees EOF and exits. The daemon side has already buffered the
+		// data for reading; closing the write end here just signals
+		// "no more input" and prevents the input goroutine from blocking
+		// forever on Read.
 		inputWriter.Close()
 	}()
 
@@ -344,7 +345,8 @@ func TestSessionRunWithPipe(t *testing.T) {
 	metadata := testMetadata
 	historyContent := []byte("scrollback history\r\n")
 
-	// Simulate daemon side.
+	// Simulate daemon side: complete the protocol exchange, send live
+	// data, then close to trigger EOF on the client.
 	go func() {
 		// Read request.
 		var request ObserveRequest
@@ -364,11 +366,8 @@ func TestSessionRunWithPipe(t *testing.T) {
 		// Send history.
 		WriteMessage(daemonConn, NewHistoryMessage(historyContent))
 
-		// Send some live data.
+		// Send some live data, then close.
 		WriteMessage(daemonConn, NewDataMessage([]byte("live output")))
-
-		// Wait a bit and close.
-		time.Sleep(200 * time.Millisecond)
 		daemonConn.Close()
 	}()
 

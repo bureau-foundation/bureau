@@ -355,7 +355,7 @@ func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachin
 			Keys:          []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
 			Ciphertext:    ciphertext,
 			ProvisionedBy: adminUserID,
-			ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
+			ProvisionedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("push credentials for %s: %v", account.Localpart, err)

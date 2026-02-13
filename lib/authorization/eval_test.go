@@ -227,10 +227,9 @@ func TestAuthorized_OperatorFullAccess(t *testing.T) {
 func TestAuthorized_ExpiredGrant(t *testing.T) {
 	index := NewIndex()
 
-	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
 	index.SetPrincipal("agent", schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe"}, Targets: []string{"**"}, ExpiresAt: past},
+			{Actions: []string{"observe"}, Targets: []string{"**"}, ExpiresAt: "2020-01-01T00:00:00Z"},
 		},
 	})
 	index.SetPrincipal("target", schema.AuthorizationPolicy{
@@ -239,7 +238,8 @@ func TestAuthorized_ExpiredGrant(t *testing.T) {
 		},
 	})
 
-	result := Authorized(index, "agent", "observe", "target")
+	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	result := AuthorizedAt(index, "agent", "observe", "target", checkTime)
 	if result.Decision != Deny {
 		t.Errorf("expired grant: got %v, want deny", result.Decision)
 	}
@@ -251,10 +251,9 @@ func TestAuthorized_ExpiredGrant(t *testing.T) {
 func TestAuthorized_FutureGrantValid(t *testing.T) {
 	index := NewIndex()
 
-	future := time.Now().Add(time.Hour).Format(time.RFC3339)
 	index.SetPrincipal("agent", schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe"}, Targets: []string{"**"}, ExpiresAt: future},
+			{Actions: []string{"observe"}, Targets: []string{"**"}, ExpiresAt: "2099-01-01T00:00:00Z"},
 		},
 	})
 	index.SetPrincipal("target", schema.AuthorizationPolicy{
@@ -263,7 +262,8 @@ func TestAuthorized_FutureGrantValid(t *testing.T) {
 		},
 	})
 
-	result := Authorized(index, "agent", "observe", "target")
+	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	result := AuthorizedAt(index, "agent", "observe", "target", checkTime)
 	if result.Decision != Allow {
 		t.Errorf("future grant: got %v (%v), want allow", result.Decision, result.Reason)
 	}
@@ -333,12 +333,12 @@ func TestGrantsAllow(t *testing.T) {
 }
 
 func TestGrantsAllow_ExpiredGrant(t *testing.T) {
-	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
 	grants := []schema.Grant{
-		{Actions: []string{"ticket/create"}, ExpiresAt: past},
+		{Actions: []string{"ticket/create"}, ExpiresAt: "2020-01-01T00:00:00Z"},
 	}
 
-	if GrantsAllow(grants, "ticket/create", "") {
+	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	if GrantsAllowAt(grants, "ticket/create", "", checkTime) {
 		t.Error("expired grant should not match")
 	}
 }

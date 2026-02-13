@@ -74,6 +74,12 @@ type WebRTCTransport struct {
 	// each connection to the HTTP handler.
 	inboundConnections chan net.Conn
 
+	// ready is closed when Serve has started the signaling poller and is
+	// ready to accept inbound connections. Callers can wait on Ready()
+	// before dialing.
+	ready     chan struct{}
+	readyOnce sync.Once
+
 	// closed signals shutdown.
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -102,6 +108,7 @@ func NewWebRTCTransport(signaler Signaler, localpart string, iceConfig ICEConfig
 		logger:             logger,
 		peers:              make(map[string]*peerState),
 		inboundConnections: make(chan net.Conn, 64),
+		ready:              make(chan struct{}),
 		closed:             make(chan struct{}),
 	}
 }
@@ -109,9 +116,20 @@ func NewWebRTCTransport(signaler Signaler, localpart string, iceConfig ICEConfig
 // Serve starts the WebRTC transport. It polls for inbound signaling offers
 // and dispatches incoming data channels to the HTTP handler. Blocks until
 // ctx is cancelled or Close is called.
+// Ready returns a channel that is closed when Serve has started the
+// signaling poller and is ready to accept inbound connections. This
+// enables callers to synchronize without polling or sleeping.
+func (wt *WebRTCTransport) Ready() <-chan struct{} {
+	return wt.ready
+}
+
 func (wt *WebRTCTransport) Serve(ctx context.Context, handler http.Handler) error {
 	// Start the signaling poller in the background.
 	go wt.signalingPoller(ctx)
+
+	// Signal readiness: the poller is running and the listener is about
+	// to start accepting connections.
+	wt.readyOnce.Do(func() { close(wt.ready) })
 
 	// Serve incoming data channels as HTTP.
 	listener := &chanListener{

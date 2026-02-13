@@ -260,7 +260,7 @@ func TestFakeClockSleep(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(1 * time.Second): //nolint:realclock safety valve for testing fake clock itself
 		t.Fatal("Sleep did not return after Advance")
 	}
 }

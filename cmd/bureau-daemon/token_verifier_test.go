@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -46,7 +47,7 @@ func TestTokenVerifierValidToken(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	verifier := newTokenVerifier(client, 5*time.Minute, slog.Default())
+	verifier := newTokenVerifier(client, 5*time.Minute, clock.Real(), slog.Default())
 
 	userID, err := verifier.Verify(context.Background(), "valid-token")
 	if err != nil {
@@ -76,7 +77,7 @@ func TestTokenVerifierInvalidToken(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	verifier := newTokenVerifier(client, 5*time.Minute, slog.Default())
+	verifier := newTokenVerifier(client, 5*time.Minute, clock.Real(), slog.Default())
 
 	_, err = verifier.Verify(context.Background(), "bad-token")
 	if err == nil {
@@ -87,7 +88,7 @@ func TestTokenVerifierInvalidToken(t *testing.T) {
 func TestTokenVerifierEmptyToken(t *testing.T) {
 	t.Parallel()
 
-	verifier := newTokenVerifier(nil, 5*time.Minute, slog.Default())
+	verifier := newTokenVerifier(nil, 5*time.Minute, clock.Real(), slog.Default())
 
 	_, err := verifier.Verify(context.Background(), "")
 	if err == nil {
@@ -115,7 +116,7 @@ func TestTokenVerifierCachesSuccess(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	verifier := newTokenVerifier(client, 5*time.Minute, slog.Default())
+	verifier := newTokenVerifier(client, 5*time.Minute, clock.Real(), slog.Default())
 	ctx := context.Background()
 
 	// First call should hit the server.
@@ -165,7 +166,7 @@ func TestTokenVerifierDoesNotCacheFailure(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	verifier := newTokenVerifier(client, 5*time.Minute, slog.Default())
+	verifier := newTokenVerifier(client, 5*time.Minute, clock.Real(), slog.Default())
 	ctx := context.Background()
 
 	// First call fails.
@@ -207,8 +208,8 @@ func TestTokenVerifierCacheExpiry(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// Very short cache duration for testing expiry.
-	verifier := newTokenVerifier(client, 10*time.Millisecond, slog.Default())
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	verifier := newTokenVerifier(client, 5*time.Minute, fakeClock, slog.Default())
 	ctx := context.Background()
 
 	// First call hits server.
@@ -220,8 +221,8 @@ func TestTokenVerifierCacheExpiry(t *testing.T) {
 		t.Fatalf("expected 1 server call, got %d", callCount.Load())
 	}
 
-	// Wait for cache to expire.
-	time.Sleep(20 * time.Millisecond)
+	// Advance past cache expiry.
+	fakeClock.Advance(6 * time.Minute)
 
 	// Second call should hit server again.
 	_, err = verifier.Verify(ctx, "expiring-token")
@@ -250,7 +251,8 @@ func TestTokenVerifierEvictExpired(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	verifier := newTokenVerifier(client, 10*time.Millisecond, slog.Default())
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	verifier := newTokenVerifier(client, 5*time.Minute, fakeClock, slog.Default())
 	ctx := context.Background()
 
 	// Populate cache.
@@ -270,8 +272,8 @@ func TestTokenVerifierEvictExpired(t *testing.T) {
 		t.Fatalf("cache size = %d, want 2", cacheSize)
 	}
 
-	// Wait for entries to expire and evict.
-	time.Sleep(20 * time.Millisecond)
+	// Advance past cache expiry and evict.
+	fakeClock.Advance(6 * time.Minute)
 	verifier.evictExpired()
 
 	verifier.mu.RLock()

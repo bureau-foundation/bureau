@@ -20,7 +20,7 @@ func TestMetadataStoreWriteRead(t *testing.T) {
 
 	hash := HashChunk([]byte("test content"))
 	fileHash := HashFile(hash)
-	now := time.Now().Truncate(time.Second) // CBOR time resolution
+	storedAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	original := &ArtifactMetadata{
 		FileHash:       fileHash,
@@ -36,7 +36,7 @@ func TestMetadataStoreWriteRead(t *testing.T) {
 		ChunkCount:     1,
 		ContainerCount: 1,
 		Compression:    "lz4",
-		StoredAt:       now,
+		StoredAt:       storedAt,
 	}
 
 	if err := store.Write(original); err != nil {
@@ -115,6 +115,7 @@ func TestMetadataStoreScanRefs(t *testing.T) {
 	}
 
 	// Store several artifacts.
+	baseTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	var hashes []Hash
 	for i := 0; i < 5; i++ {
 		content := []byte{byte(i), byte(i + 1), byte(i + 2)}
@@ -128,7 +129,7 @@ func TestMetadataStoreScanRefs(t *testing.T) {
 			ContentType: "application/octet-stream",
 			Size:        int64(len(content)),
 			ChunkCount:  1,
-			StoredAt:    time.Now(),
+			StoredAt:    baseTime.Add(time.Duration(i) * time.Minute),
 		}
 		if err := store.Write(meta); err != nil {
 			t.Fatalf("writing metadata %d: %v", i, err)
@@ -193,7 +194,7 @@ func TestMetadataStoreScanRefsIgnoresNonHashFiles(t *testing.T) {
 		ContentType: "text/plain",
 		Size:        4,
 		ChunkCount:  1,
-		StoredAt:    time.Now(),
+		StoredAt:    time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 	if err := store.Write(meta); err != nil {
 		t.Fatal(err)
@@ -230,13 +231,14 @@ func TestMetadataStoreOverwrite(t *testing.T) {
 	fileHash := HashFile(chunkHash)
 
 	// Write initial metadata.
+	baseTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	meta1 := &ArtifactMetadata{
 		FileHash:    fileHash,
 		Ref:         FormatRef(fileHash),
 		ContentType: "text/plain",
 		Size:        7,
 		ChunkCount:  1,
-		StoredAt:    time.Now(),
+		StoredAt:    baseTime,
 	}
 	if err := store.Write(meta1); err != nil {
 		t.Fatal(err)
@@ -250,7 +252,7 @@ func TestMetadataStoreOverwrite(t *testing.T) {
 		Description: "updated description",
 		Size:        7,
 		ChunkCount:  1,
-		StoredAt:    time.Now(),
+		StoredAt:    baseTime.Add(time.Minute),
 	}
 	if err := store.Write(meta2); err != nil {
 		t.Fatal(err)

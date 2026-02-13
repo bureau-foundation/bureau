@@ -4,8 +4,10 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -76,7 +78,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 			Status:    "pending",
 			Project:   "wst",
 			Machine:   machine.Name,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish initial workspace state: %v", err)
@@ -163,7 +165,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 			Status:    "active",
 			Project:   "wst",
 			Machine:   machine.Name,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish active workspace state: %v", err)
@@ -189,7 +191,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 			TeardownMode: "archive",
 			Project:      "wst",
 			Machine:      machine.Name,
-			UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt:    "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish teardown workspace state: %v", err)
@@ -315,7 +317,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 			Status:    "pending",
 			Project:   "wsp",
 			Machine:   machine.Name,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish initial workspace state: %v", err)
@@ -376,7 +378,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 										"status":     "active",
 										"project":    "${PROJECT}",
 										"machine":    "${MACHINE}",
-										"updated_at": time.Now().UTC().Format(time.RFC3339),
+										"updated_at": "2026-01-01T00:00:00Z",
 									},
 								},
 							},
@@ -431,7 +433,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 										"status":     "archived",
 										"project":    "${PROJECT}",
 										"machine":    "${MACHINE}",
-										"updated_at": time.Now().UTC().Format(time.RFC3339),
+										"updated_at": "2026-01-01T00:00:00Z",
 									},
 								},
 							},
@@ -478,7 +480,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 			TeardownMode: "archive",
 			Project:      "wsp",
 			Machine:      machine.Name,
-			UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt:    "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish teardown workspace state: %v", err)
@@ -530,14 +532,16 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 
 // waitForWorkspaceStatus polls the workspace room for the
 // m.bureau.workspace state event until its status field matches the
-// expected value or the timeout expires. This abstracts the common
-// pattern of waiting for a workspace lifecycle transition.
+// expected value or the context expires. Uses the test context for
+// timeout bounding instead of wall-clock deadlines.
 func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, expectedStatus string, timeout time.Duration) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+
 	for {
-		content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorkspace, "")
+		content, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
 		if err == nil {
 			var state schema.WorkspaceState
 			if unmarshalError := json.Unmarshal(content, &state); unmarshalError == nil {
@@ -546,7 +550,7 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, ex
 				}
 			}
 		}
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil {
 			// Read the current status for the error message.
 			currentStatus := "(unknown)"
 			if content != nil {
@@ -558,6 +562,6 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, ex
 			t.Fatalf("timed out after %s waiting for workspace status %q in room %s (current: %s)",
 				timeout, expectedStatus, roomID, currentStatus)
 		}
-		time.Sleep(500 * time.Millisecond)
+		runtime.Gosched()
 	}
 }

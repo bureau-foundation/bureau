@@ -8,9 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -86,7 +84,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			Status:    "active",
 			Project:   "testproj",
 			Machine:   machine.Name,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish workspace state: %v", err)
@@ -94,7 +92,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Test workspace.status ---
 	t.Run("status", func(t *testing.T) {
-		requestID := "ws-status-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "ws-status-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -141,7 +139,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Test workspace.du ---
 	t.Run("du", func(t *testing.T) {
-		requestID := "ws-du-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "ws-du-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -183,7 +181,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Test workspace.worktree.list ---
 	t.Run("worktree_list", func(t *testing.T) {
-		requestID := "ws-wtlist-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "ws-wtlist-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -222,7 +220,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Test workspace.fetch ---
 	t.Run("fetch", func(t *testing.T) {
-		requestID := "ws-fetch-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "ws-fetch-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -259,7 +257,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Test workspace.status for nonexistent workspace ---
 	t.Run("status_nonexistent", func(t *testing.T) {
-		requestID := "ws-status-ne-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "ws-status-ne-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -357,7 +355,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			Status:    "active",
 			Project:   "wtproj",
 			Machine:   machine.Name,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	if err != nil {
 		t.Fatalf("publish workspace state: %v", err)
@@ -369,7 +367,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// the integration-test-env), so we wait for both and verify the
 	// accepted ack is present.
 	t.Run("add_accepted", func(t *testing.T) {
-		requestID := "wt-add-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-add-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -402,7 +400,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Test worktree.remove accepted ack ---
 	t.Run("remove_accepted", func(t *testing.T) {
-		requestID := "wt-rm-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-rm-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -434,7 +432,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Test validation: missing path ---
 	t.Run("add_missing_path", func(t *testing.T) {
-		requestID := "wt-nopath-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-nopath-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -469,7 +467,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Test validation: path traversal ---
 	t.Run("add_path_traversal", func(t *testing.T) {
-		requestID := "wt-trav-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-trav-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -504,7 +502,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Test validation: invalid remove mode ---
 	t.Run("remove_invalid_mode", func(t *testing.T) {
-		requestID := "wt-badmode-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-badmode-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
@@ -540,7 +538,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Test validation: missing workspace ---
 	t.Run("add_missing_workspace", func(t *testing.T) {
-		requestID := "wt-nows-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		requestID := "wt-nows-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,

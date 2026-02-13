@@ -5,6 +5,7 @@ package integration_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +17,11 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-const (
-	bootstrapImageName     = "bureau-test-machine"
-	bootstrapContainerName = "bureau-bootstrap-test"
-)
+const bootstrapImageName = "bureau-test-machine"
+
+// bootstrapContainerName includes the PID so parallel test runs
+// don't collide on Docker container names.
+var bootstrapContainerName = fmt.Sprintf("bureau-bootstrap-test-%d", os.Getpid())
 
 // TestBootstrapScript exercises the full bootstrap-machine shell script inside
 // a Docker container. This validates the actual production bootstrap path: the

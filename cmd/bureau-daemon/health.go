@@ -245,8 +245,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
@@ -260,8 +258,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
 		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
@@ -273,8 +269,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	delete(d.exitWatchers, localpart)
 	delete(d.proxyExitWatchers, localpart)
 	delete(d.lastCredentials, localpart)
-	delete(d.lastVisibility, localpart)
-	delete(d.lastMatrixPolicy, localpart)
 	delete(d.lastObservePolicy, localpart)
 	delete(d.lastSpecs, localpart)
 	d.lastActivityAt = d.clock.Now()
@@ -307,7 +301,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		return
 	}
 
-	// Read the current assignment for MatrixPolicy and service config.
+	// Read the current assignment for authorization grants and service config.
 	config, err := d.readMachineConfig(ctx)
 	if err != nil {
 		d.logger.Error("health rollback: cannot read machine config",
@@ -332,12 +326,15 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		return
 	}
 
+	// Resolve authorization grants so the proxy starts with enforcement.
+	grants := d.resolveGrantsForProxy(localpart, *assignment, config)
+
 	// Recreate with the previous working spec.
 	response, err = d.launcherRequest(ctx, launcherIPCRequest{
 		Action:               "create-sandbox",
 		Principal:            localpart,
 		EncryptedCredentials: credentials.Ciphertext,
-		MatrixPolicy:         assignment.MatrixPolicy,
+		Grants:               grants,
 		SandboxSpec:          previousSpec,
 	})
 	if err != nil {
@@ -361,6 +358,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 
 	d.running[localpart] = true
 	d.lastSpecs[localpart] = previousSpec
+	d.lastGrants[localpart] = grants
 	delete(d.previousSpecs, localpart)
 	d.lastActivityAt = d.clock.Now()
 
@@ -370,10 +368,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	d.startLayoutWatcher(ctx, localpart)
 	d.configureConsumerProxy(ctx, localpart)
 
-	if err := d.pushVisibilityToProxy(ctx, localpart, assignment.ServiceVisibility); err != nil {
-		d.logger.Error("health rollback: failed to push visibility",
-			"principal", localpart, "error", err)
-	}
 	directory := d.buildServiceDirectory()
 	if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
 		d.logger.Error("health rollback: failed to push service directory",

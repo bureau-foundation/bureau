@@ -12,8 +12,8 @@ import (
 // Actions use the same "/" hierarchy and glob semantics as localparts:
 //
 //	"observe"        matches "observe" exactly
-//	"observe/*"      matches "observe/readwrite" but not "observe/foo/bar"
-//	"observe/**"     matches "observe/readwrite", "observe/foo/bar", etc.
+//	"observe/*"      matches "observe/read-write" but not "observe/foo/bar"
+//	"observe/**"     matches "observe/read-write", "observe/foo/bar", etc.
 //	"ticket/**"      matches "ticket/create", "ticket/assign", etc.
 //	"**"             matches any action
 //

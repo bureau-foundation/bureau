@@ -41,7 +41,7 @@ func setupIndex() *Index {
 		},
 		// Coder allows observation from PM and admin.
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe", "observe/readwrite"}, Actors: []string{"bureau/dev/pm", "bureau-admin"}},
+			{Actions: []string{"observe", "observe/read-write"}, Actors: []string{"bureau/dev/pm", "bureau-admin"}},
 			{Actions: []string{"observe"}, Actors: []string{"bureau/dev/**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
@@ -104,14 +104,14 @@ func TestAuthorized_CrossPrincipal_FullChain(t *testing.T) {
 	}
 }
 
-func TestAuthorized_CrossPrincipal_ReadwriteUpgrade(t *testing.T) {
+func TestAuthorized_CrossPrincipal_ReadWriteUpgrade(t *testing.T) {
 	index := setupIndex()
 
 	// PM observes coder with readwrite: PM has observe/** grant, coder
-	// allows observe/readwrite from PM → allow.
-	result := Authorized(index, "bureau/dev/pm", "observe/readwrite", "bureau/dev/workspace/coder/0")
+	// allows observe/read-write from PM → allow.
+	result := Authorized(index, "bureau/dev/pm", "observe/read-write", "bureau/dev/workspace/coder/0")
 	if result.Decision != Allow {
-		t.Errorf("PM observe/readwrite coder: got %v (%v), want allow", result.Decision, result.Reason)
+		t.Errorf("PM observe/read-write coder: got %v (%v), want allow", result.Decision, result.Reason)
 	}
 }
 

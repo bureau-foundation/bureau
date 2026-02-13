@@ -272,7 +272,7 @@ func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 	}{
 		{"command/ticket/create", "", true},
 		{"command/artifact/fetch", "", true},
-		{"observe/readwrite", "any/principal", true},
+		{"observe/read-write", "any/principal", true},
 		{"observe", "any/principal", true},
 		{"interrupt", "", false},
 	}

@@ -89,9 +89,9 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	pushCredentials(t, admin, machine, agent)
 
 	// The test agent sends messages to the config room from inside the
-	// sandbox. The proxy's default-deny MatrixPolicy blocks JoinRoom, so
-	// handle membership before the sandbox starts: admin invites, principal
-	// joins via direct session.
+	// sandbox. The proxy's default-deny grants block JoinRoom, so handle
+	// membership before the sandbox starts: admin invites, principal joins
+	// via direct session.
 	if err := admin.InviteUser(ctx, machine.ConfigRoomID, agent.UserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			t.Fatalf("invite agent to config room: %v", err)

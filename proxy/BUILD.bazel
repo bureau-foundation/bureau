@@ -21,8 +21,10 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/proxy",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/authorization",
+        "//lib/codec",
+        "//lib/ipc",
         "//lib/netutil",
-        "//lib/principal",
         "//lib/schema",
         "//lib/secret",
         "@in_gopkg_yaml_v3//:yaml_v3",
@@ -42,6 +44,8 @@ go_test(
     ],
     embed = [":proxy"],
     deps = [
+        "//lib/codec",
+        "//lib/ipc",
         "//lib/schema",
         "//lib/secret",
     ],

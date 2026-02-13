@@ -1323,158 +1323,158 @@ func TestUnixSocketUpstream(t *testing.T) {
 	}
 }
 
-func TestMatrixPolicy(t *testing.T) {
+func TestCheckMatrixPolicy(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handler := NewHandler(logger)
 
 	// checkMatrixPolicy is a method on Handler — test it directly with
-	// table-driven subtests covering every gated endpoint.
+	// table-driven subtests covering every gated endpoint. Authorization
+	// is grant-based: the daemon pushes pre-resolved grants and the proxy
+	// checks them via authorization.GrantsAllow().
 	tests := []struct {
 		name    string
-		policy  *schema.MatrixPolicy
+		grants  []schema.Grant
 		method  string
 		path    string
 		blocked bool
 	}{
-		// Default-deny (nil policy): all self-service operations blocked.
+		// Default-deny (nil grants): all gated operations blocked.
 		{
-			name:    "nil policy blocks join by alias",
-			policy:  nil,
+			name:    "nil grants blocks join by alias",
+			grants:  nil,
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
 		},
 		{
-			name:    "nil policy blocks join by room ID",
-			policy:  nil,
+			name:    "nil grants blocks join by room ID",
+			grants:  nil,
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/join",
 			blocked: true,
 		},
 		{
-			name:    "nil policy blocks invite",
-			policy:  nil,
+			name:    "nil grants blocks invite",
+			grants:  nil,
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
 			blocked: true,
 		},
 		{
-			name:    "nil policy blocks createRoom",
-			policy:  nil,
+			name:    "nil grants blocks createRoom",
+			grants:  nil,
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: true,
 		},
 		{
-			name:    "nil policy allows GET messages",
-			policy:  nil,
+			name:    "nil grants allows GET messages",
+			grants:  nil,
 			method:  "GET",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/messages",
 			blocked: false,
 		},
 		{
-			name:    "nil policy allows PUT send",
-			policy:  nil,
+			name:    "nil grants allows PUT send",
+			grants:  nil,
 			method:  "PUT",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/send/m.room.message/txn1",
 			blocked: false,
 		},
 		{
-			name:    "nil policy allows GET sync",
-			policy:  nil,
+			name:    "nil grants allows GET sync",
+			grants:  nil,
 			method:  "GET",
 			path:    "/_matrix/client/v3/sync",
 			blocked: false,
 		},
 
-		// Zero-valued policy (all false): same as nil.
+		// Empty grants (non-nil but no entries): same as nil.
 		{
-			name:    "zero policy blocks join",
-			policy:  &schema.MatrixPolicy{},
+			name:    "empty grants blocks join",
+			grants:  []schema.Grant{},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
 		},
 
-		// AllowJoin = true: join and accept-invite unblocked.
+		// matrix/join grant: join unblocked, other actions still blocked.
 		{
-			name:    "AllowJoin unblocks join by alias",
-			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			name:    "join grant unblocks join by alias",
+			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23iree:bureau.local",
 			blocked: false,
 		},
 		{
-			name:    "AllowJoin unblocks rooms/*/join",
-			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			name:    "join grant unblocks rooms/*/join",
+			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/join",
 			blocked: false,
 		},
 		{
-			name:    "AllowJoin still blocks invite",
-			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			name:    "join grant still blocks invite",
+			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
 			blocked: true,
 		},
 		{
-			name:    "AllowJoin still blocks createRoom",
-			policy:  &schema.MatrixPolicy{AllowJoin: true},
+			name:    "join grant still blocks createRoom",
+			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: true,
 		},
 
-		// AllowInvite = true: invite unblocked, join still blocked.
+		// matrix/invite grant: invite unblocked, join still blocked.
 		{
-			name:    "AllowInvite unblocks invite",
-			policy:  &schema.MatrixPolicy{AllowInvite: true},
+			name:    "invite grant unblocks invite",
+			grants:  []schema.Grant{{Actions: []string{"matrix/invite"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
 			blocked: false,
 		},
 		{
-			name:    "AllowInvite still blocks join",
-			policy:  &schema.MatrixPolicy{AllowInvite: true},
+			name:    "invite grant still blocks join",
+			grants:  []schema.Grant{{Actions: []string{"matrix/invite"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
 		},
 
-		// AllowRoomCreate = true: createRoom unblocked.
+		// matrix/create-room grant: createRoom unblocked.
 		{
-			name:    "AllowRoomCreate unblocks createRoom",
-			policy:  &schema.MatrixPolicy{AllowRoomCreate: true},
+			name:    "create-room grant unblocks createRoom",
+			grants:  []schema.Grant{{Actions: []string{"matrix/create-room"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: false,
 		},
 		{
-			name:    "AllowRoomCreate still blocks join",
-			policy:  &schema.MatrixPolicy{AllowRoomCreate: true},
+			name:    "create-room grant still blocks join",
+			grants:  []schema.Grant{{Actions: []string{"matrix/create-room"}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
 		},
 
-		// Coordinator policy (all true): everything allowed.
+		// Full grants (all actions in one grant): everything allowed.
 		{
-			name: "full policy allows everything",
-			policy: &schema.MatrixPolicy{
-				AllowJoin:       true,
-				AllowInvite:     true,
-				AllowRoomCreate: true,
-			},
+			name: "full grants allows everything",
+			grants: []schema.Grant{{Actions: []string{
+				"matrix/join", "matrix/invite", "matrix/create-room",
+			}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: false,
 		},
 
-		// Non-POST methods are never blocked.
+		// Non-POST methods are never blocked regardless of grants.
 		{
 			name:    "GET join endpoint is allowed (not POST)",
-			policy:  nil,
+			grants:  nil,
 			method:  "GET",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: false,
@@ -1483,16 +1483,16 @@ func TestMatrixPolicy(t *testing.T) {
 		// Non-Matrix paths are never checked.
 		{
 			name:    "non-matrix path ignored",
-			policy:  nil,
+			grants:  nil,
 			method:  "POST",
 			path:    "/v1/proxy",
 			blocked: false,
 		},
 
-		// PUT state events are always allowed (admin sets state).
+		// PUT state events are always allowed (not POST).
 		{
-			name:    "PUT state event allowed even with nil policy",
-			policy:  nil,
+			name:    "PUT state event allowed even with nil grants",
+			grants:  nil,
 			method:  "PUT",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/state/m.room.topic/",
 			blocked: false,
@@ -1501,7 +1501,7 @@ func TestMatrixPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler.SetMatrixPolicy(tt.policy)
+			handler.SetGrants(tt.grants)
 			blocked, reason := handler.checkMatrixPolicy(tt.method, tt.path)
 			if blocked != tt.blocked {
 				t.Errorf("checkMatrixPolicy(%s, %s) blocked = %v, want %v (reason: %s)",
@@ -1530,9 +1530,9 @@ func TestServiceDirectory(t *testing.T) {
 		t.Fatalf("failed to create server: %v", err)
 	}
 
-	// Set wildcard visibility so the directory is fully visible. Tests
-	// specifically for visibility filtering are in TestServiceVisibility.
-	server.SetServiceVisibility([]string{"**"})
+	// Grant full service discovery so the directory is visible. Tests
+	// specifically for authorization filtering are in TestServiceVisibility.
+	server.SetGrants([]schema.Grant{{Actions: []string{"service/discover"}, Targets: []string{"**"}}})
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
@@ -1958,24 +1958,28 @@ func TestServiceVisibility(t *testing.T) {
 		return services
 	}
 
-	t.Run("default-deny: no visibility returns empty", func(t *testing.T) {
-		// No visibility patterns set — agent sees nothing.
+	discoverGrant := func(targets ...string) []schema.Grant {
+		return []schema.Grant{{Actions: []string{"service/discover"}, Targets: targets}}
+	}
+
+	t.Run("default-deny: no grants returns empty", func(t *testing.T) {
+		// No grants set — agent sees nothing.
 		services := getServices(t, "")
 		if len(services) != 0 {
-			t.Errorf("expected 0 services with no visibility, got %d", len(services))
+			t.Errorf("expected 0 services with no grants, got %d", len(services))
 		}
 	})
 
-	t.Run("wildcard visibility shows all", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"**"})
+	t.Run("wildcard grant shows all", func(t *testing.T) {
+		server.SetGrants(discoverGrant("**"))
 		services := getServices(t, "")
 		if len(services) != 4 {
-			t.Errorf("expected 4 services with ** visibility, got %d", len(services))
+			t.Errorf("expected 4 services with ** grant, got %d", len(services))
 		}
 	})
 
 	t.Run("namespace pattern filters to subtree", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"service/stt/*"})
+		server.SetGrants(discoverGrant("service/stt/*"))
 		services := getServices(t, "")
 		if len(services) != 2 {
 			t.Errorf("expected 2 STT services, got %d", len(services))
@@ -1987,8 +1991,8 @@ func TestServiceVisibility(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple patterns are unioned", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"service/stt/*", "service/embedding/*"})
+	t.Run("multiple targets are unioned", func(t *testing.T) {
+		server.SetGrants(discoverGrant("service/stt/*", "service/embedding/*"))
 		services := getServices(t, "")
 		if len(services) != 3 {
 			t.Errorf("expected 3 services (2 STT + 1 embedding), got %d", len(services))
@@ -1996,7 +2000,7 @@ func TestServiceVisibility(t *testing.T) {
 	})
 
 	t.Run("exact localpart match", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"service/tts/piper"})
+		server.SetGrants(discoverGrant("service/tts/piper"))
 		services := getServices(t, "")
 		if len(services) != 1 {
 			t.Errorf("expected 1 service, got %d", len(services))
@@ -2006,27 +2010,27 @@ func TestServiceVisibility(t *testing.T) {
 		}
 	})
 
-	t.Run("no matching patterns returns empty", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"service/llm/*"})
+	t.Run("no matching targets returns empty", func(t *testing.T) {
+		server.SetGrants(discoverGrant("service/llm/*"))
 		services := getServices(t, "")
 		if len(services) != 0 {
-			t.Errorf("expected 0 services for non-matching pattern, got %d", len(services))
+			t.Errorf("expected 0 services for non-matching target, got %d", len(services))
 		}
 	})
 
-	t.Run("visibility combined with query param filtering", func(t *testing.T) {
+	t.Run("grants combined with query param filtering", func(t *testing.T) {
 		// Can see all services, but filter by capability.
-		server.SetServiceVisibility([]string{"**"})
+		server.SetGrants(discoverGrant("**"))
 		services := getServices(t, "capability=streaming")
 		if len(services) != 2 {
 			t.Errorf("expected 2 streaming services, got %d", len(services))
 		}
 	})
 
-	t.Run("visibility restricts before query param filtering", func(t *testing.T) {
+	t.Run("grants restrict before query param filtering", func(t *testing.T) {
 		// Can only see STT services; even though TTS/piper also has streaming,
-		// it should not appear because it's not visible.
-		server.SetServiceVisibility([]string{"service/stt/*"})
+		// it should not appear because the grant doesn't cover it.
+		server.SetGrants(discoverGrant("service/stt/*"))
 		services := getServices(t, "capability=streaming")
 		if len(services) != 1 {
 			t.Errorf("expected 1 visible streaming service, got %d", len(services))
@@ -2036,13 +2040,13 @@ func TestServiceVisibility(t *testing.T) {
 		}
 	})
 
-	t.Run("push visibility via admin API", func(t *testing.T) {
+	t.Run("push grants via admin API", func(t *testing.T) {
 		// Reset to default-deny first.
-		server.SetServiceVisibility(nil)
+		server.SetGrants(nil)
 
-		// Push patterns via admin API.
-		patterns, _ := json.Marshal([]string{"service/embedding/*"})
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader(patterns))
+		// Push grants via admin API.
+		grants, _ := json.Marshal(discoverGrant("service/embedding/*"))
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(grants))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := adminClient.Do(req)
@@ -2061,23 +2065,20 @@ func TestServiceVisibility(t *testing.T) {
 		if result["status"] != "ok" {
 			t.Errorf("expected status ok, got %v", result["status"])
 		}
-		if result["patterns"] != float64(1) {
-			t.Errorf("expected 1 pattern, got %v", result["patterns"])
-		}
 
 		// Verify the agent now sees only embedding services.
 		services := getServices(t, "")
 		if len(services) != 1 {
-			t.Errorf("expected 1 service after visibility push, got %d", len(services))
+			t.Errorf("expected 1 service after grant push, got %d", len(services))
 		}
 		if len(services) > 0 && services[0].Localpart != "service/embedding/e5" {
 			t.Errorf("expected e5, got %q", services[0].Localpart)
 		}
 	})
 
-	t.Run("admin visibility not on agent socket", func(t *testing.T) {
-		patterns, _ := json.Marshal([]string{"**"})
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader(patterns))
+	t.Run("admin authorization not on agent socket", func(t *testing.T) {
+		grants, _ := json.Marshal(discoverGrant("**"))
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(grants))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := agentClient.Do(req)
@@ -2087,51 +2088,36 @@ func TestServiceVisibility(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			t.Error("admin visibility endpoint should not be accessible on agent socket")
-		}
-	})
-
-	t.Run("push invalid visibility body", func(t *testing.T) {
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/visibility", bytes.NewReader([]byte("not json")))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := adminClient.Do(req)
-		if err != nil {
-			t.Fatalf("request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("expected status 400, got %d", resp.StatusCode)
+			t.Error("admin authorization endpoint should not be accessible on agent socket")
 		}
 	})
 
 	t.Run("deep wildcard matches nested paths", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"service/**"})
+		server.SetGrants(discoverGrant("service/**"))
 		services := getServices(t, "")
 		if len(services) != 4 {
-			t.Errorf("expected 4 services with service/** visibility, got %d", len(services))
+			t.Errorf("expected 4 services with service/** grant, got %d", len(services))
 		}
 	})
 
-	t.Run("empty patterns resets to default-deny", func(t *testing.T) {
-		server.SetServiceVisibility([]string{"**"})
+	t.Run("nil grants resets to default-deny", func(t *testing.T) {
+		server.SetGrants(discoverGrant("**"))
 		// Verify agent can see services.
 		services := getServices(t, "")
 		if len(services) != 4 {
-			t.Fatalf("expected 4 services with ** visibility, got %d", len(services))
+			t.Fatalf("expected 4 services with ** grant, got %d", len(services))
 		}
 
-		// Reset to empty.
-		server.SetServiceVisibility([]string{})
+		// Reset to nil.
+		server.SetGrants(nil)
 		services = getServices(t, "")
 		if len(services) != 0 {
-			t.Errorf("expected 0 services after clearing visibility, got %d", len(services))
+			t.Errorf("expected 0 services after clearing grants, got %d", len(services))
 		}
 	})
 }
 
-func TestAdminSetMatrixPolicy(t *testing.T) {
+func TestAdminSetAuthorization(t *testing.T) {
 	tempDir := t.TempDir()
 	agentSocket := filepath.Join(tempDir, "proxy.sock")
 	adminSocket := filepath.Join(tempDir, "admin.sock")
@@ -2159,36 +2145,13 @@ func TestAdminSetMatrixPolicy(t *testing.T) {
 		},
 	}
 
-	agentClient := &http.Client{
-		Transport: &http.Transport{
-			Dial: func(_, _ string) (net.Conn, error) {
-				return net.Dial("unix", agentSocket)
-			},
-		},
-	}
-
-	// Set up a Matrix HTTP service on the provider so we can test
-	// policy enforcement on the agent socket. The upstream doesn't
-	// need to exist for blocked requests (the proxy rejects before
-	// forwarding), but we need the service registered so the proxy
-	// routes /http/matrix/ paths to HandleHTTPProxy.
-	matrixService, err := NewHTTPService(HTTPServiceConfig{
-		Name:     "matrix",
-		Upstream: "http://localhost:6167",
-	})
-	if err != nil {
-		t.Fatalf("failed to create matrix service: %v", err)
-	}
-	server.RegisterHTTPService("matrix", matrixService)
-
-	t.Run("set policy with mixed permissions", func(t *testing.T) {
-		policy := schema.MatrixPolicy{
-			AllowJoin:       true,
-			AllowInvite:     false,
-			AllowRoomCreate: true,
+	t.Run("push grants via admin endpoint", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/join", "matrix/invite"}},
+			{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
 		}
-		body, _ := json.Marshal(&policy)
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
+		body, _ := json.Marshal(grants)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := adminClient.Do(req)
@@ -2209,78 +2172,13 @@ func TestAdminSetMatrixPolicy(t *testing.T) {
 		if result["status"] != "ok" {
 			t.Errorf("expected status ok, got %v", result["status"])
 		}
-		if result["allow_join"] != true {
-			t.Errorf("expected allow_join=true, got %v", result["allow_join"])
-		}
-		if result["allow_invite"] != false {
-			t.Errorf("expected allow_invite=false, got %v", result["allow_invite"])
-		}
-		if result["allow_room_create"] != true {
-			t.Errorf("expected allow_room_create=true, got %v", result["allow_room_create"])
+		if result["grants"] != float64(2) {
+			t.Errorf("expected grants=2, got %v", result["grants"])
 		}
 	})
 
-	t.Run("policy takes effect on agent socket", func(t *testing.T) {
-		// Join should be allowed (AllowJoin=true from previous subtest).
-		// The request will fail at the upstream level (no real Matrix
-		// server), but it should NOT be blocked by the policy — a 403
-		// with "matrix policy:" in the body means the policy blocked it.
-		joinResp, err := agentClient.Post(
-			"http://localhost/http/matrix/_matrix/client/v3/join/%23test:bureau.local",
-			"application/json", nil,
-		)
-		if err != nil {
-			t.Fatalf("join request failed: %v", err)
-		}
-		defer joinResp.Body.Close()
-
-		// Should NOT be 403 with policy reason — upstream errors are fine.
-		if joinResp.StatusCode == http.StatusForbidden {
-			respBody, _ := io.ReadAll(joinResp.Body)
-			bodyString := string(respBody)
-			if strings.Contains(bodyString, "matrix policy:") {
-				t.Errorf("join should be allowed by policy, but was blocked: %s", bodyString)
-			}
-		}
-
-		// Invite should be blocked (AllowInvite=false).
-		inviteResp, err := agentClient.Post(
-			"http://localhost/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite",
-			"application/json", bytes.NewReader([]byte(`{"user_id":"@other:bureau.local"}`)),
-		)
-		if err != nil {
-			t.Fatalf("invite request failed: %v", err)
-		}
-		defer inviteResp.Body.Close()
-
-		if inviteResp.StatusCode != http.StatusForbidden {
-			t.Errorf("expected invite to be blocked (403), got %d", inviteResp.StatusCode)
-		}
-		inviteBody, _ := io.ReadAll(inviteResp.Body)
-		if !strings.Contains(string(inviteBody), "matrix policy:") {
-			t.Errorf("expected policy rejection reason, got %q", string(inviteBody))
-		}
-	})
-
-	t.Run("admin policy not on agent socket", func(t *testing.T) {
-		policy := schema.MatrixPolicy{AllowJoin: true}
-		body, _ := json.Marshal(&policy)
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := agentClient.Do(req)
-		if err != nil {
-			t.Fatalf("request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			t.Error("admin policy endpoint should not be accessible on agent socket")
-		}
-	})
-
-	t.Run("push invalid body", func(t *testing.T) {
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader([]byte("not json")))
+	t.Run("invalid body returns 400", func(t *testing.T) {
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader([]byte("not json")))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := adminClient.Do(req)
@@ -2295,7 +2193,7 @@ func TestAdminSetMatrixPolicy(t *testing.T) {
 	})
 }
 
-func TestAdminSetMatrixPolicy_Null(t *testing.T) {
+func TestGrantsBasedMatrixPolicy(t *testing.T) {
 	tempDir := t.TempDir()
 	agentSocket := filepath.Join(tempDir, "proxy.sock")
 	adminSocket := filepath.Join(tempDir, "admin.sock")
@@ -2332,7 +2230,8 @@ func TestAdminSetMatrixPolicy_Null(t *testing.T) {
 	}
 
 	// Register a Matrix HTTP service so the proxy routes /http/matrix/
-	// paths through HandleHTTPProxy (which applies policy checks).
+	// paths to HandleHTTPProxy. The upstream doesn't need to exist —
+	// blocked requests are rejected before forwarding.
 	matrixService, err := NewHTTPService(HTTPServiceConfig{
 		Name:     "matrix",
 		Upstream: "http://localhost:6167",
@@ -2342,89 +2241,301 @@ func TestAdminSetMatrixPolicy_Null(t *testing.T) {
 	}
 	server.RegisterHTTPService("matrix", matrixService)
 
-	// First, set a permissive policy so we have a known starting state.
-	permissive := schema.MatrixPolicy{
-		AllowJoin:       true,
-		AllowInvite:     true,
-		AllowRoomCreate: true,
+	// Push grants that allow join and create-room but NOT invite.
+	grants := []schema.Grant{
+		{Actions: []string{"matrix/join", "matrix/create-room"}},
 	}
-	body, _ := json.Marshal(&permissive)
-	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader(body))
+	body, _ := json.Marshal(grants)
+	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := adminClient.Do(req)
 	if err != nil {
-		t.Fatalf("failed to set permissive policy: %v", err)
+		t.Fatalf("push grants failed: %v", err)
 	}
 	resp.Body.Close()
 
-	t.Run("null resets to default-deny", func(t *testing.T) {
-		// Push null to reset to default-deny.
-		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/policy", bytes.NewReader([]byte("null")))
-		req.Header.Set("Content-Type", "application/json")
+	t.Run("join allowed by grant", func(t *testing.T) {
+		joinResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/join/%23test:bureau.local",
+			"application/json", nil,
+		)
+		if err != nil {
+			t.Fatalf("join request failed: %v", err)
+		}
+		defer joinResp.Body.Close()
 
+		// Should NOT be blocked by authorization — upstream errors are fine.
+		if joinResp.StatusCode == http.StatusForbidden {
+			respBody, _ := io.ReadAll(joinResp.Body)
+			if strings.Contains(string(respBody), "authorization:") {
+				t.Errorf("join should be allowed by grant, but was blocked: %s", respBody)
+			}
+		}
+	})
+
+	t.Run("createRoom allowed by grant", func(t *testing.T) {
+		createResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/createRoom",
+			"application/json", bytes.NewReader([]byte("{}")),
+		)
+		if err != nil {
+			t.Fatalf("createRoom request failed: %v", err)
+		}
+		defer createResp.Body.Close()
+
+		if createResp.StatusCode == http.StatusForbidden {
+			respBody, _ := io.ReadAll(createResp.Body)
+			if strings.Contains(string(respBody), "authorization:") {
+				t.Errorf("createRoom should be allowed by grant, but was blocked: %s", respBody)
+			}
+		}
+	})
+
+	t.Run("invite blocked by missing grant", func(t *testing.T) {
+		inviteResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite",
+			"application/json", bytes.NewReader([]byte(`{"user_id":"@other:bureau.local"}`)),
+		)
+		if err != nil {
+			t.Fatalf("invite request failed: %v", err)
+		}
+		defer inviteResp.Body.Close()
+
+		if inviteResp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected invite to be blocked (403), got %d", inviteResp.StatusCode)
+		}
+		inviteBody, _ := io.ReadAll(inviteResp.Body)
+		if !strings.Contains(string(inviteBody), "authorization:") {
+			t.Errorf("expected authorization rejection reason, got %q", string(inviteBody))
+		}
+	})
+
+	t.Run("room join via rooms endpoint blocked without grant", func(t *testing.T) {
+		// Push grants with only matrix/invite — join should be blocked.
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/invite"}},
+		}
+		body, _ := json.Marshal(grants)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		resp, err := adminClient.Do(req)
 		if err != nil {
-			t.Fatalf("request failed: %v", err)
+			t.Fatalf("push grants failed: %v", err)
+		}
+		resp.Body.Close()
+
+		joinResp, err := agentClient.Post(
+			"http://localhost/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/join",
+			"application/json", nil,
+		)
+		if err != nil {
+			t.Fatalf("join request failed: %v", err)
+		}
+		defer joinResp.Body.Close()
+
+		if joinResp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected join to be blocked (403), got %d", joinResp.StatusCode)
+		}
+	})
+}
+
+func TestGrantsBasedServiceDiscovery(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	adminClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", adminSocket)
+			},
+		},
+	}
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	// Push a service directory.
+	directory := []ServiceDirectoryEntry{
+		{Localpart: "service/stt/whisper", Principal: "@service/stt/whisper:bureau.local", Machine: "@m:b", Protocol: "http"},
+		{Localpart: "service/stt/deepgram", Principal: "@service/stt/deepgram:bureau.local", Machine: "@m:b", Protocol: "http"},
+		{Localpart: "service/tts/piper", Principal: "@service/tts/piper:bureau.local", Machine: "@m:b", Protocol: "http"},
+		{Localpart: "service/embedding/e5", Principal: "@service/embedding/e5:bureau.local", Machine: "@m:b", Protocol: "grpc"},
+	}
+	body, _ := json.Marshal(directory)
+	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatalf("push directory failed: %v", err)
+	}
+	resp.Body.Close()
+
+	getServices := func(t *testing.T) []ServiceDirectoryEntry {
+		t.Helper()
+		resp, err := agentClient.Get("http://localhost/v1/services")
+		if err != nil {
+			t.Fatalf("get services failed: %v", err)
 		}
 		defer resp.Body.Close()
+		var entries []ServiceDirectoryEntry
+		if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+			t.Fatalf("decode services failed: %v", err)
+		}
+		return entries
+	}
 
-		if resp.StatusCode != http.StatusOK {
+	// Push grants that allow discovering only stt services.
+	grants := []schema.Grant{
+		{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+	}
+	body, _ = json.Marshal(grants)
+	req, _ = http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = adminClient.Do(req)
+	if err != nil {
+		t.Fatalf("push grants failed: %v", err)
+	}
+	resp.Body.Close()
+
+	t.Run("only stt services visible", func(t *testing.T) {
+		entries := getServices(t)
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 services, got %d: %v", len(entries), entries)
+		}
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Localpart, "service/stt/") {
+				t.Errorf("unexpected service: %s", entry.Localpart)
+			}
+		}
+	})
+
+	t.Run("empty grants means no services", func(t *testing.T) {
+		// Push empty grants — grants are non-nil but contain no
+		// service/discover action, so nothing should be visible.
+		emptyGrants := []schema.Grant{}
+		body, _ := json.Marshal(emptyGrants)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("push grants failed: %v", err)
+		}
+		resp.Body.Close()
+
+		entries := getServices(t)
+		if len(entries) != 0 {
+			t.Errorf("expected 0 services with empty grants, got %d", len(entries))
+		}
+	})
+
+	t.Run("wildcard grants show all services", func(t *testing.T) {
+		wildcardGrants := []schema.Grant{
+			{Actions: []string{"service/discover"}, Targets: []string{"**"}},
+		}
+		body, _ := json.Marshal(wildcardGrants)
+		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			t.Fatalf("push grants failed: %v", err)
+		}
+		resp.Body.Close()
+
+		entries := getServices(t)
+		if len(entries) != 4 {
+			t.Errorf("expected 4 services with wildcard grants, got %d", len(entries))
+		}
+	})
+}
+
+func TestDefaultDenyWithoutGrants(t *testing.T) {
+	tempDir := t.TempDir()
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	adminSocket := filepath.Join(tempDir, "admin.sock")
+
+	server, err := NewServer(ServerConfig{
+		SocketPath:      agentSocket,
+		AdminSocketPath: adminSocket,
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+
+	agentClient := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	matrixService, err := NewHTTPService(HTTPServiceConfig{
+		Name:     "matrix",
+		Upstream: "http://localhost:6167",
+	})
+	if err != nil {
+		t.Fatalf("failed to create matrix service: %v", err)
+	}
+	server.RegisterHTTPService("matrix", matrixService)
+
+	// No grants pushed — everything should be denied.
+	endpoints := []struct {
+		name string
+		path string
+	}{
+		{"join by alias", "/http/matrix/_matrix/client/v3/join/%23room:bureau.local"},
+		{"join by room ID", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/join"},
+		{"invite", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite"},
+		{"createRoom", "/http/matrix/_matrix/client/v3/createRoom"},
+	}
+
+	for _, endpoint := range endpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			resp, err := agentClient.Post(
+				"http://localhost"+endpoint.path,
+				"application/json",
+				bytes.NewReader([]byte("{}")),
+			)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected 403, got %d", resp.StatusCode)
+			}
 			respBody, _ := io.ReadAll(resp.Body)
-			t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, respBody)
-		}
-
-		var result map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-		if result["status"] != "ok" {
-			t.Errorf("expected status ok, got %v", result["status"])
-		}
-		// All permissions should be false when policy is null.
-		if result["allow_join"] != false {
-			t.Errorf("expected allow_join=false after null, got %v", result["allow_join"])
-		}
-		if result["allow_invite"] != false {
-			t.Errorf("expected allow_invite=false after null, got %v", result["allow_invite"])
-		}
-		if result["allow_room_create"] != false {
-			t.Errorf("expected allow_room_create=false after null, got %v", result["allow_room_create"])
-		}
-	})
-
-	t.Run("default-deny blocks all gated operations", func(t *testing.T) {
-		// After null policy, all self-service membership operations
-		// should be blocked by the proxy.
-		endpoints := []struct {
-			name string
-			path string
-		}{
-			{"join by alias", "/http/matrix/_matrix/client/v3/join/%23room:bureau.local"},
-			{"join by room ID", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/join"},
-			{"invite", "/http/matrix/_matrix/client/v3/rooms/!abc:bureau.local/invite"},
-			{"createRoom", "/http/matrix/_matrix/client/v3/createRoom"},
-		}
-
-		for _, endpoint := range endpoints {
-			t.Run(endpoint.name, func(t *testing.T) {
-				resp, err := agentClient.Post(
-					"http://localhost"+endpoint.path,
-					"application/json",
-					bytes.NewReader([]byte("{}")),
-				)
-				if err != nil {
-					t.Fatalf("request failed: %v", err)
-				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode != http.StatusForbidden {
-					t.Errorf("expected 403 for %s, got %d", endpoint.name, resp.StatusCode)
-				}
-				respBody, _ := io.ReadAll(resp.Body)
-				if !strings.Contains(string(respBody), "matrix policy:") {
-					t.Errorf("expected policy rejection reason for %s, got %q", endpoint.name, string(respBody))
-				}
-			})
-		}
-	})
+			if !strings.Contains(string(respBody), "authorization:") {
+				t.Errorf("expected authorization rejection, got %q", string(respBody))
+			}
+		})
+	}
 }

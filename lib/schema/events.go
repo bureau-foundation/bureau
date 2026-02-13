@@ -702,16 +702,15 @@ type PrincipalAssignment struct {
 	// proxy, which filters the directory before returning results.
 	ServiceVisibility []string `json:"service_visibility,omitempty"`
 
-	// Authorization is the unified authorization policy for this
-	// principal. Defines what this principal can do (grants, denials)
-	// and what others can do to it (allowances, allowance denials).
+	// Authorization is the full authorization policy for this principal.
+	// Defines what this principal can do (grants, denials) and what
+	// others can do to it (allowances, allowance denials).
 	//
-	// This field coexists with MatrixPolicy, ObservePolicy, and
-	// ServiceVisibility during migration. When Authorization is set,
-	// the daemon will use it for authorization decisions. When absent,
-	// the daemon falls back to the legacy per-field policies above.
-	// Once all configurations have migrated, the legacy fields will
-	// be removed.
+	// This is the advanced alternative to the shorthand fields above
+	// (MatrixPolicy, ObservePolicy, ServiceVisibility). When set, the
+	// daemon uses it for all authorization decisions and ignores the
+	// shorthand fields. When absent, the daemon synthesizes grants
+	// from the shorthand fields.
 	Authorization *AuthorizationPolicy `json:"authorization,omitempty"`
 
 	// CommandOverride replaces the template's Command for this specific

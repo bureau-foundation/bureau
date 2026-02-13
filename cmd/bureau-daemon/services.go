@@ -407,8 +407,8 @@ func (d *Daemon) pushServiceDirectory(ctx context.Context) {
 }
 
 // putProxyAdmin sends a JSON PUT request to a principal's proxy admin API.
-// Used by all push-to-proxy functions (directory, visibility, policy) which
-// differ only in the endpoint path and payload type.
+// Used by push-to-proxy functions (directory, authorization) which differ
+// only in the endpoint path and payload type.
 func (d *Daemon) putProxyAdmin(ctx context.Context, localpart, path string, payload any) error {
 	adminSocket := d.adminSocketPathFunc(localpart)
 	client := proxyAdminClient(adminSocket)
@@ -479,19 +479,53 @@ type adminDirectoryEntry struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
-// pushVisibilityToProxy pushes the service visibility patterns for a specific
-// consumer to its proxy via the admin API (PUT /v1/admin/visibility). Called
-// when a new sandbox starts so the proxy knows which services the agent is
-// allowed to discover.
-func (d *Daemon) pushVisibilityToProxy(ctx context.Context, consumerLocalpart string, patterns []string) error {
-	return d.putProxyAdmin(ctx, consumerLocalpart, "/v1/admin/visibility", patterns)
+// pushAuthorizationToProxy pushes the pre-resolved authorization grants to a
+// single principal's proxy via the admin API (PUT /v1/admin/authorization).
+// Called when a new sandbox starts and when the principal's grants change at
+// runtime (config change, temporal grant arrival/expiry).
+func (d *Daemon) pushAuthorizationToProxy(ctx context.Context, localpart string, grants []schema.Grant) error {
+	return d.putProxyAdmin(ctx, localpart, "/v1/admin/authorization", grants)
 }
 
-// pushMatrixPolicyToProxy pushes the Matrix access policy to a single
-// principal's proxy via the admin API (PUT /v1/admin/policy). Called when
-// a running principal's MatrixPolicy changes in the MachineConfig.
-func (d *Daemon) pushMatrixPolicyToProxy(ctx context.Context, localpart string, policy *schema.MatrixPolicy) error {
-	return d.putProxyAdmin(ctx, localpart, "/v1/admin/policy", policy)
+// synthesizeGrants converts the shorthand MatrixPolicy and ServiceVisibility
+// fields on PrincipalAssignment into authorization grants. These fields are
+// the simple configuration surface — operators set booleans and glob patterns
+// instead of spelling out full Grant objects. When a principal has the full
+// Authorization field set (or the machine has DefaultPolicy), the daemon
+// uses the authorization index instead of calling this function.
+func synthesizeGrants(policy *schema.MatrixPolicy, visibility []string) []schema.Grant {
+	var grants []schema.Grant
+	if policy != nil {
+		if policy.AllowJoin {
+			grants = append(grants, schema.Grant{Actions: []string{"matrix/join"}})
+		}
+		if policy.AllowInvite {
+			grants = append(grants, schema.Grant{Actions: []string{"matrix/invite"}})
+		}
+		if policy.AllowRoomCreate {
+			grants = append(grants, schema.Grant{Actions: []string{"matrix/create-room"}})
+		}
+	}
+	if len(visibility) > 0 {
+		grants = append(grants, schema.Grant{
+			Actions: []string{"service/discover"},
+			Targets: visibility,
+		})
+	}
+	return grants
+}
+
+// resolveGrantsForProxy returns the authorization grants that should be pushed
+// to a principal's proxy. If the machine config or per-principal assignment
+// uses the authorization framework (DefaultPolicy or per-principal
+// Authorization), the grants come from the pre-merged authorization index.
+// Otherwise, grants are synthesized from the shorthand MatrixPolicy and
+// ServiceVisibility fields.
+func (d *Daemon) resolveGrantsForProxy(localpart string, assignment schema.PrincipalAssignment, config *schema.MachineConfig) []schema.Grant {
+	if config.DefaultPolicy != nil || assignment.Authorization != nil {
+		return d.authorizationIndex.Grants(localpart)
+	}
+	return synthesizeGrants(assignment.MatrixPolicy, assignment.ServiceVisibility)
 }
 
 // unregisterProxyRoute removes a single service from a single consumer's proxy

@@ -488,8 +488,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 		launcherSocket:      launcherSocket,
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
+		lastGrants:          make(map[string][]schema.Grant),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -625,8 +624,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		daemonBinaryHash:    daemonHash,
 		running:             make(map[string]bool),
 		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
+		lastGrants:          make(map[string][]schema.Grant),
 		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
 		lastSpecs:           make(map[string]*schema.SandboxSpec),
 		previousSpecs:       make(map[string]*schema.SandboxSpec),
@@ -760,8 +758,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		launcherSocket:    launcherSocket,
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
-		lastVisibility:    make(map[string][]string),
-		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
+		lastGrants:        make(map[string][]schema.Grant),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -909,8 +906,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 		launcherSocket:    launcherSocket,
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
-		lastVisibility:    make(map[string][]string),
-		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
+		lastGrants:        make(map[string][]schema.Grant),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -1020,8 +1016,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 		launcherSocket:    launcherSocket,
 		running:           map[string]bool{"agent/test": true},
 		lastCredentials:   make(map[string]string),
-		lastVisibility:    make(map[string][]string),
-		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
+		lastGrants:        make(map[string][]schema.Grant),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		lastSpecs: map[string]*schema.SandboxSpec{
 			"agent/test": {
@@ -1113,256 +1108,6 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 	case conn := <-accepted:
 		conn.Close()
 	case <-time.After(time.Second):
-	}
-}
-
-// TestReconcileVisibilityHotReload verifies that reconcile() detects when a
-// running principal's ServiceVisibility patterns change in the MachineConfig
-// and pushes the updated patterns to the proxy's admin socket. This tests
-// the hot-reload path for proxy-only principals (no template) which
-// reconcileRunningPrincipal() would skip.
-func TestReconcileVisibilityHotReload(t *testing.T) {
-	t.Parallel()
-
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
-
-	// MachineConfig with updated ServiceVisibility patterns.
-	state := newMockMatrixState()
-	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart:         "agent/test",
-				AutoStart:         true,
-				ServiceVisibility: []string{"service/stt/*", "service/embedding/**"},
-			},
-		},
-	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
-		Ciphertext: "encrypted-test-credentials",
-	})
-
-	matrixServer := httptest.NewServer(state.handler())
-	t.Cleanup(matrixServer.Close)
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
-	if err != nil {
-		t.Fatalf("creating client: %v", err)
-	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
-	if err != nil {
-		t.Fatalf("creating session: %v", err)
-	}
-	t.Cleanup(func() { session.Close() })
-
-	socketDir := testutil.SocketDir(t)
-	launcherSocket := filepath.Join(socketDir, "launcher.sock")
-
-	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		return launcherIPCResponse{OK: true}
-	})
-	t.Cleanup(func() { listener.Close() })
-
-	// Mock admin server that captures PUT /v1/admin/visibility calls.
-	var (
-		visibilityMu        sync.Mutex
-		receivedPatterns    []string
-		visibilityCallCount int
-	)
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
-		visibilityMu.Lock()
-		defer visibilityMu.Unlock()
-		visibilityCallCount++
-
-		bodyBytes, _ := io.ReadAll(r.Body)
-		json.Unmarshal(bodyBytes, &receivedPatterns)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
-	})
-
-	adminSocketPath := filepath.Join(socketDir, "agent/test.admin.sock")
-	os.MkdirAll(filepath.Dir(adminSocketPath), 0755)
-	adminListener, err := net.Listen("unix", adminSocketPath)
-	if err != nil {
-		t.Fatalf("Listen() error: %v", err)
-	}
-	defer adminListener.Close()
-	adminServer := &http.Server{Handler: adminMux}
-	go adminServer.Serve(adminListener)
-	defer adminServer.Close()
-
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
-		lastCredentials: map[string]string{
-			"agent/test": "encrypted-test-credentials",
-		},
-		// Old patterns differ from what the config now says.
-		lastVisibility: map[string][]string{
-			"agent/test": {"service/old/*"},
-		},
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
-	t.Cleanup(daemon.stopAllLayoutWatchers)
-	t.Cleanup(daemon.stopAllHealthMonitors)
-
-	if err := daemon.reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile() error: %v", err)
-	}
-
-	visibilityMu.Lock()
-	defer visibilityMu.Unlock()
-
-	if visibilityCallCount != 1 {
-		t.Errorf("expected 1 visibility push, got %d", visibilityCallCount)
-	}
-	if len(receivedPatterns) != 2 ||
-		receivedPatterns[0] != "service/stt/*" ||
-		receivedPatterns[1] != "service/embedding/**" {
-		t.Errorf("proxy received patterns %v, want [service/stt/* service/embedding/**]", receivedPatterns)
-	}
-
-	// lastVisibility should be updated to the new patterns.
-	stored := daemon.lastVisibility["agent/test"]
-	if len(stored) != 2 || stored[0] != "service/stt/*" || stored[1] != "service/embedding/**" {
-		t.Errorf("lastVisibility = %v, want [service/stt/* service/embedding/**]", stored)
-	}
-}
-
-// TestReconcileVisibilityUnchanged verifies that reconcile() does NOT push
-// visibility when the patterns haven't changed, avoiding unnecessary admin
-// socket calls on every reconcile cycle.
-func TestReconcileVisibilityUnchanged(t *testing.T) {
-	t.Parallel()
-
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
-
-	state := newMockMatrixState()
-	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart:         "agent/test",
-				AutoStart:         true,
-				ServiceVisibility: []string{"service/stt/*"},
-			},
-		},
-	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
-		Ciphertext: "encrypted-test-credentials",
-	})
-
-	matrixServer := httptest.NewServer(state.handler())
-	t.Cleanup(matrixServer.Close)
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
-	if err != nil {
-		t.Fatalf("creating client: %v", err)
-	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
-	if err != nil {
-		t.Fatalf("creating session: %v", err)
-	}
-	t.Cleanup(func() { session.Close() })
-
-	socketDir := testutil.SocketDir(t)
-	launcherSocket := filepath.Join(socketDir, "launcher.sock")
-
-	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		return launcherIPCResponse{OK: true}
-	})
-	t.Cleanup(func() { listener.Close() })
-
-	// Mock admin server that tracks calls — should NOT be called.
-	var (
-		visibilityMu        sync.Mutex
-		visibilityCallCount int
-	)
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("PUT /v1/admin/visibility", func(w http.ResponseWriter, r *http.Request) {
-		visibilityMu.Lock()
-		defer visibilityMu.Unlock()
-		visibilityCallCount++
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
-	})
-
-	adminSocketPath := filepath.Join(socketDir, "agent/test.admin.sock")
-	os.MkdirAll(filepath.Dir(adminSocketPath), 0755)
-	adminListener, err := net.Listen("unix", adminSocketPath)
-	if err != nil {
-		t.Fatalf("Listen() error: %v", err)
-	}
-	defer adminListener.Close()
-	adminServer := &http.Server{Handler: adminMux}
-	go adminServer.Serve(adminListener)
-	defer adminServer.Close()
-
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
-		lastCredentials: map[string]string{
-			"agent/test": "encrypted-test-credentials",
-		},
-		// Stored patterns MATCH the config — no hot-reload needed.
-		lastVisibility: map[string][]string{
-			"agent/test": {"service/stt/*"},
-		},
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
-	t.Cleanup(daemon.stopAllLayoutWatchers)
-	t.Cleanup(daemon.stopAllHealthMonitors)
-
-	if err := daemon.reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile() error: %v", err)
-	}
-
-	visibilityMu.Lock()
-	defer visibilityMu.Unlock()
-
-	if visibilityCallCount != 0 {
-		t.Errorf("expected 0 visibility pushes (patterns unchanged), got %d", visibilityCallCount)
 	}
 }
 
@@ -1832,5 +1577,257 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 		if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
 			t.Errorf("token file for %q should exist", role)
 		}
+	}
+}
+
+func TestSynthesizeGrants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		policy     *schema.MatrixPolicy
+		visibility []string
+		expected   []schema.Grant
+	}{
+		{
+			name:     "nil policy and empty visibility",
+			policy:   nil,
+			expected: nil,
+		},
+		{
+			name:   "join only",
+			policy: &schema.MatrixPolicy{AllowJoin: true},
+			expected: []schema.Grant{
+				{Actions: []string{"matrix/join"}},
+			},
+		},
+		{
+			name:   "invite only",
+			policy: &schema.MatrixPolicy{AllowInvite: true},
+			expected: []schema.Grant{
+				{Actions: []string{"matrix/invite"}},
+			},
+		},
+		{
+			name:   "create-room only",
+			policy: &schema.MatrixPolicy{AllowRoomCreate: true},
+			expected: []schema.Grant{
+				{Actions: []string{"matrix/create-room"}},
+			},
+		},
+		{
+			name: "all matrix permissions",
+			policy: &schema.MatrixPolicy{
+				AllowJoin:       true,
+				AllowInvite:     true,
+				AllowRoomCreate: true,
+			},
+			expected: []schema.Grant{
+				{Actions: []string{"matrix/join"}},
+				{Actions: []string{"matrix/invite"}},
+				{Actions: []string{"matrix/create-room"}},
+			},
+		},
+		{
+			name:       "visibility only",
+			visibility: []string{"service/stt/*", "service/embedding/**"},
+			expected: []schema.Grant{
+				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/*", "service/embedding/**"}},
+			},
+		},
+		{
+			name:       "policy and visibility combined",
+			policy:     &schema.MatrixPolicy{AllowJoin: true},
+			visibility: []string{"service/**"},
+			expected: []schema.Grant{
+				{Actions: []string{"matrix/join"}},
+				{Actions: []string{"service/discover"}, Targets: []string{"service/**"}},
+			},
+		},
+		{
+			name:   "zero-valued policy produces no grants",
+			policy: &schema.MatrixPolicy{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := synthesizeGrants(tt.policy, tt.visibility)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("got %d grants, want %d: %v", len(got), len(tt.expected), got)
+			}
+			for i := range got {
+				if !slicesEqual(got[i].Actions, tt.expected[i].Actions) {
+					t.Errorf("grant[%d].Actions = %v, want %v", i, got[i].Actions, tt.expected[i].Actions)
+				}
+				if !slicesEqual(got[i].Targets, tt.expected[i].Targets) {
+					t.Errorf("grant[%d].Targets = %v, want %v", i, got[i].Targets, tt.expected[i].Targets)
+				}
+			}
+		})
+	}
+}
+
+// slicesEqual compares two string slices for equality.
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID = "!config:test.local"
+		serverName   = "test.local"
+		machineName  = "machine/test"
+	)
+
+	// MachineConfig with a MatrixPolicy and ServiceVisibility — these get
+	// synthesized into grants since there's no explicit Authorization field.
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart:         "agent/test",
+				AutoStart:         true,
+				MatrixPolicy:      &schema.MatrixPolicy{AllowJoin: true, AllowInvite: true},
+				ServiceVisibility: []string{"service/stt/**"},
+			},
+		},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	matrixServer := httptest.NewServer(state.handler())
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		return launcherIPCResponse{OK: true}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	// Mock admin server that captures PUT /v1/admin/authorization calls.
+	var (
+		grantsMu        sync.Mutex
+		receivedGrants  []schema.Grant
+		grantsCallCount int
+	)
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("PUT /v1/admin/authorization", func(w http.ResponseWriter, r *http.Request) {
+		grantsMu.Lock()
+		defer grantsMu.Unlock()
+		grantsCallCount++
+
+		bodyBytes, _ := io.ReadAll(r.Body)
+		json.Unmarshal(bodyBytes, &receivedGrants)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	})
+	// Accept all other admin endpoints so they don't fail the reconcile.
+	adminMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	})
+
+	adminSocketPath := filepath.Join(socketDir, "agent/test.admin.sock")
+	os.MkdirAll(filepath.Dir(adminSocketPath), 0755)
+	adminListener, err := net.Listen("unix", adminSocketPath)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer adminListener.Close()
+	adminServer := &http.Server{Handler: adminMux}
+	go adminServer.Serve(adminListener)
+	defer adminServer.Close()
+
+	daemon := &Daemon{
+		clock:          clock.Real(),
+		runDir:         principal.DefaultRunDir,
+		session:        session,
+		machineName:    machineName,
+		serverName:     serverName,
+		configRoomID:   configRoomID,
+		launcherSocket: launcherSocket,
+		running:        map[string]bool{"agent/test": true},
+		lastCredentials: map[string]string{
+			"agent/test": "encrypted-test-credentials",
+		},
+		// Old grants differ from what the config now produces.
+		lastGrants: map[string][]schema.Grant{
+			"agent/test": {
+				{Actions: []string{"matrix/join"}},
+			},
+		},
+		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
+		lastSpecs:           make(map[string]*schema.SandboxSpec),
+		previousSpecs:       make(map[string]*schema.SandboxSpec),
+		lastTemplates:       make(map[string]*schema.TemplateContent),
+		healthMonitors:      make(map[string]*healthMonitor),
+		services:            make(map[string]*schema.Service),
+		proxyRoutes:         make(map[string]string),
+		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:      make(map[string]*layoutWatcher),
+		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	grantsMu.Lock()
+	defer grantsMu.Unlock()
+
+	if grantsCallCount != 1 {
+		t.Errorf("expected 1 grants push, got %d", grantsCallCount)
+	}
+
+	// The new config has AllowJoin + AllowInvite + ServiceVisibility,
+	// which synthesizes to three grants.
+	expectedGrants := []schema.Grant{
+		{Actions: []string{"matrix/join"}},
+		{Actions: []string{"matrix/invite"}},
+		{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+	}
+	if len(receivedGrants) != len(expectedGrants) {
+		t.Fatalf("proxy received %d grants, want %d: %v", len(receivedGrants), len(expectedGrants), receivedGrants)
+	}
+	for i := range expectedGrants {
+		if !slicesEqual(receivedGrants[i].Actions, expectedGrants[i].Actions) {
+			t.Errorf("grant[%d].Actions = %v, want %v", i, receivedGrants[i].Actions, expectedGrants[i].Actions)
+		}
+		if !slicesEqual(receivedGrants[i].Targets, expectedGrants[i].Targets) {
+			t.Errorf("grant[%d].Targets = %v, want %v", i, receivedGrants[i].Targets, expectedGrants[i].Targets)
+		}
+	}
+
+	// lastGrants should be updated to the new grants.
+	stored := daemon.lastGrants["agent/test"]
+	if len(stored) != 3 {
+		t.Errorf("lastGrants has %d entries, want 3", len(stored))
 	}
 }

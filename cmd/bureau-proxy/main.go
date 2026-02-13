@@ -193,12 +193,12 @@ func run() error {
 		server.SetIdentity(identity)
 	}
 
-	// Set Matrix access policy from the credential payload. The policy
-	// controls which self-service membership operations (join, invite, room
-	// creation) the proxy allows. Only PipeCredentialSource carries the
-	// policy — other credential sources use default-deny.
+	// Set pre-resolved authorization grants from the credential payload.
+	// Grants control which Matrix operations (join, invite, room creation)
+	// and service discovery the proxy allows. Only PipeCredentialSource
+	// carries grants — other credential sources use default-deny.
 	if credentialStdin && pipeSource != nil {
-		server.SetMatrixPolicy(pipeSource.MatrixPolicy())
+		server.SetGrants(pipeSource.Grants())
 	}
 
 	// Accept any pending room invites before starting the server. The
@@ -373,9 +373,9 @@ func createHTTPService(name string, config proxy.ServiceConfig, credentials prox
 // acceptPendingInvites performs a one-time initial sync to discover rooms
 // the principal has been invited to, and joins each one. This bridges the
 // gap between the daemon's invite (ensurePrincipalRoomAccess) and the
-// sandboxed agent's inability to call JoinRoom (MatrixPolicy.AllowJoin is
-// default-deny). The daemon invites before create-sandbox, so the invite
-// is already pending when the proxy starts.
+// sandboxed agent's inability to call JoinRoom (authorization grants
+// default-deny matrix/join). The daemon invites before create-sandbox,
+// so the invite is already pending when the proxy starts.
 //
 // Best-effort: failures are logged but do not block proxy startup. The
 // proxy can still serve other services, and the agent can still publish

@@ -18,19 +18,19 @@ import (
 //   - Phase 2: Update to AllowJoin=true. Wait for daemon confirmation, join.
 //   - Phase 3: Revert to default-deny. Wait for daemon confirmation, join blocked.
 //
-// The daemon sends "Matrix policy updated for <principal> (<summary>)" to
-// the config room after pushing the policy to the proxy's admin API. This
-// message serves as a synchronization point: once it appears, the proxy is
-// guaranteed to be enforcing the new policy. The test uses roomWatch to
-// distinguish phase 2's message from phase 3's even though both contain
-// "Matrix policy updated".
+// The daemon synthesizes authorization grants from MatrixPolicy fields and
+// pushes them to the proxy via PUT /v1/admin/authorization. When grants
+// change, the daemon posts "Authorization grants updated for <principal>
+// (<count> grants)" to the config room. This message serves as a
+// synchronization point: once it appears, the proxy is guaranteed to be
+// enforcing the new grants.
 //
 // Phase 3 uses a fresh room (room B) because the agent joined room A in
 // phase 2. The Matrix /join endpoint is idempotent for already-joined
-// members, so retesting room A would succeed regardless of policy.
+// members, so retesting room A would succeed regardless of grants.
 //
-// This proves the daemon's reconcile → pushMatrixPolicyToProxy →
-// proxy HandleAdminSetMatrixPolicy → checkMatrixPolicy enforcement flow
+// This proves the daemon's reconcile → resolveGrantsForProxy →
+// pushAuthorizationToProxy → proxy GrantsAllow enforcement flow
 // applies runtime policy changes end-to-end.
 func TestMatrixPolicyHotReload(t *testing.T) {
 	t.Parallel()
@@ -75,7 +75,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		t.Fatalf("phase 1: expected 403 for join with default-deny, got %d: %s",
 			statusCode, body)
 	}
-	t.Log("phase 1 passed: join blocked with default-deny policy")
+	t.Log("phase 1 passed: join blocked with default-deny grants")
 
 	// --- Phase 2: Hot-reload AllowJoin=true ---
 
@@ -88,14 +88,14 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		}},
 	})
 
-	// Wait for the daemon's policy hot-reload confirmation. The watch
+	// Wait for the daemon's grants hot-reload confirmation. The watch
 	// checkpoint was taken before the config push, so only new messages
 	// after the push are considered.
-	watch.WaitForMessage(t, "Matrix policy updated for agent/policy-hr",
+	watch.WaitForMessage(t, "Authorization grants updated for agent/policy-hr",
 		machine.UserID)
-	t.Log("daemon confirmed policy hot-reload to AllowJoin=true")
+	t.Log("daemon confirmed grants hot-reload for AllowJoin=true")
 
-	// Now the proxy is guaranteed to enforce the new policy.
+	// Now the proxy is guaranteed to enforce the new grants.
 	statusCode, body = proxyTryJoinRoom(t, proxyClient, roomA.RoomID)
 	if statusCode != http.StatusOK {
 		t.Fatalf("phase 2: expected 200 for join with AllowJoin=true, got %d: %s",
@@ -106,7 +106,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	// --- Phase 3: Revert to default-deny ---
 
 	// Create a fresh room. Room A is already joined, so the homeserver
-	// would return 200 on a duplicate join regardless of proxy policy.
+	// would return 200 on a duplicate join regardless of proxy grants.
 	roomB, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name: "policy-hr-room-b",
 	})
@@ -123,19 +123,19 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		Principals: []principalSpec{{Account: agent}},
 	})
 
-	// Wait for the daemon's policy revert confirmation via a fresh watch.
-	watch.WaitForMessage(t, "Matrix policy updated for agent/policy-hr",
+	// Wait for the daemon's grants revert confirmation via a fresh watch.
+	watch.WaitForMessage(t, "Authorization grants updated for agent/policy-hr",
 		machine.UserID)
-	t.Log("daemon confirmed policy revert to default-deny")
+	t.Log("daemon confirmed grants revert to default-deny")
 
 	statusCode, body = proxyTryJoinRoom(t, proxyClient, roomB.RoomID)
 	if statusCode != http.StatusForbidden {
-		t.Fatalf("phase 3: expected 403 for join after policy revert, got %d: %s",
+		t.Fatalf("phase 3: expected 403 for join after grants revert, got %d: %s",
 			statusCode, body)
 	}
 	t.Log("phase 3 passed: join blocked after reverting to default-deny")
 
-	t.Log("MatrixPolicy hot-reload verified: deny → allow → deny")
+	t.Log("grants hot-reload verified: deny → allow → deny")
 }
 
 // TestServiceVisibilityHotReload verifies that ServiceVisibility pattern
@@ -145,14 +145,15 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 //   - Phase 2: Change visibility to non-matching patterns. Service disappears.
 //   - Phase 3: Restore matching visibility. Service reappears.
 //
-// Visibility filtering happens at query time in the proxy's
-// HandleServiceDirectory. The daemon pushes updated patterns via
-// PUT /v1/admin/visibility when it detects a PrincipalAssignment's
-// ServiceVisibility has changed. The service directory itself is unchanged —
-// only the filter applied on GET /v1/services changes.
+// The daemon synthesizes authorization grants from ServiceVisibility patterns
+// (as service/discover targets) and pushes them to the proxy via
+// PUT /v1/admin/authorization. Visibility filtering happens at query time in
+// the proxy's HandleServiceDirectory using GrantsAllow. When grants change,
+// the daemon posts "Authorization grants updated for <principal>" to the
+// config room — this serves as the synchronization point.
 //
-// This proves the daemon's reconcile → pushVisibilityToProxy →
-// proxy HandleAdminSetVisibility → HandleServiceDirectory filtering flow
+// This proves the daemon's reconcile → resolveGrantsForProxy →
+// pushAuthorizationToProxy → proxy GrantsAllow filtering flow
 // applies runtime visibility changes end-to-end.
 func TestServiceVisibilityHotReload(t *testing.T) {
 	t.Parallel()
@@ -235,9 +236,9 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		}},
 	})
 
-	// Wait for the daemon's visibility hot-reload confirmation, then
+	// Wait for the daemon's grants hot-reload confirmation, then
 	// verify the service is no longer visible.
-	watch.WaitForMessage(t, "Service visibility updated for agent/vis-hr",
+	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
 		machine.UserID)
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
@@ -257,9 +258,9 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		}},
 	})
 
-	// Wait for the daemon's visibility hot-reload confirmation, then
+	// Wait for the daemon's grants hot-reload confirmation, then
 	// verify the service is visible again.
-	watch.WaitForMessage(t, "Service visibility updated for agent/vis-hr",
+	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
 		machine.UserID)
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
@@ -272,5 +273,5 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	}
 	t.Log("phase 3 passed: service visible again after visibility restored")
 
-	t.Log("ServiceVisibility hot-reload verified: match → no-match → match")
+	t.Log("grants hot-reload verified: match → no-match → match")
 }

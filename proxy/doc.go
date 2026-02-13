@@ -24,15 +24,15 @@
 //
 // [Handler] dispatches requests by path: /cli/{service} for CLI services,
 // /http/{service}/... for HTTP services, and /services for the filtered
-// service directory. Matrix API requests are subject to MatrixPolicy
-// enforcement, which gates room creation, joins, and invites independently.
-// The service directory filters entries by each sandbox's visibility policy
-// ([Filter]), preventing agents from enumerating the organization's full
-// service inventory.
+// service directory. Matrix API requests are subject to grant-based
+// authorization enforcement, which gates room creation, joins, and invites
+// independently. The service directory filters entries by each sandbox's
+// authorization grants (service/discover action), preventing agents from
+// enumerating the organization's full service inventory.
 //
 // Credential sources ([CredentialSource]) form a chain: environment variables,
 // files, systemd credentials, stdin pipe (production credential delivery from
-// the launcher), and in-memory maps. The pipe source reads a JSON credential
+// the launcher), and in-memory maps. The pipe source reads a CBOR credential
 // payload from stdin, stores tokens in mmap-backed secret.Buffer memory
 // (locked against swap, excluded from core dumps), and zeroes the raw input
 // buffer after parsing.

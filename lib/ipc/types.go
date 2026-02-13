@@ -36,10 +36,14 @@ type Request struct {
 	// Mutually exclusive with EncryptedCredentials — set one or neither.
 	DirectCredentials map[string]string `cbor:"direct_credentials,omitempty"`
 
-	// MatrixPolicy is the Matrix access policy for this principal's proxy.
-	// Forwarded from the PrincipalAssignment in MachineConfig. The launcher
-	// includes this in the credential payload piped to the proxy subprocess.
-	MatrixPolicy *schema.MatrixPolicy `cbor:"matrix_policy,omitempty"`
+	// Grants are the pre-resolved authorization grants for this principal's
+	// proxy. The daemon resolves these from the authorization index (when
+	// DefaultPolicy or per-principal Authorization is configured) or
+	// synthesizes them from the shorthand MatrixPolicy/ServiceVisibility
+	// fields on PrincipalAssignment. The launcher includes them in the
+	// credential payload piped to the proxy subprocess, giving the proxy
+	// grant-based enforcement from the moment it starts accepting requests.
+	Grants []schema.Grant `cbor:"grants,omitempty"`
 
 	// SandboxSpec is the fully-resolved sandbox configuration produced by
 	// the daemon's template resolution pipeline. When set, the launcher
@@ -136,4 +140,33 @@ type Response struct {
 type SandboxListEntry struct {
 	Localpart string `cbor:"localpart"`
 	ProxyPID  int    `cbor:"proxy_pid"`
+}
+
+// ProxyCredentialPayload is the CBOR structure piped from the launcher to
+// the proxy process's stdin. It carries Matrix credentials, external API
+// keys, and pre-resolved authorization grants. The proxy reads this once
+// at startup and uses the grants for enforcement from the first request.
+//
+// This is the canonical definition — both the launcher (writer) and the
+// proxy (reader) import it from here rather than maintaining duplicates.
+type ProxyCredentialPayload struct {
+	// MatrixHomeserverURL is the Matrix homeserver base URL.
+	MatrixHomeserverURL string `cbor:"matrix_homeserver_url"`
+
+	// MatrixToken is the raw Matrix access token (without "Bearer " prefix).
+	MatrixToken string `cbor:"matrix_token"`
+
+	// MatrixUserID is the principal's full Matrix user ID.
+	MatrixUserID string `cbor:"matrix_user_id"`
+
+	// Credentials is a map of additional credential key-value pairs
+	// (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
+	Credentials map[string]string `cbor:"credentials"`
+
+	// Grants are the pre-resolved authorization grants for this proxy.
+	// The daemon resolves these before sandbox creation and passes them
+	// through the launcher. Controls Matrix API gating (matrix/join,
+	// matrix/invite, matrix/create-room) and service directory filtering
+	// (service/discover).
+	Grants []schema.Grant `cbor:"grants,omitempty"`
 }

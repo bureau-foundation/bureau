@@ -56,8 +56,8 @@ func TestTwoAgentMessaging(t *testing.T) {
 
 	// --- Sub-test: agents join through their proxies ---
 	t.Run("JoinRoom", func(t *testing.T) {
-		// Admin creates the room because agents can't (MatrixPolicy doesn't
-		// grant AllowRoomCreate). This mirrors production: admins or
+		// Admin creates the room because agents don't have a
+		// matrix/create-room grant. This mirrors production: admins or
 		// coordinator agents create rooms and invite participants.
 		chatRoom, err := admin.CreateRoom(t.Context(), messaging.CreateRoomRequest{
 			Name:   "Alice-Bob Test Chat",

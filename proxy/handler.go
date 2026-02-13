@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -36,25 +36,21 @@ type IdentityInfo struct {
 	ObserveSocket string `json:"observe_socket,omitempty"`
 }
 
-// Handler handles HTTP requests to the proxy server.
+// Handler handles HTTP requests to the proxy server. Authorization is
+// grant-based: the daemon pushes pre-resolved grants via the admin socket,
+// and the handler checks them via authorization.GrantsAllow for both Matrix
+// API gating and service directory filtering.
 type Handler struct {
 	services     map[string]Service      // CLI services (JSON-RPC style)
 	httpServices map[string]*HTTPService // HTTP proxy services
 	identity     *IdentityInfo           // agent identity, nil if not set
-	matrixPolicy *schema.MatrixPolicy    // Matrix access policy, nil = default-deny
+	grants       []schema.Grant          // pre-resolved grants from daemon, nil = default-deny
 
 	// serviceDirectory is the cached service directory pushed by the
 	// daemon. Agents query this via GET /v1/services to discover what
 	// services are available. The daemon pushes updates via the admin
 	// socket whenever the directory changes.
 	serviceDirectory []ServiceDirectoryEntry
-
-	// serviceVisibility is a list of glob patterns that control which
-	// services this agent can discover. Patterns match against service
-	// localparts using Bureau's hierarchical glob syntax. An empty list
-	// means the agent sees no services (default-deny). Set by the
-	// daemon via the admin API when the sandbox starts.
-	serviceVisibility []string
 
 	mu     sync.RWMutex
 	logger *slog.Logger
@@ -152,23 +148,19 @@ func (h *Handler) SetIdentity(identity IdentityInfo) {
 	h.logger.Info("agent identity configured", "user_id", identity.UserID)
 }
 
-// SetMatrixPolicy configures the Matrix access policy for this agent. When
-// nil, the proxy uses default-deny: all self-service membership operations
-// (join, invite, room creation) are blocked. The agent can only interact
-// with rooms the admin explicitly placed it in.
-func (h *Handler) SetMatrixPolicy(policy *schema.MatrixPolicy) {
+// SetGrants configures the pre-resolved authorization grants for this agent.
+// When nil (the default), the proxy uses default-deny: all gated operations
+// are blocked. When non-nil, the proxy checks grants via
+// authorization.GrantsAllow for Matrix API gating and service discovery.
+//
+// The daemon resolves grants from the authorization index (merging machine
+// defaults, room-level grants, and per-principal policy) and pushes them
+// to the proxy via the admin socket.
+func (h *Handler) SetGrants(grants []schema.Grant) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.matrixPolicy = policy
-	if policy != nil {
-		h.logger.Info("matrix policy configured",
-			"allow_join", policy.AllowJoin,
-			"allow_invite", policy.AllowInvite,
-			"allow_room_create", policy.AllowRoomCreate,
-		)
-	} else {
-		h.logger.Info("matrix policy configured (default-deny)")
-	}
+	h.grants = grants
+	h.logger.Info("authorization grants configured", "grants", len(grants))
 }
 
 // HandleHealth handles health check requests.
@@ -466,10 +458,6 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 // Everything else (messages, state, sync, room history) is allowed — the
 // homeserver enforces room membership and power levels for those operations.
 func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason string) {
-	h.mu.RLock()
-	policy := h.matrixPolicy
-	h.mu.RUnlock()
-
 	// Only POST requests are gated — reads always pass through to the
 	// homeserver which enforces membership.
 	if method != http.MethodPost {
@@ -482,48 +470,54 @@ func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason s
 	}
 	apiPath := strings.TrimPrefix(path, clientPrefix)
 
+	// Determine the authorization action from the Matrix API endpoint.
+	action := h.matrixAPIAction(apiPath)
+	if action == "" {
+		// Unrecognized endpoint — allow through, homeserver handles authz.
+		return false, ""
+	}
+
+	h.mu.RLock()
+	grants := h.grants
+	h.mu.RUnlock()
+
+	// Matrix operations are self-service (empty target) — the principal
+	// is acting on infrastructure, not on another principal.
+	if authorization.GrantsAllow(grants, action, "") {
+		return false, ""
+	}
+	return true, fmt.Sprintf("authorization: no grant for action %q", action)
+}
+
+// matrixAPIAction maps a Matrix client API path (after the /v3/ prefix)
+// to a Bureau authorization action. Returns empty string for endpoints
+// that are not gated by Bureau authorization.
+func (h *Handler) matrixAPIAction(apiPath string) string {
 	// POST /_matrix/client/v3/createRoom
 	if apiPath == "createRoom" {
-		if policy != nil && policy.AllowRoomCreate {
-			return false, ""
-		}
-		return true, "matrix policy: room creation is not allowed for this agent"
+		return "matrix/create-room"
 	}
 
 	// POST /_matrix/client/v3/join/{roomIdOrAlias}
 	if strings.HasPrefix(apiPath, "join/") {
-		if policy != nil && policy.AllowJoin {
-			return false, ""
-		}
-		return true, "matrix policy: joining rooms is not allowed for this agent"
+		return "matrix/join"
 	}
 
 	// POST /_matrix/client/v3/rooms/{roomId}/join
 	// POST /_matrix/client/v3/rooms/{roomId}/invite
 	if strings.HasPrefix(apiPath, "rooms/") {
-		// Extract the action after rooms/{roomId}/...
-		// Room IDs contain colons and may be URL-encoded, but the action
-		// segment is always the last path component.
 		parts := strings.Split(apiPath, "/")
 		if len(parts) >= 3 {
-			action := parts[len(parts)-1]
-			switch action {
+			switch parts[len(parts)-1] {
 			case "join":
-				if policy != nil && policy.AllowJoin {
-					return false, ""
-				}
-				return true, "matrix policy: joining rooms is not allowed for this agent"
+				return "matrix/join"
 			case "invite":
-				if policy != nil && policy.AllowInvite {
-					return false, ""
-				}
-				return true, "matrix policy: inviting users is not allowed for this agent"
+				return "matrix/invite"
 			}
 		}
 	}
 
-	// All other endpoints are allowed — the homeserver handles authz.
-	return false, ""
+	return ""
 }
 
 // AdminServiceRequest is the JSON body for PUT /v1/admin/services/{name}.
@@ -649,8 +643,9 @@ func (h *Handler) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 // the proxy serves it as a read-only catalog.
 //
 // The directory is filtered in two stages:
-//  1. Visibility: only services matching the agent's ServiceVisibility
-//     patterns are included. An empty pattern list means nothing is visible.
+//  1. Authorization: each entry is checked against the agent's grants for
+//     the service/discover action. Default-deny: no matching grant means
+//     the service is not visible.
 //  2. Query parameters: further filter by protocol and/or capability.
 //
 // Optional query parameters:
@@ -659,27 +654,23 @@ func (h *Handler) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request) {
 	h.mu.RLock()
 	directory := h.serviceDirectory
-	visibility := h.serviceVisibility
+	grants := h.grants
 	h.mu.RUnlock()
 
 	if directory == nil {
 		directory = []ServiceDirectoryEntry{}
 	}
 
-	// Stage 1: visibility filtering. If no patterns are configured,
-	// the agent sees nothing (default-deny).
-	if len(visibility) > 0 {
-		visible := make([]ServiceDirectoryEntry, 0, len(directory))
-		for _, entry := range directory {
-			if principal.MatchAnyPattern(visibility, entry.Localpart) {
-				visible = append(visible, entry)
-			}
+	// Stage 1: authorization filtering. Each service entry is checked
+	// against the agent's grants for the service/discover action.
+	// Default-deny: if no grants match, the service is not visible.
+	visible := make([]ServiceDirectoryEntry, 0, len(directory))
+	for _, entry := range directory {
+		if authorization.GrantsAllow(grants, "service/discover", entry.Localpart) {
+			visible = append(visible, entry)
 		}
-		directory = visible
-	} else if len(directory) > 0 {
-		// Empty visibility = default-deny: no services visible.
-		directory = []ServiceDirectoryEntry{}
 	}
+	directory = visible
 
 	// Stage 2: query parameter filtering.
 	capability := r.URL.Query().Get("capability")
@@ -720,55 +711,21 @@ func (h *Handler) HandleAdminSetDirectory(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// SetServiceVisibility configures which services this agent can discover.
-// Patterns use Bureau's hierarchical glob syntax (principal.MatchPattern):
-// "service/stt/*", "service/**", "**", etc. An empty list means the agent
-// cannot see any services. Called by the daemon via the admin API when the
-// sandbox starts or when the policy changes.
-func (h *Handler) SetServiceVisibility(patterns []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.serviceVisibility = patterns
-	h.logger.Info("service visibility configured", "patterns", patterns)
-}
-
-// HandleAdminSetVisibility sets the service visibility patterns. The daemon
-// pushes these via PUT /v1/admin/visibility when configuring the proxy.
-func (h *Handler) HandleAdminSetVisibility(w http.ResponseWriter, r *http.Request) {
-	var patterns []string
-	if err := json.NewDecoder(r.Body).Decode(&patterns); err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid visibility payload: %v", err)
+// HandleAdminSetAuthorization replaces the pre-resolved authorization grants
+// for this proxy. The daemon pushes grants via PUT /v1/admin/authorization
+// when the sandbox starts or when the principal's authorization changes at
+// runtime (config change, temporal grant arrival/expiry).
+func (h *Handler) HandleAdminSetAuthorization(w http.ResponseWriter, r *http.Request) {
+	var grants []schema.Grant
+	if err := json.NewDecoder(r.Body).Decode(&grants); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid authorization payload: %v", err)
 		return
 	}
 
-	h.SetServiceVisibility(patterns)
+	h.SetGrants(grants)
 
 	h.writeJSON(w, map[string]any{
-		"status":   "ok",
-		"patterns": len(patterns),
-	})
-}
-
-// HandleAdminSetMatrixPolicy updates the Matrix access policy for this proxy.
-// The daemon pushes policy changes via PUT /v1/admin/policy when the
-// PrincipalAssignment's MatrixPolicy is modified at runtime.
-func (h *Handler) HandleAdminSetMatrixPolicy(w http.ResponseWriter, r *http.Request) {
-	var policy *schema.MatrixPolicy
-	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid policy payload: %v", err)
-		return
-	}
-
-	h.SetMatrixPolicy(policy)
-
-	allowJoin := policy != nil && policy.AllowJoin
-	allowInvite := policy != nil && policy.AllowInvite
-	allowRoomCreate := policy != nil && policy.AllowRoomCreate
-
-	h.writeJSON(w, map[string]any{
-		"status":            "ok",
-		"allow_join":        allowJoin,
-		"allow_invite":      allowInvite,
-		"allow_room_create": allowRoomCreate,
+		"status": "ok",
+		"grants": len(grants),
 	})
 }

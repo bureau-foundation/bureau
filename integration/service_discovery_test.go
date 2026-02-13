@@ -19,7 +19,7 @@ import (
 //
 // This proves the daemon /sync → syncServiceDirectory → reconcileServices →
 // pushServiceDirectory → proxy HandleServiceDirectory flow works end-to-end,
-// including ServiceVisibility glob filtering and query parameter filtering.
+// including grant-based service/discover filtering and query parameter filtering.
 func TestServiceDiscovery(t *testing.T) {
 	t.Parallel()
 

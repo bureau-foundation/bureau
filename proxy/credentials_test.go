@@ -4,11 +4,14 @@
 package proxy
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
@@ -149,17 +152,21 @@ func TestMapCredentialSource_NilMap(t *testing.T) {
 }
 
 func TestReadPipeCredentials(t *testing.T) {
-	payload := `{
-		"matrix_homeserver_url": "http://localhost:6167",
-		"matrix_token": "syt_test_token_123",
-		"matrix_user_id": "@iree/amdgpu/pm:bureau.local",
-		"credentials": {
-			"OPENAI_API_KEY": "sk-test-openai",
-			"ANTHROPIC_API_KEY": "sk-ant-test"
-		}
-	}`
+	payload := ipc.ProxyCredentialPayload{
+		MatrixHomeserverURL: "http://localhost:6167",
+		MatrixToken:         "syt_test_token_123",
+		MatrixUserID:        "@iree/amdgpu/pm:bureau.local",
+		Credentials: map[string]string{
+			"OPENAI_API_KEY":    "sk-test-openai",
+			"ANTHROPIC_API_KEY": "sk-ant-test",
+		},
+	}
+	data, err := codec.Marshal(payload)
+	if err != nil {
+		t.Fatalf("codec.Marshal() error: %v", err)
+	}
 
-	source, err := ReadPipeCredentials(strings.NewReader(payload))
+	source, err := ReadPipeCredentials(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
@@ -186,13 +193,17 @@ func TestReadPipeCredentials(t *testing.T) {
 }
 
 func TestReadPipeCredentials_EmptyCredentialsMap(t *testing.T) {
-	payload := `{
-		"matrix_homeserver_url": "http://localhost:6167",
-		"matrix_token": "syt_token",
-		"matrix_user_id": "@alice:bureau.local"
-	}`
+	payload := ipc.ProxyCredentialPayload{
+		MatrixHomeserverURL: "http://localhost:6167",
+		MatrixToken:         "syt_token",
+		MatrixUserID:        "@alice:bureau.local",
+	}
+	data, err := codec.Marshal(payload)
+	if err != nil {
+		t.Fatalf("codec.Marshal() error: %v", err)
+	}
 
-	source, err := ReadPipeCredentials(strings.NewReader(payload))
+	source, err := ReadPipeCredentials(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
@@ -204,16 +215,20 @@ func TestReadPipeCredentials_EmptyCredentialsMap(t *testing.T) {
 }
 
 func TestReadPipeCredentials_ZerosBuffer(t *testing.T) {
-	// Create a buffer we can inspect after ReadPipeCredentials returns.
-	payload := []byte(`{"matrix_homeserver_url":"http://h:6167","matrix_token":"secret","matrix_user_id":"@a:b"}`)
-	original := make([]byte, len(payload))
-	copy(original, payload)
+	payload := ipc.ProxyCredentialPayload{
+		MatrixHomeserverURL: "http://h:6167",
+		MatrixToken:         "secret",
+		MatrixUserID:        "@a:b",
+	}
+	data, err := codec.Marshal(payload)
+	if err != nil {
+		t.Fatalf("codec.Marshal() error: %v", err)
+	}
 
-	// Wrap in a reader that serves from our buffer. ReadPipeCredentials
-	// reads via io.ReadAll which copies the data, so we can't directly
-	// observe the zeroing of the internal buffer. But we CAN verify the
-	// source works correctly after construction.
-	source, err := ReadPipeCredentials(strings.NewReader(string(payload)))
+	// ReadPipeCredentials reads via io.ReadAll which copies the data, so
+	// we can't directly observe the zeroing of the internal buffer. But
+	// we CAN verify the source works correctly after construction.
+	source, err := ReadPipeCredentials(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
@@ -222,56 +237,61 @@ func TestReadPipeCredentials_ZerosBuffer(t *testing.T) {
 }
 
 func TestReadPipeCredentials_Errors(t *testing.T) {
+	// Helper to CBOR-encode a payload for test cases that need valid CBOR
+	// but with missing/empty fields.
+	mustMarshal := func(t *testing.T, v any) []byte {
+		t.Helper()
+		data, err := codec.Marshal(v)
+		if err != nil {
+			t.Fatalf("codec.Marshal() error: %v", err)
+		}
+		return data
+	}
+
 	tests := []struct {
 		name    string
-		input   string
+		input   []byte
 		wantErr string
 	}{
 		{
 			name:    "empty input",
-			input:   "",
+			input:   nil,
 			wantErr: "credential payload is empty",
 		},
 		{
-			name:    "invalid json",
-			input:   "not json",
+			name:    "invalid cbor",
+			input:   []byte("not cbor"),
 			wantErr: "parsing credential payload",
 		},
 		{
-			name:    "missing matrix_homeserver_url",
-			input:   `{"matrix_token": "tok", "matrix_user_id": "@a:b"}`,
+			name: "missing matrix_homeserver_url",
+			input: mustMarshal(t, ipc.ProxyCredentialPayload{
+				MatrixToken:  "tok",
+				MatrixUserID: "@a:b",
+			}),
 			wantErr: "missing required field: matrix_homeserver_url",
 		},
 		{
-			name:    "missing matrix_token",
-			input:   `{"matrix_homeserver_url": "http://h:6167", "matrix_user_id": "@a:b"}`,
+			name: "missing matrix_token",
+			input: mustMarshal(t, ipc.ProxyCredentialPayload{
+				MatrixHomeserverURL: "http://h:6167",
+				MatrixUserID:        "@a:b",
+			}),
 			wantErr: "missing required field: matrix_token",
 		},
 		{
-			name:    "missing matrix_user_id",
-			input:   `{"matrix_homeserver_url": "http://h:6167", "matrix_token": "tok"}`,
-			wantErr: "missing required field: matrix_user_id",
-		},
-		{
-			name:    "empty matrix_homeserver_url",
-			input:   `{"matrix_homeserver_url": "", "matrix_token": "tok", "matrix_user_id": "@a:b"}`,
-			wantErr: "missing required field: matrix_homeserver_url",
-		},
-		{
-			name:    "empty matrix_token",
-			input:   `{"matrix_homeserver_url": "http://h:6167", "matrix_token": "", "matrix_user_id": "@a:b"}`,
-			wantErr: "missing required field: matrix_token",
-		},
-		{
-			name:    "empty matrix_user_id",
-			input:   `{"matrix_homeserver_url": "http://h:6167", "matrix_token": "tok", "matrix_user_id": ""}`,
+			name: "missing matrix_user_id",
+			input: mustMarshal(t, ipc.ProxyCredentialPayload{
+				MatrixHomeserverURL: "http://h:6167",
+				MatrixToken:         "tok",
+			}),
 			wantErr: "missing required field: matrix_user_id",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := ReadPipeCredentials(strings.NewReader(test.input))
+			_, err := ReadPipeCredentials(bytes.NewReader(test.input))
 			if err == nil {
 				t.Fatalf("ReadPipeCredentials() = nil error, want error containing %q", test.wantErr)
 			}
@@ -287,20 +307,24 @@ func TestReadPipeCredentials_TopLevelFieldsCannotBeOverridden(t *testing.T) {
 	// MATRIX_BEARER, or MATRIX_HOMESERVER_URL, the top-level fields take
 	// precedence. This prevents a malformed or malicious credential bundle
 	// from overriding the principal's Matrix identity or homeserver.
-	payload := `{
-		"matrix_homeserver_url": "http://real:6167",
-		"matrix_token": "top-level-token",
-		"matrix_user_id": "@top:level",
-		"credentials": {
+	payload := ipc.ProxyCredentialPayload{
+		MatrixHomeserverURL: "http://real:6167",
+		MatrixToken:         "top-level-token",
+		MatrixUserID:        "@top:level",
+		Credentials: map[string]string{
 			"MATRIX_HOMESERVER_URL": "http://attacker:666",
-			"MATRIX_TOKEN": "attempted-override",
-			"MATRIX_BEARER": "Bearer attempted-override",
-			"MATRIX_USER_ID": "@attacker:evil",
-			"OTHER_KEY": "other-value"
-		}
-	}`
+			"MATRIX_TOKEN":          "attempted-override",
+			"MATRIX_BEARER":         "Bearer attempted-override",
+			"MATRIX_USER_ID":        "@attacker:evil",
+			"OTHER_KEY":             "other-value",
+		},
+	}
+	data, err := codec.Marshal(payload)
+	if err != nil {
+		t.Fatalf("codec.Marshal() error: %v", err)
+	}
 
-	source, err := ReadPipeCredentials(strings.NewReader(payload))
+	source, err := ReadPipeCredentials(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("ReadPipeCredentials() error: %v", err)
 	}
@@ -337,70 +361,57 @@ func TestChainCredentialSource_Get(t *testing.T) {
 	}
 }
 
-func TestPipeCredentialSource_MatrixPolicy(t *testing.T) {
-	t.Run("policy present", func(t *testing.T) {
-		payload := `{
-			"matrix_homeserver_url": "http://localhost:6167",
-			"matrix_token": "syt_test",
-			"matrix_user_id": "@test:bureau.local",
-			"matrix_policy": {
-				"allow_join": true,
-				"allow_invite": false,
-				"allow_room_create": true
-			}
-		}`
+func TestPipeCredentialSource_Grants(t *testing.T) {
+	t.Run("grants present", func(t *testing.T) {
+		payload := ipc.ProxyCredentialPayload{
+			MatrixHomeserverURL: "http://localhost:6167",
+			MatrixToken:         "syt_test",
+			MatrixUserID:        "@test:bureau.local",
+			Grants: []schema.Grant{
+				{Actions: []string{"matrix/join", "matrix/invite"}},
+				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+			},
+		}
+		data, err := codec.Marshal(payload)
+		if err != nil {
+			t.Fatalf("codec.Marshal() error: %v", err)
+		}
 
-		source, err := ReadPipeCredentials(strings.NewReader(payload))
+		source, err := ReadPipeCredentials(bytes.NewReader(data))
 		if err != nil {
 			t.Fatalf("ReadPipeCredentials() error: %v", err)
 		}
 
-		policy := source.MatrixPolicy()
-		if policy == nil {
-			t.Fatal("MatrixPolicy() = nil, want non-nil")
+		grants := source.Grants()
+		if len(grants) != 2 {
+			t.Fatalf("Grants() returned %d grants, want 2", len(grants))
 		}
-		if !policy.AllowJoin {
-			t.Error("AllowJoin = false, want true")
+		if grants[0].Actions[0] != "matrix/join" || grants[0].Actions[1] != "matrix/invite" {
+			t.Errorf("grants[0].Actions = %v, want [matrix/join, matrix/invite]", grants[0].Actions)
 		}
-		if policy.AllowInvite {
-			t.Error("AllowInvite = true, want false")
-		}
-		if !policy.AllowRoomCreate {
-			t.Error("AllowRoomCreate = false, want true")
+		if grants[1].Targets[0] != "service/stt/**" {
+			t.Errorf("grants[1].Targets = %v, want [service/stt/**]", grants[1].Targets)
 		}
 	})
 
-	t.Run("policy absent", func(t *testing.T) {
-		payload := `{
-			"matrix_homeserver_url": "http://localhost:6167",
-			"matrix_token": "syt_test",
-			"matrix_user_id": "@test:bureau.local"
-		}`
+	t.Run("grants absent", func(t *testing.T) {
+		payload := ipc.ProxyCredentialPayload{
+			MatrixHomeserverURL: "http://localhost:6167",
+			MatrixToken:         "syt_test",
+			MatrixUserID:        "@test:bureau.local",
+		}
+		data, err := codec.Marshal(payload)
+		if err != nil {
+			t.Fatalf("codec.Marshal() error: %v", err)
+		}
 
-		source, err := ReadPipeCredentials(strings.NewReader(payload))
+		source, err := ReadPipeCredentials(bytes.NewReader(data))
 		if err != nil {
 			t.Fatalf("ReadPipeCredentials() error: %v", err)
 		}
 
-		if source.MatrixPolicy() != nil {
-			t.Errorf("MatrixPolicy() = %v, want nil for absent policy", source.MatrixPolicy())
+		if source.Grants() != nil {
+			t.Errorf("Grants() = %v, want nil for absent grants", source.Grants())
 		}
-	})
-
-	t.Run("policy round-trips through schema type", func(t *testing.T) {
-		// Verify the policy type is schema.MatrixPolicy (compile-time check).
-		payload := `{
-			"matrix_homeserver_url": "http://localhost:6167",
-			"matrix_token": "syt_test",
-			"matrix_user_id": "@test:bureau.local",
-			"matrix_policy": {"allow_join": true}
-		}`
-
-		source, err := ReadPipeCredentials(strings.NewReader(payload))
-		if err != nil {
-			t.Fatalf("ReadPipeCredentials() error: %v", err)
-		}
-
-		var _ *schema.MatrixPolicy = source.MatrixPolicy()
 	})
 }

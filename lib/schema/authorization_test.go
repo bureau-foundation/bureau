@@ -98,7 +98,7 @@ func TestDenialJSONRoundTrip(t *testing.T) {
 
 func TestAllowanceJSONRoundTrip(t *testing.T) {
 	original := Allowance{
-		Actions: []string{"observe", "observe/readwrite"},
+		Actions: []string{"observe", "observe/read-write"},
 		Actors:  []string{"bureau/dev/pm", "bureau-admin"},
 	}
 
@@ -188,7 +188,7 @@ func TestRoomAuthorizationPolicyJSONRoundTrip(t *testing.T) {
 		},
 		PowerLevelGrants: map[string][]Grant{
 			"50": {
-				{Actions: []string{"interrupt", "observe/readwrite"}, Targets: []string{"bureau/dev/workspace/**"}},
+				{Actions: []string{"interrupt", "observe/read-write"}, Targets: []string{"bureau/dev/workspace/**"}},
 			},
 			"100": {
 				{Actions: []string{"**"}, Targets: []string{"bureau/dev/workspace/**"}},

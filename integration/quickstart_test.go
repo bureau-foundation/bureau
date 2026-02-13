@@ -99,7 +99,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 
 	// The test agent sends messages to the config room from inside the
 	// sandbox. For that to work, the principal must be a room member.
-	// The proxy's default-deny MatrixPolicy blocks JoinRoom, so we handle
+	// The proxy's default-deny grants block JoinRoom, so we handle
 	// membership here: admin invites, principal joins via direct session
 	// (outside the sandbox) before the sandbox starts.
 	if err := admin.InviteUser(ctx, machine.ConfigRoomID, agent.UserID); err != nil {

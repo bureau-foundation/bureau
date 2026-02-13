@@ -92,8 +92,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		adminMux.HandleFunc("PUT /v1/admin/services/{name}", handler.HandleAdminRegisterService)
 		adminMux.HandleFunc("DELETE /v1/admin/services/{name}", handler.HandleAdminUnregisterService)
 		adminMux.HandleFunc("PUT /v1/admin/directory", handler.HandleAdminSetDirectory)
-		adminMux.HandleFunc("PUT /v1/admin/visibility", handler.HandleAdminSetVisibility)
-		adminMux.HandleFunc("PUT /v1/admin/policy", handler.HandleAdminSetMatrixPolicy)
+		adminMux.HandleFunc("PUT /v1/admin/authorization", handler.HandleAdminSetAuthorization)
 		// Fall through to agent endpoints for all other paths.
 		adminMux.Handle("/", agentMux)
 
@@ -134,22 +133,16 @@ func (s *Server) SetIdentity(identity IdentityInfo) {
 	s.handler.SetIdentity(identity)
 }
 
-// SetMatrixPolicy configures the Matrix access policy. See
-// Handler.SetMatrixPolicy for details.
-func (s *Server) SetMatrixPolicy(policy *schema.MatrixPolicy) {
-	s.handler.SetMatrixPolicy(policy)
+// SetGrants configures the pre-resolved authorization grants. See
+// Handler.SetGrants for details.
+func (s *Server) SetGrants(grants []schema.Grant) {
+	s.handler.SetGrants(grants)
 }
 
 // SetServiceDirectory replaces the cached service directory. See
 // Handler.SetServiceDirectory for details.
 func (s *Server) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 	s.handler.SetServiceDirectory(entries)
-}
-
-// SetServiceVisibility configures which services this agent can discover.
-// See Handler.SetServiceVisibility for details.
-func (s *Server) SetServiceVisibility(patterns []string) {
-	s.handler.SetServiceVisibility(patterns)
 }
 
 // SetObserveConfig configures the observation proxy. When called before

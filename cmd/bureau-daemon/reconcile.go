@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
@@ -150,8 +149,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
+		delete(d.lastGrants, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
@@ -163,60 +161,30 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		))
 	}
 
-	// Hot-reload ServiceVisibility patterns when they change. This runs
-	// in reconcile() (not reconcileRunningPrincipal) because it applies
-	// to all principals including proxy-only ones without templates.
-	// The proxy already has PUT /v1/admin/visibility — we just need to
-	// call it when the PrincipalAssignment's patterns diverge from what
-	// we last pushed.
-	for localpart, assignment := range desired {
-		if !d.running[localpart] {
-			continue
-		}
-		oldVisibility := d.lastVisibility[localpart]
-		newVisibility := assignment.ServiceVisibility
-		if !slices.Equal(oldVisibility, newVisibility) {
-			d.logger.Info("service visibility changed, updating proxy",
-				"principal", localpart)
-			if err := d.pushVisibilityToProxy(ctx, localpart, newVisibility); err != nil {
-				d.logger.Error("push visibility failed during hot-reload",
-					"principal", localpart, "error", err)
-				continue
-			}
-			d.lastVisibility[localpart] = newVisibility
-
-			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-				fmt.Sprintf("Service visibility updated for %s: %v", localpart, newVisibility),
-			))
-		}
+	// Hot-reload authorization grants when they change on a running
+	// principal. The proxy uses grants for Matrix API gating and service
+	// directory filtering.
+	if d.lastGrants == nil {
+		d.lastGrants = make(map[string][]schema.Grant)
 	}
-
-	// Hot-reload MatrixPolicy when it changes on a running principal.
 	for localpart, assignment := range desired {
 		if !d.running[localpart] {
 			continue
 		}
-		oldPolicy := d.lastMatrixPolicy[localpart]
-		newPolicy := assignment.MatrixPolicy
-		if !reflect.DeepEqual(oldPolicy, newPolicy) {
-			d.logger.Info("matrix policy changed, updating proxy",
+		newGrants := d.resolveGrantsForProxy(localpart, assignment, config)
+		oldGrants := d.lastGrants[localpart]
+		if !reflect.DeepEqual(oldGrants, newGrants) {
+			d.logger.Info("authorization grants changed, updating proxy",
 				"principal", localpart)
-			if err := d.pushMatrixPolicyToProxy(ctx, localpart, newPolicy); err != nil {
-				d.logger.Error("push matrix policy failed during hot-reload",
+			if err := d.pushAuthorizationToProxy(ctx, localpart, newGrants); err != nil {
+				d.logger.Error("push authorization grants failed during hot-reload",
 					"principal", localpart, "error", err)
 				continue
 			}
-			d.lastMatrixPolicy[localpart] = newPolicy
+			d.lastGrants[localpart] = newGrants
 
-			var policySummary string
-			if newPolicy != nil {
-				policySummary = fmt.Sprintf("join=%v invite=%v create=%v",
-					newPolicy.AllowJoin, newPolicy.AllowInvite, newPolicy.AllowRoomCreate)
-			} else {
-				policySummary = "default-deny"
-			}
 			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-				fmt.Sprintf("Matrix policy updated for %s (%s)", localpart, policySummary),
+				fmt.Sprintf("Authorization grants updated for %s (%d grants)", localpart, len(newGrants)),
 			))
 		}
 	}
@@ -257,9 +225,9 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// restart. After adoptPreExistingSandboxes populates d.running from
 	// the launcher's list-sandboxes response, those entries have no exit
 	// watcher, layout watcher, health monitor, or consumer proxy config.
-	// The earlier reconcile passes (credential tracking, visibility push,
-	// MatrixPolicy push, reconcileRunningPrincipal for lastSpecs) already
-	// handled their state — this pass starts the goroutines.
+	// The earlier reconcile passes (credential tracking, authorization
+	// grants push, ObservePolicy, reconcileRunningPrincipal for lastSpecs)
+	// already handled their state — this pass starts the goroutines.
 	//
 	// On subsequent reconcile calls all d.running entries have exit
 	// watchers, so this loop is a no-op in steady state.
@@ -390,12 +358,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			tokenDirectory = tokenDir
 		}
 
+		// Resolve authorization grants before sandbox creation so the
+		// proxy starts with enforcement from the first request. The
+		// launcher pipes these to the proxy's stdin alongside credentials.
+		grants := d.resolveGrantsForProxy(localpart, assignment, config)
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
 			Principal:            localpart,
 			EncryptedCredentials: credentials.Ciphertext,
-			MatrixPolicy:         assignment.MatrixPolicy,
+			Grants:               grants,
 			SandboxSpec:          sandboxSpec,
 			TriggerContent:       triggerContents[localpart],
 			ServiceMounts:        serviceMounts,
@@ -412,11 +385,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.running[localpart] = true
 		d.lastCredentials[localpart] = credentials.Ciphertext
-		d.lastVisibility[localpart] = assignment.ServiceVisibility
-		d.lastMatrixPolicy[localpart] = assignment.MatrixPolicy
 		d.lastObservePolicy[localpart] = assignment.ObservePolicy
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
+		d.lastGrants[localpart] = grants
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
@@ -437,17 +409,6 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// so it should be accepting connections by the time the launcher
 		// responds to create-sandbox.
 		d.configureConsumerProxy(ctx, localpart)
-
-		// Push service visibility patterns so the proxy knows which
-		// services this agent is allowed to discover. This must happen
-		// before the directory push, since the proxy filters the
-		// directory based on visibility patterns.
-		if err := d.pushVisibilityToProxy(ctx, localpart, assignment.ServiceVisibility); err != nil {
-			d.logger.Error("failed to push service visibility to new consumer proxy",
-				"consumer", localpart,
-				"error", err,
-			)
-		}
 
 		// Push the service directory so the new consumer's agent can
 		// discover services via GET /v1/services.
@@ -535,8 +496,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
+		delete(d.lastGrants, localpart)
 		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
@@ -623,8 +583,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
+		delete(d.lastGrants, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
@@ -674,9 +633,11 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 // that survived a daemon restart. The launcher continued running the sandbox
 // while the daemon was down — adoptPreExistingSandboxes added the principal
 // to d.running, and earlier reconcile passes handled state tracking
-// (credentials, visibility, MatrixPolicy, ObservePolicy, lastSpecs). This
-// method starts the goroutines that the "create missing" pass normally starts:
-// exit watcher, layout watcher, health monitor, consumer proxy configuration.
+// (credentials, grants, ObservePolicy, lastSpecs). This method starts the
+// goroutines that the "create missing" pass normally starts: exit watcher,
+// layout watcher, health monitor, and consumer proxy configuration.
+// Authorization grants are handled by the hot-reload block that runs before
+// the adoption pass.
 //
 // Caller must hold reconcileMu.
 func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
@@ -703,6 +664,10 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, 
 			"error", err,
 		)
 	}
+
+	// Authorization grants are handled by the hot-reload block that runs
+	// before the adoption pass. On daemon restart, d.lastGrants is empty,
+	// so the hot-reload detects the mismatch and pushes grants.
 
 	// Watch for sandbox and proxy process exit. Uses shutdownCtx (not
 	// the sync cycle's ctx) so the watchers survive across sync iterations.
@@ -1258,8 +1223,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
-		delete(d.lastVisibility, localpart)
-		delete(d.lastMatrixPolicy, localpart)
+		delete(d.lastGrants, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 	}
@@ -1688,8 +1652,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	delete(d.previousSpecs, localpart)
 	delete(d.lastTemplates, localpart)
 	delete(d.lastCredentials, localpart)
-	delete(d.lastVisibility, localpart)
-	delete(d.lastMatrixPolicy, localpart)
+	delete(d.lastGrants, localpart)
 	delete(d.lastObservePolicy, localpart)
 	d.lastActivityAt = d.clock.Now()
 	d.reconcileMu.Unlock()

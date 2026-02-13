@@ -5,7 +5,6 @@ package proxy
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
@@ -289,24 +290,13 @@ func (s *ChainCredentialSource) Close() error {
 	return nil
 }
 
-// PipeCredentialSource reads credentials from a JSON payload piped to an
-// io.Reader (typically stdin) at construction time. This is the production
-// credential delivery mechanism: the launcher decrypts a credential bundle
-// and pipes it to the proxy process's stdin. The raw JSON buffer is zeroed
-// after parsing to minimize the time all credentials coexist in a single
-// contiguous memory region.
-//
-// The JSON payload has the following structure:
-//
-//	{
-//	  "matrix_homeserver_url": "http://localhost:6167",
-//	  "matrix_token": "syt_...",
-//	  "matrix_user_id": "@iree/amdgpu/pm:bureau.local",
-//	  "credentials": {
-//	    "OPENAI_API_KEY": "sk-...",
-//	    "ANTHROPIC_API_KEY": "sk-ant-..."
-//	  }
-//	}
+// PipeCredentialSource reads credentials from a CBOR-encoded
+// [ipc.ProxyCredentialPayload] piped to an io.Reader (typically stdin)
+// at construction time. This is the production credential delivery
+// mechanism: the launcher decrypts a credential bundle and pipes it to
+// the proxy process's stdin. The raw buffer is zeroed after parsing to
+// minimize the time all credentials coexist in a single contiguous
+// memory region.
 //
 // All fields are flattened into a single credential map with uppercase keys:
 // MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_BEARER (derived as "Bearer " +
@@ -314,27 +304,22 @@ func (s *ChainCredentialSource) Close() error {
 // keys appear in the credentials object (stored verbatim). Lookup is
 // exact-match (no normalization).
 //
+// Authorization grants from the payload are stored separately and
+// accessible via [PipeCredentialSource.Grants].
+//
 // Thread safety: the credentials map is immutable after construction.
-// Get and MatrixPolicy are safe for concurrent use. Close must not be
+// Get and Grants are safe for concurrent use. Close must not be
 // called concurrently with Get.
 type PipeCredentialSource struct {
-	credentials  map[string]*secret.Buffer
-	matrixPolicy *schema.MatrixPolicy
+	credentials map[string]*secret.Buffer
+	grants      []schema.Grant
 }
 
-// pipeCredentialPayload is the JSON structure read from stdin.
-type pipeCredentialPayload struct {
-	MatrixHomeserverURL string               `json:"matrix_homeserver_url"`
-	MatrixToken         string               `json:"matrix_token"`
-	MatrixUserID        string               `json:"matrix_user_id"`
-	Credentials         map[string]string    `json:"credentials"`
-	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
-}
-
-// ReadPipeCredentials reads a JSON credential payload from reader and returns
-// a PipeCredentialSource. The reader is read to completion (stdin is one-shot).
-// The raw buffer is zeroed after parsing. Returns an error if the payload
-// cannot be read or parsed, or if required fields are missing.
+// ReadPipeCredentials reads a CBOR-encoded [ipc.ProxyCredentialPayload]
+// from reader and returns a PipeCredentialSource. The reader is read to
+// completion (stdin is one-shot). The raw buffer is zeroed after parsing.
+// Returns an error if the payload cannot be read or parsed, or if required
+// fields are missing.
 func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 	rawBuffer, err := io.ReadAll(reader)
 	if err != nil {
@@ -347,8 +332,8 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 		return nil, fmt.Errorf("credential payload is empty")
 	}
 
-	var payload pipeCredentialPayload
-	if err := json.Unmarshal(rawBuffer, &payload); err != nil {
+	var payload ipc.ProxyCredentialPayload
+	if err := codec.Unmarshal(rawBuffer, &payload); err != nil {
 		return nil, fmt.Errorf("parsing credential payload: %w", err)
 	}
 
@@ -398,13 +383,13 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 	}
 
 	return &PipeCredentialSource{
-		credentials:  credentials,
-		matrixPolicy: payload.MatrixPolicy,
+		credentials: credentials,
+		grants:      payload.Grants,
 	}, nil
 }
 
 // Get retrieves a credential by exact name. No normalization is applied —
-// the key must match exactly as it appeared in the JSON payload (or
+// the key must match exactly as it appeared in the credential payload (or
 // "MATRIX_TOKEN" / "MATRIX_USER_ID" for the top-level fields).
 func (s *PipeCredentialSource) Get(name string) *secret.Buffer {
 	return s.credentials[name]
@@ -419,10 +404,10 @@ func (s *PipeCredentialSource) Close() error {
 	return nil
 }
 
-// MatrixPolicy returns the Matrix access policy from the credential payload.
-// Returns nil if no policy was specified (the proxy should use default-deny).
-func (s *PipeCredentialSource) MatrixPolicy() *schema.MatrixPolicy {
-	return s.matrixPolicy
+// Grants returns the pre-resolved authorization grants from the credential
+// payload. Returns nil if no grants were specified (default-deny).
+func (s *PipeCredentialSource) Grants() []schema.Grant {
+	return s.grants
 }
 
 // Verify credential sources implement CredentialSource interface.

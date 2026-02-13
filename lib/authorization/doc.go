@@ -26,7 +26,7 @@
 // number of segments, "?" matches a single non-slash character.
 //
 //	observe              — read-only terminal observation
-//	observe/readwrite    — interactive terminal observation
+//	observe/read-write   — interactive terminal observation
 //	interrupt            — send interrupt signal
 //	interrupt/terminate  — send termination signal
 //	matrix/join          — join rooms

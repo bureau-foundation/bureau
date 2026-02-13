@@ -236,8 +236,7 @@ func run() error {
 		exitWatchers:           make(map[string]context.CancelFunc),
 		proxyExitWatchers:      make(map[string]context.CancelFunc),
 		lastCredentials:        make(map[string]string),
-		lastVisibility:         make(map[string][]string),
-		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastGrants:             make(map[string][]schema.Grant),
 		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
 		lastSpecs:              make(map[string]*schema.SandboxSpec),
 		previousSpecs:          make(map[string]*schema.SandboxSpec),
@@ -433,19 +432,13 @@ type Daemon struct {
 	// triggers a destroy+create cycle to rotate the proxy's credentials.
 	lastCredentials map[string]string
 
-	// lastVisibility stores the ServiceVisibility patterns most
+	// lastGrants stores the pre-resolved authorization grants most
 	// recently pushed to each running principal's proxy. On each
-	// reconcile cycle, the daemon compares the current patterns from
-	// the PrincipalAssignment against this stored value — a mismatch
-	// triggers a PUT /v1/admin/visibility call to hot-reload the
-	// proxy's service filtering without restarting the sandbox.
-	lastVisibility map[string][]string
-
-	// lastMatrixPolicy stores the per-principal MatrixPolicy from the
-	// most recent reconcile cycle. Used purely for change detection:
-	// when a principal's MatrixPolicy differs from the stored value,
-	// the daemon pushes the new policy to the proxy via the admin API.
-	lastMatrixPolicy map[string]*schema.MatrixPolicy
+	// reconcile cycle, the daemon compares the current grants against
+	// this stored value — a mismatch triggers a PUT /v1/admin/authorization
+	// call to hot-reload the proxy's grant-based enforcement without
+	// restarting the sandbox.
+	lastGrants map[string][]schema.Grant
 
 	// lastObservePolicy stores the per-principal ObservePolicy from
 	// the most recent reconcile cycle. Used purely for change detection:

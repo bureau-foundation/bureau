@@ -18,8 +18,8 @@ func TestMatchAction(t *testing.T) {
 		// Exact match.
 		{"observe", "observe", true},
 		{"observe", "interrupt", false},
-		{"observe/readwrite", "observe/readwrite", true},
-		{"observe/readwrite", "observe", false},
+		{"observe/read-write", "observe/read-write", true},
+		{"observe/read-write", "observe", false},
 
 		// Single-segment wildcard.
 		{"ticket/*", "ticket/create", true},
@@ -31,7 +31,7 @@ func TestMatchAction(t *testing.T) {
 		// Recursive wildcard.
 		{"ticket/**", "ticket/create", true},
 		{"ticket/**", "ticket/a/b", true},
-		{"observe/**", "observe/readwrite", true},
+		{"observe/**", "observe/read-write", true},
 		{"observe/**", "observe", true},
 		{"command/**", "command/ticket/create", true},
 		{"command/**", "command", true},
@@ -45,7 +45,7 @@ func TestMatchAction(t *testing.T) {
 		{"grant/approve/**", "grant/approve/credential/provision", true},
 
 		// No match.
-		{"observe", "observe/readwrite", false},
+		{"observe", "observe/read-write", false},
 		{"ticket/*", "fleet/assign", false},
 	}
 
@@ -82,7 +82,7 @@ func TestGrantMatches(t *testing.T) {
 		{
 			name:   "cross-principal action matches",
 			grant:  schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**"}},
-			action: "observe/readwrite",
+			action: "observe/read-write",
 			target: "bureau/dev/workspace/coder/0",
 			want:   true,
 		},

@@ -641,17 +641,6 @@ type managedSandbox struct {
 	proxyExitCode int                 // proxy exit code (set before proxyDone is closed)
 }
 
-// proxyCredentialPayload is the JSON structure piped to the proxy's stdin.
-// This mirrors proxy.pipeCredentialPayload but lives here to avoid importing
-// the proxy package — the launcher should not depend on the proxy.
-type proxyCredentialPayload struct {
-	MatrixHomeserverURL string               `json:"matrix_homeserver_url"`
-	MatrixToken         string               `json:"matrix_token"`
-	MatrixUserID        string               `json:"matrix_user_id"`
-	Credentials         map[string]string    `json:"credentials"`
-	MatrixPolicy        *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
-}
-
 // Launcher handles IPC requests from the daemon. The serve loop accepts
 // connections concurrently (each handleConnection runs in its own goroutine),
 // so all mutable state is protected by mu. Immutable-after-startup fields
@@ -864,7 +853,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		"has_sandbox_spec", request.SandboxSpec != nil,
 	)
 
-	pid, err := l.spawnProxy(request.Principal, credentials, request.MatrixPolicy)
+	pid, err := l.spawnProxy(request.Principal, credentials, request.Grants)
 	if err != nil {
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
@@ -1449,7 +1438,7 @@ func derivePassword(registrationToken *secret.Buffer, machineName string) (*secr
 //
 // A background goroutine reaps the proxy process to avoid zombies and logs
 // the exit, but the sandbox lifecycle is driven by the tmux session.
-func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, matrixPolicy *schema.MatrixPolicy) (int, error) {
+func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, grants []schema.Grant) (int, error) {
 	if l.proxyBinaryPath == "" {
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
 	}
@@ -1510,7 +1499,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Write credential payload to the proxy's stdin and close.
 	if credentials != nil {
-		payload, err := l.buildCredentialPayload(principalLocalpart, credentials, matrixPolicy)
+		payload, err := l.buildCredentialPayload(principalLocalpart, credentials, grants)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -1518,7 +1507,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 			return 0, fmt.Errorf("building credential payload: %w", err)
 		}
 
-		payloadJSON, err := json.Marshal(payload)
+		payloadBytes, err := codec.Marshal(payload)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -1526,8 +1515,8 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 			return 0, fmt.Errorf("marshaling credential payload: %w", err)
 		}
 
-		_, writeError := stdinPipe.Write(payloadJSON)
-		secret.Zero(payloadJSON)
+		_, writeError := stdinPipe.Write(payloadBytes)
+		secret.Zero(payloadBytes)
 
 		if writeError != nil {
 			cmd.Process.Kill()
@@ -1603,7 +1592,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 // structure expected by the proxy's PipeCredentialSource. The Matrix-specific
 // keys (MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_USER_ID) are extracted
 // into top-level fields; everything else goes under "credentials".
-func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials map[string]string, matrixPolicy *schema.MatrixPolicy) (*proxyCredentialPayload, error) {
+func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials map[string]string, grants []schema.Grant) (*ipc.ProxyCredentialPayload, error) {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		// Fall back to the launcher's homeserver URL (the principal is
@@ -1632,12 +1621,12 @@ func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials
 		}
 	}
 
-	return &proxyCredentialPayload{
+	return &ipc.ProxyCredentialPayload{
 		MatrixHomeserverURL: homeserverURL,
 		MatrixToken:         matrixToken,
 		MatrixUserID:        matrixUserID,
 		Credentials:         remaining,
-		MatrixPolicy:        matrixPolicy,
+		Grants:              grants,
 	}, nil
 }
 

@@ -133,8 +133,6 @@ func TestPublishStatus_SandboxCount(t *testing.T) {
 			"service/tts/piper":   true,
 		},
 		lastCredentials:   make(map[string]string),
-		lastVisibility:    make(map[string][]string),
-		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
 		lastObservePolicy: make(map[string]*schema.ObservePolicy),
 		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}

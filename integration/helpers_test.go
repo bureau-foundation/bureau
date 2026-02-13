@@ -755,7 +755,7 @@ func proxyWhoami(t *testing.T, client *http.Client) string {
 
 // proxyJoinRoom joins a room through a proxy by posting to the Matrix join
 // endpoint. The proxy injects the principal's access token and checks
-// MatrixPolicy (AllowJoin must be true).
+// authorization grants (a matrix/join grant must be present).
 func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 	t.Helper()
 	request, err := http.NewRequest("POST",
@@ -779,7 +779,7 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 // proxyTryJoinRoom attempts to join a room through a proxy and returns the
 // HTTP status code and response body. Unlike proxyJoinRoom, this does not
 // fatal on non-200 responses — callers can assert on expected failures
-// (e.g., MatrixPolicy blocking the join with 403 Forbidden).
+// (e.g., grants blocking the join with 403 Forbidden).
 func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, string) {
 	t.Helper()
 	request, err := http.NewRequest("POST",

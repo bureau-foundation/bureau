@@ -334,6 +334,18 @@ func (cr *ContainerReader) ExtractChunk(rs io.ReadSeeker, chunkIndex int) ([]byt
 	return decompressed, nil
 }
 
+// TotalSize returns the total serialized size of the container in bytes
+// (header + chunk index + all compressed chunk data). This is the number
+// of bytes that were written to produce this container on disk.
+func (cr *ContainerReader) TotalSize() int64 {
+	headerAndIndex := int64(containerHeaderSize) + int64(len(cr.Index))*int64(chunkIndexEntrySize)
+	var dataSize int64
+	for _, entry := range cr.Index {
+		dataSize += int64(entry.CompressedSize)
+	}
+	return headerAndIndex + dataSize
+}
+
 // writeByte writes a single byte to w.
 func writeByte(w io.Writer, b byte) error {
 	_, err := w.Write([]byte{b})

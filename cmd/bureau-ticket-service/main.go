@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -83,11 +84,10 @@ func run() error {
 	defer stop()
 
 	// Load and validate the Matrix session.
-	client, session, err := service.LoadSession(stateDir, homeserverURL, logger)
+	_, session, err := service.LoadSession(stateDir, homeserverURL, logger)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
 	}
-	_ = client // Available for future use (e.g., token verification).
 	defer session.Close()
 
 	userID, err := service.ValidateSession(ctx, session)
@@ -96,12 +96,35 @@ func run() error {
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
-	// Resolve and join the service directory room.
+	// Resolve and join global rooms the service needs.
 	serviceRoomID, err := service.ResolveServiceRoom(ctx, session, serverName)
 	if err != nil {
 		return fmt.Errorf("resolving service room: %w", err)
 	}
-	logger.Info("service room ready", "room_id", serviceRoomID)
+
+	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)
+	if err != nil {
+		return fmt.Errorf("resolving system room: %w", err)
+	}
+	logger.Info("global rooms ready",
+		"service_room", serviceRoomID,
+		"system_room", systemRoomID,
+	)
+
+	// Load the daemon's token signing public key for authenticating
+	// incoming service requests. The daemon publishes this key as a
+	// state event in #bureau/system at startup.
+	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineName)
+	if err != nil {
+		return fmt.Errorf("loading token signing key: %w", err)
+	}
+	logger.Info("token signing key loaded", "machine", machineName)
+
+	authConfig := &service.AuthConfig{
+		PublicKey: signingKey,
+		Audience:  "ticket",
+		Blacklist: servicetoken.NewBlacklist(),
+	}
 
 	clk := clock.Real()
 
@@ -153,7 +176,7 @@ func run() error {
 
 	// Start the socket server in a goroutine.
 	socketPath := principal.RunDirSocketPath(runDir, principalName)
-	socketServer := service.NewSocketServer(socketPath, logger, nil)
+	socketServer := service.NewSocketServer(socketPath, logger, authConfig)
 	ticketService.registerActions(socketServer)
 
 	socketDone := make(chan error, 1)

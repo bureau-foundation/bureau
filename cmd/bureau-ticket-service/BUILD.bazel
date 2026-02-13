@@ -18,6 +18,7 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//lib/service",
+        "//lib/servicetoken",
         "//lib/ticket",
         "//lib/version",
         "//messaging",

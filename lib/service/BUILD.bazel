@@ -9,6 +9,7 @@ go_library(
         "doc.go",
         "registration.go",
         "session.go",
+        "signing_key.go",
         "socket.go",
         "sync.go",
     ],
@@ -29,11 +30,13 @@ go_test(
     name = "service_test",
     srcs = [
         "session_test.go",
+        "signing_key_test.go",
         "socket_test.go",
     ],
     embed = [":service"],
     deps = [
         "//lib/codec",
+        "//lib/schema",
         "//lib/servicetoken",
     ],
 )

@@ -13,6 +13,8 @@
 //     create an authenticated Matrix client and session.
 //   - Service registration: publish and clear m.bureau.service state
 //     events in #bureau/service.
+//   - Signing key discovery: fetch the daemon's Ed25519 token signing
+//     public key from #bureau/system for request authentication.
 //   - Sync loop: incremental Matrix /sync long-poll with backoff,
 //     delivering responses to a caller-provided handler.
 //   - Socket server: CBOR Unix socket server with action dispatch,
@@ -38,7 +40,9 @@
 // do not require authentication (use for health checks and diagnostics).
 //
 // The token verification is stateless: services need only the daemon's
-// Ed25519 public key (published as m.bureau.token_signing_key in
-// #bureau/system) and a local [servicetoken.Blacklist] for emergency
+// Ed25519 public key and a local [servicetoken.Blacklist] for emergency
 // revocation. No daemon round-trip is required per request.
+// [LoadTokenSigningKey] fetches the public key from #bureau/system
+// where the daemon publishes it at startup. [ResolveSystemRoom]
+// resolves the system room alias and joins it.
 package service

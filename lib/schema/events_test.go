@@ -1037,8 +1037,14 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 		}
 	}
 
-	// Administrative actions require power level 100.
-	for _, field := range []string{"state_default", "ban", "kick", "redact"} {
+	// state_default is 0: room membership is the authorization boundary.
+	// New Bureau state event types work without updating power levels.
+	if levels["state_default"] != 0 {
+		t.Errorf("state_default = %v, want 0", levels["state_default"])
+	}
+
+	// Moderation actions require power level 100.
+	for _, field := range []string{"ban", "kick", "redact"} {
 		if levels[field] != 100 {
 			t.Errorf("%s = %v, want 100", field, levels[field])
 		}

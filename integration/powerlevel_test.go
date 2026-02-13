@@ -181,7 +181,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 	// --- Workspace room tests ---
 	// Power levels: admin=100, machine=50, agent=0
-	// events_default: 0, state_default: 100
+	// events_default: 0, state_default: 0
 	// m.bureau.workspace: 0, m.bureau.layout: 0
 	// m.bureau.project: 100, m.room.power_levels: 100
 	// invite: 50
@@ -244,6 +244,33 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			if err != nil {
 				t.Fatalf("agent should be able to set layout (PL 0): %v", err)
 			}
+		})
+
+		t.Run("AgentCanSetArbitraryBureauState", func(t *testing.T) {
+			// state_default is 0 in workspace rooms: any member can publish
+			// any state event type not explicitly restricted. This means new
+			// Bureau event types (tickets, artifacts, etc.) work without
+			// updating WorkspaceRoomPowerLevels. Room membership is the
+			// authorization boundary.
+			_, err := agentSession.SendStateEvent(ctx, workspaceRoom.RoomID,
+				"m.bureau.ticket", "tkt-test", map[string]any{
+					"title":  "test ticket from power level test",
+					"status": "open",
+				})
+			if err != nil {
+				t.Fatalf("agent should be able to set arbitrary Bureau state (state_default: 0): %v", err)
+			}
+		})
+
+		t.Run("AgentCannotSetRoomMetadata", func(t *testing.T) {
+			// AdminProtectedEvents locks Matrix room metadata at PL 100
+			// regardless of state_default. Agents cannot rename, re-alias,
+			// or otherwise modify the room itself.
+			_, err := agentSession.SendStateEvent(ctx, workspaceRoom.RoomID,
+				"m.room.name", "", map[string]any{
+					"name": "hijacked workspace name",
+				})
+			assertForbidden(t, err, "agent (PL 0) setting m.room.name (PL 100)")
 		})
 	})
 

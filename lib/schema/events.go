@@ -1834,12 +1834,16 @@ func AdminProtectedEvents() map[string]any {
 //   - Machine/daemon (50): invite principals into workspace rooms
 //   - Default (0): messages, workspace state, layout, read state
 //
-// Workspace state events (m.bureau.workspace) are at PL 0 — any room member
-// can publish them. Authorization relies on room membership: the room is
-// invite-only, and only the daemon (PL 50) or admin can invite. This avoids
-// the daemon needing to modify m.room.power_levels, which Continuwuity
-// rejects from non-admin senders due to a spec compliance gap (it validates
-// ALL fields in the event against the sender's PL, not just changed fields).
+// state_default is 0: any room member can publish any state event type not
+// explicitly listed. Authorization relies on room membership — the room is
+// invite-only, and only the daemon (PL 50) or admin can invite. This means
+// new Bureau state event types (tickets, artifacts, etc.) work in workspace
+// rooms without updating this function. AdminProtectedEvents locks all
+// Matrix room metadata (m.room.*, m.space.*) at PL 100 regardless.
+//
+// The explicit PL 0 entries for workspace/worktree/layout are documentation
+// of the expected state event types, not load-bearing — they'd fall through
+// to state_default: 0 anyway.
 //
 // The admin creates workspace rooms via "bureau workspace create", so using
 // this as PowerLevelContentOverride in CreateRoom is safe (the creator
@@ -1863,7 +1867,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 		"users_default":  0,
 		"events":         events,
 		"events_default": 0,
-		"state_default":  100,
+		"state_default":  0,
 		"ban":            100,
 		"kick":           100,
 		"invite":         50,

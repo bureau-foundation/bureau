@@ -133,6 +133,27 @@ Integration tests must pass before every commit. Run them after any change to:
 daemon, launcher, proxy, messaging, pipeline executor, workspace handling,
 observation, templates, schema, or bootstrap logic. When in doubt, run them.
 
+## Security principles
+
+Bureau runs untrusted code. Every design decision must account for this.
+
+- **Every API surface requires authentication and authorization.** Read and
+  write, query and mutation, socket and HTTP — no exceptions. A reachable
+  channel is not an access policy. Information disclosure is a vulnerability:
+  ticket titles, dependency graphs, room membership, service registrations,
+  and operational metadata are all sensitive. "It's read-only" or "only
+  accessible over a unix socket" is never sufficient justification to skip
+  auth. If a caller can reach an endpoint, the endpoint must verify who
+  they are and whether they are permitted to see the response.
+
+- **Default-deny.** If there is no explicit grant, the answer is no. This
+  applies to Matrix operations (MatrixPolicy), service socket actions, and
+  any future API surface.
+
+- **Credentials never appear on command lines, in logs, or in error messages.**
+  Use file paths, sealed inputs, or environment variables. Mask tokens in
+  debug output.
+
 ## Conventions
 
 - Go is the primary language for infrastructure code

@@ -326,9 +326,11 @@ func (sr *SizedReader) Remaining() int64 {
 // StoreHeader with long labels, description, and filename.
 const MaxHeaderSize = 64 * 1024
 
-// writeMessage encodes v as CBOR and writes it with a 4-byte length
-// prefix.
-func writeMessage(w io.Writer, v any) error {
+// WriteMessage encodes v as CBOR and writes it with a 4-byte length
+// prefix. This is the general-purpose message writer for the artifact
+// transfer protocol — the type-specific helpers (WriteStoreHeader,
+// WriteFetchResponse, etc.) call through to this function.
+func WriteMessage(w io.Writer, v any) error {
 	data, err := codec.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("encoding message: %w", err)
@@ -344,26 +346,47 @@ func writeMessage(w io.Writer, v any) error {
 	return nil
 }
 
-// readMessage reads a length-prefixed CBOR message and decodes it
+// ReadMessage reads a length-prefixed CBOR message and decodes it
 // into v. Rejects messages larger than MaxHeaderSize.
-func readMessage(r io.Reader, v any) error {
-	var lengthPrefix [4]byte
-	if _, err := io.ReadFull(r, lengthPrefix[:]); err != nil {
-		return fmt.Errorf("reading message length: %w", err)
-	}
-	length := binary.BigEndian.Uint32(lengthPrefix[:])
-	if length > MaxHeaderSize {
-		return fmt.Errorf("message size %d exceeds maximum %d", length, MaxHeaderSize)
-	}
-
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return fmt.Errorf("reading message body: %w", err)
+func ReadMessage(r io.Reader, v any) error {
+	data, err := ReadRawMessage(r)
+	if err != nil {
+		return err
 	}
 	if err := codec.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("decoding message: %w", err)
 	}
 	return nil
+}
+
+// ReadRawMessage reads a length-prefixed CBOR message from r and
+// returns the raw CBOR bytes without decoding. The caller can
+// unmarshal the bytes into different types — first to extract an
+// action field for dispatch, then into the action-specific request
+// type. Rejects messages larger than MaxHeaderSize.
+func ReadRawMessage(r io.Reader) ([]byte, error) {
+	var lengthPrefix [4]byte
+	if _, err := io.ReadFull(r, lengthPrefix[:]); err != nil {
+		return nil, fmt.Errorf("reading message length: %w", err)
+	}
+	length := binary.BigEndian.Uint32(lengthPrefix[:])
+	if length > MaxHeaderSize {
+		return nil, fmt.Errorf("message size %d exceeds maximum %d", length, MaxHeaderSize)
+	}
+
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, fmt.Errorf("reading message body: %w", err)
+	}
+	return data, nil
+}
+
+// ErrorResponse is the CBOR error message sent when an action fails.
+// Used by the artifact service's connection handler for both streaming
+// and simple protocol paths. Clients check for the presence of the
+// "error" field to distinguish error responses from success responses.
+type ErrorResponse struct {
+	Error string `cbor:"error" json:"error"`
 }
 
 // WriteStoreHeader writes a length-prefixed CBOR StoreHeader to w.
@@ -373,7 +396,7 @@ func readMessage(r io.Reader, v any) error {
 // (FrameWriter).
 func WriteStoreHeader(w io.Writer, header *StoreHeader) error {
 	header.Action = "store"
-	return writeMessage(w, header)
+	return WriteMessage(w, header)
 }
 
 // ReadStoreHeader reads a length-prefixed CBOR StoreHeader from r.
@@ -381,7 +404,7 @@ func WriteStoreHeader(w io.Writer, header *StoreHeader) error {
 // binary data reads if this is a large artifact transfer.
 func ReadStoreHeader(r io.Reader) (*StoreHeader, error) {
 	var header StoreHeader
-	if err := readMessage(r, &header); err != nil {
+	if err := ReadMessage(r, &header); err != nil {
 		return nil, fmt.Errorf("reading store header: %w", err)
 	}
 	if header.Action != "store" {
@@ -392,13 +415,13 @@ func ReadStoreHeader(r io.Reader) (*StoreHeader, error) {
 
 // WriteStoreResponse writes a length-prefixed CBOR StoreResponse to w.
 func WriteStoreResponse(w io.Writer, response *StoreResponse) error {
-	return writeMessage(w, response)
+	return WriteMessage(w, response)
 }
 
 // ReadStoreResponse reads a length-prefixed CBOR StoreResponse from r.
 func ReadStoreResponse(r io.Reader) (*StoreResponse, error) {
 	var response StoreResponse
-	if err := readMessage(r, &response); err != nil {
+	if err := ReadMessage(r, &response); err != nil {
 		return nil, fmt.Errorf("reading store response: %w", err)
 	}
 	return &response, nil
@@ -407,13 +430,13 @@ func ReadStoreResponse(r io.Reader) (*StoreResponse, error) {
 // WriteFetchRequest writes a length-prefixed CBOR FetchRequest to w.
 func WriteFetchRequest(w io.Writer, request *FetchRequest) error {
 	request.Action = "fetch"
-	return writeMessage(w, request)
+	return WriteMessage(w, request)
 }
 
 // ReadFetchRequest reads a length-prefixed CBOR FetchRequest from r.
 func ReadFetchRequest(r io.Reader) (*FetchRequest, error) {
 	var request FetchRequest
-	if err := readMessage(r, &request); err != nil {
+	if err := ReadMessage(r, &request); err != nil {
 		return nil, fmt.Errorf("reading fetch request: %w", err)
 	}
 	if request.Action != "fetch" {
@@ -424,13 +447,13 @@ func ReadFetchRequest(r io.Reader) (*FetchRequest, error) {
 
 // WriteFetchResponse writes a length-prefixed CBOR FetchResponse to w.
 func WriteFetchResponse(w io.Writer, response *FetchResponse) error {
-	return writeMessage(w, response)
+	return WriteMessage(w, response)
 }
 
 // ReadFetchResponse reads a length-prefixed CBOR FetchResponse from r.
 func ReadFetchResponse(r io.Reader) (*FetchResponse, error) {
 	var response FetchResponse
-	if err := readMessage(r, &response); err != nil {
+	if err := ReadMessage(r, &response); err != nil {
 		return nil, fmt.Errorf("reading fetch response: %w", err)
 	}
 	return &response, nil

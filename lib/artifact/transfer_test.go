@@ -987,3 +987,173 @@ func BenchmarkCBORByteStringVsBase64(b *testing.B) {
 		}
 	})
 }
+
+// --- ReadRawMessage / WriteMessage tests ---
+
+func TestReadRawMessage(t *testing.T) {
+	// Write a length-prefixed CBOR message, then read it back as raw bytes.
+	type testMessage struct {
+		Action string `cbor:"action"`
+		Value  int    `cbor:"value"`
+	}
+
+	original := testMessage{Action: "test", Value: 42}
+	var buffer bytes.Buffer
+	if err := WriteMessage(&buffer, &original); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := ReadRawMessage(&buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the raw bytes are valid CBOR that decodes to the same value.
+	var decoded testMessage
+	if err := codec.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshaling raw message: %v", err)
+	}
+	if decoded.Action != original.Action {
+		t.Errorf("action = %q, want %q", decoded.Action, original.Action)
+	}
+	if decoded.Value != original.Value {
+		t.Errorf("value = %d, want %d", decoded.Value, original.Value)
+	}
+}
+
+func TestReadRawMessageOversized(t *testing.T) {
+	// Write a length prefix that exceeds MaxHeaderSize.
+	var buffer bytes.Buffer
+	var lengthPrefix [4]byte
+	binary.BigEndian.PutUint32(lengthPrefix[:], MaxHeaderSize+1)
+	buffer.Write(lengthPrefix[:])
+
+	_, err := ReadRawMessage(&buffer)
+	if err == nil {
+		t.Fatal("expected error for oversized message")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("error = %q, want contains 'exceeds maximum'", err.Error())
+	}
+}
+
+func TestReadRawMessageEmptyReader(t *testing.T) {
+	var buffer bytes.Buffer
+	_, err := ReadRawMessage(&buffer)
+	if err == nil {
+		t.Fatal("expected error for empty reader")
+	}
+}
+
+func TestWriteMessageReadRawMessageRoundtrip(t *testing.T) {
+	// Verify that WriteMessage → ReadRawMessage → Unmarshal produces
+	// the same result as WriteMessage → ReadMessage.
+	type payload struct {
+		Name   string   `cbor:"name"`
+		Labels []string `cbor:"labels"`
+		Size   int64    `cbor:"size"`
+	}
+
+	original := payload{
+		Name:   "test-artifact",
+		Labels: []string{"ml", "production"},
+		Size:   1024 * 1024,
+	}
+
+	// Path 1: WriteMessage → ReadMessage
+	var buffer1 bytes.Buffer
+	if err := WriteMessage(&buffer1, &original); err != nil {
+		t.Fatal(err)
+	}
+	var decoded1 payload
+	if err := ReadMessage(&buffer1, &decoded1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Path 2: WriteMessage → ReadRawMessage → Unmarshal
+	var buffer2 bytes.Buffer
+	if err := WriteMessage(&buffer2, &original); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := ReadRawMessage(&buffer2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded2 payload
+	if err := codec.Unmarshal(raw, &decoded2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both paths should produce identical results.
+	if decoded1.Name != decoded2.Name || decoded1.Size != decoded2.Size {
+		t.Errorf("path 1 = %+v, path 2 = %+v", decoded1, decoded2)
+	}
+	if len(decoded1.Labels) != len(decoded2.Labels) {
+		t.Errorf("path 1 labels = %v, path 2 labels = %v", decoded1.Labels, decoded2.Labels)
+	}
+}
+
+func TestReadRawMessageActionDispatch(t *testing.T) {
+	// Simulate the service handler pattern: read raw, extract action,
+	// then decode into action-specific type.
+	header := StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        100,
+		Description: "test upload",
+	}
+
+	var buffer bytes.Buffer
+	if err := WriteMessage(&buffer, &header); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := ReadRawMessage(&buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First unmarshal: just the action field.
+	var actionHeader struct {
+		Action string `cbor:"action"`
+	}
+	if err := codec.Unmarshal(raw, &actionHeader); err != nil {
+		t.Fatal(err)
+	}
+	if actionHeader.Action != "store" {
+		t.Fatalf("action = %q, want 'store'", actionHeader.Action)
+	}
+
+	// Second unmarshal: full type based on the action.
+	var decoded StoreHeader
+	if err := codec.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ContentType != header.ContentType {
+		t.Errorf("content_type = %q, want %q", decoded.ContentType, header.ContentType)
+	}
+	if decoded.Size != header.Size {
+		t.Errorf("size = %d, want %d", decoded.Size, header.Size)
+	}
+	if decoded.Description != header.Description {
+		t.Errorf("description = %q, want %q", decoded.Description, header.Description)
+	}
+}
+
+func TestErrorResponseRoundtrip(t *testing.T) {
+	original := ErrorResponse{Error: "artifact not found: art-a3f9b2c1e7d4"}
+
+	var buffer bytes.Buffer
+	if err := WriteMessage(&buffer, &original); err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded ErrorResponse
+	if err := ReadMessage(&buffer, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	if decoded.Error != original.Error {
+		t.Errorf("error = %q, want %q", decoded.Error, original.Error)
+	}
+}

@@ -12,9 +12,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -81,6 +83,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 
 	var capturedMounts []launcherServiceMount
+	var capturedTokenDir string
 	var mountsMu sync.Mutex
 
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
@@ -88,33 +91,42 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		defer mountsMu.Unlock()
 		if request.Action == "create-sandbox" {
 			capturedMounts = request.ServiceMounts
+			capturedTokenDir = request.TokenDirectory
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
 	})
 	t.Cleanup(func() { listener.Close() })
 
+	_, signingKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
 	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		clock:                  clock.Real(),
+		runDir:                 principal.DefaultRunDir,
+		stateDir:               t.TempDir(),
+		session:                session,
+		machineName:            machineName,
+		serverName:             serverName,
+		configRoomID:           configRoomID,
+		launcherSocket:         launcherSocket,
+		tokenSigningPrivateKey: signingKey,
+		authorizationIndex:     authorization.NewIndex(),
+		running:                make(map[string]bool),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return nil
 		},
@@ -144,6 +156,15 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	expectedSocket := principal.RunDirSocketPath(principal.DefaultRunDir, "service/ticket")
 	if capturedMounts[0].SocketPath != expectedSocket {
 		t.Errorf("mount socket = %q, want %q", capturedMounts[0].SocketPath, expectedSocket)
+	}
+
+	// Token directory should be set when RequiredServices are present.
+	// It may be empty if the authorization index has no grants for this
+	// principal, but the path should still be populated since the daemon
+	// creates the directory unconditionally for any principal with
+	// RequiredServices.
+	if capturedTokenDir == "" {
+		t.Error("expected TokenDirectory to be set in IPC request")
 	}
 }
 
@@ -293,28 +314,36 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
+	_, signingKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
 	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		clock:                  clock.Real(),
+		runDir:                 principal.DefaultRunDir,
+		stateDir:               t.TempDir(),
+		session:                session,
+		machineName:            machineName,
+		serverName:             serverName,
+		configRoomID:           configRoomID,
+		launcherSocket:         launcherSocket,
+		tokenSigningPrivateKey: signingKey,
+		authorizationIndex:     authorization.NewIndex(),
+		running:                make(map[string]bool),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return nil
 		},
@@ -421,28 +450,36 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
+	_, signingKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
 	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		clock:                  clock.Real(),
+		runDir:                 principal.DefaultRunDir,
+		stateDir:               t.TempDir(),
+		session:                session,
+		machineName:            machineName,
+		serverName:             serverName,
+		configRoomID:           configRoomID,
+		launcherSocket:         launcherSocket,
+		tokenSigningPrivateKey: signingKey,
+		authorizationIndex:     authorization.NewIndex(),
+		running:                make(map[string]bool),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return nil
 		},
@@ -607,28 +644,36 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
+	_, signingKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
 	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		clock:                  clock.Real(),
+		runDir:                 principal.DefaultRunDir,
+		stateDir:               t.TempDir(),
+		session:                session,
+		machineName:            machineName,
+		serverName:             serverName,
+		configRoomID:           configRoomID,
+		launcherSocket:         launcherSocket,
+		tokenSigningPrivateKey: signingKey,
+		authorizationIndex:     authorization.NewIndex(),
+		running:                make(map[string]bool),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return nil
 		},
@@ -691,28 +736,36 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 		}
 	})
 
+	_, tokenSigningPrivateKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
 	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastVisibility:      make(map[string][]string),
-		lastMatrixPolicy:    make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		clock:                  clock.Real(),
+		runDir:                 principal.DefaultRunDir,
+		stateDir:               t.TempDir(),
+		session:                session,
+		machineName:            machineName,
+		serverName:             serverName,
+		configRoomID:           configRoomID,
+		launcherSocket:         launcherSocket,
+		tokenSigningPrivateKey: tokenSigningPrivateKey,
+		authorizationIndex:     authorization.NewIndex(),
+		running:                make(map[string]bool),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
+		layoutWatchers:         make(map[string]*layoutWatcher),
+		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		prefetchFunc: func(ctx context.Context, storePath string) error {
 			return nil
 		},

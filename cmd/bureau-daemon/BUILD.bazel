@@ -106,6 +106,7 @@ go_test(
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",
+        "//lib/servicetoken",
         "//lib/testutil",
         "//lib/tmux",
         "//lib/watchdog",

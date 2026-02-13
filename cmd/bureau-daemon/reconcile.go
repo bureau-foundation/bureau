@@ -5,9 +5,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -18,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -365,6 +370,26 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			serviceMounts = mounts
 		}
 
+		// Mint service tokens for each required service. The tokens carry
+		// pre-resolved grants scoped to the service namespace. Written to
+		// disk and bind-mounted read-only at /run/bureau/tokens/ so the
+		// agent can authenticate to services without a daemon round-trip.
+		var tokenDirectory string
+		if sandboxSpec != nil && len(sandboxSpec.RequiredServices) > 0 {
+			tokenDir, err := d.mintServiceTokens(localpart, sandboxSpec.RequiredServices)
+			if err != nil {
+				d.logger.Error("minting service tokens",
+					"principal", localpart,
+					"error", err,
+				)
+				d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+					fmt.Sprintf("Cannot start %s: failed to mint service tokens: %v", localpart, err),
+				))
+				continue
+			}
+			tokenDirectory = tokenDir
+		}
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
@@ -374,6 +399,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			SandboxSpec:          sandboxSpec,
 			TriggerContent:       triggerContents[localpart],
 			ServiceMounts:        serviceMounts,
+			TokenDirectory:       tokenDirectory,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
@@ -1023,6 +1049,150 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 	}
 
 	return "", fmt.Errorf("no binding found for service role %q in any accessible room", role)
+}
+
+// tokenTTL is the default TTL for service tokens. Set to 5 minutes to
+// limit exposure from a compromised token. The daemon's refresh goroutine
+// (task bd-15of) renews at 80% of this duration.
+const tokenTTL = 5 * time.Minute
+
+// mintServiceTokens mints a signed service token for each required
+// service and writes them to disk. Returns the host-side directory path
+// containing the token files, suitable for bind-mounting into the sandbox
+// at /run/bureau/tokens/.
+//
+// For each required service role:
+//   - Resolves the principal's grants from the authorization index
+//   - Filters grants to those whose action patterns match the service
+//     namespace (role + "/**")
+//   - Converts schema.Grant to servicetoken.Grant (strips audit metadata)
+//   - Mints a servicetoken.Token with the daemon's signing key
+//   - Writes the raw signed bytes to <stateDir>/tokens/<localpart>/<role>
+//
+// Returns ("", nil) if there are no required services. Returns an error
+// if token minting or file I/O fails — callers should treat this as a
+// fatal condition that blocks sandbox creation.
+func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) (string, error) {
+	if len(requiredServices) == 0 {
+		return "", nil
+	}
+
+	if d.tokenSigningPrivateKey == nil {
+		return "", fmt.Errorf("token signing keypair not initialized (required for service token minting)")
+	}
+	if d.stateDir == "" {
+		return "", fmt.Errorf("state directory not configured (required for writing service tokens)")
+	}
+
+	// Ensure the token directory exists.
+	tokenDir := filepath.Join(d.stateDir, "tokens", localpart)
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		return "", fmt.Errorf("creating token directory: %w", err)
+	}
+
+	// Get the principal's resolved grants from the authorization index.
+	grants := d.authorizationIndex.Grants(localpart)
+
+	now := d.clock.Now()
+
+	for _, role := range requiredServices {
+		// Filter grants to those relevant to this service's namespace.
+		// A grant is relevant if any of its action patterns could match
+		// actions in the service's namespace (role + "/**"). We check
+		// this by testing whether the pattern matches "role/" as a
+		// prefix, or is a broad wildcard like "**" or "service/**".
+		//
+		// The filtering is intentionally generous: we include any grant
+		// whose action patterns COULD match a service-namespaced action.
+		// The service itself performs the definitive authorization check
+		// using servicetoken.GrantsAllow on the specific action.
+		filtered := filterGrantsForService(grants, role)
+
+		// Convert schema.Grant → servicetoken.Grant (strip audit metadata).
+		tokenGrants := make([]servicetoken.Grant, len(filtered))
+		for i, grant := range filtered {
+			tokenGrants[i] = servicetoken.Grant{
+				Actions: grant.Actions,
+				Targets: grant.Targets,
+			}
+		}
+
+		// Generate a unique token ID for emergency revocation.
+		tokenID, err := generateTokenID()
+		if err != nil {
+			return "", fmt.Errorf("generating token ID for service %q: %w", role, err)
+		}
+
+		token := &servicetoken.Token{
+			Subject:   localpart,
+			Machine:   d.machineName,
+			Audience:  role,
+			Grants:    tokenGrants,
+			ID:        tokenID,
+			IssuedAt:  now.Unix(),
+			ExpiresAt: now.Add(tokenTTL).Unix(),
+		}
+
+		tokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, token)
+		if err != nil {
+			return "", fmt.Errorf("minting token for service %q: %w", role, err)
+		}
+
+		tokenPath := filepath.Join(tokenDir, role)
+		if err := os.WriteFile(tokenPath, tokenBytes, 0600); err != nil {
+			return "", fmt.Errorf("writing token for service %q: %w", role, err)
+		}
+
+		d.logger.Info("minted service token",
+			"principal", localpart,
+			"service", role,
+			"token_id", tokenID,
+			"grants", len(tokenGrants),
+			"expires_at", now.Add(tokenTTL).Format(time.RFC3339),
+		)
+	}
+
+	return tokenDir, nil
+}
+
+// filterGrantsForService returns the subset of grants whose action
+// patterns could match actions in the given service namespace. A service
+// with role "ticket" expects actions like "ticket/create", "ticket/close",
+// etc. A grant with action patterns ["ticket/*"] or ["**"] would match;
+// a grant with ["observe/*"] would not.
+//
+// A grant is included if any of its action patterns either:
+//   - Starts with the role prefix (literal match: "ticket/create" starts
+//     with "ticket/")
+//   - Is a glob that matches a synthetic probe action in the namespace
+//     (e.g., "**" matches "ticket/x", "service/*" matches "service/x")
+//   - Equals the role exactly (bare "ticket" — targets the service itself)
+//
+// Grants with no action patterns are skipped (they authorize nothing).
+func filterGrantsForService(grants []schema.Grant, role string) []schema.Grant {
+	prefix := role + "/"
+	probe := role + "/x" // synthetic action for glob testing
+	var filtered []schema.Grant
+	for _, grant := range grants {
+		for _, pattern := range grant.Actions {
+			if strings.HasPrefix(pattern, prefix) || pattern == role || principal.MatchPattern(pattern, probe) {
+				filtered = append(filtered, grant)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+// generateTokenID returns a cryptographically random 16-byte hex string
+// (32 characters) for use as a unique token identifier. The ID supports
+// emergency revocation via the service token blacklist.
+func generateTokenID() (string, error) {
+	var buffer [16]byte
+	if _, err := rand.Read(buffer[:]); err != nil {
+		return "", fmt.Errorf("reading random bytes: %w", err)
+	}
+	return hex.EncodeToString(buffer[:]), nil
 }
 
 // cancelExitWatcher cancels the watchSandboxExit goroutine for a principal.

@@ -874,7 +874,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	// principal without a bwrap sandbox).
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
-		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts)
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts, request.TokenDirectory)
 		if setupErr != nil {
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)
@@ -1221,12 +1221,14 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 // When triggerContent is non-nil, it is written to trigger.json and bind-mounted
 // read-only at /run/bureau/trigger.json inside the sandbox. Service mounts
 // are bind-mounted read-write at /run/bureau/service/<role>.sock, giving
-// the sandboxed process direct access to Bureau services.
+// the sandboxed process direct access to Bureau services. When tokenDirectory
+// is non-empty, it is bind-mounted read-only at /run/bureau/tokens/, providing
+// the agent with pre-minted service authentication tokens.
 //
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -1297,6 +1299,19 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 			Source: mount.SocketPath,
 			Dest:   "/run/bureau/service/" + mount.Role + ".sock",
 			Mode:   sandbox.MountModeRW,
+		})
+	}
+
+	// Bind-mount the token directory into the sandbox. The daemon writes
+	// pre-minted service tokens (one file per required service role) to
+	// this directory. Agents read tokens from /run/bureau/tokens/<role>
+	// before each service request. Read-only: the daemon owns token
+	// lifecycle (minting, refresh, revocation).
+	if tokenDirectory != "" {
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: tokenDirectory,
+			Dest:   "/run/bureau/tokens",
+			Mode:   sandbox.MountModeRO,
 		})
 	}
 

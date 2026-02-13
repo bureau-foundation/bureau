@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -18,11 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -1605,5 +1608,229 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	}
 	if grants[0].Ticket != "bd-test-temporal" {
 		t.Errorf("preserved grant ticket = %q, want %q", grants[0].Ticket, "bd-test-temporal")
+	}
+}
+
+func TestFilterGrantsForService(t *testing.T) {
+	t.Parallel()
+
+	grants := []schema.Grant{
+		{Actions: []string{"ticket/create", "ticket/assign"}},
+		{Actions: []string{"observe/*"}, Targets: []string{"**"}},
+		{Actions: []string{"**"}},
+		{Actions: []string{"artifact/fetch"}},
+		{Actions: []string{"ticket/*"}, Targets: []string{"iree/**"}},
+	}
+
+	tests := []struct {
+		name       string
+		role       string
+		wantCount  int
+		wantAction string // first action of first matched grant
+	}{
+		{
+			name:       "ticket role matches ticket grants and wildcard",
+			role:       "ticket",
+			wantCount:  3, // ticket/create+assign, **, ticket/*
+			wantAction: "ticket/create",
+		},
+		{
+			name:       "observe role matches observe grant and wildcard",
+			role:       "observe",
+			wantCount:  2, // observe/*, **
+			wantAction: "observe/*",
+		},
+		{
+			name:       "artifact role matches artifact grant and wildcard",
+			role:       "artifact",
+			wantCount:  2, // **, artifact/fetch
+			wantAction: "**",
+		},
+		{
+			name:      "unknown role matches only wildcard",
+			role:      "unknown",
+			wantCount: 1, // **
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			filtered := filterGrantsForService(grants, test.role)
+			if len(filtered) != test.wantCount {
+				t.Errorf("filterGrantsForService(%q) = %d grants, want %d", test.role, len(filtered), test.wantCount)
+				for i, grant := range filtered {
+					t.Logf("  [%d] actions=%v", i, grant.Actions)
+				}
+			}
+			if test.wantAction != "" && len(filtered) > 0 {
+				if filtered[0].Actions[0] != test.wantAction {
+					t.Errorf("first grant action = %q, want %q", filtered[0].Actions[0], test.wantAction)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterGrantsForService_EmptyGrants(t *testing.T) {
+	t.Parallel()
+
+	filtered := filterGrantsForService(nil, "ticket")
+	if len(filtered) != 0 {
+		t.Errorf("nil grants should return empty, got %d", len(filtered))
+	}
+
+	filtered = filterGrantsForService([]schema.Grant{}, "ticket")
+	if len(filtered) != 0 {
+		t.Errorf("empty grants should return empty, got %d", len(filtered))
+	}
+}
+
+func TestMintServiceTokens(t *testing.T) {
+	t.Parallel()
+
+	_, privateKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
+	stateDir := t.TempDir()
+
+	daemon := &Daemon{
+		clock:                  clock.Real(),
+		machineName:            "machine/test",
+		stateDir:               stateDir,
+		tokenSigningPrivateKey: privateKey,
+		authorizationIndex:     authorization.NewIndex(),
+		logger:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	// Set up the principal with grants covering the ticket namespace.
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Grants: []schema.Grant{
+			{Actions: []string{"ticket/create", "ticket/assign"}},
+			{Actions: []string{"observe/*"}, Targets: []string{"**"}},
+		},
+	})
+
+	tokenDir, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	if err != nil {
+		t.Fatalf("mintServiceTokens: %v", err)
+	}
+
+	if tokenDir == "" {
+		t.Fatal("tokenDir should not be empty")
+	}
+
+	// Verify the token file exists.
+	tokenPath := filepath.Join(tokenDir, "ticket")
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("reading token file: %v", err)
+	}
+
+	if len(tokenBytes) == 0 {
+		t.Fatal("token file should not be empty")
+	}
+
+	// Verify the token is valid (can be decoded and verified).
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	token, err := servicetoken.Verify(publicKey, tokenBytes)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if token.Subject != "agent/alpha" {
+		t.Errorf("Subject = %q, want %q", token.Subject, "agent/alpha")
+	}
+	if token.Machine != "machine/test" {
+		t.Errorf("Machine = %q, want %q", token.Machine, "machine/test")
+	}
+	if token.Audience != "ticket" {
+		t.Errorf("Audience = %q, want %q", token.Audience, "ticket")
+	}
+	if token.ID == "" {
+		t.Error("ID should not be empty")
+	}
+
+	// Should have 1 grant (ticket/* matching, observe/* filtered out).
+	if len(token.Grants) != 1 {
+		t.Errorf("Grants = %d, want 1 (only ticket namespace)", len(token.Grants))
+	}
+}
+
+func TestMintServiceTokens_NoRequiredServices(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	tokenDir, err := daemon.mintServiceTokens("agent/alpha", nil)
+	if err != nil {
+		t.Fatalf("mintServiceTokens with nil services: %v", err)
+	}
+	if tokenDir != "" {
+		t.Errorf("tokenDir should be empty for no required services, got %q", tokenDir)
+	}
+}
+
+func TestMintServiceTokens_MissingPrivateKey(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		stateDir:           t.TempDir(),
+		authorizationIndex: authorization.NewIndex(),
+		logger:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	_, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	if err == nil {
+		t.Fatal("expected error when private key is nil")
+	}
+	if !strings.Contains(err.Error(), "token signing keypair not initialized") {
+		t.Errorf("error = %q, want mention of token signing keypair", err.Error())
+	}
+}
+
+func TestMintServiceTokens_MultipleServices(t *testing.T) {
+	t.Parallel()
+
+	_, privateKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
+	stateDir := t.TempDir()
+
+	daemon := &Daemon{
+		clock:                  clock.Real(),
+		machineName:            "machine/test",
+		stateDir:               stateDir,
+		tokenSigningPrivateKey: privateKey,
+		authorizationIndex:     authorization.NewIndex(),
+		logger:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Grants: []schema.Grant{
+			{Actions: []string{"ticket/**"}},
+			{Actions: []string{"artifact/fetch"}},
+		},
+	})
+
+	tokenDir, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket", "artifact"})
+	if err != nil {
+		t.Fatalf("mintServiceTokens: %v", err)
+	}
+
+	// Verify both token files exist.
+	for _, role := range []string{"ticket", "artifact"} {
+		tokenPath := filepath.Join(tokenDir, role)
+		if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+			t.Errorf("token file for %q should exist", role)
+		}
 	}
 }

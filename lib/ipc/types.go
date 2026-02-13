@@ -70,6 +70,13 @@ type Request struct {
 	// /run/bureau/service/<role>.sock inside the sandbox.
 	ServiceMounts []ServiceMount `cbor:"service_mounts,omitempty"`
 
+	// TokenDirectory is the host-side directory containing pre-minted
+	// service tokens for this principal. When non-empty, the launcher
+	// bind-mounts it read-only at /run/bureau/tokens/ inside the sandbox.
+	// Each file in the directory is named by service role (e.g., "ticket",
+	// "artifact") and contains the raw signed token bytes.
+	TokenDirectory string `cbor:"token_directory,omitempty"`
+
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path exists and is executable,
 	// then switches to it for future sandbox creation. Existing proxy

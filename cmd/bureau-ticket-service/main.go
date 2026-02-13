@@ -130,6 +130,7 @@ func run() error {
 
 	ticketService := &TicketService{
 		session:       session,
+		writer:        session,
 		clock:         clk,
 		principalName: principalName,
 		machineName:   machineName,
@@ -210,6 +211,7 @@ func run() error {
 // TicketService is the core service state.
 type TicketService struct {
 	session *messaging.Session
+	writer  matrixWriter
 	clock   clock.Clock
 
 	principalName string

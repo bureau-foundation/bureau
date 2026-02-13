@@ -278,6 +278,17 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		} else {
 			d.reconcileServices(ctx, added, removed, updated)
 			d.pushServiceDirectory(ctx)
+
+			// Log directory changes to the config room. This serves as
+			// both operational telemetry and a causal signal: the message
+			// is sent after pushServiceDirectory completes, so observers
+			// watching the config room know all running proxies have been
+			// updated by the time this message appears.
+			changeCount := len(added) + len(removed) + len(updated)
+			if changeCount > 0 {
+				d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+					fmt.Sprintf("Service directory updated: %d services", len(d.services))))
+			}
 		}
 	}
 

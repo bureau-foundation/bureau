@@ -5,7 +5,6 @@ package integration_test
 
 import (
 	"testing"
-	"time"
 )
 
 // TestServiceDiscovery exercises the full cross-machine service discovery
@@ -53,6 +52,11 @@ func TestServiceDiscovery(t *testing.T) {
 		Principals: []principalSpec{{Account: serviceAgent}},
 	})
 
+	// Watch the consumer daemon's config room for service directory updates.
+	// Set up the watch BEFORE publishing the service event so the roomWatch
+	// captures the sync position before any directory change messages arrive.
+	serviceWatch := watchRoom(t, admin, consumer.ConfigRoomID)
+
 	// Publish a service event in #bureau/service advertising the service.
 	// The consumer daemon detects this via /sync and pushes the directory
 	// to its principals' proxies.
@@ -94,16 +98,18 @@ func TestServiceDiscovery(t *testing.T) {
 	wideClient := proxyHTTPClient(consumerSockets[consumerWide.Localpart])
 	narrowClient := proxyHTTPClient(consumerSockets[consumerNarrow.Localpart])
 
+	// Wait for the consumer daemon to process the service event. The
+	// daemon posts this message AFTER pushServiceDirectory completes, so
+	// all running consumer proxies are guaranteed to have the directory
+	// by the time this returns. Combined with deployPrincipals having
+	// returned (consumer sockets exist, directory pushed during reconcile),
+	// the proxy is ready to query.
+	serviceWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+
 	// --- Phase 3: Verify service propagation and visibility isolation ---
 
 	t.Run("ServicePropagation", func(t *testing.T) {
-		// Poll the wide consumer's proxy until the service appears. The
-		// daemon's /sync long-poll has up to 30s latency, but typically
-		// returns within milliseconds when events are available.
-		entries := waitForServiceDiscovery(t, wideClient, "",
-			func(entries []serviceDirectoryEntry) bool {
-				return len(entries) > 0
-			}, 30*time.Second)
+		entries := proxyServiceDiscovery(t, wideClient, "")
 
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 service entry, got %d", len(entries))
@@ -176,6 +182,8 @@ func TestServiceDiscovery(t *testing.T) {
 	// --- Phase 5: Service deregistration ---
 
 	t.Run("ServiceDeregistration", func(t *testing.T) {
+		deregWatch := watchRoom(t, admin, consumer.ConfigRoomID)
+
 		// Deregister the service by publishing an empty-content state event.
 		// The daemon's syncServiceDirectory skips entries with empty
 		// Principal (services.go:67), treating this as a deregistration.
@@ -185,16 +193,21 @@ func TestServiceDiscovery(t *testing.T) {
 			t.Fatalf("deregister service: %v", err)
 		}
 
-		// Poll until the wide consumer no longer sees the service.
-		waitForServiceDiscovery(t, wideClient, "",
-			func(entries []serviceDirectoryEntry) bool {
-				return len(entries) == 0
-			}, 30*time.Second)
+		// Wait for the daemon to process the deregistration and push the
+		// empty directory to all consumer proxies.
+		deregWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+
+		entries := proxyServiceDiscovery(t, wideClient, "")
+		if len(entries) != 0 {
+			t.Errorf("wide consumer should see 0 services after deregistration, got %d", len(entries))
+		}
 	})
 
 	// --- Phase 6: Partial visibility with second service ---
 
 	t.Run("PartialVisibility", func(t *testing.T) {
+		partialWatch := watchRoom(t, admin, consumer.ConfigRoomID)
+
 		// Register a second service that the narrow consumer CAN see.
 		embeddingAgent := registerPrincipal(t, "service/embedding/test", "embedding-password")
 		deployPrincipals(t, admin, provider, deploymentConfig{
@@ -216,13 +229,16 @@ func TestServiceDiscovery(t *testing.T) {
 			t.Fatalf("publish embedding service event: %v", err)
 		}
 
+		// Wait for the consumer daemon to process the new service event
+		// and push the updated directory to all consumer proxies.
+		partialWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+
 		// The narrow consumer's visibility ["service/embedding/*"] matches
 		// "service/embedding/test" but not the deregistered "service/stt/test".
-		narrowEntries := waitForServiceDiscovery(t, narrowClient, "",
-			func(entries []serviceDirectoryEntry) bool {
-				return len(entries) == 1
-			}, 30*time.Second)
-
+		narrowEntries := proxyServiceDiscovery(t, narrowClient, "")
+		if len(narrowEntries) != 1 {
+			t.Fatalf("narrow consumer: expected 1 service, got %d", len(narrowEntries))
+		}
 		if narrowEntries[0].Localpart != "service/embedding/test" {
 			t.Errorf("narrow consumer sees %q, want %q",
 				narrowEntries[0].Localpart, "service/embedding/test")
@@ -230,11 +246,10 @@ func TestServiceDiscovery(t *testing.T) {
 
 		// The wide consumer should also see exactly 1 service (the STT
 		// service was deregistered in Phase 5).
-		wideEntries := waitForServiceDiscovery(t, wideClient, "",
-			func(entries []serviceDirectoryEntry) bool {
-				return len(entries) == 1
-			}, 30*time.Second)
-
+		wideEntries := proxyServiceDiscovery(t, wideClient, "")
+		if len(wideEntries) != 1 {
+			t.Fatalf("wide consumer: expected 1 service, got %d", len(wideEntries))
+		}
 		if wideEntries[0].Localpart != "service/embedding/test" {
 			t.Errorf("wide consumer sees %q, want %q",
 				wideEntries[0].Localpart, "service/embedding/test")

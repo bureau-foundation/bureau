@@ -881,34 +881,3 @@ func proxyServiceDiscovery(t *testing.T, client *http.Client, queryParams string
 	}
 	return entries
 }
-
-// waitForServiceDiscovery polls a proxy's GET /v1/services endpoint until
-// the response satisfies the predicate or the timeout expires. Returns the
-// final set of entries that satisfied the predicate. Used for waiting on
-// async propagation through daemon /sync → pushServiceDirectory → proxy.
-func waitForServiceDiscovery(
-	t *testing.T,
-	client *http.Client,
-	queryParams string,
-	predicate func([]serviceDirectoryEntry) bool,
-	timeout time.Duration,
-) []serviceDirectoryEntry {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	var lastEntries []serviceDirectoryEntry
-
-	for {
-		lastEntries = proxyServiceDiscovery(t, client, queryParams)
-		if predicate(lastEntries) {
-			return lastEntries
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for service discovery predicate (last response: %d entries)",
-				timeout, len(lastEntries))
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-}

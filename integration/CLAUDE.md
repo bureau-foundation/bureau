@@ -23,7 +23,6 @@ config reconciliation) use the existing helpers in helpers_test.go:
 
 - `waitForFile` — file appears on disk (proxy socket, launcher socket)
 - `waitForFileGone` — file removed (sandbox teardown)
-- `waitForServiceDiscovery` — service directory propagation (proxy HTTP)
 - `watchRoom` + `roomWatch` methods — all Matrix event waiting
 
 ### Room watches
@@ -62,6 +61,23 @@ The watch captures a sync checkpoint. All Wait methods use Matrix /sync
 long-polling (server holds the connection until events arrive). No timeout
 parameter — bounded by t.Context() (test timeout). Never inline a
 sleep-and-retry loop.
+
+### Service directory propagation
+
+Service directory changes flow through a non-Matrix path (daemon → proxy
+admin socket push), but the daemon posts a "Service directory updated"
+message to the config room after `pushServiceDirectory` completes. Use
+this message as the synchronization signal:
+
+```go
+serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service", key, content)
+serviceWatch.WaitForMessage(t, "Service directory updated", machine.UserID)
+entries := proxyServiceDiscovery(t, proxyClient, "")
+```
+
+The message is posted after all running proxies have been updated, so the
+proxy query is guaranteed to see the new directory.
 
 **Unit tests with time-dependent logic** should use injectable clocks, not
 real time.

@@ -6,7 +6,6 @@ package integration_test
 import (
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -170,6 +169,11 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
+	// Watch the daemon's config room for service directory updates. Set up
+	// the watch BEFORE publishing the service event to capture the sync
+	// position before any directory change messages arrive.
+	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	// Publish a test service in #bureau/service. No actual service
 	// principal needs to run — the directory entry is constructed from
 	// the state event content regardless of whether the principal exists.
@@ -200,14 +204,12 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 
 	// --- Phase 1: Matching visibility — service is visible ---
 
-	// Wait for the service to propagate through daemon /sync →
-	// syncServiceDirectory → pushServiceDirectory → proxy. This also
-	// confirms the initial visibility patterns were applied correctly.
-	entries := waitForServiceDiscovery(t, proxyClient, "",
-		func(entries []serviceDirectoryEntry) bool {
-			return len(entries) > 0
-		}, 30*time.Second)
+	// Wait for the daemon to process the service event. The message is
+	// posted after pushServiceDirectory completes, so the consumer proxy
+	// is guaranteed to have the directory by the time this returns.
+	serviceWatch.WaitForMessage(t, "Service directory updated", machine.UserID)
 
+	entries := proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {
 		t.Fatalf("phase 1: expected 1 service, got %d", len(entries))
 	}

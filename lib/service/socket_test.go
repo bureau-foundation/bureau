@@ -97,6 +97,9 @@ func testAuthConfig(t *testing.T) (*AuthConfig, ed25519.PrivateKey) {
 }
 
 // mintTestToken creates a signed test token with the given subject.
+// Uses fixed timestamps: issued 2025-01-01, expires 2099-01-01. The
+// far-future expiry means the token is always valid without needing
+// wall-clock access.
 func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
@@ -107,8 +110,8 @@ func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) 
 			{Actions: []string{"test/read", "test/write"}},
 		},
 		ID:        "test-token-id",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
+		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -569,14 +572,14 @@ func TestSocketServerAuthExpiredToken(t *testing.T) {
 
 	waitForSocket(t, socketPath)
 
-	// Mint an already-expired token.
+	// Mint an already-expired token using fixed past timestamps.
 	token := &servicetoken.Token{
 		Subject:   "agent/test",
 		Machine:   "machine/test",
 		Audience:  "test-service",
 		ID:        "expired-token",
-		IssuedAt:  time.Now().Add(-10 * time.Minute).Unix(),
-		ExpiresAt: time.Now().Add(-5 * time.Minute).Unix(),
+		IssuedAt:  1577836800, // 2020-01-01T00:00:00Z
+		ExpiresAt: 1577840400, // 2020-01-01T01:00:00Z
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -623,7 +626,7 @@ func TestSocketServerAuthRevokedToken(t *testing.T) {
 
 	// Mint a valid token, then blacklist it.
 	tokenBytes := mintTestToken(t, privateKey, "agent/test")
-	authConfig.Blacklist.Revoke("test-token-id", time.Now().Add(5*time.Minute))
+	authConfig.Blacklist.Revoke("test-token-id", time.Unix(4070908800, 0)) // 2099-01-01: always in the future
 
 	response := sendRequest(t, socketPath, map[string]any{
 		"action": "create",
@@ -851,8 +854,8 @@ func TestSocketServerAuthWrongAudience(t *testing.T) {
 		Machine:   "machine/test",
 		Audience:  "wrong-service",
 		ID:        "wrong-audience-token",
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
+		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {

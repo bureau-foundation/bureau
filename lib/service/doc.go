@@ -19,6 +19,9 @@
 //     delivering responses to a caller-provided handler.
 //   - Socket server: CBOR Unix socket server with action dispatch,
 //     service token authentication, and graceful shutdown.
+//   - Socket client: CBOR client for making authenticated requests to
+//     service sockets. Handles token inclusion, connection lifecycle,
+//     and response decoding.
 //
 // Services compose these utilities in their own main() function rather
 // than subclassing a framework. The package provides building blocks,

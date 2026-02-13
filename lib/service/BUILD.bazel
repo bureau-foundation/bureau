@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "service",
     srcs = [
+        "client.go",
         "doc.go",
         "registration.go",
         "session.go",
@@ -29,6 +30,7 @@ go_library(
 go_test(
     name = "service_test",
     srcs = [
+        "client_test.go",
         "session_test.go",
         "signing_key_test.go",
         "socket_test.go",

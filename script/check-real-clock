@@ -18,8 +18,18 @@
 #
 # Exemptions:
 #   - lib/clock/ itself (implements the clock abstraction)
-#   - Lines with //nolint:realclock (for timeout safety valves and kernel
-#     I/O deadlines where wall time is genuinely required)
+#   - Lines with //nolint:realclock — reserved for cases where wall time is
+#     genuinely unavoidable: OS-level I/O deadlines (net.Conn.SetDeadline),
+#     filesystem polling safety valves, kernel timeout parameters.
+#
+# NOT valid exemptions (use these patterns instead):
+#   - Token timestamps: use fixed Unix constants (e.g. 1735689600 for
+#     2025-01-01, 4070908800 for 2099-01-01). Far-future expiry for valid
+#     tokens, far-past expiry for expired token tests.
+#   - Test data construction: hardcode deterministic values rather than
+#     computing them from time.Now().
+#   - Business logic timing: inject clock.Clock into the code under test
+#     and use clock.Fake() in the test.
 #
 # Only checks lines ADDED in the staged diff, so existing violations do not
 # block commits. New violations must either use the fake clock or justify
@@ -76,9 +86,11 @@ while IFS= read -r line; do
     echo "  $line"
 done <<< "$violations"
 echo ""
-echo "To fix: inject a clock.Clock into the code under test and use"
-echo "clock.Fake() in the test. If real wall time is genuinely required"
-echo "(timeout safety valves, kernel I/O deadlines), add //nolint:realclock"
-echo "with a brief justification on the same line."
+echo "To fix (in order of preference):"
+echo "  1. Inject clock.Clock into the code under test; use clock.Fake()"
+echo "  2. Use fixed Unix timestamp constants for token/test data"
+echo "     (e.g. 1735689600 for 2025-01-01, 4070908800 for 2099-01-01)"
+echo "  3. Only if wall time is genuinely unavoidable (OS I/O deadlines,"
+echo "     filesystem polling), add //nolint:realclock with justification"
 echo ""
 exit 1

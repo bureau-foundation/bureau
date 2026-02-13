@@ -51,6 +51,8 @@ func TestPipelineExecution(t *testing.T) {
 	// PL 100 (set by the daemon during room creation), satisfying the
 	// PowerLevelAdmin requirement for pipeline.execute.
 	requestID := "test-pipeline-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
@@ -72,10 +74,8 @@ func TestPipelineExecution(t *testing.T) {
 	}
 
 	// Wait for both command results: the sync "accepted" acknowledgment
-	// and the async pipeline execution result. The pipeline creates a
-	// bwrap sandbox, runs two echo commands, and posts the result — give
-	// it enough time for the full lifecycle.
-	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
+	// and the async pipeline execution result.
+	results := resultWatch.WaitForCommandResults(t, requestID, 2)
 
 	acceptedResult := findAcceptedEvent(t, results)
 	pipelineResult := findPipelineEvent(t, results)
@@ -162,6 +162,8 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	ctx := t.Context()
 
 	requestID := "test-pipeline-fail-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
@@ -182,7 +184,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 
-	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
+	results := resultWatch.WaitForCommandResults(t, requestID, 2)
 	pipelineResult := findPipelineEvent(t, results)
 
 	// The executor exits non-zero when a step fails, and the daemon
@@ -264,6 +266,8 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	ctx := t.Context()
 
 	requestID := "test-pipeline-params-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
@@ -296,7 +300,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 
-	results := waitForCommandResults(t, admin, machine.ConfigRoomID, requestID, 2, 60*time.Second)
+	results := resultWatch.WaitForCommandResults(t, requestID, 2)
 	pipelineResult := findPipelineEvent(t, results)
 
 	// If the step succeeded (exit 0), the variable was propagated correctly

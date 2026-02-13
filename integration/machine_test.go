@@ -162,12 +162,16 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		launcherArgs = append(launcherArgs, "--proxy-binary", options.ProxyBinary)
 	}
 
+	// Set up a room watch before starting the launcher so we can detect
+	// the machine key publication via /sync long-polling.
+	keyWatch := watchRoom(t, admin, machineRoomID)
+
 	startProcess(t, machine.Name+"-launcher", options.LauncherBinary, launcherArgs...)
 	waitForFile(t, machine.LauncherSocket, 15*time.Second)
 
 	// Retrieve the machine's public key from Matrix.
-	machineKeyJSON := waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_key", machine.Name, 10*time.Second)
+	machineKeyJSON := keyWatch.WaitForStateEvent(t,
+		"m.bureau.machine_key", machine.Name)
 	var machineKey struct {
 		PublicKey string `json:"public_key"`
 	}
@@ -204,11 +208,14 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		daemonArgs = append(daemonArgs, "--pipeline-environment", options.PipelineEnvironment)
 	}
 
+	// Set up a watch before starting the daemon to detect the first heartbeat.
+	statusWatch := watchRoom(t, admin, machineRoomID)
+
 	startProcess(t, machine.Name+"-daemon", options.DaemonBinary, daemonArgs...)
 
 	// Wait for daemon readiness (MachineStatus heartbeat).
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_status", machine.Name, 15*time.Second)
+	statusWatch.WaitForStateEvent(t,
+		"m.bureau.machine_status", machine.Name)
 
 	// Resolve the per-machine config room and join as admin.
 	configAlias := "#bureau/config/" + machine.Name + ":" + testServerName

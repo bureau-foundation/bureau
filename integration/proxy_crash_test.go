@@ -106,6 +106,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	)
 	waitForFile(t, launcherSocket, 15*time.Second)
 
+	statusWatch := watchRoom(t, admin, machineRoomID)
+
 	startProcess(t, "daemon", daemonBinary,
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machineName,
@@ -117,8 +119,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	)
 
 	// Wait for the daemon to come alive.
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_status", machineName, 15*time.Second)
+	statusWatch.WaitForStateEvent(t,
+		"m.bureau.machine_status", machineName)
 
 	// Resolve config room and push credentials + config.
 	configAlias := "#bureau/config/" + machineName + ":" + testServerName

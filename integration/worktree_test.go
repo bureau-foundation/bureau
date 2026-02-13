@@ -95,6 +95,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Test workspace.status ---
 	t.Run("status", func(t *testing.T) {
 		requestID := "ws-status-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -107,7 +109,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatalf("send workspace.status: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -140,6 +142,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Test workspace.du ---
 	t.Run("du", func(t *testing.T) {
 		requestID := "ws-du-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -152,7 +156,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatalf("send workspace.du: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -180,6 +184,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Test workspace.worktree.list ---
 	t.Run("worktree_list", func(t *testing.T) {
 		requestID := "ws-wtlist-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -192,7 +198,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatalf("send workspace.worktree.list: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -217,6 +223,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Test workspace.fetch ---
 	t.Run("fetch", func(t *testing.T) {
 		requestID := "ws-fetch-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -229,7 +237,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatalf("send workspace.fetch: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 60*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -252,6 +260,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Test workspace.status for nonexistent workspace ---
 	t.Run("status_nonexistent", func(t *testing.T) {
 		requestID := "ws-status-ne-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -264,7 +274,7 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatalf("send workspace.status: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -360,6 +370,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// accepted ack is present.
 	t.Run("add_accepted", func(t *testing.T) {
 		requestID := "wt-add-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -377,7 +389,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		}
 
 		// Wait for both the accepted ack and the pipeline result.
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 2, 60*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 2)
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 
@@ -391,6 +403,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// --- Test worktree.remove accepted ack ---
 	t.Run("remove_accepted", func(t *testing.T) {
 		requestID := "wt-rm-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -407,7 +421,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send workspace.worktree.remove: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 2, 60*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 2)
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 
@@ -421,6 +435,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// --- Test validation: missing path ---
 	t.Run("add_missing_path", func(t *testing.T) {
 		requestID := "wt-nopath-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:    schema.MsgTypeCommand,
@@ -436,7 +452,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send command: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -454,6 +470,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// --- Test validation: path traversal ---
 	t.Run("add_path_traversal", func(t *testing.T) {
 		requestID := "wt-trav-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -469,7 +487,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send command: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -487,6 +505,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// --- Test validation: invalid remove mode ---
 	t.Run("remove_invalid_mode", func(t *testing.T) {
 		requestID := "wt-badmode-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -503,7 +523,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send command: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)
@@ -521,6 +541,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// --- Test validation: missing workspace ---
 	t.Run("add_missing_workspace", func(t *testing.T) {
 		requestID := "wt-nows-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		resultWatch := watchRoom(t, admin, workspaceRoomID)
+
 		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
@@ -536,7 +558,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send command: %v", err)
 		}
 
-		results := waitForCommandResults(t, admin, workspaceRoomID, requestID, 1, 30*time.Second)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		result := results[0].Content
 
 		status, _ := result["status"].(string)

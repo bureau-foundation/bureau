@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -416,26 +417,6 @@ func waitForFileGone(t *testing.T, path string, timeout time.Duration) {
 	}
 }
 
-// waitForStateEvent polls a Matrix room for a state event until it appears
-// or the timeout expires. Returns the raw JSON content of the event.
-func waitForStateEvent(t *testing.T, session *messaging.Session, roomID, eventType, stateKey string, timeout time.Duration) json.RawMessage {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var lastError error
-	for {
-		content, err := session.GetStateEvent(t.Context(), roomID, eventType, stateKey)
-		if err == nil {
-			return content
-		}
-		lastError = err
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for state event %s/%s in room %s: %v",
-				timeout, eventType, stateKey, roomID, lastError)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
 // --- Command Result Classification Helpers ---
 
 // findAcceptedEvent searches command result events for the "accepted"
@@ -523,60 +504,17 @@ func findRunnerEnv(t *testing.T) string {
 	return storePath
 }
 
-// waitForCommandResults polls a room's timeline for m.bureau.command_result
-// events with a matching request_id. Returns when at least count matching
-// events are found or the timeout expires.
-func waitForCommandResults(t *testing.T, session *messaging.Session, roomID, requestID string, count int, timeout time.Duration) []messaging.Event {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for {
-		response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
-			Direction: "b",
-			Limit:     50,
-		})
-		if err != nil {
-			t.Fatalf("RoomMessages for room %s: %v", roomID, err)
-		}
-
-		var matching []messaging.Event
-		for _, event := range response.Chunk {
-			if event.Type != "m.room.message" {
-				continue
-			}
-			msgtype, _ := event.Content["msgtype"].(string)
-			if msgtype != "m.bureau.command_result" {
-				continue
-			}
-			eventRequestID, _ := event.Content["request_id"].(string)
-			if eventRequestID != requestID {
-				continue
-			}
-			matching = append(matching, event)
-		}
-
-		if len(matching) >= count {
-			return matching
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for %d command results with request_id %q in room %s (found %d)",
-				timeout, count, requestID, roomID, len(matching))
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-// --- Room Watch (sync-based message waiting) ---
+// --- Room Watch (sync-based event waiting) ---
 
 // roomWatch captures a position in the Matrix sync stream. Create one with
-// watchRoom BEFORE triggering the action that generates the expected message,
-// then call WaitForMessage to receive messages that arrive after the
+// watchRoom BEFORE triggering the action that generates the expected event,
+// then call one of the Wait methods to receive events that arrive after the
 // checkpoint.
 //
-// This uses Matrix /sync long-polling: the server holds the connection until
-// new events arrive, then returns immediately. There is no client-side sleep
-// or polling interval. The wait is bounded by t.Context() (test timeout).
+// All Wait methods use Matrix /sync long-polling: the server holds the
+// connection until new events arrive, then returns immediately. There is no
+// client-side sleep or polling interval. Waits are bounded by t.Context()
+// (test timeout).
 type roomWatch struct {
 	session   *messaging.Session
 	roomID    string
@@ -601,11 +539,12 @@ func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatc
 	}
 }
 
-// WaitForMessage blocks until a message from senderID containing bodyContains
-// arrives in the watched room. Uses Matrix /sync long-polling: the server
-// holds the connection until new events arrive, so latency equals event
-// delivery time (typically under 100ms). The wait is bounded by t.Context().
-func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) string {
+// WaitForEvent blocks until an event matching the predicate arrives in the
+// watched room. Checks both State.Events (gap-fill state changes when the
+// timeline is limited) and Timeline.Events (all live events including state)
+// from each sync response. The description appears in the fatal message if
+// the test context expires.
+func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) bool, description string) messaging.Event {
 	t.Helper()
 	ctx := t.Context()
 	for {
@@ -616,28 +555,126 @@ func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) 
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				t.Fatalf("test context cancelled waiting for message containing %q from %s in room %s",
-					bodyContains, senderID, w.roomID)
+				t.Fatalf("test context cancelled waiting for event: %s (room %s)",
+					description, w.roomID)
 			}
 			t.Fatalf("roomWatch sync: %v", err)
 		}
 		w.nextBatch = response.NextBatch
 
 		if joined, ok := response.Rooms.Join[w.roomID]; ok {
+			// State events may appear in state.events (gap-fill when
+			// timeline is limited) or timeline.events (live). Check both.
+			for _, event := range joined.State.Events {
+				if predicate(event) {
+					return event
+				}
+			}
 			for _, event := range joined.Timeline.Events {
-				if event.Type != "m.room.message" {
-					continue
-				}
-				if event.Sender != senderID {
-					continue
-				}
-				body, _ := event.Content["body"].(string)
-				if strings.Contains(body, bodyContains) {
-					return body
+				if predicate(event) {
+					return event
 				}
 			}
 		}
 	}
+}
+
+// WaitForMessage blocks until a message from senderID containing bodyContains
+// arrives in the watched room. Returns the full message body.
+func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) string {
+	t.Helper()
+	event := w.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != "m.room.message" {
+			return false
+		}
+		if event.Sender != senderID {
+			return false
+		}
+		body, _ := event.Content["body"].(string)
+		return strings.Contains(body, bodyContains)
+	}, fmt.Sprintf("message containing %q from %s", bodyContains, senderID))
+	body, _ := event.Content["body"].(string)
+	return body
+}
+
+// WaitForStateEvent blocks until a state event with the given type and
+// state_key arrives in the watched room. Returns the raw JSON content.
+func (w *roomWatch) WaitForStateEvent(t *testing.T, eventType, stateKey string) json.RawMessage {
+	t.Helper()
+	event := w.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != eventType {
+			return false
+		}
+		return event.StateKey != nil && *event.StateKey == stateKey
+	}, fmt.Sprintf("state event %s/%s", eventType, stateKey))
+	content, err := json.Marshal(event.Content)
+	if err != nil {
+		t.Fatalf("marshal state event content: %v", err)
+	}
+	return content
+}
+
+// WaitForMachineStatus blocks until a MachineStatus state event for the given
+// stateKey arrives and satisfies the predicate. Returns the decoded status.
+func (w *roomWatch) WaitForMachineStatus(t *testing.T, stateKey string, predicate func(schema.MachineStatus) bool, description string) schema.MachineStatus {
+	t.Helper()
+	var status schema.MachineStatus
+	w.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.EventTypeMachineStatus {
+			return false
+		}
+		if event.StateKey == nil || *event.StateKey != stateKey {
+			return false
+		}
+		// Round-trip through JSON to decode Content (map[string]any) into
+		// the typed struct.
+		contentJSON, err := json.Marshal(event.Content)
+		if err != nil {
+			return false
+		}
+		var candidate schema.MachineStatus
+		if json.Unmarshal(contentJSON, &candidate) != nil {
+			return false
+		}
+		if predicate(candidate) {
+			status = candidate
+			return true
+		}
+		return false
+	}, description)
+	return status
+}
+
+// WaitForCommandResults blocks until at least count m.bureau.command_result
+// messages with the given requestID arrive in the watched room. Returns all
+// matching events collected across sync responses.
+func (w *roomWatch) WaitForCommandResults(t *testing.T, requestID string, count int) []messaging.Event {
+	t.Helper()
+	var collected []messaging.Event
+	for len(collected) < count {
+		event := w.WaitForEvent(t, func(event messaging.Event) bool {
+			if event.Type != "m.room.message" {
+				return false
+			}
+			msgtype, _ := event.Content["msgtype"].(string)
+			if msgtype != "m.bureau.command_result" {
+				return false
+			}
+			eventRequestID, _ := event.Content["request_id"].(string)
+			if eventRequestID != requestID {
+				return false
+			}
+			// Avoid re-matching events we already collected.
+			for _, existing := range collected {
+				if existing.EventID == event.EventID {
+					return false
+				}
+			}
+			return true
+		}, fmt.Sprintf("command result %d/%d for request %s", len(collected)+1, count, requestID))
+		collected = append(collected, event)
+	}
+	return collected
 }
 
 // --- Proxy Test Helpers ---

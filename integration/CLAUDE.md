@@ -23,14 +23,22 @@ config reconciliation) use the existing helpers in helpers_test.go:
 
 - `waitForFile` — file appears on disk (proxy socket, launcher socket)
 - `waitForFileGone` — file removed (sandbox teardown)
-- `waitForStateEvent` — Matrix state event appears in a room
-- `waitForCommandResults` — command result events in room timeline
-- `waitForServiceDiscovery` — service directory propagation
-- `watchRoom` + `roomWatch.WaitForMessage` — message from a specific sender,
-  using Matrix /sync long-polling (event-driven, no client-side sleep)
+- `waitForServiceDiscovery` — service directory propagation (proxy HTTP)
+- `watchRoom` + `roomWatch` methods — all Matrix event waiting
 
-**Room watches** are the preferred pattern for waiting on messages. Create a
-watch BEFORE triggering the action, then call WaitForMessage after:
+### Room watches
+
+Room watches are the **only** pattern for waiting on Matrix events. All
+Matrix-based waiting uses `roomWatch` methods built on `WaitForEvent`:
+
+- `WaitForEvent(t, predicate, description)` — core primitive, matches any event
+- `WaitForMessage(t, bodyContains, senderID)` — m.room.message from a sender
+- `WaitForStateEvent(t, eventType, stateKey)` — state event, returns raw JSON
+- `WaitForMachineStatus(t, stateKey, predicate, description)` — typed MachineStatus
+- `WaitForCommandResults(t, requestID, count)` — collect command result events
+
+Create a watch BEFORE triggering the action, then call the appropriate
+Wait method after:
 
 ```go
 watch := watchRoom(t, admin, machine.ConfigRoomID)
@@ -38,7 +46,19 @@ pushMachineConfig(t, admin, machine, config)  // triggers daemon action
 watch.WaitForMessage(t, "expected message", machine.UserID)
 ```
 
-The watch captures a sync checkpoint. WaitForMessage uses Matrix /sync
+```go
+watch := watchRoom(t, admin, machineRoomID)
+startProcess(t, "daemon", daemonBinary, args...)
+watch.WaitForStateEvent(t, "m.bureau.machine_status", machine.Name)
+```
+
+```go
+watch := watchRoom(t, admin, machine.ConfigRoomID)
+admin.SendEvent(ctx, roomID, "m.room.message", command)
+results := watch.WaitForCommandResults(t, requestID, 2)
+```
+
+The watch captures a sync checkpoint. All Wait methods use Matrix /sync
 long-polling (server holds the connection until events arrive). No timeout
 parameter — bounded by t.Context() (test timeout). Never inline a
 sleep-and-retry loop.

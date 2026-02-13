@@ -121,8 +121,13 @@ func TestMachineLifecycle(t *testing.T) {
 	}
 
 	// Verify the machine key was published to #bureau/machine.
-	machineKeyJSON := waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_key", machineName, 10*time.Second)
+	// The launcher published this during first boot (which already completed),
+	// so the event exists in the room state — read it directly.
+	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
+		"m.bureau.machine_key", machineName)
+	if err != nil {
+		t.Fatalf("get machine key: %v", err)
+	}
 	var machineKey struct {
 		Algorithm string `json:"algorithm"`
 		PublicKey string `json:"public_key"`
@@ -171,6 +176,8 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 		waitForFile(t, launcherSocket, 15*time.Second)
 
+		statusWatch := watchRoom(t, admin, machineRoomID)
+
 		startProcess(t, "daemon", daemonBinary,
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
@@ -182,8 +189,8 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 
 		// Wait for MachineStatus heartbeat.
-		statusJSON := waitForStateEvent(t, admin, machineRoomID,
-			"m.bureau.machine_status", machineName, 15*time.Second)
+		statusJSON := statusWatch.WaitForStateEvent(t,
+			"m.bureau.machine_status", machineName)
 		var status struct {
 			Principal string `json:"principal"`
 		}
@@ -234,6 +241,8 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 		waitForFile(t, launcherSocket, 15*time.Second)
 
+		statusWatch := watchRoom(t, admin, machineRoomID)
+
 		startProcess(t, "daemon-restart", daemonBinary,
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
@@ -245,9 +254,8 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
-		// Poll until we get a status with a newer timestamp.
-		waitForStateEvent(t, admin, machineRoomID,
-			"m.bureau.machine_status", machineName, 15*time.Second)
+		statusWatch.WaitForStateEvent(t,
+			"m.bureau.machine_status", machineName)
 		t.Log("machine reconnected and published status after restart")
 	})
 
@@ -391,11 +399,16 @@ func TestTwoMachineFleet(t *testing.T) {
 	publicKeyA := readPublicKey(stateDirA)
 	publicKeyB := readPublicKey(stateDirB)
 
-	// Verify both machine keys are published.
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_key", machineAName, 10*time.Second)
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_key", machineBName, 10*time.Second)
+	// Verify both machine keys are published. First boot already completed,
+	// so these events exist in room state — read them directly.
+	if _, err := admin.GetStateEvent(ctx, machineRoomID,
+		"m.bureau.machine_key", machineAName); err != nil {
+		t.Fatalf("get machine A key: %v", err)
+	}
+	if _, err := admin.GetStateEvent(ctx, machineRoomID,
+		"m.bureau.machine_key", machineBName); err != nil {
+		t.Fatalf("get machine B key: %v", err)
+	}
 
 	// --- Start both launcher+daemon pairs ---
 	startMachineProcesses := func(t *testing.T, machine machineSetup) {
@@ -423,14 +436,17 @@ func TestTwoMachineFleet(t *testing.T) {
 		)
 	}
 
+	// Set up a watch before starting daemons to detect their first heartbeats.
+	statusWatch := watchRoom(t, admin, machineRoomID)
+
 	startMachineProcesses(t, machineA)
 	startMachineProcesses(t, machineB)
 
 	// Wait for both daemons to publish MachineStatus heartbeats.
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_status", machineAName, 15*time.Second)
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_status", machineBName, 15*time.Second)
+	statusWatch.WaitForStateEvent(t,
+		"m.bureau.machine_status", machineAName)
+	statusWatch.WaitForStateEvent(t,
+		"m.bureau.machine_status", machineBName)
 	t.Log("both daemons running and publishing status")
 
 	// --- Verify mutual visibility ---

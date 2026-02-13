@@ -135,11 +135,12 @@ func TestPrincipalAssignment(t *testing.T) {
 		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, agent.UserID)
 	}
 
-	// Verify MachineStatus reflects the running sandbox.
-	waitForMachineStatus(t, admin, machine.MachineRoomID, machine.Name,
-		func(status schema.MachineStatus) bool {
-			return status.Sandboxes.Running > 0
-		}, 15*time.Second, "MachineStatus with running sandboxes")
+	// Verify MachineStatus reflects the running sandbox. The daemon publishes
+	// status on its interval; watch from the current sync position.
+	sandboxWatch := watchRoom(t, admin, machine.MachineRoomID)
+	sandboxWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+		return status.Sandboxes.Running > 0
+	}, "MachineStatus with running sandboxes")
 }
 
 // TestOperatorFlow verifies the operator-facing observation pipeline:
@@ -183,28 +184,21 @@ func TestOperatorFlow(t *testing.T) {
 
 	// --- Sub-test: list targets via Go library ---
 	t.Run("ListTargets", func(t *testing.T) {
-		// Poll until the principal appears in the list. The proxy socket
-		// exists on disk before the launcher responds to the daemon's IPC
-		// call, so there's a brief window where the socket is ready but
-		// the daemon's d.running map hasn't been updated yet.
-		var response *observe.ListResponse
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			var err error
-			response, err = observe.ListTargets(machine.ObserveSocket, observe.ListRequest{
-				Observer: adminUserID,
-				Token:    adminToken,
-			})
-			if err != nil {
-				t.Fatalf("ListTargets: %v", err)
-			}
-			if len(response.Principals) > 0 {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("timed out waiting for principal to appear in list")
-			}
-			time.Sleep(100 * time.Millisecond)
+		// Wait for the daemon's heartbeat to report running sandboxes. This
+		// proves d.running has been updated (the daemon counts sandboxes from
+		// its running map when publishing the heartbeat). ListTargets reads
+		// from the same running map, so a single call suffices after this.
+		listWatch := watchRoom(t, admin, machine.MachineRoomID)
+		listWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+			return status.Sandboxes.Running > 0
+		}, "MachineStatus with running sandboxes for ListTargets")
+
+		response, err := observe.ListTargets(machine.ObserveSocket, observe.ListRequest{
+			Observer: adminUserID,
+			Token:    adminToken,
+		})
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
 		}
 
 		// Verify the running principal appears in the list.
@@ -708,9 +702,9 @@ func TestConfigReconciliation(t *testing.T) {
 		waitForFileGone(t, betaSocket, 15*time.Second)
 
 		// Verify MachineStatus reflects zero running sandboxes.
-		waitForMachineStatus(t, admin, machine.MachineRoomID, machine.Name,
-			func(status schema.MachineStatus) bool {
-				return status.Sandboxes.Running == 0
-			}, 15*time.Second, "MachineStatus with 0 running sandboxes")
+		zeroWatch := watchRoom(t, admin, machine.MachineRoomID)
+		zeroWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+			return status.Sandboxes.Running == 0
+		}, "MachineStatus with 0 running sandboxes")
 	})
 }

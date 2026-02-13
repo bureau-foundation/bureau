@@ -108,11 +108,12 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Start the first daemon as a manageable process (not via startProcess,
 	// since we need to kill it mid-test without subtest cleanup).
+	initialStatusWatch := watchRoom(t, admin, machineRoomID)
 	daemon1 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir)
 
 	// Wait for the daemon to come alive.
-	waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_status", machineName, 15*time.Second)
+	initialStatusWatch.WaitForStateEvent(t,
+		"m.bureau.machine_status", machineName)
 
 	// Resolve config room and push credentials + config.
 	configAlias := "#bureau/config/" + machineName + ":" + testServerName
@@ -210,10 +211,13 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("initial whoami = %q, want %q", initialWhoami, principalUserID)
 	}
 
-	// Verify initial heartbeat reports 1 running sandbox.
-	waitForMachineStatus(t, admin, machineRoomID, machineName, func(status schema.MachineStatus) bool {
+	// Verify initial heartbeat reports 1 running sandbox. The daemon
+	// publishes status on its interval; use a watch from the current
+	// sync position to catch the next heartbeat.
+	runningWatch := watchRoom(t, admin, machineRoomID)
+	runningWatch.WaitForMachineStatus(t, machineName, func(status schema.MachineStatus) bool {
 		return status.Sandboxes.Running == 1
-	}, 15*time.Second, "initial heartbeat with Running=1")
+	}, "initial heartbeat with Running=1")
 
 	// --- Phase 3: Kill the daemon ---
 	t.Log("killing daemon (SIGTERM)")
@@ -257,9 +261,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("clear machine status sentinel: %v", err)
 	}
 
-	// Set up a room watch before starting the new daemon so we can detect
-	// the adoption message without matching stale events.
+	// Set up room watches before starting the new daemon so we can detect
+	// the adoption message and heartbeat without matching stale events.
 	adoptionWatch := watchRoom(t, admin, configRoomID)
+	recoveryWatch := watchRoom(t, admin, machineRoomID)
 
 	t.Log("starting new daemon")
 	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir)
@@ -279,9 +284,9 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Wait for the new daemon to publish a heartbeat with the correct
 	// running count. The sentinel has running=-1, so any valid heartbeat
 	// with running >= 0 is from the new daemon.
-	waitForMachineStatus(t, admin, machineRoomID, machineName, func(status schema.MachineStatus) bool {
+	recoveryWatch.WaitForMachineStatus(t, machineName, func(status schema.MachineStatus) bool {
 		return status.Principal == machineUserID && status.Sandboxes.Running == 1
-	}, 15*time.Second, "heartbeat from new daemon with Running=1")
+	}, "heartbeat from new daemon with Running=1")
 	t.Log("new daemon adopted sandbox and published correct heartbeat")
 
 	// Verify the proxy is still functional after daemon restart.
@@ -321,24 +326,4 @@ func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir stri
 	}
 	t.Logf("daemon started (pid %d)", cmd.Process.Pid)
 	return cmd
-}
-
-// waitForMachineStatus polls for a MachineStatus state event that satisfies
-// the given condition. Fails the test if the timeout expires.
-func waitForMachineStatus(t *testing.T, session *messaging.Session, roomID, stateKey string, condition func(schema.MachineStatus) bool, timeout time.Duration, description string) schema.MachineStatus {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeMachineStatus, stateKey)
-		if err == nil {
-			var status schema.MachineStatus
-			if json.Unmarshal(content, &status) == nil && condition(status) {
-				return status
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for machine status: %s", timeout, description)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 }

@@ -133,8 +133,12 @@ func TestBootstrapScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
-	machineKeyJSON := waitForStateEvent(t, admin, machineRoomID,
-		"m.bureau.machine_key", machineName, 10*time.Second)
+	// First boot already completed, so the key exists in room state.
+	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
+		"m.bureau.machine_key", machineName)
+	if err != nil {
+		t.Fatalf("get machine key: %v", err)
+	}
 	var machineKey struct {
 		Algorithm string `json:"algorithm"`
 		PublicKey string `json:"public_key"`
@@ -186,6 +190,9 @@ func TestBootstrapScript(t *testing.T) {
 		waitForFileInContainer(t, containerID, "/run/bureau/launcher.sock", 15*time.Second)
 		t.Log("launcher started inside container")
 
+		// Set up a watch before starting the daemon to detect its heartbeat.
+		statusWatch := watchRoom(t, admin, machineRoomID)
+
 		// Start daemon in the background.
 		dockerExecBackground(t, containerID, "daemon",
 			"/usr/local/bin/bureau-daemon",
@@ -197,8 +204,8 @@ func TestBootstrapScript(t *testing.T) {
 		)
 
 		// Wait for daemon heartbeat in Matrix.
-		waitForStateEvent(t, admin, machineRoomID,
-			"m.bureau.machine_status", machineName, 15*time.Second)
+		statusWatch.WaitForStateEvent(t,
+			"m.bureau.machine_status", machineName)
 		t.Log("daemon started and publishing status")
 
 		// Deploy a principal to verify sandbox creation (bwrap).

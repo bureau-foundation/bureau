@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -72,7 +72,7 @@ func TestWriteAndReadStateFile(t *testing.T) {
 	}
 
 	var state launcherState
-	if err := json.Unmarshal(data, &state); err != nil {
+	if err := codec.Unmarshal(data, &state); err != nil {
 		t.Fatalf("parsing state file: %v", err)
 	}
 
@@ -177,8 +177,8 @@ func TestReconnectSandboxes(t *testing.T) {
 		},
 		ProxyBinaryPath: "/test/proxy/binary",
 	}
-	stateData, _ := json.Marshal(state)
-	statePath := filepath.Join(runDir, "launcher-state.json")
+	stateData, _ := codec.Marshal(state)
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	if err := os.WriteFile(statePath, stateData, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +263,8 @@ func TestReconnectDeadProcess(t *testing.T) {
 			},
 		},
 	}
-	stateData, _ := json.Marshal(state)
-	statePath := filepath.Join(runDir, "launcher-state.json")
+	stateData, _ := codec.Marshal(state)
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
@@ -311,8 +311,8 @@ func TestReconnectMissingSocket(t *testing.T) {
 			},
 		},
 	}
-	stateData, _ := json.Marshal(state)
-	statePath := filepath.Join(runDir, "launcher-state.json")
+	stateData, _ := codec.Marshal(state)
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
@@ -370,8 +370,8 @@ func TestReconnectPreservesProxyBinaryPath(t *testing.T) {
 		Sandboxes:       make(map[string]*sandboxEntry),
 		ProxyBinaryPath: "/nix/store/updated-proxy/bin/bureau-proxy",
 	}
-	stateData, _ := json.Marshal(state)
-	statePath := filepath.Join(runDir, "launcher-state.json")
+	stateData, _ := codec.Marshal(state)
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
@@ -523,10 +523,10 @@ func TestPerformExecFailure(t *testing.T) {
 
 	// Pre-create the state file and watchdog so we can verify they are
 	// cleaned up after exec failure.
-	statePath := filepath.Join(runDir, "launcher-state.json")
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	os.WriteFile(statePath, []byte("{}"), 0600)
 
-	watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+	watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 	watchdog.Write(watchdogPath, watchdog.State{
 		Component: "launcher",
 		Timestamp: time.Now(),
@@ -603,7 +603,7 @@ func TestPerformExecCallsExecWithCorrectArgs(t *testing.T) {
 func TestCheckLauncherWatchdog(t *testing.T) {
 	t.Run("no watchdog", func(t *testing.T) {
 		stateDir := t.TempDir()
-		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		failedPath := checkLauncherWatchdog(watchdogPath, "/current/binary", logger)
@@ -614,7 +614,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 
 	t.Run("exec succeeded", func(t *testing.T) {
 		stateDir := t.TempDir()
-		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		watchdog.Write(watchdogPath, watchdog.State{
@@ -637,7 +637,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 
 	t.Run("exec failed - old binary restarted", func(t *testing.T) {
 		stateDir := t.TempDir()
-		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		watchdog.Write(watchdogPath, watchdog.State{
@@ -660,7 +660,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 
 	t.Run("stale watchdog - neither match", func(t *testing.T) {
 		stateDir := t.TempDir()
-		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		watchdog.Write(watchdogPath, watchdog.State{
@@ -683,7 +683,7 @@ func TestCheckLauncherWatchdog(t *testing.T) {
 
 	t.Run("expired watchdog", func(t *testing.T) {
 		stateDir := t.TempDir()
-		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.json")
+		watchdogPath := filepath.Join(stateDir, "launcher-watchdog.cbor")
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		watchdog.Write(watchdogPath, watchdog.State{

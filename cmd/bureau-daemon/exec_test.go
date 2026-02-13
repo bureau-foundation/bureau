@@ -32,7 +32,7 @@ import (
 func TestCheckDaemonWatchdog_NoWatchdog(t *testing.T) {
 	t.Parallel()
 
-	watchdogPath := filepath.Join(t.TempDir(), "daemon-watchdog.json")
+	watchdogPath := filepath.Join(t.TempDir(), "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	failedPath := checkDaemonWatchdog(watchdogPath, "/bin/daemon", nil, "", logger)
@@ -45,7 +45,7 @@ func TestCheckDaemonWatchdog_SuccessfulExec(t *testing.T) {
 	t.Parallel()
 
 	watchdogDir := t.TempDir()
-	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Write a watchdog as if the previous process wrote it before exec.
@@ -79,7 +79,7 @@ func TestCheckDaemonWatchdog_FailedExec(t *testing.T) {
 	t.Parallel()
 
 	watchdogDir := t.TempDir()
-	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	err := watchdog.Write(watchdogPath, watchdog.State{
@@ -113,7 +113,7 @@ func TestCheckDaemonWatchdog_StaleWatchdog(t *testing.T) {
 	t.Parallel()
 
 	watchdogDir := t.TempDir()
-	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Write a watchdog with an old timestamp (beyond watchdogMaxAge).
@@ -142,7 +142,7 @@ func TestCheckDaemonWatchdog_NeitherMatch(t *testing.T) {
 	t.Parallel()
 
 	watchdogDir := t.TempDir()
-	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	err := watchdog.Write(watchdogPath, watchdog.State{
@@ -175,7 +175,7 @@ func TestCheckDaemonWatchdog_ReportsToMatrix(t *testing.T) {
 	t.Parallel()
 
 	watchdogDir := t.TempDir()
-	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	err := watchdog.Write(watchdogPath, watchdog.State{
@@ -244,7 +244,7 @@ func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
-	watchdogPath := filepath.Join(stateDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(stateDir, "daemon-watchdog.cbor")
 
 	var (
 		execMu     sync.Mutex
@@ -308,7 +308,7 @@ func TestExecDaemon_WatchdogWrittenBeforeExec(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
-	watchdogPath := filepath.Join(stateDir, "daemon-watchdog.json")
+	watchdogPath := filepath.Join(stateDir, "daemon-watchdog.cbor")
 
 	// Capture whether the watchdog exists when exec is called.
 	var watchdogExistedAtExecTime bool

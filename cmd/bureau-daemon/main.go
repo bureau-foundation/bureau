@@ -173,7 +173,7 @@ func run() error {
 	var failedExecPath string
 	if daemonBinaryPath != "" {
 		failedExecPath = checkDaemonWatchdog(
-			filepath.Join(stateDir, "daemon-watchdog.json"),
+			filepath.Join(stateDir, "daemon-watchdog.cbor"),
 			daemonBinaryPath,
 			session,
 			configRoomID,

@@ -12,7 +12,7 @@ import (
 )
 
 func TestWriteRead(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component:      "daemon",
 		PreviousBinary: "/nix/store/old-bureau-daemon/bin/bureau-daemon",
@@ -44,7 +44,7 @@ func TestWriteRead(t *testing.T) {
 }
 
 func TestWriteOverwritesExisting(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 
 	first := State{
 		Component:      "daemon",
@@ -79,7 +79,7 @@ func TestWriteOverwritesExisting(t *testing.T) {
 }
 
 func TestWriteFilePermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now(),
@@ -103,7 +103,7 @@ func TestWriteFilePermissions(t *testing.T) {
 
 func TestWriteNoTemporaryFileLeftBehind(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "watchdog.json")
+	path := filepath.Join(directory, "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now(),
@@ -120,7 +120,7 @@ func TestWriteNoTemporaryFileLeftBehind(t *testing.T) {
 }
 
 func TestWriteParentDirectoryMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nonexistent", "subdir", "watchdog.json")
+	path := filepath.Join(t.TempDir(), "nonexistent", "subdir", "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now(),
@@ -133,7 +133,7 @@ func TestWriteParentDirectoryMissing(t *testing.T) {
 }
 
 func TestReadNonexistent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "does-not-exist.json")
+	path := filepath.Join(t.TempDir(), "does-not-exist.cbor")
 
 	_, err := Read(path)
 	if err == nil {
@@ -144,15 +144,15 @@ func TestReadNonexistent(t *testing.T) {
 	}
 }
 
-func TestReadCorruptJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
-	if err := os.WriteFile(path, []byte("not valid json{{{"), 0600); err != nil {
+func TestReadCorruptCBOR(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
+	if err := os.WriteFile(path, []byte{0xff, 0xfe, 0xfd}, 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	_, err := Read(path)
 	if err == nil {
-		t.Fatal("Read corrupt JSON should return an error")
+		t.Fatal("Read corrupt CBOR should return an error")
 	}
 	// The error should mention the file path for diagnostics.
 	if got := err.Error(); !contains(got, path) {
@@ -161,7 +161,7 @@ func TestReadCorruptJSON(t *testing.T) {
 }
 
 func TestCheckRecent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component:      "daemon",
 		PreviousBinary: "/old",
@@ -186,7 +186,7 @@ func TestCheckRecent(t *testing.T) {
 }
 
 func TestCheckStale(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now().Add(-10 * time.Minute),
@@ -206,7 +206,7 @@ func TestCheckStale(t *testing.T) {
 }
 
 func TestCheckNonexistent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "does-not-exist.json")
+	path := filepath.Join(t.TempDir(), "does-not-exist.cbor")
 
 	_, found, err := Check(path, time.Minute)
 	if err != nil {
@@ -217,20 +217,20 @@ func TestCheckNonexistent(t *testing.T) {
 	}
 }
 
-func TestCheckCorruptJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
-	if err := os.WriteFile(path, []byte("{invalid"), 0600); err != nil {
+func TestCheckCorruptCBOR(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
+	if err := os.WriteFile(path, []byte{0xff, 0xfe, 0xfd}, 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	_, _, err := Check(path, time.Minute)
 	if err == nil {
-		t.Fatal("Check should return an error for corrupt JSON (not silently ignore it)")
+		t.Fatal("Check should return an error for corrupt data (not silently ignore it)")
 	}
 }
 
 func TestClearExisting(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now(),
@@ -250,7 +250,7 @@ func TestClearExisting(t *testing.T) {
 }
 
 func TestClearNonexistent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "does-not-exist.json")
+	path := filepath.Join(t.TempDir(), "does-not-exist.cbor")
 
 	if err := Clear(path); err != nil {
 		t.Errorf("Clear nonexistent file should be idempotent, got: %v", err)
@@ -258,7 +258,7 @@ func TestClearNonexistent(t *testing.T) {
 }
 
 func TestClearIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "watchdog.json")
+	path := filepath.Join(t.TempDir(), "watchdog.cbor")
 	state := State{
 		Component: "daemon",
 		Timestamp: time.Now(),

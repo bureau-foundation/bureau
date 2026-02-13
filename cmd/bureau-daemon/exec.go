@@ -24,7 +24,7 @@ const watchdogMaxAge = 5 * time.Minute
 
 // daemonWatchdogPath returns the path to the daemon watchdog file.
 func (d *Daemon) daemonWatchdogPath() string {
-	return filepath.Join(d.stateDir, "daemon-watchdog.json")
+	return filepath.Join(d.stateDir, "daemon-watchdog.cbor")
 }
 
 // checkDaemonWatchdog reads the daemon watchdog file on startup and

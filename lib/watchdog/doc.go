@@ -26,7 +26,6 @@
 // prevent acting on ancient files left behind by unrelated restarts.
 //
 // The [State] struct records the component name, previous and new
-// binary paths, and a timestamp. It is serialized as JSON.
-//
-// This package has no dependencies on other Bureau packages.
+// binary paths, and a timestamp. It is serialized as CBOR using the
+// shared [github.com/bureau-foundation/bureau/lib/codec] package.
 package watchdog

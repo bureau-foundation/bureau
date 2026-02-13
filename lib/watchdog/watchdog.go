@@ -4,11 +4,12 @@
 package watchdog
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
 // State records the context of a process transition. Written before the
@@ -16,22 +17,22 @@ import (
 type State struct {
 	// Component identifies what is being updated (e.g., "daemon",
 	// "launcher"). Used for logging and diagnostics.
-	Component string `json:"component"`
+	Component string `cbor:"component"`
 
 	// PreviousBinary is the absolute path of the binary before the
 	// transition. When the current process's executable matches this
 	// path, the transition failed (the new binary crashed and the
 	// system restarted the old one).
-	PreviousBinary string `json:"previous_binary"`
+	PreviousBinary string `cbor:"previous_binary"`
 
 	// NewBinary is the absolute path of the binary being transitioned
 	// to. When the current process's executable matches this path, the
 	// transition succeeded.
-	NewBinary string `json:"new_binary"`
+	NewBinary string `cbor:"new_binary"`
 
 	// Timestamp is when the transition was initiated. Used by Check to
 	// discard stale watchdog files from previous unrelated restarts.
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time `cbor:"timestamp"`
 }
 
 // Write atomically writes a watchdog state file. The file is written to a
@@ -41,12 +42,10 @@ type State struct {
 // The file is created with mode 0600 (owner read/write only). The parent
 // directory must already exist.
 func Write(path string, state State) error {
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := codec.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshaling watchdog state: %w", err)
 	}
-	// Trailing newline for clean file content.
-	data = append(data, '\n')
 
 	temporaryPath := path + ".tmp"
 
@@ -99,7 +98,7 @@ func Read(path string) (State, error) {
 	}
 
 	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
+	if err := codec.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("parsing watchdog file %s: %w", path, err)
 	}
 	return state, nil
@@ -110,7 +109,7 @@ func Read(path string) (State, error) {
 // and its Timestamp is within maxAge of now. Returns a zero State and false
 // when the file does not exist or is older than maxAge.
 //
-// Any other error (permission denied, corrupt JSON) is returned as-is so
+// Any other error (permission denied, corrupt data) is returned as-is so
 // the caller can distinguish "no watchdog" from "watchdog exists but
 // unreadable."
 func Check(path string, maxAge time.Duration) (State, bool, error) {

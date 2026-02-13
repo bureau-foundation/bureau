@@ -11,6 +11,7 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/watchdog",
     visibility = ["//visibility:public"],
+    deps = ["//lib/codec"],
 )
 
 go_test(

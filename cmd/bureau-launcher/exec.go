@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
 )
@@ -23,20 +23,20 @@ import (
 // is generous — normal launcher startup completes in under a second.
 const watchdogMaxAge = 5 * time.Minute
 
-// launcherState is the JSON structure written to the state file before
-// exec(). It captures the minimal information needed to reconnect to
-// surviving proxy processes after the new binary starts.
+// launcherState is written to the state file before exec(). It captures
+// the minimal information needed to reconnect to surviving proxy
+// processes after the new binary starts.
 type launcherState struct {
 	// Sandboxes maps principal localpart to the state needed for
 	// reconnection. Each entry corresponds to a running proxy process
 	// that will survive the exec() transition.
-	Sandboxes map[string]*sandboxEntry `json:"sandboxes"`
+	Sandboxes map[string]*sandboxEntry `cbor:"sandboxes"`
 
 	// ProxyBinaryPath is the proxy binary the launcher was using at
 	// the time of exec(). Preserved because the daemon may have updated
 	// it via "update-proxy-binary" IPC since the launcher started —
 	// os.Args has the stale flag value.
-	ProxyBinaryPath string `json:"proxy_binary_path"`
+	ProxyBinaryPath string `cbor:"proxy_binary_path"`
 }
 
 // sandboxEntry captures the per-sandbox state needed to reconnect after
@@ -44,9 +44,9 @@ type launcherState struct {
 // the temp directory containing its config file; roles are from the
 // SandboxSpec.
 type sandboxEntry struct {
-	ProxyPID  int                 `json:"proxy_pid"`
-	ConfigDir string              `json:"config_dir"`
-	Roles     map[string][]string `json:"roles,omitempty"`
+	ProxyPID  int                 `cbor:"proxy_pid"`
+	ConfigDir string              `cbor:"config_dir"`
+	Roles     map[string][]string `cbor:"roles,omitempty"`
 }
 
 // launcherWatchdogPath returns the path to the launcher watchdog file.
@@ -54,7 +54,7 @@ type sandboxEntry struct {
 // exec() and unclean restarts (the whole point is detecting whether the
 // new binary crashed and the old one was restarted by systemd).
 func (l *Launcher) launcherWatchdogPath() string {
-	return filepath.Join(l.stateDir, "launcher-watchdog.json")
+	return filepath.Join(l.stateDir, "launcher-watchdog.cbor")
 }
 
 // launcherStatePath returns the path to the launcher state file. Lives
@@ -62,7 +62,7 @@ func (l *Launcher) launcherWatchdogPath() string {
 // nothing to reconnect to after a reboot, so a stale state file on
 // persistent storage would cause incorrect reconnection attempts.
 func (l *Launcher) launcherStatePath() string {
-	return filepath.Join(l.runDir, "launcher-state.json")
+	return filepath.Join(l.runDir, "launcher-state.cbor")
 }
 
 // writeStateFile serializes the current sandboxes map to the state file.
@@ -90,11 +90,10 @@ func (l *Launcher) writeStateFile() error {
 		}
 	}
 
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := codec.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshaling launcher state: %w", err)
 	}
-	data = append(data, '\n')
 
 	statePath := l.launcherStatePath()
 	temporaryPath := statePath + ".tmp"
@@ -256,7 +255,7 @@ func (l *Launcher) reconnectSandboxes() error {
 	defer os.Remove(statePath)
 
 	var state launcherState
-	if err := json.Unmarshal(data, &state); err != nil {
+	if err := codec.Unmarshal(data, &state); err != nil {
 		return fmt.Errorf("parsing state file: %w", err)
 	}
 

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -524,9 +525,9 @@ func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, mach
 	return state
 }
 
-// startMockLauncher starts a mock launcher that accepts IPC on a Unix
-// socket and responds using the provided handler function. Returns the
-// listener (caller should defer Close).
+// startMockLauncher starts a mock launcher that accepts CBOR IPC on a
+// Unix socket and responds using the provided handler function. Returns
+// the listener (caller should defer Close).
 func startMockLauncher(t *testing.T, socketPath string, handler func(launcherIPCRequest) launcherIPCResponse) net.Listener {
 	t.Helper()
 
@@ -543,13 +544,13 @@ func startMockLauncher(t *testing.T, socketPath string, handler func(launcherIPC
 			}
 
 			var request launcherIPCRequest
-			if err := json.NewDecoder(conn).Decode(&request); err != nil {
+			if err := codec.NewDecoder(conn).Decode(&request); err != nil {
 				conn.Close()
 				continue
 			}
 
 			response := handler(request)
-			json.NewEncoder(conn).Encode(response)
+			codec.NewEncoder(conn).Encode(response)
 			conn.Close()
 		}
 	}()

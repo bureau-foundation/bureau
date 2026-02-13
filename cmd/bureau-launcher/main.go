@@ -27,6 +27,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -708,22 +709,23 @@ func (l *Launcher) serve(ctx context.Context, listener net.Listener) {
 	}
 }
 
-// IPCRequest is the JSON structure of a request from the daemon.
+// IPCRequest is the CBOR-encoded request from the daemon, sent over
+// the launcher's Unix IPC socket.
 type IPCRequest struct {
 	// Action is the request type: "create-sandbox", "destroy-sandbox",
 	// "update-payload", "update-proxy-binary", or "status".
-	Action string `json:"action"`
+	Action string `cbor:"action"`
 
 	// Principal is the localpart of the principal to operate on (for
 	// create-sandbox and destroy-sandbox).
-	Principal string `json:"principal,omitempty"`
+	Principal string `cbor:"principal,omitempty"`
 
 	// EncryptedCredentials is the base64-encoded age ciphertext from
 	// the m.bureau.credentials state event (for create-sandbox). The
 	// launcher decrypts this using its keypair.
 	//
 	// Mutually exclusive with DirectCredentials — set one or neither.
-	EncryptedCredentials string `json:"encrypted_credentials,omitempty"`
+	EncryptedCredentials string `cbor:"encrypted_credentials,omitempty"`
 
 	// DirectCredentials provides plaintext credentials for the proxy
 	// (for create-sandbox). Used when the daemon spawns ephemeral
@@ -736,46 +738,47 @@ type IPCRequest struct {
 	// credentials.
 	//
 	// Mutually exclusive with EncryptedCredentials — set one or neither.
-	DirectCredentials map[string]string `json:"direct_credentials,omitempty"`
+	DirectCredentials map[string]string `cbor:"direct_credentials,omitempty"`
 
 	// MatrixPolicy is the Matrix access policy for this principal's proxy.
 	// Forwarded from the PrincipalAssignment in MachineConfig. The launcher
 	// includes this in the credential payload piped to the proxy subprocess.
-	MatrixPolicy *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
+	MatrixPolicy *schema.MatrixPolicy `cbor:"matrix_policy,omitempty"`
 
 	// SandboxSpec is the fully-resolved sandbox configuration produced by
 	// the daemon's template resolution pipeline. When set, the launcher
 	// uses this to build the bwrap command line and configure the sandbox
 	// environment. When nil (current behavior), the launcher spawns only
 	// the proxy process without a bwrap sandbox.
-	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
+	SandboxSpec *schema.SandboxSpec `cbor:"sandbox_spec,omitempty"`
 
 	// Payload is the new payload data for update-payload requests. The
 	// launcher atomically rewrites the payload file that is bind-mounted
 	// into the sandbox at /run/bureau/payload.json.
-	Payload map[string]any `json:"payload,omitempty"`
+	Payload map[string]any `cbor:"payload,omitempty"`
 
 	// TriggerContent is the raw JSON content of the state event that
 	// satisfied the principal's StartCondition. Written to
 	// /run/bureau/trigger.json inside the sandbox as a read-only bind
 	// mount. Enables event-triggered principals to read context from
-	// the event that caused their launch.
+	// the event that caused their launch. Carried as opaque bytes —
+	// the launcher writes them verbatim to the trigger file.
 	//
 	// nil when the principal has no StartCondition or when the condition
 	// has no associated event content.
-	TriggerContent json.RawMessage `json:"trigger_content,omitempty"`
+	TriggerContent []byte `cbor:"trigger_content,omitempty"`
 
 	// ServiceMounts lists service sockets that should be bind-mounted
 	// into the sandbox. Each entry maps a service role to a host-side
 	// socket path. The launcher creates a bind-mount for each at
 	// /run/bureau/service/<role>.sock inside the sandbox.
-	ServiceMounts []ServiceMount `json:"service_mounts,omitempty"`
+	ServiceMounts []ServiceMount `cbor:"service_mounts,omitempty"`
 
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path exists and is executable,
 	// then switches to it for future sandbox creation. Existing proxy
 	// processes continue running their current binary.
-	BinaryPath string `json:"binary_path,omitempty"`
+	BinaryPath string `cbor:"binary_path,omitempty"`
 }
 
 // ServiceMount describes a service socket to bind-mount into a sandbox.
@@ -785,51 +788,51 @@ type IPCRequest struct {
 type ServiceMount struct {
 	// Role is the service role name (e.g., "ticket", "rag"). Determines
 	// the in-sandbox socket path: /run/bureau/service/<role>.sock.
-	Role string `json:"role"`
+	Role string `cbor:"role"`
 
 	// SocketPath is the host-side socket path to bind-mount. For local
 	// services this is the provider's principal socket; for remote
 	// services this is the daemon's tunnel socket for that service.
-	SocketPath string `json:"socket_path"`
+	SocketPath string `cbor:"socket_path"`
 }
 
-// IPCResponse is the JSON structure of a response to the daemon.
+// IPCResponse is the CBOR-encoded response sent back to the daemon.
 type IPCResponse struct {
 	// OK indicates whether the request succeeded.
-	OK bool `json:"ok"`
+	OK bool `cbor:"ok"`
 
 	// Error contains the error message if OK is false.
-	Error string `json:"error,omitempty"`
+	Error string `cbor:"error,omitempty"`
 
 	// ProxyPID is the PID of the spawned proxy process (for create-sandbox).
-	ProxyPID int `json:"proxy_pid,omitempty"`
+	ProxyPID int `cbor:"proxy_pid,omitempty"`
 
 	// BinaryHash is the SHA256 hex digest of the launcher's own binary.
 	// Returned by the "status" action so the daemon can compare against
 	// the desired BureauVersion without restarting the launcher.
-	BinaryHash string `json:"binary_hash,omitempty"`
+	BinaryHash string `cbor:"binary_hash,omitempty"`
 
 	// ProxyBinaryPath is the filesystem path of the proxy binary the
 	// launcher is currently using for new sandbox creation. Returned by
 	// the "status" action so the daemon can hash-compare the current
 	// proxy against the desired version.
-	ProxyBinaryPath string `json:"proxy_binary_path,omitempty"`
+	ProxyBinaryPath string `cbor:"proxy_binary_path,omitempty"`
 
 	// ExitCode is the process exit code returned by "wait-sandbox".
 	// Uses a pointer to distinguish "exit code 0" (success) from
 	// "field not present" (non-wait-sandbox responses).
-	ExitCode *int `json:"exit_code,omitempty"`
+	ExitCode *int `cbor:"exit_code,omitempty"`
 
 	// Sandboxes lists running sandboxes. Returned by "list-sandboxes"
 	// so the daemon can discover principals that survived a daemon
 	// restart while the launcher continued running.
-	Sandboxes []SandboxListEntry `json:"sandboxes,omitempty"`
+	Sandboxes []SandboxListEntry `cbor:"sandboxes,omitempty"`
 }
 
 // SandboxListEntry describes a running sandbox returned by "list-sandboxes".
 type SandboxListEntry struct {
-	Localpart string `json:"localpart"`
-	ProxyPID  int    `json:"proxy_pid"`
+	Localpart string `cbor:"localpart"`
+	ProxyPID  int    `cbor:"proxy_pid"`
 }
 
 // handleConnection processes a single IPC request/response cycle.
@@ -839,8 +842,8 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	// Set a deadline for the entire request/response cycle.
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
-	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
+	decoder := codec.NewDecoder(conn)
+	encoder := codec.NewEncoder(conn)
 
 	var request IPCRequest
 	if err := decoder.Decode(&request); err != nil {
@@ -1106,7 +1109,7 @@ func watchDisconnect(conn net.Conn) <-chan struct{} {
 // The handler monitors both the sandbox's done channel and the IPC
 // connection. If the daemon disconnects (crashes, restarts, context
 // cancelled), the handler returns without sending a response.
-func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
+func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder *codec.Encoder, request *IPCRequest) {
 	if request.Principal == "" {
 		if err := encoder.Encode(IPCResponse{OK: false, Error: "principal is required"}); err != nil {
 			l.logger.Error("encoding IPC response", "error", err, "action", "wait-sandbox")
@@ -1170,7 +1173,7 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 //
 // Runs outside the launcher mutex so that other IPC requests are not
 // blocked during the (potentially long) wait.
-func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *json.Encoder, request *IPCRequest) {
+func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *codec.Encoder, request *IPCRequest) {
 	if request.Principal == "" {
 		if err := encoder.Encode(IPCResponse{OK: false, Error: "principal is required"}); err != nil {
 			l.logger.Error("encoding IPC response", "error", err, "action", "wait-proxy")
@@ -1339,7 +1342,7 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent json.RawMessage, serviceMounts []ServiceMount) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {

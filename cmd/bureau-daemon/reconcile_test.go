@@ -20,6 +20,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -46,8 +47,8 @@ func TestLauncherRequest(t *testing.T) {
 			}
 
 			var request launcherIPCRequest
-			decoder := json.NewDecoder(conn)
-			encoder := json.NewEncoder(conn)
+			decoder := codec.NewDecoder(conn)
+			encoder := codec.NewEncoder(conn)
 
 			if err := decoder.Decode(&request); err != nil {
 				conn.Close()

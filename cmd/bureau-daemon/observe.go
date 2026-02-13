@@ -36,8 +36,8 @@ import (
 )
 
 // observeRequest mirrors observe.ObserveRequest. Defined locally to parallel
-// the existing pattern with launcherIPCRequest — the JSON wire format is the
-// contract between client and daemon.
+// the existing pattern with launcherIPCRequest. The observation protocol uses
+// JSON (user-facing CLI boundary), unlike the launcher IPC which uses CBOR.
 type observeRequest struct {
 	// Action selects the request type:
 	//   - "" or "observe": streaming observation session

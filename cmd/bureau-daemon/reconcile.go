@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -56,7 +57,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// changes from "active" to "teardown", agents gated on "active"
 	// stop, and a teardown principal gated on "teardown" starts.
 	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
-	triggerContents := make(map[string]json.RawMessage)
+	triggerContents := make(map[string][]byte)
 	conditionRoomIDs := make(map[string]string) // localpart → resolved workspace room ID
 	for _, assignment := range config.Principals {
 		if !assignment.AutoStart {
@@ -1040,48 +1041,46 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 
 // launcherIPCRequest mirrors the launcher's IPCRequest type. Defined here to
 // avoid importing cmd/bureau-launcher (which is a main package and cannot be
-// imported). The JSON wire format is the contract between daemon and launcher.
+// imported). The CBOR wire format is the contract between daemon and launcher.
 type launcherIPCRequest struct {
-	Action               string               `json:"action"`
-	Principal            string               `json:"principal,omitempty"`
-	EncryptedCredentials string               `json:"encrypted_credentials,omitempty"`
-	DirectCredentials    map[string]string    `json:"direct_credentials,omitempty"`
-	MatrixPolicy         *schema.MatrixPolicy `json:"matrix_policy,omitempty"`
+	Action               string               `cbor:"action"`
+	Principal            string               `cbor:"principal,omitempty"`
+	EncryptedCredentials string               `cbor:"encrypted_credentials,omitempty"`
+	DirectCredentials    map[string]string    `cbor:"direct_credentials,omitempty"`
+	MatrixPolicy         *schema.MatrixPolicy `cbor:"matrix_policy,omitempty"`
 
 	// SandboxSpec is the fully-resolved sandbox configuration produced by
 	// the daemon's template resolution pipeline. When set, the launcher
 	// uses this to build the bwrap command line and configure the sandbox
 	// environment. When nil (current behavior), the launcher spawns only
 	// the proxy process without a bwrap sandbox.
-	SandboxSpec *schema.SandboxSpec `json:"sandbox_spec,omitempty"`
+	SandboxSpec *schema.SandboxSpec `cbor:"sandbox_spec,omitempty"`
 
 	// Payload is the new payload data for update-payload requests. The
 	// launcher atomically rewrites the payload file that is bind-mounted
 	// into the sandbox at /run/bureau/payload.json.
-	Payload map[string]any `json:"payload,omitempty"`
+	Payload map[string]any `cbor:"payload,omitempty"`
 
 	// TriggerContent is the raw JSON content of the state event that
-	// satisfied the principal's StartCondition. Passed through as-is to
-	// the launcher, which writes it to /run/bureau/trigger.json inside
-	// the sandbox. This enables event-triggered principals to read
-	// context from the event that caused their launch (e.g., workspace
-	// teardown mode, webhook payload, CI trigger metadata).
+	// satisfied the principal's StartCondition. Passed through as opaque
+	// bytes to the launcher, which writes them to /run/bureau/trigger.json
+	// inside the sandbox. Carried as a CBOR byte string.
 	//
 	// nil when the principal has no StartCondition or when the condition
 	// has no associated event content (room-existence-only checks).
-	TriggerContent json.RawMessage `json:"trigger_content,omitempty"`
+	TriggerContent []byte `cbor:"trigger_content,omitempty"`
 
 	// ServiceMounts lists service sockets that the launcher should
 	// bind-mount into the sandbox. The daemon populates this by
 	// resolving the SandboxSpec's RequiredServices against
 	// m.bureau.room_service state events in the principal's rooms.
 	// Each entry maps a service role to a host-side socket path.
-	ServiceMounts []launcherServiceMount `json:"service_mounts,omitempty"`
+	ServiceMounts []launcherServiceMount `cbor:"service_mounts,omitempty"`
 
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path and switches its proxy
 	// binary for future sandbox creation.
-	BinaryPath string `json:"binary_path,omitempty"`
+	BinaryPath string `cbor:"binary_path,omitempty"`
 }
 
 // launcherServiceMount describes a service socket to bind-mount into a
@@ -1091,30 +1090,30 @@ type launcherIPCRequest struct {
 type launcherServiceMount struct {
 	// Role is the service role name (e.g., "ticket", "rag"). Determines
 	// the in-sandbox socket path: /run/bureau/service/<role>.sock.
-	Role string `json:"role"`
+	Role string `cbor:"role"`
 
 	// SocketPath is the host-side socket path to bind-mount. For local
 	// services this is the provider's principal socket; for remote
 	// services this is the daemon's tunnel socket for that service.
-	SocketPath string `json:"socket_path"`
+	SocketPath string `cbor:"socket_path"`
 }
 
 // launcherIPCResponse mirrors the launcher's IPCResponse type.
 type launcherIPCResponse struct {
-	OK              bool                       `json:"ok"`
-	Error           string                     `json:"error,omitempty"`
-	ProxyPID        int                        `json:"proxy_pid,omitempty"`
-	BinaryHash      string                     `json:"binary_hash,omitempty"`
-	ProxyBinaryPath string                     `json:"proxy_binary_path,omitempty"`
-	ExitCode        *int                       `json:"exit_code,omitempty"`
-	Sandboxes       []launcherSandboxListEntry `json:"sandboxes,omitempty"`
+	OK              bool                       `cbor:"ok"`
+	Error           string                     `cbor:"error,omitempty"`
+	ProxyPID        int                        `cbor:"proxy_pid,omitempty"`
+	BinaryHash      string                     `cbor:"binary_hash,omitempty"`
+	ProxyBinaryPath string                     `cbor:"proxy_binary_path,omitempty"`
+	ExitCode        *int                       `cbor:"exit_code,omitempty"`
+	Sandboxes       []launcherSandboxListEntry `cbor:"sandboxes,omitempty"`
 }
 
 // launcherSandboxListEntry mirrors the launcher's SandboxListEntry type.
 // Returned by the "list-sandboxes" action for daemon restart recovery.
 type launcherSandboxListEntry struct {
-	Localpart string `json:"localpart"`
-	ProxyPID  int    `json:"proxy_pid"`
+	Localpart string `cbor:"localpart"`
+	ProxyPID  int    `cbor:"proxy_pid"`
 }
 
 // queryLauncherStatus sends a "status" IPC request to the launcher and
@@ -1302,13 +1301,13 @@ func (d *Daemon) launcherRequest(ctx context.Context, request launcherIPCRequest
 	conn.SetDeadline(deadline)
 
 	// Send the request.
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		return nil, fmt.Errorf("sending request to launcher: %w", err)
 	}
 
 	// Read the response.
 	var response launcherIPCResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		return nil, fmt.Errorf("reading response from launcher: %w", err)
 	}
 
@@ -1355,7 +1354,7 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 		Action:    "wait-sandbox",
 		Principal: principalLocalpart,
 	}
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		return -1, "", fmt.Errorf("sending wait-sandbox request: %w", err)
 	}
 
@@ -1364,7 +1363,7 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 	conn.SetDeadline(time.Time{})
 
 	var response launcherIPCResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		if ctx.Err() != nil {
 			return -1, "", ctx.Err()
 		}
@@ -1417,7 +1416,7 @@ func (d *Daemon) launcherWaitProxy(ctx context.Context, principalLocalpart strin
 		Action:    "wait-proxy",
 		Principal: principalLocalpart,
 	}
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		return -1, fmt.Errorf("sending wait-proxy request: %w", err)
 	}
 
@@ -1426,7 +1425,7 @@ func (d *Daemon) launcherWaitProxy(ctx context.Context, principalLocalpart strin
 	conn.SetDeadline(time.Time{})
 
 	var response launcherIPCResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		if ctx.Err() != nil {
 			return -1, ctx.Err()
 		}

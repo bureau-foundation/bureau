@@ -42,14 +42,27 @@ func Unmarshal(data []byte, v any) error {
 	return decMode.Unmarshal(data, v)
 }
 
+// Encoder is a CBOR stream encoder. Type alias so consumers import
+// only lib/codec, not fxamacker/cbor directly.
+type Encoder = cbor.Encoder
+
+// Decoder is a CBOR stream decoder. Type alias so consumers import
+// only lib/codec, not fxamacker/cbor directly.
+type Decoder = cbor.Decoder
+
+// RawMessage is a raw encoded CBOR value. It implements
+// cbor.Marshaler and cbor.Unmarshaler so it can be used to delay
+// CBOR decoding or pre-encode CBOR output.
+type RawMessage = cbor.RawMessage
+
 // NewEncoder returns a CBOR encoder that writes to w using Bureau's
 // standard Core Deterministic Encoding configuration.
-func NewEncoder(w io.Writer) *cbor.Encoder {
+func NewEncoder(w io.Writer) *Encoder {
 	return encMode.NewEncoder(w)
 }
 
 // NewDecoder returns a CBOR decoder that reads from r using Bureau's
 // standard decoding configuration.
-func NewDecoder(r io.Reader) *cbor.Decoder {
+func NewDecoder(r io.Reader) *Decoder {
 	return decMode.NewDecoder(r)
 }

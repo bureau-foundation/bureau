@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -491,8 +492,8 @@ func TestHandleConnection_FullCycle(t *testing.T) {
 				}
 				defer conn.Close()
 
-				encoder := json.NewEncoder(conn)
-				decoder := json.NewDecoder(conn)
+				encoder := codec.NewEncoder(conn)
+				decoder := codec.NewDecoder(conn)
 
 				if err := encoder.Encode(test.request); err != nil {
 					t.Errorf("Encode() error: %v", err)
@@ -1737,12 +1738,12 @@ func TestHandleUpdateProxyBinary_ViaIPC(t *testing.T) {
 		Action:     "update-proxy-binary",
 		BinaryPath: execPath,
 	}
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		t.Fatalf("encoding request: %v", err)
 	}
 
 	var response IPCResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
 
@@ -1766,11 +1767,11 @@ func sendIPCRequest(t *testing.T, socketPath string, request IPCRequest) IPCResp
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
 	var response IPCResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	return response
@@ -1826,12 +1827,12 @@ func TestWaitSandbox_Validation(t *testing.T) {
 				}
 				defer conn.Close()
 
-				if encodeErr := json.NewEncoder(conn).Encode(test.request); encodeErr != nil {
+				if encodeErr := codec.NewEncoder(conn).Encode(test.request); encodeErr != nil {
 					t.Errorf("Encode: %v", encodeErr)
 					return
 				}
 				var response IPCResponse
-				if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+				if decodeErr := codec.NewDecoder(conn).Decode(&response); decodeErr != nil {
 					t.Errorf("Decode: %v", decodeErr)
 					return
 				}
@@ -1893,7 +1894,7 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if encodeErr := json.NewEncoder(conn).Encode(IPCRequest{
+		if encodeErr := codec.NewEncoder(conn).Encode(IPCRequest{
 			Action:    "wait-sandbox",
 			Principal: "test/waitnormal",
 		}); encodeErr != nil {
@@ -1902,7 +1903,7 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 		}
 
 		var response IPCResponse
-		if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+		if decodeErr := codec.NewDecoder(conn).Decode(&response); decodeErr != nil {
 			t.Errorf("Decode: %v", decodeErr)
 			return
 		}
@@ -2001,7 +2002,7 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if encodeErr := json.NewEncoder(conn).Encode(IPCRequest{
+		if encodeErr := codec.NewEncoder(conn).Encode(IPCRequest{
 			Action:    "wait-sandbox",
 			Principal: "test/waitalready",
 		}); encodeErr != nil {
@@ -2010,7 +2011,7 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 		}
 
 		var response IPCResponse
-		if decodeErr := json.NewDecoder(conn).Decode(&response); decodeErr != nil {
+		if decodeErr := codec.NewDecoder(conn).Decode(&response); decodeErr != nil {
 			t.Errorf("Decode: %v", decodeErr)
 			return
 		}
@@ -2085,7 +2086,7 @@ func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
 	}
 	defer waitConn.Close()
 
-	if encodeErr := json.NewEncoder(waitConn).Encode(IPCRequest{
+	if encodeErr := codec.NewEncoder(waitConn).Encode(IPCRequest{
 		Action:    "wait-sandbox",
 		Principal: "test/waitblock",
 	}); encodeErr != nil {

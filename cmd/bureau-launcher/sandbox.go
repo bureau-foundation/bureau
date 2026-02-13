@@ -181,11 +181,11 @@ func writePayloadFile(configDir string, payload map[string]any) (string, error) 
 }
 
 // writeTriggerFile writes the trigger event content to trigger.json in the
-// config directory. Unlike writePayloadFile, the content is already serialized
-// JSON (json.RawMessage is []byte) so no marshaling is needed. Returns the
-// path to the written file. The caller adds a bind mount for this file at
-// /run/bureau/trigger.json inside the sandbox.
-func writeTriggerFile(configDir string, content json.RawMessage) (string, error) {
+// config directory. The content is pre-serialized JSON bytes passed through
+// the IPC layer without parsing. Returns the path to the written file. The
+// caller adds a bind mount for this file at /run/bureau/trigger.json inside
+// the sandbox.
+func writeTriggerFile(configDir string, content []byte) (string, error) {
 	triggerPath := filepath.Join(configDir, "trigger.json")
 	if err := os.WriteFile(triggerPath, content, 0644); err != nil {
 		return "", fmt.Errorf("writing trigger file: %w", err)

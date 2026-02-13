@@ -40,7 +40,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	// Verify machine key algorithm and value.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		"m.bureau.machine_key", machine.Name)
+		schema.EventTypeMachineKey, machine.Name)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	// Verify MachineStatus contents.
 	statusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		"m.bureau.machine_status", machine.Name)
+		schema.EventTypeMachineStatus, machine.Name)
 	if err != nil {
 		t.Fatalf("get machine status: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	// Verify config room power levels.
 	powerLevelJSON, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		"m.room.power_levels", "")
+		schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
 		t.Fatalf("get config room power levels: %v", err)
 	}
@@ -165,9 +165,9 @@ func TestOperatorFlow(t *testing.T) {
 	observed := registerPrincipal(t, "test/observed", "test-observe-password")
 	deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
-		DefaultObservePolicy: map[string]any{
-			"allowed_observers":   []string{"**"},
-			"readwrite_observers": []string{"bureau-admin"},
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"bureau-admin"},
 		},
 	})
 
@@ -442,9 +442,9 @@ func TestCrossMachineObservation(t *testing.T) {
 	observed := registerPrincipal(t, "test/xm-obs", "xm-observe-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
-		DefaultObservePolicy: map[string]any{
-			"allowed_observers":   []string{"**"},
-			"readwrite_observers": []string{"bureau-admin"},
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"bureau-admin"},
 		},
 	})
 
@@ -454,9 +454,9 @@ func TestCrossMachineObservation(t *testing.T) {
 	// a remote principal (the consumer authorizes the proxy role before
 	// forwarding to the provider).
 	pushMachineConfig(t, admin, consumer, deploymentConfig{
-		DefaultObservePolicy: map[string]any{
-			"allowed_observers":   []string{"**"},
-			"readwrite_observers": []string{"bureau-admin"},
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"bureau-admin"},
 		},
 	})
 
@@ -464,11 +464,11 @@ func TestCrossMachineObservation(t *testing.T) {
 	// can discover the principal on the provider machine. In production,
 	// services are registered by the daemon or admin; here we simulate
 	// that by pushing the state event directly.
-	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
+	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
 		observed.Localpart, map[string]any{
 			"principal":   observed.UserID,
 			"machine":     provider.UserID,

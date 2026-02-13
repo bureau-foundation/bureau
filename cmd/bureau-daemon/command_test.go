@@ -155,7 +155,7 @@ func buildCommandEvent(eventID, sender, command, workspace, requestID string) me
 
 	return messaging.Event{
 		EventID: eventID,
-		Type:    "m.room.message",
+		Type:    schema.MatrixEventTypeMessage,
 		Sender:  sender,
 		Content: content,
 	}
@@ -165,7 +165,7 @@ func buildCommandEvent(eventID, sender, command, workspace, requestID string) me
 // pattern for m.room.message.
 func isSendMessagePath(path string) bool {
 	// Pattern: /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}
-	return strings.Contains(path, "/send/m.room.message/")
+	return strings.Contains(path, "/send/"+schema.MatrixEventTypeMessage+"/")
 }
 
 // extractRoomIDFromSendPath extracts the room ID from a send event path.
@@ -198,7 +198,7 @@ func TestCommandDispatch(t *testing.T) {
 	// Set up power levels so the sender is authorized (PL 0 suffices for
 	// workspace.list).
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -256,7 +256,7 @@ func TestCommandAuthorizationDenied(t *testing.T) {
 
 	const roomID = "!workspace:test"
 	// Set power levels: sender has PL 0, workspace.fetch requires PL 50.
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -287,7 +287,7 @@ func TestCommandAuthorizationAllowed(t *testing.T) {
 
 	const roomID = "!workspace:test"
 	// Set power levels: sender has PL 50 (sufficient for workspace.fetch).
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@operator:bureau.local": float64(50),
 		},
@@ -326,7 +326,7 @@ func TestCommandUnknownCommand(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -373,7 +373,7 @@ func TestCommandMissingWorkspace(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -404,7 +404,7 @@ func TestCommandPathTraversal(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -453,7 +453,7 @@ func TestCommandWorkspaceList(t *testing.T) {
 	}
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -509,7 +509,7 @@ func TestCommandWorkspaceDu(t *testing.T) {
 	}
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -545,7 +545,7 @@ func TestCommandThreadedReply(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -609,7 +609,7 @@ func TestCommandWorkspaceStatus(t *testing.T) {
 	}
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -650,7 +650,7 @@ func TestCommandWorkspaceStatusNonExistent(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})
@@ -689,7 +689,7 @@ func TestCommandNonMessageEventsIgnored(t *testing.T) {
 	// A state event (not m.room.message) should be ignored.
 	stateEvent := messaging.Event{
 		EventID: "$state1",
-		Type:    "m.bureau.machine_config",
+		Type:    schema.EventTypeMachineConfig,
 		Sender:  "@admin:bureau.local",
 		Content: map[string]any{
 			"msgtype": schema.MsgTypeCommand,
@@ -700,7 +700,7 @@ func TestCommandNonMessageEventsIgnored(t *testing.T) {
 	// A regular text message (not m.bureau.command) should be ignored.
 	textEvent := messaging.Event{
 		EventID: "$text1",
-		Type:    "m.room.message",
+		Type:    schema.MatrixEventTypeMessage,
 		Sender:  "@user:bureau.local",
 		Content: map[string]any{
 			"msgtype": "m.text",
@@ -722,7 +722,7 @@ func TestCommandWorkspaceListEmpty(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users":         map[string]any{},
 		"users_default": 0,
 	})

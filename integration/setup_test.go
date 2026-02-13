@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestDoctorPassesAfterSetup(t *testing.T) {
@@ -40,11 +42,11 @@ func TestRoomsExistViaAPI(t *testing.T) {
 	defer session.Close()
 
 	expectedAliases := []string{
-		"#bureau:" + testServerName,
-		"#bureau/system:" + testServerName,
-		"#bureau/machine:" + testServerName,
-		"#bureau/service:" + testServerName,
-		"#bureau/template:" + testServerName,
+		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 
 	for _, alias := range expectedAliases {
@@ -63,7 +65,7 @@ func TestSpaceHierarchy(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	spaceRoomID, err := session.ResolveAlias(t.Context(), "#bureau:"+testServerName)
+	spaceRoomID, err := session.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasSpace, testServerName))
 	if err != nil {
 		t.Fatalf("resolve space alias: %v", err)
 	}
@@ -76,17 +78,17 @@ func TestSpaceHierarchy(t *testing.T) {
 
 	children := make(map[string]bool)
 	for _, event := range events {
-		if event.Type == "m.space.child" && event.StateKey != nil && *event.StateKey != "" {
+		if event.Type == schema.MatrixEventTypeSpaceChild && event.StateKey != nil && *event.StateKey != "" {
 			children[*event.StateKey] = true
 		}
 	}
 
 	// Verify each standard room is a child of the space.
 	childRooms := []string{
-		"#bureau/system:" + testServerName,
-		"#bureau/machine:" + testServerName,
-		"#bureau/service:" + testServerName,
-		"#bureau/template:" + testServerName,
+		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 
 	for _, alias := range childRooms {
@@ -105,13 +107,13 @@ func TestTemplatesPublished(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	templateRoomID, err := session.ResolveAlias(t.Context(), "#bureau/template:"+testServerName)
+	templateRoomID, err := session.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
 	if err != nil {
 		t.Fatalf("resolve template alias: %v", err)
 	}
 
 	// Read base template state event.
-	content, err := session.GetStateEvent(t.Context(), templateRoomID, "m.bureau.template", "base")
+	content, err := session.GetStateEvent(t.Context(), templateRoomID, schema.EventTypeTemplate, "base")
 	if err != nil {
 		t.Fatalf("get base template: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestTemplatesPublished(t *testing.T) {
 	}
 
 	// Verify base-networked template exists and inherits from base.
-	content, err = session.GetStateEvent(t.Context(), templateRoomID, "m.bureau.template", "base-networked")
+	content, err = session.GetStateEvent(t.Context(), templateRoomID, schema.EventTypeTemplate, "base-networked")
 	if err != nil {
 		t.Fatalf("get base-networked template: %v", err)
 	}
@@ -147,11 +149,11 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 	defer session.Close()
 
 	rooms := []string{
-		"#bureau:" + testServerName,
-		"#bureau/system:" + testServerName,
-		"#bureau/machine:" + testServerName,
-		"#bureau/service:" + testServerName,
-		"#bureau/template:" + testServerName,
+		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
+		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 
 	for _, alias := range rooms {
@@ -161,7 +163,7 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 			continue
 		}
 
-		content, err := session.GetStateEvent(t.Context(), roomID, "m.room.join_rules", "")
+		content, err := session.GetStateEvent(t.Context(), roomID, schema.MatrixEventTypeJoinRules, "")
 		if err != nil {
 			t.Errorf("get join rules for %s: %v", alias, err)
 			continue

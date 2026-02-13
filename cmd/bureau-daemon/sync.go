@@ -31,10 +31,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -52,48 +54,59 @@ import (
 // uses evaluateStartCondition with direct GetStateEvent calls to check
 // whether conditions are met — the sync filter just ensures the room
 // appears in the response so the daemon knows to re-check.
-const syncFilter = `{
-	"room": {
-		"state": {
-			"types": [
-				"m.bureau.machine_config",
-				"m.bureau.credentials",
-				"m.bureau.machine_status",
-				"m.bureau.service",
-				"m.bureau.layout",
-				"m.bureau.project",
-				"m.bureau.workspace",
-				"m.bureau.worktree"
-			]
-		},
-		"timeline": {
-			"types": [
-				"m.bureau.machine_config",
-				"m.bureau.credentials",
-				"m.bureau.machine_status",
-				"m.bureau.service",
-				"m.bureau.layout",
-				"m.bureau.project",
-				"m.bureau.workspace",
-				"m.bureau.worktree",
-				"m.room.message"
-			],
-			"limit": 50
-		},
-		"ephemeral": {
-			"types": []
-		},
-		"account_data": {
-			"types": []
-		}
-	},
-	"presence": {
-		"types": []
-	},
-	"account_data": {
-		"types": []
+var syncFilter = buildSyncFilter()
+
+// buildSyncFilter constructs the Matrix /sync filter JSON from typed
+// schema constants. Using constants instead of raw strings ensures that
+// event type renames are caught at compile time.
+func buildSyncFilter() string {
+	stateEventTypes := []string{
+		schema.EventTypeMachineConfig,
+		schema.EventTypeCredentials,
+		schema.EventTypeMachineStatus,
+		schema.EventTypeService,
+		schema.EventTypeLayout,
+		schema.EventTypeProject,
+		schema.EventTypeWorkspace,
+		schema.EventTypeWorktree,
 	}
-}`
+
+	timelineEventTypes := make([]string, len(stateEventTypes)+1)
+	copy(timelineEventTypes, stateEventTypes)
+	timelineEventTypes[len(stateEventTypes)] = schema.MatrixEventTypeMessage
+
+	emptyTypes := []string{}
+
+	filter := map[string]any{
+		"room": map[string]any{
+			"state": map[string]any{
+				"types": stateEventTypes,
+			},
+			"timeline": map[string]any{
+				"types": timelineEventTypes,
+				"limit": 50,
+			},
+			"ephemeral": map[string]any{
+				"types": emptyTypes,
+			},
+			"account_data": map[string]any{
+				"types": emptyTypes,
+			},
+		},
+		"presence": map[string]any{
+			"types": emptyTypes,
+		},
+		"account_data": map[string]any{
+			"types": emptyTypes,
+		},
+	}
+
+	data, err := json.Marshal(filter)
+	if err != nil {
+		panic("building sync filter: " + err.Error())
+	}
+	return string(data)
+}
 
 // initialSync performs the first Matrix /sync to obtain a since token, then
 // runs the startup handlers (reconcile, peer address sync, service directory

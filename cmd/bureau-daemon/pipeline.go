@@ -401,21 +401,17 @@ func (d *Daemon) postPipelineResult(
 	}
 
 	// Build step summaries from the result entries.
-	var steps []map[string]any
+	var steps []schema.PipelineStepResult
 	for _, entry := range entries {
 		if entry.Type != "step" {
 			continue
 		}
-		step := map[string]any{
-			"index":       entry.Index,
-			"name":        entry.Name,
-			"status":      entry.Status,
-			"duration_ms": entry.DurationMS,
-		}
-		if entry.Error != "" {
-			step["error"] = entry.Error
-		}
-		steps = append(steps, step)
+		steps = append(steps, schema.PipelineStepResult{
+			Name:       entry.Name,
+			Status:     entry.Status,
+			DurationMS: entry.DurationMS,
+			Error:      entry.Error,
+		})
 	}
 
 	// Determine overall status.
@@ -439,28 +435,22 @@ func (d *Daemon) postPipelineResult(
 		status = "success"
 	}
 
-	content := map[string]any{
-		"msgtype":      schema.MsgTypeCommandResult,
-		"body":         body,
-		"status":       status,
-		"exit_code":    exitCode,
-		"duration_ms":  durationMilliseconds,
-		"m.relates_to": threadRelation(commandEventID),
-	}
-
-	if len(steps) > 0 {
-		content["steps"] = steps
+	message := schema.CommandResultMessage{
+		MsgType:    schema.MsgTypeCommandResult,
+		Body:       body,
+		Status:     status,
+		ExitCode:   &exitCode,
+		DurationMS: durationMilliseconds,
+		Steps:      steps,
+		RequestID:  command.RequestID,
+		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
 	if terminalEntry != nil && terminalEntry.LogEventID != "" {
-		content["log_event_id"] = terminalEntry.LogEventID
+		message.LogEventID = terminalEntry.LogEventID
 	}
 
-	if command.RequestID != "" {
-		content["request_id"] = command.RequestID
-	}
-
-	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post pipeline result",
 			"room_id", roomID,
 			"error", err,
@@ -484,22 +474,18 @@ func (d *Daemon) postPipelineError(
 	)
 
 	durationMilliseconds := time.Since(start).Milliseconds()
-	body := fmt.Sprintf("pipeline.execute: error: %s", errorMessage)
 
-	content := map[string]any{
-		"msgtype":      schema.MsgTypeCommandResult,
-		"body":         body,
-		"status":       "error",
-		"error":        errorMessage,
-		"duration_ms":  durationMilliseconds,
-		"m.relates_to": threadRelation(commandEventID),
+	message := schema.CommandResultMessage{
+		MsgType:    schema.MsgTypeCommandResult,
+		Body:       fmt.Sprintf("pipeline.execute: error: %s", errorMessage),
+		Status:     "error",
+		Error:      errorMessage,
+		DurationMS: durationMilliseconds,
+		RequestID:  command.RequestID,
+		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if command.RequestID != "" {
-		content["request_id"] = command.RequestID
-	}
-
-	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post pipeline error",
 			"room_id", roomID,
 			"error", err,
@@ -516,21 +502,16 @@ func (d *Daemon) postPipelineAccepted(
 	command schema.CommandMessage,
 	localpart string,
 ) {
-	body := fmt.Sprintf("pipeline.execute: starting executor as %s", localpart)
-
-	content := map[string]any{
-		"msgtype":      schema.MsgTypeCommandResult,
-		"body":         body,
-		"status":       "accepted",
-		"principal":    localpart,
-		"m.relates_to": threadRelation(commandEventID),
+	message := schema.CommandResultMessage{
+		MsgType:   schema.MsgTypeCommandResult,
+		Body:      fmt.Sprintf("pipeline.execute: starting executor as %s", localpart),
+		Status:    "accepted",
+		Principal: localpart,
+		RequestID: command.RequestID,
+		RelatesTo: schema.NewThreadRelation(commandEventID),
 	}
 
-	if command.RequestID != "" {
-		content["request_id"] = command.RequestID
-	}
-
-	if _, sendError := d.session.SendEvent(ctx, roomID, "m.room.message", content); sendError != nil {
+	if _, sendError := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); sendError != nil {
 		d.logger.Error("failed to post pipeline accepted message",
 			"room_id", roomID,
 			"error", sendError,

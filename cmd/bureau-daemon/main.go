@@ -832,7 +832,7 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 	// (creator, PL 100 from preset) lowers itself to PL 50: sufficient to
 	// invite and write layouts, but insufficient to modify config or
 	// credentials (PL 100). The admin stays at PL 100.
-	_, err = session.SendStateEvent(ctx, response.RoomID, "m.room.power_levels", "",
+	_, err = session.SendStateEvent(ctx, response.RoomID, schema.MatrixEventTypePowerLevels, "",
 		schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 	if err != nil {
 		return "", fmt.Errorf("setting config room power levels: %w", err)

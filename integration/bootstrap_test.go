@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 const (
@@ -129,13 +130,13 @@ func TestBootstrapScript(t *testing.T) {
 	t.Log("bootstrap config deleted (security check passed)")
 
 	// Verify: first boot published the machine key to Matrix.
-	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 	// First boot already completed, so the key exists in room state.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_key", machineName)
+		schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -205,11 +206,11 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Wait for daemon heartbeat in Matrix.
 		statusWatch.WaitForStateEvent(t,
-			"m.bureau.machine_status", machineName)
+			schema.EventTypeMachineStatus, machineName)
 		t.Log("daemon started and publishing status")
 
 		// Deploy a principal to verify sandbox creation (bwrap).
-		configAlias := "#bureau/config/" + machineName + ":" + testServerName
+		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
 		configRoomID, err := admin.ResolveAlias(t.Context(), configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
@@ -228,7 +229,7 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Push machine config to trigger sandbox creation.
 		_, err = admin.SendStateEvent(t.Context(), configRoomID,
-			"m.bureau.machine_config", machineName, map[string]any{
+			schema.EventTypeMachineConfig, machineName, map[string]any{
 				"principals": []map[string]any{
 					{
 						"localpart":  principalAccount.Localpart,

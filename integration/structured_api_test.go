@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -52,7 +53,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:      agent,
-			MatrixPolicy: map[string]any{"allow_join": true},
+			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 
@@ -392,7 +393,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 
 		var foundDirect, foundAlias bool
 		for _, event := range response.Chunk {
-			if event.Type != "m.room.message" || event.Sender != agent.UserID {
+			if event.Type != schema.MatrixEventTypeMessage || event.Sender != agent.UserID {
 				continue
 			}
 			body, _ := event.Content["body"].(string)

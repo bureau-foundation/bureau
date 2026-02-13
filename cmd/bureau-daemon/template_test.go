@@ -21,7 +21,7 @@ import (
 // resolution tests. It supports room alias resolution and state event
 // fetching — the two operations needed for template resolution.
 type templateTestState struct {
-	// roomAliases maps full room alias (e.g., "#bureau/template:test.local")
+	// roomAliases maps full room alias (e.g., schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"))
 	// to room ID (e.g., "!template:test").
 	roomAliases map[string]string
 
@@ -159,7 +159,7 @@ func TestResolveTemplateSimple(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base sandbox template",
 		Command:     []string{"/bin/bash"},
@@ -205,7 +205,7 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 
 	// Base template: provides filesystem, namespaces, security.
 	state.setTemplate("!template:test", "base", schema.TemplateContent{
@@ -310,7 +310,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 	state.setRoomAlias("#iree/template:test.local", "!iree-template:test")
 
 	// Level 0 (root): base
@@ -411,7 +411,7 @@ func TestResolveTemplateCycleDetection(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 
 	// A inherits B, B inherits A.
 	state.setTemplate("!template:test", "a", schema.TemplateContent{
@@ -439,7 +439,7 @@ func TestResolveTemplateMissingParent(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 
 	state.setTemplate("!template:test", "child", schema.TemplateContent{
 		Inherits: "bureau/template:nonexistent",
@@ -462,7 +462,7 @@ func TestResolveTemplateNotFound(t *testing.T) {
 	t.Parallel()
 
 	state := newTemplateTestState()
-	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 	// Room exists but template doesn't.
 
 	session := newTemplateTestSession(t, state)

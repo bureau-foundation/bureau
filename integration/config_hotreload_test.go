@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -82,10 +83,8 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account: agent,
-			MatrixPolicy: map[string]any{
-				"allow_join": true,
-			},
+			Account:      agent,
+			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 
@@ -177,11 +176,11 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Publish a test service in #bureau/service. No actual service
 	// principal needs to run — the directory entry is constructed from
 	// the state event content regardless of whether the principal exists.
-	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
+	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
 		"service/vis-hr/test", map[string]any{
 			"principal":   "@service/vis-hr/test:" + testServerName,
 			"machine":     machine.UserID,

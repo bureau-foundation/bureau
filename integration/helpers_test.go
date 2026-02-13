@@ -584,7 +584,7 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) string {
 	t.Helper()
 	event := w.WaitForEvent(t, func(event messaging.Event) bool {
-		if event.Type != "m.room.message" {
+		if event.Type != schema.MatrixEventTypeMessage {
 			return false
 		}
 		if event.Sender != senderID {
@@ -653,11 +653,11 @@ func (w *roomWatch) WaitForCommandResults(t *testing.T, requestID string, count 
 	var collected []messaging.Event
 	for len(collected) < count {
 		event := w.WaitForEvent(t, func(event messaging.Event) bool {
-			if event.Type != "m.room.message" {
+			if event.Type != schema.MatrixEventTypeMessage {
 				return false
 			}
 			msgtype, _ := event.Content["msgtype"].(string)
-			if msgtype != "m.bureau.command_result" {
+			if msgtype != schema.MsgTypeCommandResult {
 				return false
 			}
 			eventRequestID, _ := event.Content["request_id"].(string)
@@ -767,8 +767,8 @@ func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) st
 	t.Helper()
 	transactionID := fmt.Sprintf("txn-%d", time.Now().UnixNano())
 	messageJSON, _ := json.Marshal(messaging.NewTextMessage(body))
-	requestURL := fmt.Sprintf("http://proxy/http/matrix/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
-		url.PathEscape(roomID), url.PathEscape(transactionID))
+	requestURL := fmt.Sprintf("http://proxy/http/matrix/_matrix/client/v3/rooms/%s/send/%s/%s",
+		url.PathEscape(roomID), schema.MatrixEventTypeMessage, url.PathEscape(transactionID))
 	request, err := http.NewRequest("PUT", requestURL, strings.NewReader(string(messageJSON)))
 	if err != nil {
 		t.Fatalf("create send request: %v", err)
@@ -822,7 +822,7 @@ func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID string) []m
 func assertMessagePresent(t *testing.T, events []messaging.Event, sender, expectedBody string) {
 	t.Helper()
 	for _, event := range events {
-		if event.Type != "m.room.message" {
+		if event.Type != schema.MatrixEventTypeMessage {
 			continue
 		}
 		body, _ := event.Content["body"].(string)
@@ -832,7 +832,7 @@ func assertMessagePresent(t *testing.T, events []messaging.Event, sender, expect
 	}
 	t.Errorf("message from %s with body %q not found in %d events", sender, expectedBody, len(events))
 	for _, event := range events {
-		if event.Type == "m.room.message" {
+		if event.Type == schema.MatrixEventTypeMessage {
 			body, _ := event.Content["body"].(string)
 			t.Logf("  event %s from %s: %q", event.EventID, event.Sender, body)
 		}

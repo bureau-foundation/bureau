@@ -333,7 +333,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -558,7 +558,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -708,7 +708,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	)
 
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		HealthCheck: &schema.HealthCheck{
@@ -728,7 +728,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -815,7 +815,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	)
 
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		// No HealthCheck
@@ -912,7 +912,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -1228,7 +1228,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -1383,7 +1383,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -1521,7 +1521,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return

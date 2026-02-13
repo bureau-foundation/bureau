@@ -392,7 +392,7 @@ func TestHandlePipelineExecute_NoBinary(t *testing.T) {
 	harness := newCommandTestHarness(t)
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@admin:bureau.local": float64(100),
 		},
@@ -433,7 +433,7 @@ func TestHandlePipelineExecute_MissingPipeline(t *testing.T) {
 	harness.daemon.pipelineExecutorBinary = binaryPath
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@admin:bureau.local": float64(100),
 		},
@@ -442,7 +442,7 @@ func TestHandlePipelineExecute_MissingPipeline(t *testing.T) {
 	// Command has no pipeline, pipeline_ref, or pipeline_inline parameter.
 	event := messaging.Event{
 		EventID: "$pipe2",
-		Type:    "m.room.message",
+		Type:    schema.MatrixEventTypeMessage,
 		Sender:  "@admin:bureau.local",
 		Content: map[string]any{
 			"msgtype":    schema.MsgTypeCommand,
@@ -491,7 +491,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	harness.daemon.shutdownCtx = cancelledCtx
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@admin:bureau.local": float64(100),
 		},
@@ -541,7 +541,7 @@ func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
 
 	const roomID = "!workspace:test"
 	// Sender has PL 50, pipeline.execute requires PL 100 (admin).
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@operator:bureau.local": float64(50),
 		},
@@ -586,7 +586,7 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 	harness.daemon.shutdownCtx = cancelledCtx
 
 	const roomID = "!workspace:test"
-	harness.matrixState.setStateEvent(roomID, "m.room.power_levels", "", map[string]any{
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
 			"@admin:bureau.local": float64(100),
 		},
@@ -595,7 +595,7 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 	// No "pipeline" parameter, but pipeline_ref is present.
 	event := messaging.Event{
 		EventID: "$pipe5",
-		Type:    "m.room.message",
+		Type:    schema.MatrixEventTypeMessage,
 		Sender:  "@admin:bureau.local",
 		Content: map[string]any{
 			"msgtype": schema.MsgTypeCommand,
@@ -641,7 +641,7 @@ func buildPipelineCommandEvent(eventID, sender, pipelineRef, requestID string) m
 
 	return messaging.Event{
 		EventID: eventID,
-		Type:    "m.room.message",
+		Type:    schema.MatrixEventTypeMessage,
 		Sender:  sender,
 		Content: content,
 	}

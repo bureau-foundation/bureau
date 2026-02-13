@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -70,17 +71,17 @@ type principalAccount struct {
 // principalSpec describes a principal to deploy on a machine.
 type principalSpec struct {
 	Account           principalAccount
-	Template          string         // optional: template ref (e.g., "bureau/template:name")
-	Payload           map[string]any // optional: per-instance payload merged over template defaults
-	MatrixPolicy      map[string]any // optional per-principal policy
-	ServiceVisibility []string       // optional: glob patterns for service discovery
+	Template          string               // optional: template ref (e.g., "bureau/template:name")
+	Payload           map[string]any       // optional: per-instance payload merged over template defaults
+	MatrixPolicy      *schema.MatrixPolicy // optional per-principal policy
+	ServiceVisibility []string             // optional: glob patterns for service discovery
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
 // any machine-level configuration (observe policy, etc.).
 type deploymentConfig struct {
 	Principals           []principalSpec
-	DefaultObservePolicy map[string]any // optional machine-level observe policy
+	DefaultObservePolicy *schema.ObservePolicy // optional machine-level observe policy
 }
 
 // newTestMachine creates the directory structure for a machine. Does not
@@ -130,11 +131,11 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	}
 
 	// Resolve global rooms and invite the machine.
-	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
-	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
@@ -171,7 +172,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 
 	// Retrieve the machine's public key from Matrix.
 	machineKeyJSON := keyWatch.WaitForStateEvent(t,
-		"m.bureau.machine_key", machine.Name)
+		schema.EventTypeMachineKey, machine.Name)
 	var machineKey struct {
 		PublicKey string `json:"public_key"`
 	}
@@ -215,10 +216,10 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 
 	// Wait for daemon readiness (MachineStatus heartbeat).
 	statusWatch.WaitForStateEvent(t,
-		"m.bureau.machine_status", machine.Name)
+		schema.EventTypeMachineStatus, machine.Name)
 
 	// Resolve the per-machine config room and join as admin.
-	configAlias := "#bureau/config/" + machine.Name + ":" + testServerName
+	configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machine.Name), testServerName)
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room %s not created: %v", configAlias, err)
@@ -347,14 +348,14 @@ func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachin
 
 	adminUserID := "@bureau-admin:" + testServerName
 	_, err = admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		"m.bureau.credentials", account.Localpart, map[string]any{
-			"version":        1,
-			"principal":      account.UserID,
-			"encrypted_for":  []string{machine.UserID},
-			"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
-			"ciphertext":     ciphertext,
-			"provisioned_by": adminUserID,
-			"provisioned_at": time.Now().UTC().Format(time.RFC3339),
+		schema.EventTypeCredentials, account.Localpart, schema.Credentials{
+			Version:       schema.CredentialsVersion,
+			Principal:     account.UserID,
+			EncryptedFor:  []string{machine.UserID},
+			Keys:          []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
+			Ciphertext:    ciphertext,
+			ProvisionedBy: adminUserID,
+			ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 		})
 	if err != nil {
 		t.Fatalf("push credentials for %s: %v", account.Localpart, err)
@@ -368,38 +369,25 @@ func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachin
 func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) {
 	t.Helper()
 
-	principalConfigs := make([]map[string]any, len(config.Principals))
+	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
 	for i, spec := range config.Principals {
-		templateValue := ""
-		if spec.Template != "" {
-			templateValue = spec.Template
+		assignments[i] = schema.PrincipalAssignment{
+			Localpart:         spec.Account.Localpart,
+			Template:          spec.Template,
+			AutoStart:         true,
+			Payload:           spec.Payload,
+			MatrixPolicy:      spec.MatrixPolicy,
+			ServiceVisibility: spec.ServiceVisibility,
 		}
-		entry := map[string]any{
-			"localpart":  spec.Account.Localpart,
-			"template":   templateValue,
-			"auto_start": true,
-		}
-		if spec.Payload != nil {
-			entry["payload"] = spec.Payload
-		}
-		if spec.MatrixPolicy != nil {
-			entry["matrix_policy"] = spec.MatrixPolicy
-		}
-		if spec.ServiceVisibility != nil {
-			entry["service_visibility"] = spec.ServiceVisibility
-		}
-		principalConfigs[i] = entry
 	}
 
-	machineConfig := map[string]any{
-		"principals": principalConfigs,
-	}
-	if config.DefaultObservePolicy != nil {
-		machineConfig["default_observe_policy"] = config.DefaultObservePolicy
+	machineConfig := schema.MachineConfig{
+		Principals:           assignments,
+		DefaultObservePolicy: config.DefaultObservePolicy,
 	}
 
 	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		"m.bureau.machine_config", machine.Name, machineConfig)
+		schema.EventTypeMachineConfig, machine.Name, machineConfig)
 	if err != nil {
 		t.Fatalf("push machine config: %v", err)
 	}

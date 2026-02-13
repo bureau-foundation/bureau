@@ -53,7 +53,7 @@ func TestPipelineExecution(t *testing.T) {
 	requestID := "test-pipeline-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
+	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: integration test",
@@ -164,7 +164,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	requestID := "test-pipeline-fail-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
+	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: failure test",
@@ -268,7 +268,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	requestID := "test-pipeline-params-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, "m.room.message",
+	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: parameter propagation test",

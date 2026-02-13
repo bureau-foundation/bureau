@@ -34,7 +34,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	// Template that requires the "ticket" service.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "service-consumer", schema.TemplateContent{
@@ -161,7 +161,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	// Template requires "ticket" but no m.bureau.room_service binding exists.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "needs-ticket", schema.TemplateContent{
@@ -216,7 +216,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "ws-consumer", schema.TemplateContent{
@@ -360,7 +360,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	// Template requires both "ticket" and "rag" services.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "multi-service", schema.TemplateContent{
@@ -498,7 +498,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	// Template requires both "ticket" and "rag", but only "ticket" is bound.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "partial-services", schema.TemplateContent{
@@ -555,7 +555,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	)
 
 	matrixState := newMockMatrixState()
-	matrixState.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	// Template with no RequiredServices.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "plain-template", schema.TemplateContent{

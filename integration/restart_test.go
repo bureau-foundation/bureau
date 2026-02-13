@@ -46,7 +46,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
@@ -113,10 +113,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Wait for the daemon to come alive.
 	initialStatusWatch.WaitForStateEvent(t,
-		"m.bureau.machine_status", machineName)
+		schema.EventTypeMachineStatus, machineName)
 
 	// Resolve config room and push credentials + config.
-	configAlias := "#bureau/config/" + machineName + ":" + testServerName
+	configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room not created: %v", err)
@@ -168,7 +168,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("encrypt credentials: %v", err)
 	}
 
-	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials",
+	_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials,
 		principalLocalpart, map[string]any{
 			"version":        1,
 			"principal":      principalUserID,
@@ -182,7 +182,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("push credentials: %v", err)
 	}
 
-	_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config",
+	_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
 		machineName, map[string]any{
 			"principals": []map[string]any{
 				{

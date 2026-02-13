@@ -248,6 +248,25 @@ const (
 	MsgTypeCommandResult = "m.bureau.command_result"
 )
 
+// Standard Matrix event type constants. These are Matrix spec types
+// (not Bureau-specific) that Bureau code references frequently. Defined
+// here so that callers avoid hardcoding matrix protocol strings.
+const (
+	MatrixEventTypeMessage           = "m.room.message"
+	MatrixEventTypePowerLevels       = "m.room.power_levels"
+	MatrixEventTypeJoinRules         = "m.room.join_rules"
+	MatrixEventTypeName              = "m.room.name"
+	MatrixEventTypeTopic             = "m.room.topic"
+	MatrixEventTypeSpaceChild        = "m.space.child"
+	MatrixEventTypeCanonicalAlias    = "m.room.canonical_alias"
+	MatrixEventTypeEncryption        = "m.room.encryption"
+	MatrixEventTypeServerACL         = "m.room.server_acl"
+	MatrixEventTypeTombstone         = "m.room.tombstone"
+	MatrixEventTypeAvatar            = "m.room.avatar"
+	MatrixEventTypeHistoryVisibility = "m.room.history_visibility"
+	MatrixEventTypeMember            = "m.room.member"
+)
+
 // Power level tiers for command authorization. The daemon checks the
 // sender's power level in the room before executing any command.
 // These tiers align with ConfigRoomPowerLevels conventions.
@@ -1796,17 +1815,17 @@ type LayoutMemberFilter struct {
 // callers can safely merge their own entries.
 func AdminProtectedEvents() map[string]any {
 	return map[string]any{
-		"m.room.avatar":             100,
-		"m.room.canonical_alias":    100,
-		"m.room.encryption":         100,
-		"m.room.history_visibility": 100,
-		"m.room.join_rules":         100,
-		"m.room.name":               100,
-		"m.room.power_levels":       100,
-		"m.room.server_acl":         100,
-		"m.room.tombstone":          100,
-		"m.room.topic":              100,
-		"m.space.child":             100,
+		MatrixEventTypeAvatar:            100,
+		MatrixEventTypeCanonicalAlias:    100,
+		MatrixEventTypeEncryption:        100,
+		MatrixEventTypeHistoryVisibility: 100,
+		MatrixEventTypeJoinRules:         100,
+		MatrixEventTypeName:              100,
+		MatrixEventTypePowerLevels:       100,
+		MatrixEventTypeServerACL:         100,
+		MatrixEventTypeTombstone:         100,
+		MatrixEventTypeTopic:             100,
+		MatrixEventTypeSpaceChild:        100,
 	}
 }
 
@@ -1891,8 +1910,8 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypeMachineConfig] = 100
 	events[EventTypeCredentials] = 100
-	events[EventTypeLayout] = 0  // daemon publishes layout state
-	events["m.room.message"] = 0 // daemon posts command results and pipeline results
+	events[EventTypeLayout] = 0        // daemon publishes layout state
+	events[MatrixEventTypeMessage] = 0 // daemon posts command results and pipeline results
 
 	return map[string]any{
 		"users":          users,
@@ -1976,6 +1995,67 @@ type CommandMessage struct {
 	// example, principal.spawn includes "template" and "payload"
 	// fields. The daemon passes these through to the handler.
 	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+// CommandResultMessage is the content of an m.room.message event with
+// msgtype MsgTypeCommandResult. The daemon posts these as threaded replies
+// to the original CommandMessage. The union of all fields covers three
+// result shapes:
+//
+//   - Success: Status "success", Result contains command-specific payload
+//   - Error: Status "error", Error contains the error message
+//   - Pipeline result: Status "success"/"error", ExitCode and Steps from
+//     the pipeline executor, optionally LogEventID for thread logging
+//   - Accepted acknowledgment: Status "accepted", Principal names the
+//     ephemeral executor principal (async commands like pipeline.execute)
+//
+// Fields not relevant to a particular result shape are omitted from JSON
+// via omitempty.
+type CommandResultMessage struct {
+	MsgType    string               `json:"msgtype"`
+	Body       string               `json:"body"`
+	Status     string               `json:"status"`
+	Result     json.RawMessage      `json:"result,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	ExitCode   *int                 `json:"exit_code,omitempty"`
+	DurationMS int64                `json:"duration_ms,omitempty"`
+	Steps      []PipelineStepResult `json:"steps,omitempty"`
+	LogEventID string               `json:"log_event_id,omitempty"`
+	RequestID  string               `json:"request_id,omitempty"`
+	Principal  string               `json:"principal,omitempty"`
+	RelatesTo  *ThreadRelation      `json:"m.relates_to,omitempty"`
+}
+
+// ThreadRelation is the m.relates_to structure for threaded messages
+// (MSC3440 / Matrix spec §11.10.1). Commands and their results are
+// linked via this threading relation so that clients can render the
+// request→response pair as a conversation thread.
+type ThreadRelation struct {
+	RelType       string     `json:"rel_type"`
+	EventID       string     `json:"event_id"`
+	IsFallingBack bool       `json:"is_falling_back,omitempty"`
+	InReplyTo     *InReplyTo `json:"m.in_reply_to,omitempty"`
+}
+
+// InReplyTo identifies the event being replied to within a thread
+// relation. This is the fallback reply target for clients that do
+// not support threads.
+type InReplyTo struct {
+	EventID string `json:"event_id"`
+}
+
+// NewThreadRelation constructs a ThreadRelation for a threaded reply
+// to the given event ID. This matches the structure the daemon uses
+// when posting command results and pipeline results.
+func NewThreadRelation(eventID string) *ThreadRelation {
+	return &ThreadRelation{
+		RelType:       "m.thread",
+		EventID:       eventID,
+		IsFallingBack: true,
+		InReplyTo: &InReplyTo{
+			EventID: eventID,
+		},
+	}
 }
 
 // TicketContent is the content of an EventTypeTicket state event. Each

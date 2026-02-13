@@ -43,7 +43,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	// Publish a test template. Same structure as the quickstart test:
 	// PID namespace, security flags, bind-mounted test agent binary,
 	// standard environment variable expansion.
-	templateRoomAlias := "#bureau/template:" + testServerName
+	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
 	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
 	if err != nil {
 		t.Fatalf("resolve template room: %v", err)

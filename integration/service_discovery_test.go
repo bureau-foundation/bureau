@@ -5,6 +5,8 @@ package integration_test
 
 import (
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // TestServiceDiscovery exercises the full cross-machine service discovery
@@ -60,12 +62,12 @@ func TestServiceDiscovery(t *testing.T) {
 	// Publish a service event in #bureau/service advertising the service.
 	// The consumer daemon detects this via /sync and pushes the directory
 	// to its principals' proxies.
-	serviceRoomID, err := admin.ResolveAlias(ctx, "#bureau/service:"+testServerName)
+	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
 
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
+	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
 		"service/stt/test", map[string]any{
 			"principal":    serviceAgent.UserID,
 			"machine":      provider.UserID,
@@ -187,7 +189,7 @@ func TestServiceDiscovery(t *testing.T) {
 		// Deregister the service by publishing an empty-content state event.
 		// The daemon's syncServiceDirectory skips entries with empty
 		// Principal (services.go:67), treating this as a deregistration.
-		_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
+		_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
 			"service/stt/test", map[string]any{})
 		if err != nil {
 			t.Fatalf("deregister service: %v", err)
@@ -217,7 +219,7 @@ func TestServiceDiscovery(t *testing.T) {
 			},
 		})
 
-		_, err = admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service",
+		_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
 			"service/embedding/test", map[string]any{
 				"principal":    embeddingAgent.UserID,
 				"machine":      provider.UserID,

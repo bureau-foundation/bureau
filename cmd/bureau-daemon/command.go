@@ -59,7 +59,7 @@ var builtinCommands = map[string]commandDefinition{
 func (d *Daemon) processCommandMessages(ctx context.Context, roomID string, events []messaging.Event) {
 	for _, event := range events {
 		// Only process m.room.message events.
-		if event.Type != "m.room.message" {
+		if event.Type != schema.MatrixEventTypeMessage {
 			continue
 		}
 
@@ -185,7 +185,7 @@ func (d *Daemon) workspacePath(workspace string) string {
 // checks that the sender's power level meets the required threshold.
 // Returns an error if authorization fails or power levels cannot be read.
 func (d *Daemon) authorizeCommand(ctx context.Context, roomID, sender string, requiredLevel int) error {
-	raw, err := d.session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
+	raw, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
 		// If the room has no power levels event (unlikely but possible),
 		// treat as denied rather than defaulting to open.
@@ -237,40 +237,32 @@ func getNumericField(data map[string]any, key string) float64 {
 	return value
 }
 
-// threadRelation builds the m.relates_to structure for a threaded reply
-// to the given event ID.
-func threadRelation(eventID string) map[string]any {
-	return map[string]any{
-		"rel_type":        "m.thread",
-		"event_id":        eventID,
-		"is_falling_back": true,
-		"m.in_reply_to": map[string]any{
-			"event_id": eventID,
-		},
-	}
-}
-
 // postCommandResult posts a successful command result as a threaded
 // reply to the original command message.
 func (d *Daemon) postCommandResult(ctx context.Context, roomID, commandEventID string, command schema.CommandMessage, start time.Time, result any) {
 	durationMilliseconds := time.Since(start).Milliseconds()
 
-	body := fmt.Sprintf("%s: completed in %dms", command.Command, durationMilliseconds)
-
-	content := map[string]any{
-		"msgtype":      schema.MsgTypeCommandResult,
-		"body":         body,
-		"status":       "success",
-		"result":       result,
-		"duration_ms":  durationMilliseconds,
-		"m.relates_to": threadRelation(commandEventID),
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		d.logger.Error("failed to marshal command result",
+			"room_id", roomID,
+			"command", command.Command,
+			"error", err,
+		)
+		return
 	}
 
-	if command.RequestID != "" {
-		content["request_id"] = command.RequestID
+	message := schema.CommandResultMessage{
+		MsgType:    schema.MsgTypeCommandResult,
+		Body:       fmt.Sprintf("%s: completed in %dms", command.Command, durationMilliseconds),
+		Status:     "success",
+		Result:     json.RawMessage(resultJSON),
+		DurationMS: durationMilliseconds,
+		RequestID:  command.RequestID,
+		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command result",
 			"room_id", roomID,
 			"command", command.Command,
@@ -290,22 +282,17 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID, commandEventID st
 		"error", errorMessage,
 	)
 
-	body := fmt.Sprintf("%s: error: %s", command.Command, errorMessage)
-
-	content := map[string]any{
-		"msgtype":      schema.MsgTypeCommandResult,
-		"body":         body,
-		"status":       "error",
-		"error":        errorMessage,
-		"duration_ms":  durationMilliseconds,
-		"m.relates_to": threadRelation(commandEventID),
+	message := schema.CommandResultMessage{
+		MsgType:    schema.MsgTypeCommandResult,
+		Body:       fmt.Sprintf("%s: error: %s", command.Command, errorMessage),
+		Status:     "error",
+		Error:      errorMessage,
+		DurationMS: durationMilliseconds,
+		RequestID:  command.RequestID,
+		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if command.RequestID != "" {
-		content["request_id"] = command.RequestID
-	}
-
-	if _, err := d.session.SendEvent(ctx, roomID, "m.room.message", content); err != nil {
+	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command error",
 			"room_id", roomID,
 			"command", command.Command,

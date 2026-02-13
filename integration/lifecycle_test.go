@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -45,7 +46,7 @@ func TestMachineLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestMachineLifecycle(t *testing.T) {
 	// The launcher published this during first boot (which already completed),
 	// so the event exists in the room state — read it directly.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_key", machineName)
+		schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 		// Wait for MachineStatus heartbeat.
 		statusJSON := statusWatch.WaitForStateEvent(t,
-			"m.bureau.machine_status", machineName)
+			schema.EventTypeMachineStatus, machineName)
 		var status struct {
 			Principal string `json:"principal"`
 		}
@@ -202,7 +203,7 @@ func TestMachineLifecycle(t *testing.T) {
 		}
 
 		// Verify the config room was created.
-		configAlias := "#bureau/config/" + machineName + ":" + testServerName
+		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
@@ -255,7 +256,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
 		statusWatch.WaitForStateEvent(t,
-			"m.bureau.machine_status", machineName)
+			schema.EventTypeMachineStatus, machineName)
 		t.Log("machine reconnected and published status after restart")
 	})
 
@@ -267,7 +268,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// Verify machine key was cleared (empty content).
 	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_key", machineName)
+		schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		t.Fatalf("get machine key after decommission: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// Verify machine status was cleared.
 	clearedStatusJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_status", machineName)
+		schema.EventTypeMachineStatus, machineName)
 	if err != nil {
 		t.Fatalf("get machine status after decommission: %v", err)
 	}
@@ -318,7 +319,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, "#bureau/machine:"+testServerName)
+	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
@@ -402,11 +403,11 @@ func TestTwoMachineFleet(t *testing.T) {
 	// Verify both machine keys are published. First boot already completed,
 	// so these events exist in room state — read them directly.
 	if _, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_key", machineAName); err != nil {
+		schema.EventTypeMachineKey, machineAName); err != nil {
 		t.Fatalf("get machine A key: %v", err)
 	}
 	if _, err := admin.GetStateEvent(ctx, machineRoomID,
-		"m.bureau.machine_key", machineBName); err != nil {
+		schema.EventTypeMachineKey, machineBName); err != nil {
 		t.Fatalf("get machine B key: %v", err)
 	}
 
@@ -444,9 +445,9 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	// Wait for both daemons to publish MachineStatus heartbeats.
 	statusWatch.WaitForStateEvent(t,
-		"m.bureau.machine_status", machineAName)
+		schema.EventTypeMachineStatus, machineAName)
 	statusWatch.WaitForStateEvent(t,
-		"m.bureau.machine_status", machineBName)
+		schema.EventTypeMachineStatus, machineBName)
 	t.Log("both daemons running and publishing status")
 
 	// --- Verify mutual visibility ---
@@ -457,7 +458,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 	keyCount := 0
 	for _, event := range events {
-		if event.Type == "m.bureau.machine_key" && event.StateKey != nil {
+		if event.Type == schema.EventTypeMachineKey && event.StateKey != nil {
 			contentBytes, _ := json.Marshal(event.Content)
 			var key struct {
 				PublicKey string `json:"public_key"`
@@ -527,7 +528,7 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	// Resolve config rooms (created by daemons) and push credentials + config.
 	for _, p := range principals {
-		configAlias := "#bureau/config/" + p.machineSetup.name + ":" + testServerName
+		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(p.machineSetup.name), testServerName)
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room %s not created: %v", configAlias, err)
@@ -551,7 +552,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			t.Fatalf("encrypt credentials for %s: %v", p.localpart, err)
 		}
 
-		_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials",
+		_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials,
 			p.localpart, map[string]any{
 				"version":        1,
 				"principal":      p.userID,
@@ -565,7 +566,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			t.Fatalf("push credentials for %s: %v", p.localpart, err)
 		}
 
-		_, err = admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config",
+		_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
 			p.machineSetup.name, map[string]any{
 				"principals": []map[string]any{
 					{
@@ -651,7 +652,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	// Verify both machine keys are cleared.
 	for _, name := range []string{machineAName, machineBName} {
 		keyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-			"m.bureau.machine_key", name)
+			schema.EventTypeMachineKey, name)
 		if err != nil {
 			t.Fatalf("get machine key for %s after decommission: %v", name, err)
 		}

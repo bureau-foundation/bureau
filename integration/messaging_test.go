@@ -6,6 +6,7 @@ package integration_test
 import (
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -33,8 +34,8 @@ func TestTwoAgentMessaging(t *testing.T) {
 
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{
-			{Account: alice, MatrixPolicy: map[string]any{"allow_join": true}},
-			{Account: bob, MatrixPolicy: map[string]any{"allow_join": true}},
+			{Account: alice, MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
+			{Account: bob, MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
 		},
 	})
 

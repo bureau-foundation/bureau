@@ -48,7 +48,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// with the absolute binary path bind-mounted into the sandbox (same
 	// pattern as the workspace integration tests). For the real quickstart
 	// CLI, the binary would come from the Nix runner-env PATH.
-	templateRoomAlias := "#bureau/template:" + testServerName
+	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
 	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
 	if err != nil {
 		t.Fatalf("resolve template room: %v", err)

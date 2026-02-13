@@ -38,7 +38,7 @@ func TestRoomHasStateChanges(t *testing.T) {
 			room: messaging.JoinedRoom{
 				Timeline: messaging.TimelineSection{
 					Events: []messaging.Event{
-						{Type: "m.room.message", Content: map[string]any{"body": "hello"}},
+						{Type: schema.MatrixEventTypeMessage, Content: map[string]any{"body": "hello"}},
 					},
 				},
 			},
@@ -49,7 +49,7 @@ func TestRoomHasStateChanges(t *testing.T) {
 			room: messaging.JoinedRoom{
 				State: messaging.StateSection{
 					Events: []messaging.Event{
-						{Type: "m.bureau.machine_config", StateKey: &stateKey},
+						{Type: schema.EventTypeMachineConfig, StateKey: &stateKey},
 					},
 				},
 			},
@@ -60,7 +60,7 @@ func TestRoomHasStateChanges(t *testing.T) {
 			room: messaging.JoinedRoom{
 				Timeline: messaging.TimelineSection{
 					Events: []messaging.Event{
-						{Type: "m.bureau.service", StateKey: &stateKey, Content: map[string]any{}},
+						{Type: schema.EventTypeService, StateKey: &stateKey, Content: map[string]any{}},
 					},
 				},
 			},

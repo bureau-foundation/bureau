@@ -248,7 +248,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 	// --- Publish a test template to the template room ---
 	// The daemon resolves templates via the machine's Matrix session.
 	// The machine must be a member of the template room to read it.
-	templateRoomAlias := "#bureau/template:" + testServerName
+	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
 	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
 	if err != nil {
 		t.Fatalf("resolve template room: %v", err)
@@ -370,7 +370,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 							{
 								"name": "publish-active",
 								"publish": map[string]any{
-									"event_type": "m.bureau.workspace",
+									"event_type": schema.EventTypeWorkspace,
 									"room":       "${WORKSPACE_ROOM_ID}",
 									"content": map[string]any{
 										"status":     "active",
@@ -425,7 +425,7 @@ func TestWorkspacePipelineExecution(t *testing.T) {
 							{
 								"name": "publish-archived",
 								"publish": map[string]any{
-									"event_type": "m.bureau.workspace",
+									"event_type": schema.EventTypeWorkspace,
 									"room":       "${WORKSPACE_ROOM_ID}",
 									"content": map[string]any{
 										"status":     "archived",
@@ -519,7 +519,7 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 	}
 
 	// Add as child of Bureau space.
-	_, err = admin.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
+	_, err = admin.SendStateEvent(ctx, spaceRoomID, schema.MatrixEventTypeSpaceChild, response.RoomID,
 		map[string]any{"via": []string{testServerName}})
 	if err != nil {
 		t.Fatalf("add workspace room as space child: %v", err)

@@ -273,7 +273,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Intercept message sends to the config room. SendEvent uses
 		// PUT with url.PathEscape on room ID and event type.
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -501,7 +501,7 @@ func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, mach
 
 	state := newMockMatrixState()
 
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:     []string{"/bin/echo", "hello"},

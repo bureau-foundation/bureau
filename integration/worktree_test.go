@@ -97,7 +97,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		requestID := "ws-status-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.status testproj",
@@ -144,7 +144,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		requestID := "ws-du-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.du testproj",
@@ -186,7 +186,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		requestID := "ws-wtlist-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.list testproj",
@@ -225,7 +225,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		requestID := "ws-fetch-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.fetch testproj",
@@ -262,7 +262,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		requestID := "ws-status-ne-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.status nonexistent",
@@ -372,7 +372,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-add-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.add feature/test-branch",
@@ -405,7 +405,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-rm-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.remove feature/test-branch",
@@ -437,7 +437,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-nopath-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:    schema.MsgTypeCommand,
 				Body:       "workspace.worktree.add (no path)",
@@ -472,7 +472,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-trav-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.add ../escape",
@@ -507,7 +507,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-badmode-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.remove feature/x (bad mode)",
@@ -543,7 +543,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		requestID := "wt-nows-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
 
-		_, err := admin.SendEvent(ctx, workspaceRoomID, "m.room.message",
+		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.add (no workspace)",

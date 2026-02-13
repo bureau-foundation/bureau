@@ -549,7 +549,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -679,7 +679,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -702,7 +702,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -843,7 +843,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -861,7 +861,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/m.room.message/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -960,7 +960,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	// Template with same command but different payload.
 	state := newMockMatrixState()
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:        []string{"/bin/agent", "--mode=v1"},
 		DefaultPayload: map[string]any{"model": "claude-4"},

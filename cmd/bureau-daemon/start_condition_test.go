@@ -460,7 +460,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 
 	// Ticket event with an array "labels" field containing "bug".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-1", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-1", map[string]any{
 		"title":  "Fix the widget",
 		"labels": []any{"bug", "p1", "frontend"},
 		"status": "open",
@@ -473,7 +473,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-1",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
@@ -518,7 +518,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 
 	// Ticket with labels that do NOT include "security".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-2", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-2", map[string]any{
 		"title":  "Improve performance",
 		"labels": []any{"enhancement", "backend"},
 		"status": "open",
@@ -531,7 +531,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-2",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("security")},
@@ -576,7 +576,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 
 	// Array with non-string elements only.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-3", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-3", map[string]any{
 		"title":  "Numeric labels",
 		"labels": []any{42, true, map[string]any{"nested": "value"}},
 		"status": "open",
@@ -589,7 +589,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-3",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("42")},
@@ -633,7 +633,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-4", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-4", map[string]any{
 		"title":  "Security bug",
 		"labels": []any{"bug", "security", "p0"},
 		"status": "open",
@@ -647,7 +647,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-4",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("open"), "labels": schema.Eq("security")},
@@ -690,7 +690,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-5", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-5", map[string]any{
 		"title":  "Feature request",
 		"labels": []any{"enhancement", "backend"},
 		"status": "open",
@@ -704,7 +704,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-5",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("open"), "labels": schema.Eq("security")},
@@ -747,7 +747,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-6", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-6", map[string]any{
 		"title":  "Unlabeled ticket",
 		"labels": []any{},
 		"status": "open",
@@ -760,7 +760,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-6",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
@@ -1251,7 +1251,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	// Ticket event with an array field. The "labels" array contains "urgent"
 	// which will satisfy the ContentMatch condition.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-100", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-100", map[string]any{
 		"title":    "Critical production issue",
 		"labels":   []any{"urgent", "production", "p0"},
 		"status":   "open",
@@ -1265,7 +1265,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-100",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("urgent")},
@@ -1411,7 +1411,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 
 	// Initial ticket has labels that do NOT include "reviewed".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-200", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-200", map[string]any{
 		"title":  "Needs code review",
 		"labels": []any{"pending", "feature"},
 		"status": "open",
@@ -1424,7 +1424,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-200",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("reviewed")},
@@ -1454,7 +1454,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	tracker.mu.Unlock()
 
 	// Simulate the review being completed: "reviewed" is now in the labels array.
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-200", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-200", map[string]any{
 		"title":  "Needs code review",
 		"labels": []any{"pending", "feature", "reviewed"},
 		"status": "open",
@@ -1497,7 +1497,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 
 	// Ticket initially has "active" in its tags array.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-300", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-300", map[string]any{
 		"title": "Active work item",
 		"tags":  []any{"active", "sprint-42"},
 	})
@@ -1509,7 +1509,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-300",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"tags": schema.Eq("active")},
@@ -1539,7 +1539,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	tracker.mu.Unlock()
 
 	// Simulate the ticket being moved to "done": remove "active" from the tags.
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-300", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-300", map[string]any{
 		"title": "Active work item",
 		"tags":  []any{"done", "sprint-42"},
 	})
@@ -1581,7 +1581,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 
 	// Ticket with labels containing "bug" and "frontend" but NOT "backend".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-400", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-400", map[string]any{
 		"title":  "UI rendering glitch",
 		"labels": []any{"bug", "frontend", "p1"},
 		"status": "open",
@@ -1594,7 +1594,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
@@ -1605,7 +1605,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("frontend")},
@@ -1616,7 +1616,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("backend")},
@@ -1698,7 +1698,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 
 	// Start with "category" as a plain string value "infrastructure".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-500", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-500", map[string]any{
 		"title":    "Server migration",
 		"category": "infrastructure",
 	})
@@ -1710,7 +1710,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
-					EventType:    "m.bureau.ticket",
+					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-500",
 					RoomAlias:    "#tickets:test.local",
 					ContentMatch: schema.ContentMatch{"category": schema.Eq("infrastructure")},
@@ -1741,7 +1741,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 
 	// Update the field from a string to an array that still contains the
 	// value. The principal should remain running (condition is still satisfied).
-	matrixState.setStateEvent(ticketRoomID, "m.bureau.ticket", "TICKET-500", map[string]any{
+	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-500", map[string]any{
 		"title":    "Server migration",
 		"category": []any{"infrastructure", "networking"},
 	})
@@ -1780,7 +1780,7 @@ func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID, mach
 
 	state := newMockMatrixState()
 
-	state.setRoomAlias("#bureau/template:test.local", templateRoomID)
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/echo", "hello"},
 	})

@@ -96,11 +96,11 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
-	if events["m.bureau.machine_config"] != 100 {
-		t.Errorf("m.bureau.machine_config power level = %v, want 100", events["m.bureau.machine_config"])
+	if events[schema.EventTypeMachineConfig] != 100 {
+		t.Errorf("%s power level = %v, want 100", schema.EventTypeMachineConfig, events[schema.EventTypeMachineConfig])
 	}
-	if events["m.bureau.credentials"] != 100 {
-		t.Errorf("m.bureau.credentials power level = %v, want 100", events["m.bureau.credentials"])
+	if events[schema.EventTypeCredentials] != 100 {
+		t.Errorf("%s power level = %v, want 100", schema.EventTypeCredentials, events[schema.EventTypeCredentials])
 	}
 
 	// Default event power level should be 100 (admin-only room).

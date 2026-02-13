@@ -382,8 +382,8 @@ func (ts *TicketService) roomStats() []roomSummary {
 }
 
 type roomSummary struct {
-	RoomID     string         `json:"room_id"`
-	Tickets    int            `json:"tickets"`
-	ByStatus   map[string]int `json:"by_status"`
-	ByPriority map[int]int    `json:"by_priority"`
+	RoomID     string         `cbor:"room_id"`
+	Tickets    int            `cbor:"tickets"`
+	ByStatus   map[string]int `cbor:"by_status"`
+	ByPriority map[int]int    `cbor:"by_priority"`
 }

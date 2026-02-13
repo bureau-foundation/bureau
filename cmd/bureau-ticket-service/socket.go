@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/bureau-foundation/bureau/lib/service"
 )
@@ -35,22 +34,22 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 // statusResponse is the response to the "status" action.
 type statusResponse struct {
 	// UptimeSeconds is how long the service has been running.
-	UptimeSeconds float64 `json:"uptime_seconds"`
+	UptimeSeconds float64 `cbor:"uptime_seconds"`
 
 	// Rooms is the number of rooms with ticket management enabled.
-	Rooms int `json:"rooms"`
+	Rooms int `cbor:"rooms"`
 
 	// TotalTickets is the total number of tickets across all rooms.
-	TotalTickets int `json:"total_tickets"`
+	TotalTickets int `cbor:"total_tickets"`
 
 	// RoomDetails lists per-room ticket summaries.
-	RoomDetails []roomSummary `json:"room_details"`
+	RoomDetails []roomSummary `cbor:"room_details"`
 }
 
 // handleStatus returns health and diagnostic information about the
 // service. This action does not require authentication — it's a
 // health check endpoint.
-func (ts *TicketService) handleStatus(ctx context.Context, raw json.RawMessage) (any, error) {
+func (ts *TicketService) handleStatus(ctx context.Context, raw []byte) (any, error) {
 	uptime := ts.clock.Now().Sub(ts.startedAt)
 
 	return statusResponse{

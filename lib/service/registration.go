@@ -19,8 +19,8 @@ type Registration struct {
 	Machine string
 
 	// Protocol is the wire protocol on the service socket. Bureau
-	// services use "ndjson" (newline-delimited JSON, one request-
-	// response per connection). External services may use "http".
+	// services use "cbor" (one CBOR request-response per connection).
+	// External services may use "http".
 	Protocol string
 
 	// Description is a human-readable summary shown in service

@@ -451,7 +451,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 	t.Cleanup(func() { serviceListener.Close() })
 
 	// Accept connections on the mock service socket (drain them so
-	// nothing blocks). A real service would process NDJSON requests;
+	// nothing blocks). A real service would process CBOR requests;
 	// here we just accept and close to prove the socket is reachable.
 	go func() {
 		for {

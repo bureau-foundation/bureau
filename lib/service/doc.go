@@ -15,7 +15,7 @@
 //     events in #bureau/service.
 //   - Sync loop: incremental Matrix /sync long-poll with backoff,
 //     delivering responses to a caller-provided handler.
-//   - Socket server: NDJSON Unix socket server with action dispatch,
+//   - Socket server: CBOR Unix socket server with action dispatch,
 //     connection timeouts, and graceful shutdown.
 //
 // Services compose these utilities in their own main() function rather
@@ -30,9 +30,9 @@
 // in RequiredServices get the socket bind-mounted. Verified caller
 // identity will be provided by the authorization framework (daemon-side
 // intermediary sockets that inject authenticated principal metadata
-// into requests before forwarding). The NDJSON protocol is designed
-// to accommodate this: JSON objects are extensible, and the reserved
-// _principal field will carry daemon-injected identity when available.
-// Services must never trust a _principal field until the authorization
-// framework is in place.
+// into requests before forwarding). The CBOR protocol accommodates
+// this: CBOR maps are extensible, and the reserved _principal field
+// will carry daemon-injected identity when available. Services must
+// never trust a _principal field until the authorization framework is
+// in place.
 package service

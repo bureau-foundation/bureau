@@ -122,7 +122,7 @@ func run() error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 	if err := service.Register(ctx, session, serviceRoomID, principalName, serverName, service.Registration{
 		Machine:      machineUserID,
-		Protocol:     "ndjson",
+		Protocol:     "cbor",
 		Description:  "Ticket tracking and coordination service",
 		Capabilities: []string{"dependency-graph", "gate-evaluation"},
 	}); err != nil {

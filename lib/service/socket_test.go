@@ -4,9 +4,7 @@
 package service
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,11 +13,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
-// sendRequest connects to a Unix socket, sends a JSON request, and
-// returns the parsed response.
-func sendRequest(t *testing.T, socketPath string, request any) map[string]any {
+// sendRequest connects to a Unix socket, sends a CBOR request, and
+// returns the decoded response envelope.
+func sendRequest(t *testing.T, socketPath string, request any) Response {
 	t.Helper()
 
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
@@ -28,26 +28,34 @@ func sendRequest(t *testing.T, socketPath string, request any) map[string]any {
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		t.Fatalf("writing request: %v", err)
 	}
 
-	// Signal that we're done writing (half-close). The server reads
-	// one line, so this isn't strictly necessary, but it's good hygiene.
+	// Signal that we're done writing (half-close). CBOR is self-
+	// delimiting so this isn't required by the protocol, but it's
+	// good hygiene.
 	if unixConn, ok := conn.(*net.UnixConn); ok {
 		unixConn.CloseWrite()
 	}
 
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
-		t.Fatalf("reading response: %v", scanner.Err())
-	}
-
-	var response map[string]any
-	if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-		t.Fatalf("parsing response: %v (raw: %s)", err, scanner.Bytes())
+	var response Response
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatalf("decoding response: %v", err)
 	}
 	return response
+}
+
+// decodeData unmarshals the Data field of a response into the given
+// target. Fails the test if decoding fails.
+func decodeData(t *testing.T, response Response, target any) {
+	t.Helper()
+	if len(response.Data) == 0 {
+		t.Fatal("response has no data to decode")
+	}
+	if err := codec.Unmarshal(response.Data, target); err != nil {
+		t.Fatalf("decoding response data: %v", err)
+	}
 }
 
 func testSocketPath(t *testing.T) string {
@@ -66,7 +74,7 @@ func TestSocketServerStatus(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
-	server.Handle("status", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
 		return map[string]any{
 			"uptime_seconds": 42,
 			"rooms":          3,
@@ -84,19 +92,21 @@ func TestSocketServerStatus(t *testing.T) {
 		serveErr = server.Serve(ctx)
 	}()
 
-	// Wait for the socket to appear.
 	waitForSocket(t, socketPath)
 
 	response := sendRequest(t, socketPath, map[string]string{"action": "status"})
 
-	if response["ok"] != true {
-		t.Errorf("expected ok=true, got %v", response["ok"])
+	if !response.OK {
+		t.Errorf("expected ok=true, got false")
 	}
-	if response["uptime_seconds"] != float64(42) {
-		t.Errorf("expected uptime_seconds=42, got %v", response["uptime_seconds"])
+
+	var data map[string]any
+	decodeData(t, response, &data)
+	if data["uptime_seconds"] != uint64(42) {
+		t.Errorf("expected uptime_seconds=42, got %v (%T)", data["uptime_seconds"], data["uptime_seconds"])
 	}
-	if response["rooms"] != float64(3) {
-		t.Errorf("expected rooms=3, got %v", response["rooms"])
+	if data["rooms"] != uint64(3) {
+		t.Errorf("expected rooms=3, got %v (%T)", data["rooms"], data["rooms"])
 	}
 
 	cancel()
@@ -110,7 +120,7 @@ func TestSocketServerUnknownAction(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
-	server.Handle("status", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
 
@@ -128,11 +138,10 @@ func TestSocketServerUnknownAction(t *testing.T) {
 
 	response := sendRequest(t, socketPath, map[string]string{"action": "nonexistent"})
 
-	if response["ok"] != false {
-		t.Errorf("expected ok=false, got %v", response["ok"])
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
 	}
-	errorMessage, _ := response["error"].(string)
-	if errorMessage == "" {
+	if response.Error == "" {
 		t.Error("expected error message for unknown action")
 	}
 
@@ -158,12 +167,12 @@ func TestSocketServerMissingAction(t *testing.T) {
 
 	response := sendRequest(t, socketPath, map[string]string{"foo": "bar"})
 
-	if response["ok"] != false {
-		t.Errorf("expected ok=false, got %v", response["ok"])
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
 	}
 }
 
-func TestSocketServerInvalidJSON(t *testing.T) {
+func TestSocketServerInvalidCBOR(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
@@ -185,17 +194,20 @@ func TestSocketServerInvalidJSON(t *testing.T) {
 	}
 	defer conn.Close()
 
-	conn.Write([]byte("not json at all\n"))
+	// Send garbage bytes that aren't valid CBOR.
+	conn.Write([]byte{0xff, 0xfe, 0xfd, 0xfc, 0xfb})
 
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
-		t.Fatal("expected error response")
+	// Half-close so the server sees EOF after our bytes.
+	if unixConn, ok := conn.(*net.UnixConn); ok {
+		unixConn.CloseWrite()
 	}
 
-	var response map[string]any
-	json.Unmarshal(scanner.Bytes(), &response)
-	if response["ok"] != false {
-		t.Errorf("expected ok=false for invalid JSON, got %v", response["ok"])
+	var response Response
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatalf("decoding error response: %v", err)
+	}
+	if response.OK {
+		t.Errorf("expected ok=false for invalid CBOR, got true")
 	}
 }
 
@@ -203,7 +215,7 @@ func TestSocketServerHandlerError(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
-	server.Handle("fail", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("fail", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, fmt.Errorf("something broke")
 	})
 
@@ -221,11 +233,11 @@ func TestSocketServerHandlerError(t *testing.T) {
 
 	response := sendRequest(t, socketPath, map[string]string{"action": "fail"})
 
-	if response["ok"] != false {
-		t.Errorf("expected ok=false, got %v", response["ok"])
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
 	}
-	if response["error"] != "something broke" {
-		t.Errorf("expected error='something broke', got %v", response["error"])
+	if response.Error != "something broke" {
+		t.Errorf("expected error='something broke', got %q", response.Error)
 	}
 
 	cancel()
@@ -236,7 +248,7 @@ func TestSocketServerNilResult(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
-	server.Handle("noop", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("noop", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
 
@@ -254,12 +266,12 @@ func TestSocketServerNilResult(t *testing.T) {
 
 	response := sendRequest(t, socketPath, map[string]string{"action": "noop"})
 
-	if response["ok"] != true {
-		t.Errorf("expected ok=true, got %v", response["ok"])
+	if !response.OK {
+		t.Errorf("expected ok=true, got false")
 	}
-	// Should only have "ok", nothing else.
-	if len(response) != 1 {
-		t.Errorf("expected 1 field in response, got %d: %v", len(response), response)
+	// Should have no data.
+	if len(response.Data) != 0 {
+		t.Errorf("expected no data in response, got %d bytes", len(response.Data))
 	}
 
 	cancel()
@@ -270,11 +282,11 @@ func TestSocketServerConcurrentRequests(t *testing.T) {
 	socketPath := testSocketPath(t)
 	server := NewSocketServer(socketPath, testLogger())
 
-	server.Handle("echo", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("echo", func(ctx context.Context, raw []byte) (any, error) {
 		var request struct {
-			Value int `json:"value"`
+			Value int `cbor:"value"`
 		}
-		json.Unmarshal(raw, &request)
+		codec.Unmarshal(raw, &request)
 		return map[string]any{"value": request.Value}, nil
 	})
 
@@ -300,11 +312,13 @@ func TestSocketServerConcurrentRequests(t *testing.T) {
 				"action": "echo",
 				"value":  i,
 			})
-			if response["ok"] != true {
+			if !response.OK {
 				t.Errorf("request %d: expected ok=true", i)
 			}
-			if int(response["value"].(float64)) != i {
-				t.Errorf("request %d: expected value=%d, got %v", i, i, response["value"])
+			var data map[string]any
+			decodeData(t, response, &data)
+			if data["value"] != uint64(i) {
+				t.Errorf("request %d: expected value=%d, got %v", i, i, data["value"])
 			}
 		}()
 	}
@@ -320,7 +334,7 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 
 	// Handler that takes a moment to complete.
 	handlerStarted := make(chan struct{})
-	server.Handle("slow", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("slow", func(ctx context.Context, raw []byte) (any, error) {
 		close(handlerStarted)
 		time.Sleep(100 * time.Millisecond)
 		return map[string]any{"completed": true}, nil
@@ -336,7 +350,7 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 	waitForSocket(t, socketPath)
 
 	// Start a slow request.
-	responseChan := make(chan map[string]any, 1)
+	responseChan := make(chan Response, 1)
 	go func() {
 		responseChan <- sendRequest(t, socketPath, map[string]string{"action": "slow"})
 	}()
@@ -347,11 +361,13 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 
 	// The slow request should still complete.
 	response := <-responseChan
-	if response["ok"] != true {
-		t.Errorf("expected ok=true for in-flight request, got %v", response["ok"])
+	if !response.OK {
+		t.Errorf("expected ok=true for in-flight request, got false")
 	}
-	if response["completed"] != true {
-		t.Errorf("expected completed=true, got %v", response["completed"])
+	var data map[string]any
+	decodeData(t, response, &data)
+	if data["completed"] != true {
+		t.Errorf("expected completed=true, got %v", data["completed"])
 	}
 
 	// Serve should return after the in-flight request completes.
@@ -372,7 +388,7 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 
 func TestSocketServerDuplicateHandlerPanics(t *testing.T) {
 	server := NewSocketServer("/tmp/test.sock", testLogger())
-	server.Handle("foo", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("foo", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
 
@@ -382,7 +398,7 @@ func TestSocketServerDuplicateHandlerPanics(t *testing.T) {
 		}
 	}()
 
-	server.Handle("foo", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	server.Handle("foo", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
 }

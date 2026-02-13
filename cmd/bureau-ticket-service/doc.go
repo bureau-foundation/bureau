@@ -5,7 +5,7 @@
 // ticket lifecycle for rooms it has been invited to. It maintains an
 // in-memory index of all tickets in its scope, evaluates gate
 // conditions via the Matrix /sync loop, and serves queries and
-// mutations over a Unix socket using the NDJSON protocol.
+// mutations over a Unix socket using the CBOR protocol.
 //
 // The service is Bureau's first standalone service principal. It
 // establishes patterns that future services (artifact, fleet
@@ -32,7 +32,7 @@
 // # Socket API
 //
 // Agents and the CLI connect to the service's Unix socket and send
-// NDJSON requests (one JSON object per line, one request per
-// connection). The "action" field determines the operation: status,
-// list, ready, show, create, update, close, etc.
+// CBOR requests (one CBOR value per connection). The "action" field
+// determines the operation: status, list, ready, show, create, update,
+// close, etc.
 package main

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -108,28 +107,24 @@ func TestStringSlicesEqual(t *testing.T) {
 }
 
 func TestLocalAndRemoteServices(t *testing.T) {
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-			"service/tts/piper": {
-				Principal: "@service/tts/piper:bureau.local",
-				Machine:   "@machine/cloud-gpu-1:bureau.local",
-				Protocol:  "http",
-			},
-			"service/llm/mixtral": {
-				Principal: "@service/llm/mixtral:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu-1:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.services["service/llm/mixtral"] = &schema.Service{
+		Principal: "@service/llm/mixtral:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
 	}
 
 	local := daemon.localServices()
@@ -154,32 +149,24 @@ func TestLocalAndRemoteServices(t *testing.T) {
 
 func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		machineName:   "machine/workstation",
-		serverName:    "bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-			"service/tts/piper": {
-				Principal: "@service/tts/piper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes:       make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machineName = "machine/workstation"
+	daemon.serverName = "bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	// With no running consumers, reconcileServices should update
@@ -209,19 +196,12 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 
 func TestReconcileServices_NoChanges(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		machineUserID:     "@machine/workstation:bureau.local",
-		services:          make(map[string]*schema.Service),
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes:       make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	// reconcileServices with no changes should be a no-op.
@@ -234,21 +214,13 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 
 func TestReconcileServices_Removal(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		machineUserID:     "@machine/workstation:bureau.local",
-		services:          make(map[string]*schema.Service),
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes: map[string]string{
-			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
-		},
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	// Removing a service that was locally routed should clean up proxyRoutes.
@@ -266,27 +238,18 @@ func TestReconcileServices_Removal(t *testing.T) {
 
 func TestReconcileServices_ServiceMigration(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local", // moved to remote
-				Protocol:  "http",
-			},
-		},
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes: map[string]string{
-			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
-		},
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local", // moved to remote
+		Protocol:  "http",
+	}
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	// Updating a service that moved to a remote machine should remove the
@@ -351,27 +314,18 @@ func TestProxyRouteRegistration(t *testing.T) {
 	go adminServer.Serve(listener)
 	defer adminServer.Close()
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		running: map[string]bool{
-			"agent/alice": true,
-		},
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes:       make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(tempDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.running["agent/alice"] = true
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
 	t.Run("register on add", func(t *testing.T) {
@@ -493,17 +447,13 @@ func TestConfigureConsumerProxy(t *testing.T) {
 	go adminServer.Serve(listener)
 	defer adminServer.Close()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		proxyRoutes: map[string]string{
-			"service-stt-whisper": "/run/bureau/principal/service/stt/whisper.sock",
-			"service-llm-mixtral": "/run/bureau/principal/service/llm/mixtral.sock",
-		},
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(tempDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
+	daemon.proxyRoutes["service-llm-mixtral"] = "/run/bureau/principal/service/llm/mixtral.sock"
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
 	daemon.configureConsumerProxy(context.Background(), "agent/bob")
@@ -537,33 +487,25 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	relaySocket := filepath.Join(socketDir, "relay.sock")
 
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:           clock.Real(),
-		runDir:          principal.DefaultRunDir,
-		machineUserID:   "@machine/workstation:bureau.local",
-		machineName:     "machine/workstation",
-		serverName:      "bureau.local",
-		relaySocketPath: relaySocket,
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-			"service/tts/piper": {
-				Principal: "@service/tts/piper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes:       make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machineName = "machine/workstation"
+	daemon.serverName = "bureau.local"
+	daemon.relaySocketPath = relaySocket
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	daemon.reconcileServices(
@@ -589,28 +531,24 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 }
 
 func TestBuildServiceDirectory(t *testing.T) {
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal:    "@service/stt/whisper:bureau.local",
-				Machine:      "@machine/gpu-1:bureau.local",
-				Capabilities: []string{"streaming", "speaker-diarization"},
-				Protocol:     "http",
-				Description:  "Speech-to-text via Whisper",
-				Metadata:     map[string]any{"model": "large-v3"},
-			},
-			"service/tts/piper": {
-				Principal:    "@service/tts/piper:bureau.local",
-				Machine:      "@machine/gpu-1:bureau.local",
-				Capabilities: []string{"streaming"},
-				Protocol:     "http",
-				Description:  "Text-to-speech via Piper",
-			},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal:    "@service/stt/whisper:bureau.local",
+		Machine:      "@machine/gpu-1:bureau.local",
+		Capabilities: []string{"streaming", "speaker-diarization"},
+		Protocol:     "http",
+		Description:  "Speech-to-text via Whisper",
+		Metadata:     map[string]any{"model": "large-v3"},
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal:    "@service/tts/piper:bureau.local",
+		Machine:      "@machine/gpu-1:bureau.local",
+		Capabilities: []string{"streaming"},
+		Protocol:     "http",
+		Description:  "Text-to-speech via Piper",
 	}
 
 	directory := daemon.buildServiceDirectory()
@@ -652,12 +590,9 @@ func TestBuildServiceDirectory(t *testing.T) {
 }
 
 func TestBuildServiceDirectory_Empty(t *testing.T) {
-	daemon := &Daemon{
-		clock:    clock.Real(),
-		runDir:   principal.DefaultRunDir,
-		services: make(map[string]*schema.Service),
-		logger:   slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	directory := daemon.buildServiceDirectory()
 
@@ -708,13 +643,11 @@ func TestPushDirectoryToProxy(t *testing.T) {
 	go adminServer.Serve(listener)
 	defer adminServer.Close()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(tempDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
 	directory := []adminDirectoryEntry{
@@ -810,27 +743,19 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 		t.Cleanup(func() { server.Close() })
 	}
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		running: map[string]bool{
-			"agent/alice": true,
-			"agent/bob":   true,
-		},
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(tempDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
+	}
+	daemon.running["agent/alice"] = true
+	daemon.running["agent/bob"] = true
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
 	daemon.pushServiceDirectory(context.Background())
@@ -848,21 +773,14 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 
 func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	// When no consumers are running, pushServiceDirectory should be a no-op.
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
 	}
 
 	// Should not panic or error — just return immediately.
@@ -875,28 +793,19 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	relaySocket := filepath.Join(socketDir, "relay.sock")
 
 	adminDir := testutil.SocketDir(t)
-	daemon := &Daemon{
-		clock:           clock.Real(),
-		runDir:          principal.DefaultRunDir,
-		machineUserID:   "@machine/workstation:bureau.local",
-		relaySocketPath: relaySocket,
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local", // now local
-				Protocol:  "http",
-			},
-		},
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		proxyRoutes: map[string]string{
-			"service-stt-whisper": relaySocket, // was remote
-		},
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(adminDir, localpart+".admin.sock")
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.relaySocketPath = relaySocket
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local", // now local
+		Protocol:  "http",
+	}
+	daemon.proxyRoutes["service-stt-whisper"] = relaySocket // was remote
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
 
 	daemon.reconcileServices(

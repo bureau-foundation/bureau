@@ -8,7 +8,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -122,20 +121,14 @@ func TestUptimeSeconds(t *testing.T) {
 
 func TestPublishStatus_SandboxCount(t *testing.T) {
 	// Verify that the running map count is correctly calculated.
-	daemon := &Daemon{
-		clock:       clock.Real(),
-		runDir:      principal.DefaultRunDir,
-		machineName: "machine/test",
-		serverName:  "bureau.local",
-		running: map[string]bool{
-			"iree/amdgpu/pm":      true,
-			"service/stt/whisper": true,
-			"service/tts/piper":   true,
-		},
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.serverName = "bureau.local"
+	daemon.running["iree/amdgpu/pm"] = true
+	daemon.running["service/stt/whisper"] = true
+	daemon.running["service/tts/piper"] = true
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Count running principals the same way publishStatus does.
 	runningCount := 0

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -221,12 +220,10 @@ func TestReadPipelineResultFile(t *testing.T) {
 func TestBuildPipelineExecutorSpec(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		pipelineExecutorBinary: "/nix/store/abc-executor/bin/bureau-pipeline-executor",
-		pipelineEnvironment:    "/nix/store/xyz-runner-env",
-		workspaceRoot:          "/var/bureau/workspace",
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.pipelineExecutorBinary = "/nix/store/abc-executor/bin/bureau-pipeline-executor"
+	daemon.pipelineEnvironment = "/nix/store/xyz-runner-env"
+	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	command := schema.CommandMessage{
 		Command:   "pipeline.execute",
@@ -343,12 +340,10 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		pipelineExecutorBinary: "/usr/bin/executor",
-		pipelineEnvironment:    "", // No Nix environment.
-		workspaceRoot:          "/var/bureau/workspace",
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.pipelineExecutorBinary = "/usr/bin/executor"
+	daemon.pipelineEnvironment = "" // No Nix environment.
+	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	spec := daemon.buildPipelineExecutorSpec("test", "/tmp/result.jsonl",
 		schema.CommandMessage{})
@@ -361,11 +356,9 @@ func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 func TestBuildPipelineExecutorSpec_NoRef(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		pipelineExecutorBinary: "/usr/bin/executor",
-		workspaceRoot:          "/var/bureau/workspace",
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.pipelineExecutorBinary = "/usr/bin/executor"
+	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	// When pipelineRef is empty, the executor resolves via payload.
 	spec := daemon.buildPipelineExecutorSpec("", "/tmp/result.jsonl",

@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -75,33 +74,23 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		session:       session,
-		client:        matrixClient,
-		tokenVerifier: newTokenVerifier(matrixClient, 5*time.Minute, logger),
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers:   []string{"**"},
-				ReadWriteObservers: []string{"**"},
-			},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.client = matrixClient
+	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, logger)
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
 		},
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      "!config:test",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		observeSocketPath: observeSocketPath,
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            logger,
 	}
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.observeSocketPath = observeSocketPath
+	daemon.logger = logger
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	ctx := context.Background()

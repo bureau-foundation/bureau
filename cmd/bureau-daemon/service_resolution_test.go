@@ -12,8 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/authorization"
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -102,32 +100,19 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 principal.DefaultRunDir,
-		stateDir:               t.TempDir(),
-		session:                session,
-		machineName:            machineName,
-		serverName:             serverName,
-		configRoomID:           configRoomID,
-		launcherSocket:         launcherSocket,
-		tokenSigningPrivateKey: signingKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:         make(map[string]*layoutWatcher),
-		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.stateDir = t.TempDir()
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.tokenSigningPrivateKey = signingKey
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil
 	}
 	t.Cleanup(func() {
 		daemon.stopAllHealthMonitors()
@@ -317,32 +302,19 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 principal.DefaultRunDir,
-		stateDir:               t.TempDir(),
-		session:                session,
-		machineName:            machineName,
-		serverName:             serverName,
-		configRoomID:           configRoomID,
-		launcherSocket:         launcherSocket,
-		tokenSigningPrivateKey: signingKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:         make(map[string]*layoutWatcher),
-		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.stateDir = t.TempDir()
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.tokenSigningPrivateKey = signingKey
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil
 	}
 	t.Cleanup(func() {
 		daemon.stopAllHealthMonitors()
@@ -451,32 +423,19 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 principal.DefaultRunDir,
-		stateDir:               t.TempDir(),
-		session:                session,
-		machineName:            machineName,
-		serverName:             serverName,
-		configRoomID:           configRoomID,
-		launcherSocket:         launcherSocket,
-		tokenSigningPrivateKey: signingKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:         make(map[string]*layoutWatcher),
-		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.stateDir = t.TempDir()
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.tokenSigningPrivateKey = signingKey
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil
 	}
 	t.Cleanup(func() {
 		daemon.stopAllHealthMonitors()
@@ -643,32 +602,19 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 principal.DefaultRunDir,
-		stateDir:               t.TempDir(),
-		session:                session,
-		machineName:            machineName,
-		serverName:             serverName,
-		configRoomID:           configRoomID,
-		launcherSocket:         launcherSocket,
-		tokenSigningPrivateKey: signingKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:         make(map[string]*layoutWatcher),
-		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.stateDir = t.TempDir()
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.tokenSigningPrivateKey = signingKey
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil
 	}
 	t.Cleanup(func() {
 		daemon.stopAllHealthMonitors()
@@ -733,32 +679,19 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 principal.DefaultRunDir,
-		stateDir:               t.TempDir(),
-		session:                session,
-		machineName:            machineName,
-		serverName:             serverName,
-		configRoomID:           configRoomID,
-		launcherSocket:         launcherSocket,
-		tokenSigningPrivateKey: tokenSigningPrivateKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		adminSocketPathFunc:    func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:         make(map[string]*layoutWatcher),
-		logger:                 slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.stateDir = t.TempDir()
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.tokenSigningPrivateKey = tokenSigningPrivateKey
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil
 	}
 
 	cleanup := func() {

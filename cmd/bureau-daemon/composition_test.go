@@ -22,8 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/authorization"
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -199,37 +197,22 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 
 	// Construct the daemon directly (not via run()) so we control the lifecycle
 	// and avoid signal handling, polling loops, etc.
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            runDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    launcherSocket,
-		statusInterval:    time.Hour,
-		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs:         make(map[string]*schema.SandboxSpec),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		adminSocketPathFunc: func(localpart string) string {
-			return principal.RunDirAdminSocketPath(runDir, localpart)
-		},
-		layoutWatchers: make(map[string]*layoutWatcher),
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = runDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.statusInterval = time.Hour
+	daemon.tmuxServer = tmux.NewServer(principal.TmuxSocketPath(runDir), "")
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return principal.RunDirAdminSocketPath(runDir, localpart)
 	}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -523,41 +506,25 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		runDir:                 runDir,
-		stateDir:               stateDir,
-		session:                session,
-		machineName:            "machine/test",
-		machineUserID:          "@machine/test:bureau.local",
-		serverName:             "bureau.local",
-		configRoomID:           configRoomID,
-		machineRoomID:          machineRoomID,
-		serviceRoomID:          serviceRoomID,
-		launcherSocket:         launcherSocket,
-		statusInterval:         time.Hour,
-		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
-		tokenSigningPublicKey:  tokenSigningPublicKey,
-		tokenSigningPrivateKey: tokenSigningPrivateKey,
-		authorizationIndex:     authorization.NewIndex(),
-		running:                make(map[string]bool),
-		lastCredentials:        make(map[string]string),
-		lastGrants:             make(map[string][]schema.Grant),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		peerAddresses:          make(map[string]string),
-		peerTransports:         make(map[string]http.RoundTripper),
-		adminSocketPathFunc: func(localpart string) string {
-			return principal.RunDirAdminSocketPath(runDir, localpart)
-		},
-		layoutWatchers: make(map[string]*layoutWatcher),
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = runDir
+	daemon.stateDir = stateDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.statusInterval = time.Hour
+	daemon.tmuxServer = tmux.NewServer(principal.TmuxSocketPath(runDir), "")
+	daemon.tokenSigningPublicKey = tokenSigningPublicKey
+	daemon.tokenSigningPrivateKey = tokenSigningPrivateKey
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return principal.RunDirAdminSocketPath(runDir, localpart)
 	}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -628,31 +595,17 @@ func TestReconcileNoConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      "!config:test",
-		machineRoomID:     "!machine:test",
-		serviceRoomID:     "!service:test",
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.machineRoomID = "!machine:test"
+	daemon.serviceRoomID = "!service:test"
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -856,41 +809,24 @@ func TestProxyCrashRecovery(t *testing.T) {
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	t.Cleanup(shutdownCancel)
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		reconcileNotify:   make(chan struct{}, 10),
-		runDir:            runDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    launcherSocket,
-		statusInterval:    time.Hour,
-		tmuxServer:        tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
-		running:           make(map[string]bool),
-		exitWatchers:      make(map[string]context.CancelFunc),
-		proxyExitWatchers: make(map[string]context.CancelFunc),
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs:         make(map[string]*schema.SandboxSpec),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		adminSocketPathFunc: func(localpart string) string {
-			return principal.RunDirAdminSocketPath(runDir, localpart)
-		},
-		layoutWatchers: make(map[string]*layoutWatcher),
-		shutdownCtx:    shutdownCtx,
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.reconcileNotify = make(chan struct{}, 10)
+	daemon.runDir = runDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.statusInterval = time.Hour
+	daemon.tmuxServer = tmux.NewServer(principal.TmuxSocketPath(runDir), "")
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return principal.RunDirAdminSocketPath(runDir, localpart)
 	}
+	daemon.shutdownCtx = shutdownCtx
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(func() {
 		shutdownCancel()
 		daemon.stopAllLayoutWatchers()

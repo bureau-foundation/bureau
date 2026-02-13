@@ -7,14 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -45,25 +43,15 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, *tmux.Ser
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      "!config:test",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		tmuxServer:        tmuxServer,
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.tmuxServer = tmuxServer
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	return daemon, matrixState, tmuxServer

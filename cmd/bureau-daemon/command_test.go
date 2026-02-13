@@ -17,7 +17,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -98,30 +97,16 @@ func newCommandTestHarness(t *testing.T) *commandTestHarness {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      "!config:test",
-		machineRoomID:     "!machine:test",
-		serviceRoomID:     "!service:test",
-		workspaceRoot:     workspaceRoot,
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs:         make(map[string]*schema.SandboxSpec),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.machineRoomID = "!machine:test"
+	daemon.serviceRoomID = "!service:test"
+	daemon.workspaceRoot = workspaceRoot
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	harness.daemon = daemon
 	return harness

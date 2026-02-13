@@ -237,6 +237,7 @@ func run() error {
 		proxyExitWatchers:      make(map[string]context.CancelFunc),
 		lastCredentials:        make(map[string]string),
 		lastGrants:             make(map[string][]schema.Grant),
+		lastTokenMint:          make(map[string]time.Time),
 		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
 		lastSpecs:              make(map[string]*schema.SandboxSpec),
 		previousSpecs:          make(map[string]*schema.SandboxSpec),
@@ -322,9 +323,11 @@ func run() error {
 		// token, which triggers a fresh initial sync.
 	}
 
-	// Start the incremental sync loop and status heartbeat loop.
+	// Start the incremental sync loop, status heartbeat loop, and
+	// token refresh loop.
 	go daemon.syncLoop(ctx, sinceToken)
 	go daemon.statusLoop(ctx)
+	go daemon.tokenRefreshLoop(ctx)
 
 	// Wait for shutdown.
 	<-ctx.Done()
@@ -439,6 +442,14 @@ type Daemon struct {
 	// call to hot-reload the proxy's grant-based enforcement without
 	// restarting the sandbox.
 	lastGrants map[string][]schema.Grant
+
+	// lastTokenMint stores when service tokens were last minted for
+	// each running principal. The token refresh goroutine checks this
+	// to determine which principals need fresh tokens (those past 80%
+	// of the token TTL). Set during sandbox creation and on each
+	// successful refresh. Reset to zero time when grants change to
+	// trigger an early re-mint. Protected by reconcileMu.
+	lastTokenMint map[string]time.Time
 
 	// lastObservePolicy stores the per-principal ObservePolicy from
 	// the most recent reconcile cycle. Used purely for change detection:

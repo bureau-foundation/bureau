@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/authorization"
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -111,27 +109,17 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Construct a sync response with a config room state change.
@@ -208,27 +196,17 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Construct a sync response with a service room state change.
@@ -306,27 +284,17 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Construct a sync response with a machine room state change.
@@ -401,21 +369,15 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 	t.Cleanup(func() { session.Close() })
 
 	// Pre-populate with two peers. peerB is stale (not in state events).
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		machineUserID: "@machine/test:bureau.local",
-		session:       session,
-		machineRoomID: machineRoomID,
-		peerAddresses: map[string]string{
-			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
-			"@machine/peer-b:bureau.local": "10.0.0.2:9090",
-		},
-		peerTransports: map[string]http.RoundTripper{
-			"10.0.0.1:9090": &http.Transport{},
-			"10.0.0.2:9090": &http.Transport{},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.session = session
+	daemon.machineRoomID = machineRoomID
+	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
+	daemon.peerAddresses["@machine/peer-b:bureau.local"] = "10.0.0.2:9090"
+	daemon.peerTransports["10.0.0.1:9090"] = &http.Transport{}
+	daemon.peerTransports["10.0.0.2:9090"] = &http.Transport{}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
 		t.Fatalf("syncPeerAddresses: %v", err)
@@ -484,19 +446,13 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		machineUserID: "@machine/test:bureau.local",
-		session:       session,
-		machineRoomID: machineRoomID,
-		peerAddresses: map[string]string{
-			"@machine/peer-a:bureau.local": "10.0.0.1:9090",
-		},
-		peerTransports: map[string]http.RoundTripper{
-			"10.0.0.1:9090": &http.Transport{},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.session = session
+	daemon.machineRoomID = machineRoomID
+	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
+	daemon.peerTransports["10.0.0.1:9090"] = &http.Transport{}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
 		t.Fatalf("syncPeerAddresses: %v", err)
@@ -560,20 +516,14 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 
 	// Two peers sharing the same address (e.g., behind a load balancer).
 	sharedAddress := "10.0.0.1:9090"
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		machineUserID: "@machine/test:bureau.local",
-		session:       session,
-		machineRoomID: machineRoomID,
-		peerAddresses: map[string]string{
-			"@machine/peer-a:bureau.local": sharedAddress,
-			"@machine/peer-b:bureau.local": sharedAddress,
-		},
-		peerTransports: map[string]http.RoundTripper{
-			sharedAddress: &http.Transport{},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.session = session
+	daemon.machineRoomID = machineRoomID
+	daemon.peerAddresses["@machine/peer-a:bureau.local"] = sharedAddress
+	daemon.peerAddresses["@machine/peer-b:bureau.local"] = sharedAddress
+	daemon.peerTransports[sharedAddress] = &http.Transport{}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if err := daemon.syncPeerAddresses(context.Background()); err != nil {
 		t.Fatalf("syncPeerAddresses: %v", err)
@@ -613,27 +563,17 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      "!config:test",
-		machineRoomID:     "!machine:test",
-		serviceRoomID:     "!service:test",
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.machineRoomID = "!machine:test"
+	daemon.serviceRoomID = "!service:test"
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Empty sync response — no handlers should fire.
@@ -715,28 +655,18 @@ func TestInitialSync(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		statusInterval:    time.Hour,
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.statusInterval = time.Hour
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -819,27 +749,17 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Sync response with a workspace state event in a workspace room
@@ -904,27 +824,17 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Sync response with an invite to a workspace room.
@@ -990,28 +900,18 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       "machine/test",
-		machineUserID:     "@machine/test:bureau.local",
-		serverName:        "bureau.local",
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		launcherSocket:    "/nonexistent/launcher.sock",
-		statusInterval:    time.Hour,
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
-		layoutWatchers:    make(map[string]*layoutWatcher),
-		logger:            slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = configRoomID
+	daemon.machineRoomID = machineRoomID
+	daemon.serviceRoomID = serviceRoomID
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.statusInterval = time.Hour
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1041,11 +941,9 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	// Initialize the index with a principal so temporal grants can attach.
-	daemon.authorizationIndex = authorization.NewIndex()
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
 	stateKey := "test-grant-ticket"
@@ -1097,10 +995,8 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
-	daemon.authorizationIndex = authorization.NewIndex()
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
 	// Pre-add a temporal grant.
@@ -1153,10 +1049,8 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
-	daemon.authorizationIndex = authorization.NewIndex()
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
 	stateKey := "statekey-grant-ticket"

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -19,10 +18,8 @@ import (
 func TestAuthorizeObserveDefaultDeny(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
 	// No lastConfig — everything should be denied.
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if authz.Allowed {
@@ -33,15 +30,13 @@ func TestAuthorizeObserveDefaultDeny(t *testing.T) {
 func TestAuthorizeObserveNoPolicyDeny(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{Localpart: "iree/amdgpu/pm", AutoStart: true},
-			},
-			// No DefaultObservePolicy and no per-principal ObservePolicy.
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "iree/amdgpu/pm", AutoStart: true},
 		},
+		// No DefaultObservePolicy and no per-principal ObservePolicy.
 	}
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if authz.Allowed {
@@ -52,16 +47,14 @@ func TestAuthorizeObserveNoPolicyDeny(t *testing.T) {
 func TestAuthorizeObserveDefaultPolicyAllows(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers: []string{"**"},
-			},
-			Principals: []schema.PrincipalAssignment{
-				{Localpart: "iree/amdgpu/pm", AutoStart: true},
-			},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "iree/amdgpu/pm", AutoStart: true},
 		},
 	}
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readonly")
@@ -76,21 +69,19 @@ func TestAuthorizeObserveDefaultPolicyAllows(t *testing.T) {
 func TestAuthorizeObservePrincipalPolicyOverridesDefault(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers: []string{"**"},
-			},
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						// Principal-level policy only allows specific observer.
-						AllowedObservers: []string{"ops/alice"},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					// Principal-level policy only allows specific observer.
+					AllowedObservers: []string{"ops/alice"},
 				},
 			},
 		},
@@ -112,17 +103,15 @@ func TestAuthorizeObservePrincipalPolicyOverridesDefault(t *testing.T) {
 func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers:   []string{"**"},
-				ReadWriteObservers: []string{"ops/**"},
-			},
-			Principals: []schema.PrincipalAssignment{
-				{Localpart: "iree/amdgpu/pm", AutoStart: true},
-			},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"ops/**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "iree/amdgpu/pm", AutoStart: true},
 		},
 	}
 
@@ -149,17 +138,15 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers:   []string{"**"},
-				ReadWriteObservers: []string{"**"},
-			},
-			Principals: []schema.PrincipalAssignment{
-				{Localpart: "iree/amdgpu/pm", AutoStart: true},
-			},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "iree/amdgpu/pm", AutoStart: true},
 		},
 	}
 
@@ -177,16 +164,14 @@ func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers: []string{"ops/*"},
-			},
-			Principals: []schema.PrincipalAssignment{
-				{Localpart: "iree/amdgpu/pm", AutoStart: true},
-			},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers: []string{"ops/*"},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "iree/amdgpu/pm", AutoStart: true},
 		},
 	}
 
@@ -212,16 +197,14 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 func TestAuthorizeObserveUnknownPrincipal(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers: []string{"**"},
-			},
-			// No principals listed — an unknown principal still uses
-			// the default policy.
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers: []string{"**"},
 		},
+		// No principals listed — an unknown principal still uses
+		// the default policy.
 	}
 
 	authz := daemon.authorizeObserve("@ben:bureau.local", "unknown/principal", "readonly")
@@ -233,24 +216,22 @@ func TestAuthorizeObserveUnknownPrincipal(t *testing.T) {
 func TestAuthorizeListFiltering(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers: []string{"ops/**"},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers: []string{"ops/**"},
 				},
-				{
-					Localpart: "iree/amdgpu/builder",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers: []string{"**"},
-					},
+			},
+			{
+				Localpart: "iree/amdgpu/builder",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers: []string{"**"},
 				},
 			},
 		},
@@ -283,19 +264,17 @@ func TestFindObservePolicyFallback(t *testing.T) {
 		AllowedObservers: []string{"ops/**"},
 	}
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: defaultPolicy,
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart:     "with-policy",
-					ObservePolicy: principalPolicy,
-				},
-				{
-					Localpart: "without-policy",
-				},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: defaultPolicy,
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart:     "with-policy",
+				ObservePolicy: principalPolicy,
+			},
+			{
+				Localpart: "without-policy",
 			},
 		},
 	}
@@ -359,32 +338,30 @@ func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
 
 	connection := &mockConn{}
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		// Policy initially allowed ops/** to observe, but has now been
-		// changed to only allow ops/alice. The session below is for
-		// ops/bob, who is no longer in AllowedObservers.
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers: []string{"ops/alice"},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// Policy initially allowed ops/** to observe, but has now been
+	// changed to only allow ops/alice. The session below is for
+	// ops/bob, who is no longer in AllowedObservers.
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers: []string{"ops/alice"},
 				},
 			},
 		},
-		observeSessions: []*activeObserveSession{
-			{
-				principal:   "iree/amdgpu/pm",
-				observer:    "@ops/bob:bureau.local",
-				grantedMode: "readonly",
-				clientConn:  connection,
-			},
+	}
+	daemon.observeSessions = []*activeObserveSession{
+		{
+			principal:   "iree/amdgpu/pm",
+			observer:    "@ops/bob:bureau.local",
+			grantedMode: "readonly",
+			clientConn:  connection,
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
@@ -399,30 +376,28 @@ func TestEnforceObservePolicyChangeRetain(t *testing.T) {
 
 	connection := &mockConn{}
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		// Policy allows ops/** — ops/bob is still authorized.
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers: []string{"ops/**"},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// Policy allows ops/** — ops/bob is still authorized.
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers: []string{"ops/**"},
 				},
 			},
 		},
-		observeSessions: []*activeObserveSession{
-			{
-				principal:   "iree/amdgpu/pm",
-				observer:    "@ops/bob:bureau.local",
-				grantedMode: "readonly",
-				clientConn:  connection,
-			},
+	}
+	daemon.observeSessions = []*activeObserveSession{
+		{
+			principal:   "iree/amdgpu/pm",
+			observer:    "@ops/bob:bureau.local",
+			grantedMode: "readonly",
+			clientConn:  connection,
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
@@ -437,33 +412,31 @@ func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
 
 	connection := &mockConn{}
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		// Policy still allows ops/** to observe, but ReadWriteObservers
-		// has been narrowed to only ops/alice. The session below was
-		// granted readwrite for ops/bob, who now would only get readonly.
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers:   []string{"ops/**"},
-						ReadWriteObservers: []string{"ops/alice"},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// Policy still allows ops/** to observe, but ReadWriteObservers
+	// has been narrowed to only ops/alice. The session below was
+	// granted readwrite for ops/bob, who now would only get readonly.
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers:   []string{"ops/**"},
+					ReadWriteObservers: []string{"ops/alice"},
 				},
 			},
 		},
-		observeSessions: []*activeObserveSession{
-			{
-				principal:   "iree/amdgpu/pm",
-				observer:    "@ops/bob:bureau.local",
-				grantedMode: "readwrite",
-				clientConn:  connection,
-			},
+	}
+	daemon.observeSessions = []*activeObserveSession{
+		{
+			principal:   "iree/amdgpu/pm",
+			observer:    "@ops/bob:bureau.local",
+			grantedMode: "readwrite",
+			clientConn:  connection,
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
@@ -479,43 +452,41 @@ func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
 	targetConnection := &mockConn{}
 	otherConnection := &mockConn{}
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						// Nobody allowed — revokes all sessions.
-						AllowedObservers: []string{},
-					},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					// Nobody allowed — revokes all sessions.
+					AllowedObservers: []string{},
 				},
-				{
-					Localpart: "iree/amdgpu/builder",
-					AutoStart: true,
-					ObservePolicy: &schema.ObservePolicy{
-						AllowedObservers: []string{"ops/**"},
-					},
+			},
+			{
+				Localpart: "iree/amdgpu/builder",
+				AutoStart: true,
+				ObservePolicy: &schema.ObservePolicy{
+					AllowedObservers: []string{"ops/**"},
 				},
 			},
 		},
-		observeSessions: []*activeObserveSession{
-			{
-				principal:   "iree/amdgpu/pm",
-				observer:    "@ops/bob:bureau.local",
-				grantedMode: "readonly",
-				clientConn:  targetConnection,
-			},
-			{
-				principal:   "iree/amdgpu/builder",
-				observer:    "@ops/bob:bureau.local",
-				grantedMode: "readonly",
-				clientConn:  otherConnection,
-			},
+	}
+	daemon.observeSessions = []*activeObserveSession{
+		{
+			principal:   "iree/amdgpu/pm",
+			observer:    "@ops/bob:bureau.local",
+			grantedMode: "readonly",
+			clientConn:  targetConnection,
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		{
+			principal:   "iree/amdgpu/builder",
+			observer:    "@ops/bob:bureau.local",
+			grantedMode: "readonly",
+			clientConn:  otherConnection,
+		},
 	}
 
 	// Only enforce on pm — builder's session should be untouched.
@@ -533,18 +504,16 @@ func TestEnforceObservePolicyChangeNoSessions(t *testing.T) {
 	t.Parallel()
 
 	// Verify no panic when there are no sessions.
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		lastConfig: &schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: "iree/amdgpu/pm",
-					AutoStart: true,
-				},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.lastConfig = &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "iree/amdgpu/pm",
+				AutoStart: true,
 			},
 		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Should not panic with nil observeSessions.

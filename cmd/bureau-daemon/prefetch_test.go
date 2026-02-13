@@ -17,7 +17,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -31,14 +30,12 @@ func TestPrefetchEnvironment_ExistingPath(t *testing.T) {
 
 	existingPath := t.TempDir()
 	called := false
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			called = true
-			return fmt.Errorf("should not be called")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		called = true
+		return fmt.Errorf("should not be called")
 	}
 
 	err := daemon.prefetchEnvironment(context.Background(), existingPath)
@@ -54,14 +51,12 @@ func TestPrefetchEnvironment_MissingPathSuccess(t *testing.T) {
 	t.Parallel()
 
 	var capturedPath string
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			capturedPath = storePath
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		capturedPath = storePath
+		return nil
 	}
 
 	const wantPath = "/nix/store/nonexistent-test-path"
@@ -77,13 +72,11 @@ func TestPrefetchEnvironment_MissingPathSuccess(t *testing.T) {
 func TestPrefetchEnvironment_MissingPathFailure(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return fmt.Errorf("substituter unreachable")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return fmt.Errorf("substituter unreachable")
 	}
 
 	err := daemon.prefetchEnvironment(context.Background(), "/nix/store/nonexistent-test-path")
@@ -101,13 +94,11 @@ func TestPrefetchEnvironment_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return ctx.Err()
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return ctx.Err()
 	}
 
 	err := daemon.prefetchEnvironment(ctx, "/nix/store/nonexistent-test-path")
@@ -126,14 +117,12 @@ func TestPrefetchBureauVersion_AllPaths(t *testing.T) {
 	proxyDir := t.TempDir()
 
 	called := false
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			called = true
-			return fmt.Errorf("should not be called for existing paths")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		called = true
+		return fmt.Errorf("should not be called for existing paths")
 	}
 
 	version := &schema.BureauVersion{
@@ -158,14 +147,12 @@ func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
 	existingDir := t.TempDir()
 
 	var prefetchedPaths []string
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			prefetchedPaths = append(prefetchedPaths, storePath)
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		prefetchedPaths = append(prefetchedPaths, storePath)
+		return nil
 	}
 
 	version := &schema.BureauVersion{
@@ -185,13 +172,11 @@ func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
 func TestPrefetchBureauVersion_PrefetchFailure(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return fmt.Errorf("substituter unavailable")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return fmt.Errorf("substituter unavailable")
 	}
 
 	version := &schema.BureauVersion{
@@ -211,14 +196,12 @@ func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
 	t.Parallel()
 
 	var fetchedPaths []string
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			fetchedPaths = append(fetchedPaths, storePath)
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		fetchedPaths = append(fetchedPaths, storePath)
+		return nil
 	}
 
 	version := &schema.BureauVersion{
@@ -323,29 +306,17 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 
 	// Start with prefetch that always fails.
 	prefetchError := fmt.Errorf("connection to attic refused")
-	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return prefetchError
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return prefetchError
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -446,30 +417,18 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	prefetchCalled := false
-	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			prefetchCalled = true
-			return fmt.Errorf("should not be called")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		prefetchCalled = true
+		return fmt.Errorf("should not be called")
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)

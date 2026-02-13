@@ -19,9 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/binhash"
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -75,12 +73,10 @@ func TestLauncherRequest(t *testing.T) {
 		}
 	}()
 
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		launcherSocket: socketPath,
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.launcherSocket = socketPath
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	t.Run("status", func(t *testing.T) {
 		response, err := daemon.launcherRequest(context.Background(), launcherIPCRequest{
@@ -127,12 +123,10 @@ func TestLauncherRequest(t *testing.T) {
 }
 
 func TestLauncherRequest_ConnectionRefused(t *testing.T) {
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		launcherSocket: "/nonexistent/launcher.sock",
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	_, err := daemon.launcherRequest(context.Background(), launcherIPCRequest{
 		Action: "status",
@@ -419,12 +413,10 @@ func TestQueryLauncherStatus(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		launcherSocket: socketPath,
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.launcherSocket = socketPath
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	hash, proxyPath, err := daemon.queryLauncherStatus(context.Background())
 	if err != nil {
@@ -478,28 +470,15 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	// all — an IPC attempt would error, and we check that reconcile
 	// succeeds without error.
 
-	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastGrants:          make(map[string][]schema.Grant),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -613,29 +592,16 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		daemonHash = binhash.FormatDigest(digest)
 	}
 
-	daemon := &Daemon{
-		clock:               clock.Real(),
-		runDir:              principal.DefaultRunDir,
-		session:             session,
-		machineName:         machineName,
-		serverName:          serverName,
-		configRoomID:        configRoomID,
-		launcherSocket:      launcherSocket,
-		daemonBinaryHash:    daemonHash,
-		running:             make(map[string]bool),
-		lastCredentials:     make(map[string]string),
-		lastGrants:          make(map[string][]schema.Grant),
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.daemonBinaryHash = daemonHash
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -748,32 +714,19 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       machineName,
-		serverName:        serverName,
-		configRoomID:      configRoomID,
-		launcherSocket:    launcherSocket,
-		running:           map[string]bool{"agent/test": true},
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs: map[string]*schema.SandboxSpec{
-			"agent/test": {
-				Command: []string{"/bin/agent", "--mode=v1"},
-			},
-		},
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.running["agent/test"] = true
+	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+		Command: []string{"/bin/agent", "--mode=v1"},
 	}
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -896,33 +849,19 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Payload is nil in both old and new spec — only command differs.
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       machineName,
-		serverName:        serverName,
-		configRoomID:      configRoomID,
-		launcherSocket:    launcherSocket,
-		running:           map[string]bool{"agent/test": true},
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs: map[string]*schema.SandboxSpec{
-			"agent/test": {
-				Command: []string{"/bin/agent", "--mode=v1"},
-				// No payload — verifying structural-only detection.
-			},
-		},
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.running["agent/test"] = true
+	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+		Command: []string{"/bin/agent", "--mode=v1"},
 	}
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -1006,33 +945,20 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Old spec has same command but different payload.
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       machineName,
-		serverName:        serverName,
-		configRoomID:      configRoomID,
-		launcherSocket:    launcherSocket,
-		running:           map[string]bool{"agent/test": true},
-		lastCredentials:   make(map[string]string),
-		lastGrants:        make(map[string][]schema.Grant),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs: map[string]*schema.SandboxSpec{
-			"agent/test": {
-				Command: []string{"/bin/agent", "--mode=v1"},
-				Payload: map[string]any{"model": "gpt-4"},
-			},
-		},
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.running["agent/test"] = true
+	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+		Command: []string{"/bin/agent", "--mode=v1"},
+		Payload: map[string]any{"model": "gpt-4"},
 	}
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
@@ -1087,12 +1013,10 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 		accepted <- conn
 	}()
 
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		launcherSocket: socketPath,
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.launcherSocket = socketPath
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Use a short context timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -1221,9 +1145,7 @@ func TestMergeAuthorizationPolicy_DefaultBeforePrincipal(t *testing.T) {
 func TestRebuildAuthorizationIndex(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
 
 	config := &schema.MachineConfig{
 		DefaultPolicy: &schema.AuthorizationPolicy{
@@ -1271,9 +1193,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
 
 	// First reconcile: two principals.
 	daemon.rebuildAuthorizationIndex(&schema.MachineConfig{
@@ -1315,9 +1235,7 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
 
 	config := &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -1441,14 +1359,11 @@ func TestMintServiceTokens(t *testing.T) {
 
 	stateDir := t.TempDir()
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		machineName:            "machine/test",
-		stateDir:               stateDir,
-		tokenSigningPrivateKey: privateKey,
-		authorizationIndex:     authorization.NewIndex(),
-		logger:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, fakeClock := newTestDaemon(t)
+	fakeClock.Advance(time.Since(testDaemonEpoch))
+	daemon.machineName = "machine/test"
+	daemon.stateDir = stateDir
+	daemon.tokenSigningPrivateKey = privateKey
 
 	// Set up the principal with grants covering the ticket namespace.
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
@@ -1507,9 +1422,7 @@ func TestMintServiceTokens(t *testing.T) {
 func TestMintServiceTokens_NoRequiredServices(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
 
 	tokenDir, err := daemon.mintServiceTokens("agent/alpha", nil)
 	if err != nil {
@@ -1523,11 +1436,8 @@ func TestMintServiceTokens_NoRequiredServices(t *testing.T) {
 func TestMintServiceTokens_MissingPrivateKey(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		stateDir:           t.TempDir(),
-		authorizationIndex: authorization.NewIndex(),
-		logger:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.stateDir = t.TempDir()
 
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
@@ -1550,14 +1460,10 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 
 	stateDir := t.TempDir()
 
-	daemon := &Daemon{
-		clock:                  clock.Real(),
-		machineName:            "machine/test",
-		stateDir:               stateDir,
-		tokenSigningPrivateKey: privateKey,
-		authorizationIndex:     authorization.NewIndex(),
-		logger:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.machineName = "machine/test"
+	daemon.stateDir = stateDir
+	daemon.tokenSigningPrivateKey = privateKey
 
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
@@ -1763,35 +1669,21 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	go adminServer.Serve(adminListener)
 	defer adminServer.Close()
 
-	daemon := &Daemon{
-		clock:          clock.Real(),
-		runDir:         principal.DefaultRunDir,
-		session:        session,
-		machineName:    machineName,
-		serverName:     serverName,
-		configRoomID:   configRoomID,
-		launcherSocket: launcherSocket,
-		running:        map[string]bool{"agent/test": true},
-		lastCredentials: map[string]string{
-			"agent/test": "encrypted-test-credentials",
-		},
-		// Old grants differ from what the config now produces.
-		lastGrants: map[string][]schema.Grant{
-			"agent/test": {
-				{Actions: []string{"matrix/join"}},
-			},
-		},
-		lastObservePolicy:   make(map[string]*schema.ObservePolicy),
-		lastSpecs:           make(map[string]*schema.SandboxSpec),
-		previousSpecs:       make(map[string]*schema.SandboxSpec),
-		lastTemplates:       make(map[string]*schema.TemplateContent),
-		healthMonitors:      make(map[string]*healthMonitor),
-		services:            make(map[string]*schema.Service),
-		proxyRoutes:         make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") },
-		layoutWatchers:      make(map[string]*layoutWatcher),
-		logger:              slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.running["agent/test"] = true
+	daemon.lastCredentials["agent/test"] = "encrypted-test-credentials"
+	// Old grants differ from what the config now produces.
+	daemon.lastGrants["agent/test"] = []schema.Grant{
+		{Actions: []string{"matrix/join"}},
 	}
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 

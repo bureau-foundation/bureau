@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -253,26 +252,23 @@ func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
 		execArgv   []string
 	)
 
-	daemon := &Daemon{
-		clock:            clock.Real(),
-		runDir:           principal.DefaultRunDir,
-		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
-		daemonBinaryHash: "abcd1234",
-		stateDir:         stateDir,
-		failedExecPaths:  make(map[string]bool),
-		session:          newNoopSession(t),
-		configRoomID:     "!config:test.local",
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		execFunc: func(binary string, argv []string, env []string) error {
-			execMu.Lock()
-			defer execMu.Unlock()
-			execCalled = true
-			execBinary = binary
-			execArgv = argv
-			// Return an error to simulate exec failure (so the test
-			// process isn't actually replaced).
-			return errors.New("simulated exec failure")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
+	daemon.daemonBinaryHash = "abcd1234"
+	daemon.stateDir = stateDir
+	daemon.session = newNoopSession(t)
+	daemon.configRoomID = "!config:test.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		execMu.Lock()
+		defer execMu.Unlock()
+		execCalled = true
+		execBinary = binary
+		execArgv = argv
+		// Return an error to simulate exec failure (so the test
+		// process isn't actually replaced).
+		return errors.New("simulated exec failure")
 	}
 
 	err := daemon.execDaemon(context.Background(), "/nix/store/new-daemon/bin/bureau-daemon")
@@ -313,21 +309,18 @@ func TestExecDaemon_WatchdogWrittenBeforeExec(t *testing.T) {
 	// Capture whether the watchdog exists when exec is called.
 	var watchdogExistedAtExecTime bool
 
-	daemon := &Daemon{
-		clock:            clock.Real(),
-		runDir:           principal.DefaultRunDir,
-		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
-		stateDir:         stateDir,
-		failedExecPaths:  make(map[string]bool),
-		session:          newNoopSession(t),
-		configRoomID:     "!config:test.local",
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		execFunc: func(binary string, argv []string, env []string) error {
-			// Check if the watchdog was written before we got called.
-			state, err := watchdog.Read(watchdogPath)
-			watchdogExistedAtExecTime = err == nil && state.NewBinary == binary
-			return errors.New("simulated")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
+	daemon.stateDir = stateDir
+	daemon.session = newNoopSession(t)
+	daemon.configRoomID = "!config:test.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		// Check if the watchdog was written before we got called.
+		state, err := watchdog.Read(watchdogPath)
+		watchdogExistedAtExecTime = err == nil && state.NewBinary == binary
+		return errors.New("simulated")
 	}
 
 	daemon.execDaemon(context.Background(), "/nix/store/new-daemon/bin/bureau-daemon")
@@ -375,18 +368,15 @@ func TestExecDaemon_ExecFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon := &Daemon{
-		clock:            clock.Real(),
-		runDir:           principal.DefaultRunDir,
-		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
-		stateDir:         stateDir,
-		failedExecPaths:  make(map[string]bool),
-		session:          session,
-		configRoomID:     "!config:test.local",
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		execFunc: func(binary string, argv []string, env []string) error {
-			return errors.New("permission denied")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
+	daemon.stateDir = stateDir
+	daemon.session = session
+	daemon.configRoomID = "!config:test.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		return errors.New("permission denied")
 	}
 
 	err = daemon.execDaemon(context.Background(), "/nix/store/new-daemon/bin/bureau-daemon")
@@ -415,21 +405,17 @@ func TestExecDaemon_RetryProtection(t *testing.T) {
 	t.Parallel()
 
 	execCalled := false
-	daemon := &Daemon{
-		clock:            clock.Real(),
-		runDir:           principal.DefaultRunDir,
-		daemonBinaryPath: "/nix/store/old-daemon/bin/bureau-daemon",
-		stateDir:         t.TempDir(),
-		failedExecPaths: map[string]bool{
-			"/nix/store/broken-daemon/bin/bureau-daemon": true,
-		},
-		session:      newNoopSession(t),
-		configRoomID: "!config:test.local",
-		logger:       slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		execFunc: func(binary string, argv []string, env []string) error {
-			execCalled = true
-			return errors.New("should not be called")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
+	daemon.stateDir = t.TempDir()
+	daemon.failedExecPaths["/nix/store/broken-daemon/bin/bureau-daemon"] = true
+	daemon.session = newNoopSession(t)
+	daemon.configRoomID = "!config:test.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		execCalled = true
+		return errors.New("should not be called")
 	}
 
 	// Attempt exec for the already-failed path.
@@ -445,19 +431,16 @@ func TestExecDaemon_RetryProtection(t *testing.T) {
 func TestExecDaemon_EmptyBinaryPath(t *testing.T) {
 	t.Parallel()
 
-	daemon := &Daemon{
-		clock:            clock.Real(),
-		runDir:           principal.DefaultRunDir,
-		daemonBinaryPath: "", // unknown
-		stateDir:         t.TempDir(),
-		failedExecPaths:  make(map[string]bool),
-		session:          newNoopSession(t),
-		configRoomID:     "!config:test.local",
-		logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		execFunc: func(binary string, argv []string, env []string) error {
-			t.Fatal("exec should not be called when binary path is unknown")
-			return nil
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.daemonBinaryPath = "" // unknown
+	daemon.stateDir = t.TempDir()
+	daemon.session = newNoopSession(t)
+	daemon.configRoomID = "!config:test.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		t.Fatal("exec should not be called when binary path is unknown")
+		return nil
 	}
 
 	err := daemon.execDaemon(context.Background(), "/nix/store/new-daemon/bin/bureau-daemon")
@@ -538,42 +521,29 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		execBinary string
 	)
 
-	daemon := &Daemon{
-		clock:             clock.Real(),
-		runDir:            principal.DefaultRunDir,
-		session:           session,
-		machineName:       machineName,
-		serverName:        serverName,
-		configRoomID:      configRoomID,
-		launcherSocket:    launcherSocket,
-		daemonBinaryHash:  binhash.FormatDigest(testHash),
-		daemonBinaryPath:  testBinary,
-		stateDir:          t.TempDir(),
-		failedExecPaths:   make(map[string]bool),
-		running:           make(map[string]bool),
-		lastCredentials:   make(map[string]string),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs:         make(map[string]*schema.SandboxSpec),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		adminSocketPathFunc: func(localpart string) string {
-			return filepath.Join(socketDir, localpart+".admin.sock")
-		},
-		layoutWatchers: make(map[string]*layoutWatcher),
-		logger:         slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-		prefetchFunc: func(ctx context.Context, storePath string) error {
-			return nil // Skip real Nix operations.
-		},
-		execFunc: func(binary string, argv []string, env []string) error {
-			execMu.Lock()
-			defer execMu.Unlock()
-			execCalled = true
-			execBinary = binary
-			return errors.New("simulated exec for testing")
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.daemonBinaryHash = binhash.FormatDigest(testHash)
+	daemon.daemonBinaryPath = testBinary
+	daemon.stateDir = t.TempDir()
+	daemon.adminSocketPathFunc = func(localpart string) string {
+		return filepath.Join(socketDir, localpart+".admin.sock")
+	}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil // Skip real Nix operations.
+	}
+	daemon.execFunc = func(binary string, argv []string, env []string) error {
+		execMu.Lock()
+		defer execMu.Unlock()
+		execCalled = true
+		execBinary = binary
+		return errors.New("simulated exec for testing")
 	}
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)

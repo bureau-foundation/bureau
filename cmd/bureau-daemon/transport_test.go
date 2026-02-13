@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -69,19 +68,15 @@ func TestParseServiceFromPath(t *testing.T) {
 }
 
 func TestServiceByProxyName(t *testing.T) {
-	daemon := &Daemon{
-		clock:  clock.Real(),
-		runDir: principal.DefaultRunDir,
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-			},
-			"service/tts/piper": {
-				Principal: "@service/tts/piper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-			},
-		},
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
 	}
 
 	t.Run("found", func(t *testing.T) {
@@ -106,21 +101,17 @@ func TestServiceByProxyName(t *testing.T) {
 }
 
 func TestLocalProviderSocket(t *testing.T) {
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-			},
-			"service/tts/piper": {
-				Principal: "@service/tts/piper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-			},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+	}
+	daemon.services["service/tts/piper"] = &schema.Service{
+		Principal: "@service/tts/piper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
 	}
 
 	t.Run("local service", func(t *testing.T) {
@@ -169,24 +160,17 @@ func TestRelayHandler(t *testing.T) {
 
 	peerAddress := peerListener.Addr().String()
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		peerAddresses: map[string]string{
-			"@machine/cloud-gpu:bureau.local": peerAddress,
-		},
-		peerTransports:  make(map[string]http.RoundTripper),
-		transportDialer: &testTCPDialer{},
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
 	}
+	daemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = peerAddress
+	daemon.transportDialer = &testTCPDialer{}
 
 	// Create a relay socket and serve the relay handler.
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
@@ -239,14 +223,10 @@ func TestRelayHandler(t *testing.T) {
 }
 
 func TestRelayHandler_UnknownService(t *testing.T) {
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services:      make(map[string]*schema.Service),
-		peerAddresses: make(map[string]string),
-		logger:        slog.New(slog.NewJSONHandler(os.Stderr, nil)),
-	}
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
 	relayListener, err := net.Listen("unix", relaySocketPath)
@@ -299,18 +279,14 @@ func TestTransportInboundHandler(t *testing.T) {
 	go providerServer.Serve(providerListener)
 	defer providerServer.Close()
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/workstation:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/workstation:bureau.local",
+		Protocol:  "http",
 	}
 
 	// Start the inbound handler on a TCP listener (simulating the
@@ -362,7 +338,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// Integration test: a request travels through the complete
 	// cross-machine routing chain:
 	//
-	//   client → relay socket → transport → inbound handler → provider socket → backend
+	//   client -> relay socket -> transport -> inbound handler -> provider socket -> backend
 	//
 	// Machine A (consumer side): relay socket
 	// Machine B (provider side): transport listener + provider proxy
@@ -384,7 +360,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	go backendServer.Serve(backendListener)
 	defer backendServer.Close()
 
-	// 2. Start a "provider proxy" — a Bureau proxy that has the
+	// 2. Start a "provider proxy" -- a Bureau proxy that has the
 	// service registered and routes to the backend. For this test
 	// we use a simple HTTP server that simulates what HandleHTTPProxy
 	// does: strip /http/<service>/ and forward to the backend.
@@ -430,18 +406,14 @@ func TestCrossTransportRouting(t *testing.T) {
 
 	// 3. Set up the "provider daemon" (machine B) with a transport
 	// listener. Its inbound handler routes to the provider proxy.
-	providerDaemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/cloud-gpu:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = principal.DefaultRunDir
+	providerDaemon.machineUserID = "@machine/cloud-gpu:bureau.local"
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	providerDaemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
 	}
 
 	// The inbound handler calls localProviderSocket which derives the
@@ -490,24 +462,17 @@ func TestCrossTransportRouting(t *testing.T) {
 	_ = providerDaemon // Used for documentation; routing is handled by the custom mux above.
 
 	// 4. Set up the "consumer daemon" (machine A) with a relay socket.
-	consumerDaemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		machineUserID: "@machine/workstation:bureau.local",
-		services: map[string]*schema.Service{
-			"service/stt/whisper": {
-				Principal: "@service/stt/whisper:bureau.local",
-				Machine:   "@machine/cloud-gpu:bureau.local",
-				Protocol:  "http",
-			},
-		},
-		peerAddresses: map[string]string{
-			"@machine/cloud-gpu:bureau.local": transportListener.Addr().String(),
-		},
-		peerTransports:  make(map[string]http.RoundTripper),
-		transportDialer: &testTCPDialer{},
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	consumerDaemon, _ := newTestDaemon(t)
+	consumerDaemon.runDir = principal.DefaultRunDir
+	consumerDaemon.machineUserID = "@machine/workstation:bureau.local"
+	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	consumerDaemon.services["service/stt/whisper"] = &schema.Service{
+		Principal: "@service/stt/whisper:bureau.local",
+		Machine:   "@machine/cloud-gpu:bureau.local",
+		Protocol:  "http",
 	}
+	consumerDaemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = transportListener.Addr().String()
+	consumerDaemon.transportDialer = &testTCPDialer{}
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
 	relayListener, err := net.Listen("unix", relaySocketPath)

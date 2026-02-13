@@ -150,6 +150,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
+		delete(d.lastTokenMint, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
@@ -182,6 +183,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			d.lastGrants[localpart] = newGrants
+
+			// Force the token refresh goroutine to re-mint service
+			// tokens on its next tick so they carry the updated grants.
+			d.lastTokenMint[localpart] = time.Time{}
 
 			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
 				fmt.Sprintf("Authorization grants updated for %s (%d grants)", localpart, len(newGrants)),
@@ -389,6 +394,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastGrants[localpart] = grants
+		d.lastTokenMint[localpart] = d.clock.Now()
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
@@ -497,6 +503,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
+		delete(d.lastTokenMint, localpart)
 		delete(d.lastObservePolicy, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
@@ -584,6 +591,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.lastGrants, localpart)
+		delete(d.lastTokenMint, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
@@ -1104,7 +1112,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 		}
 
 		tokenPath := filepath.Join(tokenDir, role)
-		if err := os.WriteFile(tokenPath, tokenBytes, 0600); err != nil {
+		if err := atomicWriteFile(tokenPath, tokenBytes, 0600); err != nil {
 			return "", fmt.Errorf("writing token for service %q: %w", role, err)
 		}
 
@@ -1118,6 +1126,18 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 	}
 
 	return tokenDir, nil
+}
+
+// atomicWriteFile writes data to path atomically by writing to a
+// temporary file and renaming. This is safe for files inside
+// bind-mounted directories — the sandbox sees the update via VFS path
+// traversal because rename within the same directory is atomic on Linux.
+func atomicWriteFile(path string, data []byte, permission os.FileMode) error {
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, data, permission); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 // filterGrantsForService returns the subset of grants whose action
@@ -1224,6 +1244,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.lastTemplates, localpart)
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
+		delete(d.lastTokenMint, localpart)
 		delete(d.lastObservePolicy, localpart)
 		d.lastActivityAt = d.clock.Now()
 	}
@@ -1653,6 +1674,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	delete(d.lastTemplates, localpart)
 	delete(d.lastCredentials, localpart)
 	delete(d.lastGrants, localpart)
+	delete(d.lastTokenMint, localpart)
 	delete(d.lastObservePolicy, localpart)
 	d.lastActivityAt = d.clock.Now()
 	d.reconcileMu.Unlock()

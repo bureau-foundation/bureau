@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -139,11 +138,6 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	observeSocketPath := filepath.Join(socketDir, "observe.sock")
 	tmuxServer := tmux.NewServer(filepath.Join(socketDir, "tmux.sock"), "")
 
-	running := make(map[string]bool)
-	for _, localpart := range runningPrincipals {
-		running[localpart] = true
-	}
-
 	// Mock Matrix server for token verification. Accepts testObserverToken
 	// and returns testObserverUserID from /account/whoami.
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,32 +179,27 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		})
 	}
 
-	daemon := &Daemon{
-		clock:         clock.Real(),
-		runDir:        principal.DefaultRunDir,
-		client:        client,
-		tokenVerifier: newTokenVerifier(client, 5*time.Minute, logger),
-		lastConfig: &schema.MachineConfig{
-			DefaultObservePolicy: &schema.ObservePolicy{
-				AllowedObservers:   []string{"**"},
-				ReadWriteObservers: []string{"**"},
-			},
-			Principals: principals,
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.client = client
+	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, logger)
+	daemon.lastConfig = &schema.MachineConfig{
+		DefaultObservePolicy: &schema.ObservePolicy{
+			AllowedObservers:   []string{"**"},
+			ReadWriteObservers: []string{"**"},
 		},
-		machineName:        "machine/test",
-		machineUserID:      "@machine/test:bureau.local",
-		serverName:         "bureau.local",
-		running:            running,
-		services:           make(map[string]*schema.Service),
-		proxyRoutes:        make(map[string]string),
-		peerAddresses:      make(map[string]string),
-		peerTransports:     make(map[string]http.RoundTripper),
-		observeSocketPath:  observeSocketPath,
-		tmuxServer:         tmuxServer,
-		observeRelayBinary: relayBinary,
-		layoutWatchers:     make(map[string]*layoutWatcher),
-		logger:             logger,
+		Principals: principals,
 	}
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	for _, localpart := range runningPrincipals {
+		daemon.running[localpart] = true
+	}
+	daemon.observeSocketPath = observeSocketPath
+	daemon.tmuxServer = tmuxServer
+	daemon.observeRelayBinary = relayBinary
+	daemon.logger = logger
 
 	ctx := context.Background()
 	if err := daemon.startObserveListener(ctx); err != nil {

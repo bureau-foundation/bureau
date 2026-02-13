@@ -1,0 +1,31 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "authorization",
+    srcs = [
+        "doc.go",
+        "eval.go",
+        "index.go",
+        "match.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/authorization",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema",
+    ],
+)
+
+go_test(
+    name = "authorization_test",
+    srcs = [
+        "eval_test.go",
+        "index_test.go",
+        "match_test.go",
+    ],
+    embed = [":authorization"],
+    deps = ["//lib/schema"],
+)

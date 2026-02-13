@@ -571,6 +571,16 @@ type MachineConfig struct {
 	// per-principal overrides.
 	DefaultObservePolicy *ObservePolicy `json:"default_observe_policy,omitempty"`
 
+	// DefaultPolicy is the machine-wide baseline authorization policy.
+	// Its grants and allowances apply to every principal on this
+	// machine unless overridden. Per-principal policy is additive on
+	// top of machine defaults — it adds grants and allowances, it
+	// does not remove them. A principal cannot have fewer permissions
+	// than the machine default.
+	//
+	// Coexists with DefaultObservePolicy during migration.
+	DefaultPolicy *AuthorizationPolicy `json:"default_policy,omitempty"`
+
 	// BureauVersion specifies the desired versions of Bureau core
 	// binaries (daemon, launcher, proxy) on this machine. When the
 	// daemon detects a change (via binary content hash comparison, not
@@ -691,6 +701,18 @@ type PrincipalAssignment struct {
 	// (default-deny). The daemon pushes these patterns to the principal's
 	// proxy, which filters the directory before returning results.
 	ServiceVisibility []string `json:"service_visibility,omitempty"`
+
+	// Authorization is the unified authorization policy for this
+	// principal. Defines what this principal can do (grants, denials)
+	// and what others can do to it (allowances, allowance denials).
+	//
+	// This field coexists with MatrixPolicy, ObservePolicy, and
+	// ServiceVisibility during migration. When Authorization is set,
+	// the daemon will use it for authorization decisions. When absent,
+	// the daemon falls back to the legacy per-field policies above.
+	// Once all configurations have migrated, the legacy fields will
+	// be removed.
+	Authorization *AuthorizationPolicy `json:"authorization,omitempty"`
 
 	// CommandOverride replaces the template's Command for this specific
 	// principal instance. Use this when the same template should run a

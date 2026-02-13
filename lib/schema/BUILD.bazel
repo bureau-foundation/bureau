@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "schema",
     srcs = [
+        "authorization.go",
         "doc.go",
         "events.go",
         "match.go",
@@ -21,6 +22,7 @@ go_library(
 go_test(
     name = "schema_test",
     srcs = [
+        "authorization_test.go",
         "events_artifact_test.go",
         "events_machine_test.go",
         "events_pipeline_test.go",

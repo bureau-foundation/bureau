@@ -5,6 +5,7 @@ package codec
 
 import (
 	"io"
+	"reflect"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -26,7 +27,17 @@ func init() {
 		panic("codec: CBOR encoder initialization failed: " + err.Error())
 	}
 
-	decMode, err = cbor.DecOptions{}.DecMode()
+	decMode, err = cbor.DecOptions{
+		// Bureau never uses non-string map keys. When the decoder's
+		// target is interface{}/any (e.g., map[string]any values), it
+		// must pick a concrete Go map type. The CBOR default is
+		// map[interface{}]interface{} (since CBOR allows non-string
+		// keys), but that type is incompatible with encoding/json and
+		// most Go code that expects map[string]any. This setting only
+		// affects any-typed targets — struct field decoding is
+		// unaffected.
+		DefaultMapType: reflect.TypeOf(map[string]any(nil)),
+	}.DecMode()
 	if err != nil {
 		panic("codec: CBOR decoder initialization failed: " + err.Error())
 	}

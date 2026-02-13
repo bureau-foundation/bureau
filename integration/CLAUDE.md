@@ -66,13 +66,17 @@ sleep-and-retry loop.
 
 Service directory changes flow through a non-Matrix path (daemon → proxy
 admin socket push), but the daemon posts a "Service directory updated"
-message to the config room after `pushServiceDirectory` completes. Use
-this message as the synchronization signal:
+message to the config room after `pushServiceDirectory` completes. The
+message names each changed service (e.g., "Service directory updated:
+added service/stt/test, removed service/foo/bar"). Match on the specific
+service name to avoid cross-test interference — all daemons share
+`#bureau/service` and will post to their own config rooms when any service
+changes:
 
 ```go
 serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
-admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service", key, content)
-serviceWatch.WaitForMessage(t, "Service directory updated", machine.UserID)
+admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service", "service/stt/test", content)
+serviceWatch.WaitForMessage(t, "added service/stt/test", machine.UserID)
 entries := proxyServiceDiscovery(t, proxyClient, "")
 ```
 

@@ -58,6 +58,8 @@ go_test(
     tags = ["manual"],
     deps = [
         "//lib/bootstrap",
+        "//lib/codec",
+        "//lib/ipc",
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",

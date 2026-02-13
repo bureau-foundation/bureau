@@ -17,6 +17,7 @@ go_library(
         "//lib/binhash",
         "//lib/bootstrap",
         "//lib/codec",
+        "//lib/ipc",
         "//lib/principal",
         "//lib/schema",
         "//lib/sealed",

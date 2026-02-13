@@ -207,7 +207,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Wait for the daemon to process the service event. The message is
 	// posted after pushServiceDirectory completes, so the consumer proxy
 	// is guaranteed to have the directory by the time this returns.
-	serviceWatch.WaitForMessage(t, "Service directory updated", machine.UserID)
+	serviceWatch.WaitForMessage(t, "added service/vis-hr/test", machine.UserID)
 
 	entries := proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {

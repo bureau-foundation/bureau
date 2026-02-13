@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -1039,82 +1040,15 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	d.notifyReconcile()
 }
 
-// launcherIPCRequest mirrors the launcher's IPCRequest type. Defined here to
-// avoid importing cmd/bureau-launcher (which is a main package and cannot be
-// imported). The CBOR wire format is the contract between daemon and launcher.
-type launcherIPCRequest struct {
-	Action               string               `cbor:"action"`
-	Principal            string               `cbor:"principal,omitempty"`
-	EncryptedCredentials string               `cbor:"encrypted_credentials,omitempty"`
-	DirectCredentials    map[string]string    `cbor:"direct_credentials,omitempty"`
-	MatrixPolicy         *schema.MatrixPolicy `cbor:"matrix_policy,omitempty"`
-
-	// SandboxSpec is the fully-resolved sandbox configuration produced by
-	// the daemon's template resolution pipeline. When set, the launcher
-	// uses this to build the bwrap command line and configure the sandbox
-	// environment. When nil (current behavior), the launcher spawns only
-	// the proxy process without a bwrap sandbox.
-	SandboxSpec *schema.SandboxSpec `cbor:"sandbox_spec,omitempty"`
-
-	// Payload is the new payload data for update-payload requests. The
-	// launcher atomically rewrites the payload file that is bind-mounted
-	// into the sandbox at /run/bureau/payload.json.
-	Payload map[string]any `cbor:"payload,omitempty"`
-
-	// TriggerContent is the raw JSON content of the state event that
-	// satisfied the principal's StartCondition. Passed through as opaque
-	// bytes to the launcher, which writes them to /run/bureau/trigger.json
-	// inside the sandbox. Carried as a CBOR byte string.
-	//
-	// nil when the principal has no StartCondition or when the condition
-	// has no associated event content (room-existence-only checks).
-	TriggerContent []byte `cbor:"trigger_content,omitempty"`
-
-	// ServiceMounts lists service sockets that the launcher should
-	// bind-mount into the sandbox. The daemon populates this by
-	// resolving the SandboxSpec's RequiredServices against
-	// m.bureau.room_service state events in the principal's rooms.
-	// Each entry maps a service role to a host-side socket path.
-	ServiceMounts []launcherServiceMount `cbor:"service_mounts,omitempty"`
-
-	// BinaryPath is a filesystem path used by the "update-proxy-binary"
-	// action. The launcher validates the path and switches its proxy
-	// binary for future sandbox creation.
-	BinaryPath string `cbor:"binary_path,omitempty"`
-}
-
-// launcherServiceMount describes a service socket to bind-mount into a
-// sandbox. The daemon resolves these from RequiredServices and passes
-// them to the launcher via IPC. The launcher creates a bind-mount at
-// /run/bureau/service/<Role>.sock inside the sandbox.
-type launcherServiceMount struct {
-	// Role is the service role name (e.g., "ticket", "rag"). Determines
-	// the in-sandbox socket path: /run/bureau/service/<role>.sock.
-	Role string `cbor:"role"`
-
-	// SocketPath is the host-side socket path to bind-mount. For local
-	// services this is the provider's principal socket; for remote
-	// services this is the daemon's tunnel socket for that service.
-	SocketPath string `cbor:"socket_path"`
-}
-
-// launcherIPCResponse mirrors the launcher's IPCResponse type.
-type launcherIPCResponse struct {
-	OK              bool                       `cbor:"ok"`
-	Error           string                     `cbor:"error,omitempty"`
-	ProxyPID        int                        `cbor:"proxy_pid,omitempty"`
-	BinaryHash      string                     `cbor:"binary_hash,omitempty"`
-	ProxyBinaryPath string                     `cbor:"proxy_binary_path,omitempty"`
-	ExitCode        *int                       `cbor:"exit_code,omitempty"`
-	Sandboxes       []launcherSandboxListEntry `cbor:"sandboxes,omitempty"`
-}
-
-// launcherSandboxListEntry mirrors the launcher's SandboxListEntry type.
-// Returned by the "list-sandboxes" action for daemon restart recovery.
-type launcherSandboxListEntry struct {
-	Localpart string `cbor:"localpart"`
-	ProxyPID  int    `cbor:"proxy_pid"`
-}
+// Type aliases for the shared IPC types. The canonical definitions live
+// in lib/ipc. Aliases use the daemon's local naming convention so call
+// sites don't need to change.
+type (
+	launcherIPCRequest       = ipc.Request
+	launcherIPCResponse      = ipc.Response
+	launcherServiceMount     = ipc.ServiceMount
+	launcherSandboxListEntry = ipc.SandboxListEntry
+)
 
 // queryLauncherStatus sends a "status" IPC request to the launcher and
 // returns the launcher's binary hash and the proxy binary path it is currently

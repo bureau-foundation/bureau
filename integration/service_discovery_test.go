@@ -104,7 +104,7 @@ func TestServiceDiscovery(t *testing.T) {
 	// by the time this returns. Combined with deployPrincipals having
 	// returned (consumer sockets exist, directory pushed during reconcile),
 	// the proxy is ready to query.
-	serviceWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+	serviceWatch.WaitForMessage(t, "added service/stt/test", consumer.UserID)
 
 	// --- Phase 3: Verify service propagation and visibility isolation ---
 
@@ -195,7 +195,7 @@ func TestServiceDiscovery(t *testing.T) {
 
 		// Wait for the daemon to process the deregistration and push the
 		// empty directory to all consumer proxies.
-		deregWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+		deregWatch.WaitForMessage(t, "removed service/stt/test", consumer.UserID)
 
 		entries := proxyServiceDiscovery(t, wideClient, "")
 		if len(entries) != 0 {
@@ -231,7 +231,7 @@ func TestServiceDiscovery(t *testing.T) {
 
 		// Wait for the consumer daemon to process the new service event
 		// and push the updated directory to all consumer proxies.
-		partialWatch.WaitForMessage(t, "Service directory updated", consumer.UserID)
+		partialWatch.WaitForMessage(t, "added service/embedding/test", consumer.UserID)
 
 		// The narrow consumer's visibility ["service/embedding/*"] matches
 		// "service/embedding/test" but not the deregistered "service/stt/test".

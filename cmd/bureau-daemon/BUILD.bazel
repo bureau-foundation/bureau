@@ -36,6 +36,7 @@ go_library(
         "//lib/hwinfo",
         "//lib/hwinfo/amdgpu",
         "//lib/hwinfo/nvidia",
+        "//lib/ipc",
         "//lib/netutil",
         "//lib/nix",
         "//lib/principal",

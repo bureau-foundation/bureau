@@ -32,6 +32,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/messaging"
@@ -279,15 +280,26 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.reconcileServices(ctx, added, removed, updated)
 			d.pushServiceDirectory(ctx)
 
-			// Log directory changes to the config room. This serves as
-			// both operational telemetry and a causal signal: the message
-			// is sent after pushServiceDirectory completes, so observers
-			// watching the config room know all running proxies have been
-			// updated by the time this message appears.
-			changeCount := len(added) + len(removed) + len(updated)
-			if changeCount > 0 {
-				d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-					fmt.Sprintf("Service directory updated: %d services", len(d.services))))
+			// Post a message naming each changed service so that
+			// observers (tests, operators) can synchronize on specific
+			// service events without matching unrelated changes from
+			// other machines or tests sharing the global service room.
+			if changeCount := len(added) + len(removed) + len(updated); changeCount > 0 {
+				var parts []string
+				for _, name := range added {
+					parts = append(parts, "added "+name)
+				}
+				for _, name := range removed {
+					parts = append(parts, "removed "+name)
+				}
+				for _, name := range updated {
+					parts = append(parts, "updated "+name)
+				}
+				message := "Service directory updated: " + strings.Join(parts, ", ")
+				if _, err := d.session.SendMessage(ctx, d.configRoomID,
+					messaging.NewTextMessage(message)); err != nil {
+					d.logger.Error("failed to post service directory update", "error", err)
+				}
 			}
 		}
 	}

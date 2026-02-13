@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -278,26 +280,13 @@ func launcherListProxyPID(t *testing.T, launcherSocket, principalLocalpart strin
 
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// Mirror of cmd/bureau-launcher.IPCRequest (not importable from test).
-	request := struct {
-		Action string `json:"action"`
-	}{
-		Action: "list-sandboxes",
-	}
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	request := ipc.Request{Action: "list-sandboxes"}
+	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		t.Fatalf("encode list-sandboxes request: %v", err)
 	}
 
-	// Mirror of cmd/bureau-launcher.IPCResponse (relevant fields only).
-	var response struct {
-		OK        bool   `json:"ok"`
-		Error     string `json:"error,omitempty"`
-		Sandboxes []struct {
-			Localpart string `json:"localpart"`
-			ProxyPID  int    `json:"proxy_pid"`
-		} `json:"sandboxes,omitempty"`
-	}
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	var response ipc.Response
+	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		t.Fatalf("decode list-sandboxes response: %v", err)
 	}
 	if !response.OK {

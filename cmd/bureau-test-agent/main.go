@@ -96,9 +96,13 @@ func run() error {
 	}
 	log("ready signal sent")
 
-	// Step 5: Poll for an incoming message from another user.
+	// Step 5: Poll for an incoming message from an external user. Skip
+	// messages from self and from the machine daemon — the daemon posts
+	// operational messages (service directory updates, policy changes) to
+	// the config room that are not intended for the agent.
+	machineUserID := fmt.Sprintf("@%s:%s", machineName, serverName)
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, client, configRoomID, whoamiUserID)
+	message, err := waitForMessage(ctx, client, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}
@@ -271,9 +275,9 @@ func matrixSendMessage(ctx context.Context, client *http.Client, roomID, body st
 }
 
 // waitForMessage polls the room's timeline via the proxy's raw Matrix HTTP
-// endpoint, looking for a message from someone other than ourselves. Returns
-// the message body when found.
-func waitForMessage(ctx context.Context, client *http.Client, roomID, ownUserID string) (string, error) {
+// endpoint, looking for a message from someone other than the agent itself
+// or the machine daemon. Returns the message body when found.
+func waitForMessage(ctx context.Context, client *http.Client, roomID, ownUserID, machineUserID string) (string, error) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -282,7 +286,7 @@ func waitForMessage(ctx context.Context, client *http.Client, roomID, ownUserID 
 		case <-ctx.Done():
 			return "", fmt.Errorf("timed out waiting for message in room %s", roomID)
 		case <-ticker.C:
-			body, found, err := pollForMessage(ctx, client, roomID, ownUserID)
+			body, found, err := pollForMessage(ctx, client, roomID, ownUserID, machineUserID)
 			if err != nil {
 				// Log but keep trying — the room might not be synced yet.
 				log("poll error (retrying): %v", err)
@@ -295,9 +299,11 @@ func waitForMessage(ctx context.Context, client *http.Client, roomID, ownUserID 
 	}
 }
 
-func pollForMessage(ctx context.Context, client *http.Client, roomID, ownUserID string) (string, bool, error) {
+func pollForMessage(ctx context.Context, client *http.Client, roomID, ownUserID, machineUserID string) (string, bool, error) {
+	// Use a generous limit: concurrent tests generate many daemon
+	// operational messages (service directory updates) in the config room.
 	requestURL := fmt.Sprintf(
-		"http://proxy/http/matrix/_matrix/client/v3/rooms/%s/messages?dir=b&limit=20",
+		"http://proxy/http/matrix/_matrix/client/v3/rooms/%s/messages?dir=b&limit=200",
 		url.PathEscape(roomID))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
@@ -328,8 +334,7 @@ func pollForMessage(ctx context.Context, client *http.Client, roomID, ownUserID 
 		if event.Type != "m.room.message" {
 			continue
 		}
-		// Skip our own messages.
-		if event.Sender == ownUserID {
+		if event.Sender == ownUserID || event.Sender == machineUserID {
 			continue
 		}
 		msgtype, _ := event.Content["msgtype"].(string)

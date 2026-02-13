@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/clock",
+        "//lib/codec",
         "//lib/principal",
         "//lib/schema",
         "//lib/service",
@@ -33,11 +34,17 @@ go_binary(
 
 go_test(
     name = "bureau-ticket-service_test",
-    srcs = ["sync_test.go"],
+    srcs = [
+        "socket_test.go",
+        "sync_test.go",
+    ],
     embed = [":bureau-ticket-service_lib"],
     deps = [
         "//lib/clock",
+        "//lib/codec",
         "//lib/schema",
+        "//lib/service",
+        "//lib/servicetoken",
         "//lib/ticket",
         "//messaging",
     ],

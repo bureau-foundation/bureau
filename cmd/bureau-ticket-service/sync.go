@@ -493,14 +493,14 @@ func (ts *TicketService) totalTickets() int {
 }
 
 // findTicket looks up a ticket by ID across all rooms. Returns the
-// room state, ticket ID, content, and whether it was found.
-func (ts *TicketService) findTicket(ticketID string) (*roomState, schema.TicketContent, bool) {
-	for _, state := range ts.rooms {
+// room ID, room state, content, and whether it was found.
+func (ts *TicketService) findTicket(ticketID string) (string, *roomState, schema.TicketContent, bool) {
+	for roomID, state := range ts.rooms {
 		if content, exists := state.index.Get(ticketID); exists {
-			return state, content, true
+			return roomID, state, content, true
 		}
 	}
-	return nil, schema.TicketContent{}, false
+	return "", nil, schema.TicketContent{}, false
 }
 
 // roomIndex returns the ticket index for a room. Returns nil if the

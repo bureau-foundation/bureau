@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +27,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -128,6 +131,18 @@ func run() error {
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
+	// Load or generate the Ed25519 keypair used to sign service identity
+	// tokens. The keypair is persisted in stateDir so it survives daemon
+	// restarts. On first boot, a new keypair is generated and saved.
+	tokenSigningPublicKey, tokenSigningPrivateKey, keyWasGenerated, err := servicetoken.LoadOrGenerateKeypair(stateDir)
+	if err != nil {
+		return fmt.Errorf("loading token signing keypair: %w", err)
+	}
+	logger.Info("token signing keypair ready",
+		"public_key", hex.EncodeToString(tokenSigningPublicKey),
+		"generated", keyWasGenerated,
+	)
+
 	// Ensure the per-machine config room exists.
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
 	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, adminUser, logger)
@@ -143,7 +158,17 @@ func run() error {
 	// defensively re-joins on every startup to handle membership recovery
 	// (e.g., homeserver reset, account re-creation).
 
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
+	systemRoomID, err := session.ResolveAlias(ctx, systemAlias)
+	if err != nil {
+		return fmt.Errorf("resolving system room alias %q: %w", systemAlias, err)
+	}
+	if _, err := session.JoinRoom(ctx, systemRoomID); err != nil {
+		logger.Warn("failed to join system room (requires admin invitation)",
+			"room_id", systemRoomID, "alias", systemAlias, "error", err)
+	}
+
+	machineAlias := principal.RoomAlias(schema.RoomAliasMachine, serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
@@ -153,7 +178,7 @@ func run() error {
 			"room_id", machineRoomID, "alias", machineAlias, "error", err)
 	}
 
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceAlias := principal.RoomAlias(schema.RoomAliasService, serverName)
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		return fmt.Errorf("resolving service room alias %q: %w", serviceAlias, err)
@@ -163,6 +188,7 @@ func run() error {
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
 	logger.Info("global rooms ready",
+		"system_room", systemRoomID,
 		"machine_room", machineRoomID,
 		"service_room", serviceRoomID,
 	)
@@ -184,38 +210,41 @@ func run() error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 
 	daemon := &Daemon{
-		session:           session,
-		clock:             clock.Real(),
-		client:            client,
-		tokenVerifier:     newTokenVerifier(client, 5*time.Minute, logger),
-		machineName:       machineName,
-		machineUserID:     machineUserID,
-		serverName:        serverName,
-		configRoomID:      configRoomID,
-		machineRoomID:     machineRoomID,
-		serviceRoomID:     serviceRoomID,
-		runDir:            runDir,
-		launcherSocket:    principal.LauncherSocketPath(runDir),
-		statusInterval:    statusInterval,
-		daemonBinaryHash:  daemonBinaryHash,
-		daemonBinaryPath:  daemonBinaryPath,
-		stateDir:          stateDir,
-		failedExecPaths:   make(map[string]bool),
-		running:           make(map[string]bool),
-		exitWatchers:      make(map[string]context.CancelFunc),
-		proxyExitWatchers: make(map[string]context.CancelFunc),
-		lastCredentials:   make(map[string]string),
-		lastVisibility:    make(map[string][]string),
-		lastMatrixPolicy:  make(map[string]*schema.MatrixPolicy),
-		lastObservePolicy: make(map[string]*schema.ObservePolicy),
-		lastSpecs:         make(map[string]*schema.SandboxSpec),
-		previousSpecs:     make(map[string]*schema.SandboxSpec),
-		lastTemplates:     make(map[string]*schema.TemplateContent),
-		healthMonitors:    make(map[string]*healthMonitor),
-		services:          make(map[string]*schema.Service),
-		proxyRoutes:       make(map[string]string),
-		peerAddresses:     make(map[string]string),
-		peerTransports:    make(map[string]http.RoundTripper),
+		session:                session,
+		clock:                  clock.Real(),
+		client:                 client,
+		tokenVerifier:          newTokenVerifier(client, 5*time.Minute, logger),
+		tokenSigningPublicKey:  tokenSigningPublicKey,
+		tokenSigningPrivateKey: tokenSigningPrivateKey,
+		machineName:            machineName,
+		machineUserID:          machineUserID,
+		serverName:             serverName,
+		systemRoomID:           systemRoomID,
+		configRoomID:           configRoomID,
+		machineRoomID:          machineRoomID,
+		serviceRoomID:          serviceRoomID,
+		runDir:                 runDir,
+		launcherSocket:         principal.LauncherSocketPath(runDir),
+		statusInterval:         statusInterval,
+		daemonBinaryHash:       daemonBinaryHash,
+		daemonBinaryPath:       daemonBinaryPath,
+		stateDir:               stateDir,
+		failedExecPaths:        make(map[string]bool),
+		running:                make(map[string]bool),
+		exitWatchers:           make(map[string]context.CancelFunc),
+		proxyExitWatchers:      make(map[string]context.CancelFunc),
+		lastCredentials:        make(map[string]string),
+		lastVisibility:         make(map[string][]string),
+		lastMatrixPolicy:       make(map[string]*schema.MatrixPolicy),
+		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastSpecs:              make(map[string]*schema.SandboxSpec),
+		previousSpecs:          make(map[string]*schema.SandboxSpec),
+		lastTemplates:          make(map[string]*schema.TemplateContent),
+		healthMonitors:         make(map[string]*healthMonitor),
+		services:               make(map[string]*schema.Service),
+		proxyRoutes:            make(map[string]string),
+		peerAddresses:          make(map[string]string),
+		peerTransports:         make(map[string]http.RoundTripper),
 		adminSocketPathFunc: func(localpart string) string {
 			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
@@ -263,6 +292,11 @@ func run() error {
 	// deduplicates state events with identical content, so restarts
 	// without hardware changes produce no new events.
 	daemon.publishMachineInfo(ctx)
+
+	// Publish the token signing public key to #bureau/system so services
+	// can discover it for token verification. Conditional: only publishes
+	// if the key was just generated or the existing state event differs.
+	daemon.publishTokenSigningKey(ctx, keyWasGenerated)
 
 	// Layout watchers and health monitors are started during reconciliation
 	// for each running principal. Ensure they all stop on shutdown.
@@ -322,9 +356,19 @@ type Daemon struct {
 	// rejected in that state.
 	lastConfig *schema.MachineConfig
 
+	// tokenSigningPublicKey is the Ed25519 public key used to verify
+	// service identity tokens. Published to #bureau/system at startup
+	// so services can discover it.
+	tokenSigningPublicKey ed25519.PublicKey
+
+	// tokenSigningPrivateKey is the Ed25519 private key used to sign
+	// service identity tokens issued to sandboxed principals.
+	tokenSigningPrivateKey ed25519.PrivateKey
+
 	machineName    string
 	machineUserID  string
 	serverName     string
+	systemRoomID   string
 	configRoomID   string
 	machineRoomID  string
 	serviceRoomID  string
@@ -684,6 +728,54 @@ func (d *Daemon) publishMachineInfo(ctx context.Context) {
 		"cpu_model", info.CPU.Model,
 		"memory_mb", info.MemoryTotalMB,
 		"gpu_count", gpuCount,
+	)
+}
+
+// publishTokenSigningKey publishes the daemon's Ed25519 token signing
+// public key to #bureau/system as an m.bureau.token_signing_key state
+// event. The state key is the machine localpart (e.g., "machine/workstation").
+//
+// The publish is conditional to avoid unnecessary state events on every
+// daemon restart. It always publishes when the key was freshly generated
+// (first boot or key file deleted). For existing keys, it fetches the
+// current state event and compares the stored public key — publishing
+// only if the content differs (e.g., after manual key rotation where
+// someone replaced the key files).
+func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated bool) {
+	publicKeyHex := hex.EncodeToString(d.tokenSigningPublicKey)
+
+	if !keyWasGenerated {
+		// Check whether the current state event already has our key.
+		existing, err := d.session.GetStateEvent(ctx, d.systemRoomID,
+			schema.EventTypeTokenSigningKey, d.machineName)
+		if err == nil {
+			var content schema.TokenSigningKeyContent
+			if parseErr := json.Unmarshal(existing, &content); parseErr == nil {
+				if content.PublicKey == publicKeyHex {
+					d.logger.Info("token signing key already published, skipping")
+					return
+				}
+			}
+		} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			d.logger.Error("checking existing token signing key", "error", err)
+			// Fall through to publish — better to send a redundant state
+			// event than to silently skip on a transient error.
+		}
+	}
+
+	content := schema.TokenSigningKeyContent{
+		PublicKey: publicKeyHex,
+		Machine:   d.machineName,
+	}
+	_, err := d.session.SendStateEvent(ctx, d.systemRoomID,
+		schema.EventTypeTokenSigningKey, d.machineName, content)
+	if err != nil {
+		d.logger.Error("publishing token signing key", "error", err)
+		return
+	}
+	d.logger.Info("published token signing key",
+		"room_id", d.systemRoomID,
+		"machine", d.machineName,
 	)
 }
 

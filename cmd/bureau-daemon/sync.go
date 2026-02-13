@@ -262,6 +262,10 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			needsPeerSync = true
 		case d.serviceRoomID:
 			needsServiceSync = true
+		case d.systemRoomID:
+			// The system room carries token signing keys and operational
+			// messages. State changes here don't require reconciliation.
+			continue
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
 			// state changes trigger reconcile so deferred principals

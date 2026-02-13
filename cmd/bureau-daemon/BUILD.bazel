@@ -42,6 +42,7 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//lib/secret",
+        "//lib/servicetoken",
         "//lib/template",
         "//lib/tmux",
         "//lib/version",

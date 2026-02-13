@@ -16,7 +16,7 @@
 //   - Sync loop: incremental Matrix /sync long-poll with backoff,
 //     delivering responses to a caller-provided handler.
 //   - Socket server: CBOR Unix socket server with action dispatch,
-//     connection timeouts, and graceful shutdown.
+//     service token authentication, and graceful shutdown.
 //
 // Services compose these utilities in their own main() function rather
 // than subclassing a framework. The package provides building blocks,
@@ -24,15 +24,21 @@
 //
 // # Authentication
 //
-// Socket-level caller authentication is not yet implemented. Physical
-// access control (the sandbox boundary) determines who can reach a
-// service socket: only principals whose template declares the service
-// in RequiredServices get the socket bind-mounted. Verified caller
-// identity will be provided by the authorization framework (daemon-side
-// intermediary sockets that inject authenticated principal metadata
-// into requests before forwarding). The CBOR protocol accommodates
-// this: CBOR maps are extensible, and the reserved _principal field
-// will carry daemon-injected identity when available. Services must
-// never trust a _principal field until the authorization framework is
-// in place.
+// The socket server supports Ed25519 service token authentication via
+// [AuthConfig]. The daemon mints a signed token per (principal, service)
+// pair at sandbox creation time. The token proves the caller's identity
+// and carries pre-resolved authorization grants scoped to the service's
+// namespace. Agents include the token as an opaque CBOR byte string in
+// the "token" field of each request.
+//
+// Actions registered with [SocketServer.HandleAuth] require a valid
+// token. The server verifies the Ed25519 signature, checks expiry and
+// audience, consults the revocation blacklist, and passes the decoded
+// token to the handler. Actions registered with [SocketServer.Handle]
+// do not require authentication (use for health checks and diagnostics).
+//
+// The token verification is stateless: services need only the daemon's
+// Ed25519 public key (published as m.bureau.token_signing_key in
+// #bureau/system) and a local [servicetoken.Blacklist] for emergency
+// revocation. No daemon round-trip is required per request.
 package service

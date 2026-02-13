@@ -5,16 +5,19 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // sendRequest connects to a Unix socket, sends a CBOR request, and
@@ -70,9 +73,53 @@ func testLogger() *slog.Logger {
 	}))
 }
 
+// testKeypair generates an Ed25519 keypair for test use.
+func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	public, private, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	return public, private
+}
+
+// testAuthConfig creates an AuthConfig with a fresh keypair and
+// blacklist for testing. Returns the config and the private key
+// (for minting test tokens).
+func testAuthConfig(t *testing.T) (*AuthConfig, ed25519.PrivateKey) {
+	t.Helper()
+	public, private := testKeypair(t)
+	return &AuthConfig{
+		PublicKey: public,
+		Audience:  "test-service",
+		Blacklist: servicetoken.NewBlacklist(),
+	}, private
+}
+
+// mintTestToken creates a signed test token with the given subject.
+func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) []byte {
+	t.Helper()
+	token := &servicetoken.Token{
+		Subject:  subject,
+		Machine:  "machine/test",
+		Audience: "test-service",
+		Grants: []servicetoken.Grant{
+			{Actions: []string{"test/read", "test/write"}},
+		},
+		ID:        "test-token-id",
+		IssuedAt:  time.Now().Unix(),
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+	tokenBytes, err := servicetoken.Mint(privateKey, token)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	return tokenBytes
+}
+
 func TestSocketServerStatus(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
 		return map[string]any{
@@ -118,7 +165,7 @@ func TestSocketServerStatus(t *testing.T) {
 
 func TestSocketServerUnknownAction(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
@@ -151,7 +198,7 @@ func TestSocketServerUnknownAction(t *testing.T) {
 
 func TestSocketServerMissingAction(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -174,7 +221,7 @@ func TestSocketServerMissingAction(t *testing.T) {
 
 func TestSocketServerInvalidCBOR(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -213,7 +260,7 @@ func TestSocketServerInvalidCBOR(t *testing.T) {
 
 func TestSocketServerHandlerError(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	server.Handle("fail", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, fmt.Errorf("something broke")
@@ -246,7 +293,7 @@ func TestSocketServerHandlerError(t *testing.T) {
 
 func TestSocketServerNilResult(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	server.Handle("noop", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
@@ -280,7 +327,7 @@ func TestSocketServerNilResult(t *testing.T) {
 
 func TestSocketServerConcurrentRequests(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	server.Handle("echo", func(ctx context.Context, raw []byte) (any, error) {
 		var request struct {
@@ -330,7 +377,7 @@ func TestSocketServerConcurrentRequests(t *testing.T) {
 
 func TestSocketServerGracefulShutdown(t *testing.T) {
 	socketPath := testSocketPath(t)
-	server := NewSocketServer(socketPath, testLogger())
+	server := NewSocketServer(socketPath, testLogger(), nil)
 
 	// Handler that takes a moment to complete.
 	handlerStarted := make(chan struct{})
@@ -387,7 +434,7 @@ func TestSocketServerGracefulShutdown(t *testing.T) {
 }
 
 func TestSocketServerDuplicateHandlerPanics(t *testing.T) {
-	server := NewSocketServer("/tmp/test.sock", testLogger())
+	server := NewSocketServer("/tmp/test.sock", testLogger(), nil)
 	server.Handle("foo", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
@@ -401,6 +448,433 @@ func TestSocketServerDuplicateHandlerPanics(t *testing.T) {
 	server.Handle("foo", func(ctx context.Context, raw []byte) (any, error) {
 		return nil, nil
 	})
+}
+
+// --- Authentication tests ---
+
+func TestSocketServerHandleAuth(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	// Track what the handler receives.
+	var receivedSubject string
+	var receivedMachine string
+	var receivedGrantCount int
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		receivedSubject = token.Subject
+		receivedMachine = token.Machine
+		receivedGrantCount = len(token.Grants)
+		return map[string]any{"created": true}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	tokenBytes := mintTestToken(t, privateKey, "iree/amdgpu/pm")
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+		"title":  "test ticket",
+	})
+
+	if !response.OK {
+		t.Fatalf("expected ok=true, got false (error: %s)", response.Error)
+	}
+
+	var data map[string]any
+	decodeData(t, response, &data)
+	if data["created"] != true {
+		t.Errorf("expected created=true, got %v", data["created"])
+	}
+
+	if receivedSubject != "iree/amdgpu/pm" {
+		t.Errorf("handler received subject %q, want iree/amdgpu/pm", receivedSubject)
+	}
+	if receivedMachine != "machine/test" {
+		t.Errorf("handler received machine %q, want machine/test", receivedMachine)
+	}
+	if receivedGrantCount != 1 {
+		t.Errorf("handler received %d grants, want 1", receivedGrantCount)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerAuthMissingToken(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, _ := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		t.Error("handler should not be called without a token")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Send request without a token field.
+	response := sendRequest(t, socketPath, map[string]string{"action": "create"})
+
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	if !strings.Contains(response.Error, "missing token field") {
+		t.Errorf("expected 'missing token field' in error, got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerAuthExpiredToken(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		t.Error("handler should not be called with an expired token")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Mint an already-expired token.
+	token := &servicetoken.Token{
+		Subject:   "agent/test",
+		Machine:   "machine/test",
+		Audience:  "test-service",
+		ID:        "expired-token",
+		IssuedAt:  time.Now().Add(-10 * time.Minute).Unix(),
+		ExpiresAt: time.Now().Add(-5 * time.Minute).Unix(),
+	}
+	tokenBytes, err := servicetoken.Mint(privateKey, token)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+	})
+
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	if !strings.Contains(response.Error, "token expired") {
+		t.Errorf("expected 'token expired' in error, got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerAuthRevokedToken(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		t.Error("handler should not be called with a revoked token")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Mint a valid token, then blacklist it.
+	tokenBytes := mintTestToken(t, privateKey, "agent/test")
+	authConfig.Blacklist.Revoke("test-token-id", time.Now().Add(5*time.Minute))
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+	})
+
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	if !strings.Contains(response.Error, "token revoked") {
+		t.Errorf("expected 'token revoked' in error, got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerAuthBadSignature(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		t.Error("handler should not be called with a tampered token")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Mint a valid token, then tamper with the payload.
+	tokenBytes := mintTestToken(t, privateKey, "agent/test")
+	tokenBytes[0] ^= 0xFF
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+	})
+
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	if response.Error != "authentication failed" {
+		t.Errorf("expected 'authentication failed', got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerHandleAuthPanicsWithoutConfig(t *testing.T) {
+	server := NewSocketServer("/tmp/test.sock", testLogger(), nil)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic when calling HandleAuth without AuthConfig")
+		}
+		message, ok := r.(string)
+		if !ok || !strings.Contains(message, "HandleAuth requires AuthConfig") {
+			t.Errorf("unexpected panic message: %v", r)
+		}
+	}()
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		return nil, nil
+	})
+}
+
+func TestSocketServerDuplicateAuthAction(t *testing.T) {
+	authConfig, _ := testAuthConfig(t)
+
+	// Auth-auth duplicate.
+	t.Run("auth-auth", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on duplicate auth handler")
+			}
+		}()
+
+		server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+	})
+
+	// Auth-unauth duplicate: register auth first, then try unauth.
+	t.Run("auth-then-unauth", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on auth-then-unauth duplicate")
+			}
+		}()
+
+		server.Handle("create", func(ctx context.Context, raw []byte) (any, error) {
+			return nil, nil
+		})
+	})
+
+	// Unauth-auth duplicate: register unauth first, then try auth.
+	t.Run("unauth-then-auth", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.Handle("create", func(ctx context.Context, raw []byte) (any, error) {
+			return nil, nil
+		})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on unauth-then-auth duplicate")
+			}
+		}()
+
+		server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+	})
+}
+
+func TestSocketServerMixedHandlers(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	// Unauthenticated health check.
+	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
+		return map[string]any{"healthy": true}, nil
+	})
+
+	// Authenticated mutation.
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		return map[string]any{"subject": token.Subject}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Unauthenticated request should work without a token.
+	statusResponse := sendRequest(t, socketPath, map[string]string{"action": "status"})
+	if !statusResponse.OK {
+		t.Fatalf("status: expected ok=true, got false (error: %s)", statusResponse.Error)
+	}
+	var statusData map[string]any
+	decodeData(t, statusResponse, &statusData)
+	if statusData["healthy"] != true {
+		t.Errorf("status: expected healthy=true, got %v", statusData["healthy"])
+	}
+
+	// Authenticated request should work with a valid token.
+	tokenBytes := mintTestToken(t, privateKey, "agent/coder")
+	createResponse := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+	})
+	if !createResponse.OK {
+		t.Fatalf("create: expected ok=true, got false (error: %s)", createResponse.Error)
+	}
+	var createData map[string]any
+	decodeData(t, createResponse, &createData)
+	if createData["subject"] != "agent/coder" {
+		t.Errorf("create: expected subject=agent/coder, got %v", createData["subject"])
+	}
+
+	// Authenticated endpoint without a token should fail.
+	noTokenResponse := sendRequest(t, socketPath, map[string]string{"action": "create"})
+	if noTokenResponse.OK {
+		t.Errorf("create without token: expected ok=false, got true")
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerAuthWrongAudience(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		t.Error("handler should not be called with wrong audience token")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Mint a token for a different service.
+	token := &servicetoken.Token{
+		Subject:   "agent/test",
+		Machine:   "machine/test",
+		Audience:  "wrong-service",
+		ID:        "wrong-audience-token",
+		IssuedAt:  time.Now().Unix(),
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+	tokenBytes, err := servicetoken.Mint(privateKey, token)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "create",
+		"token":  tokenBytes,
+	})
+
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	// Audience mismatch should produce the generic "authentication failed"
+	// (not leak which audience was expected).
+	if response.Error != "authentication failed" {
+		t.Errorf("expected 'authentication failed', got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
 }
 
 // waitForSocket polls until the socket file exists. Fails the test

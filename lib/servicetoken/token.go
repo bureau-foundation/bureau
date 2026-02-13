@@ -62,12 +62,13 @@ type Token struct {
 	ExpiresAt int64 `cbor:"7,keyasint"`
 }
 
-// Errors returned by Verify.
+// Errors returned by Verify and related functions.
 var (
 	ErrTokenTooShort    = errors.New("servicetoken: token too short for signature")
 	ErrInvalidSignature = errors.New("servicetoken: invalid Ed25519 signature")
 	ErrTokenExpired     = errors.New("servicetoken: token has expired")
 	ErrAudienceMismatch = errors.New("servicetoken: audience does not match")
+	ErrTokenRevoked     = errors.New("servicetoken: token has been revoked")
 )
 
 // Mint signs a Token with the daemon's private key and returns the raw

@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // ActionFunc processes a socket request for a specific action. The raw
@@ -26,6 +28,31 @@ import (
 // contains only {ok: true}. If non-nil, the value is marshaled as
 // CBOR and placed in the response's "data" field.
 type ActionFunc func(ctx context.Context, raw []byte) (any, error)
+
+// AuthActionFunc processes a socket request that requires a valid
+// service token. The token has already been verified (signature,
+// expiry, audience, blacklist) by the server before the handler is
+// called. The handler uses the token's Subject, Machine, and Grants
+// fields to identify the caller and make authorization decisions.
+type AuthActionFunc func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error)
+
+// AuthConfig holds the cryptographic material needed to verify
+// service tokens on incoming requests. All fields are required.
+type AuthConfig struct {
+	// PublicKey is the daemon's Ed25519 public key for verifying
+	// token signatures.
+	PublicKey ed25519.PublicKey
+
+	// Audience is the expected service role (e.g., "ticket",
+	// "artifact"). Tokens scoped to a different audience are
+	// rejected.
+	Audience string
+
+	// Blacklist is the token revocation list. Consulted after
+	// cryptographic verification succeeds. The service receives
+	// revocation notices from the daemon and adds token IDs here.
+	Blacklist *servicetoken.Blacklist
+}
 
 // Response is the wire-format envelope for all socket protocol
 // responses. Handlers return a result value (or nil) and an error;
@@ -41,12 +68,15 @@ type Response struct {
 // the client writes a CBOR value, the server processes it and writes
 // a CBOR response, then the connection closes.
 //
-// Actions are registered with Handle before calling Serve. Unknown
-// actions receive an error response.
+// Actions are registered with Handle (unauthenticated) or HandleAuth
+// (authenticated, requires a valid service token) before calling
+// Serve. Unknown actions receive an error response.
 type SocketServer struct {
-	socketPath string
-	handlers   map[string]ActionFunc
-	logger     *slog.Logger
+	socketPath   string
+	handlers     map[string]ActionFunc
+	authHandlers map[string]AuthActionFunc
+	authConfig   *AuthConfig
+	logger       *slog.Logger
 
 	// activeConnections tracks in-flight request handlers for graceful
 	// shutdown. Serve waits for all active connections to complete
@@ -55,23 +85,63 @@ type SocketServer struct {
 }
 
 // NewSocketServer creates a server that will listen on socketPath.
-// Register actions with Handle before calling Serve.
-func NewSocketServer(socketPath string, logger *slog.Logger) *SocketServer {
+// If authConfig is non-nil, authenticated handlers may be registered
+// via HandleAuth. Register actions with Handle/HandleAuth before
+// calling Serve.
+func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthConfig) *SocketServer {
+	if authConfig != nil {
+		if authConfig.PublicKey == nil {
+			panic("service.SocketServer: AuthConfig.PublicKey must not be nil")
+		}
+		if authConfig.Audience == "" {
+			panic("service.SocketServer: AuthConfig.Audience must not be empty")
+		}
+		if authConfig.Blacklist == nil {
+			panic("service.SocketServer: AuthConfig.Blacklist must not be nil")
+		}
+	}
 	return &SocketServer{
-		socketPath: socketPath,
-		handlers:   make(map[string]ActionFunc),
-		logger:     logger,
+		socketPath:   socketPath,
+		handlers:     make(map[string]ActionFunc),
+		authHandlers: make(map[string]AuthActionFunc),
+		authConfig:   authConfig,
+		logger:       logger,
 	}
 }
 
-// Handle registers a handler for the given action name. Panics if
-// called after Serve has started or if the action is already
-// registered.
+// Handle registers an unauthenticated handler for the given action
+// name. Use for health checks and public endpoints. Panics if the
+// action is already registered (authenticated or unauthenticated).
 func (s *SocketServer) Handle(action string, handler ActionFunc) {
+	s.checkActionAvailable(action)
+	s.handlers[action] = handler
+}
+
+// HandleAuth registers an authenticated handler for the given action
+// name. The server extracts the "token" field from the request,
+// verifies it against the configured AuthConfig, and passes the
+// decoded token to the handler. Requests without a valid token
+// receive an error response without invoking the handler.
+//
+// Panics if no AuthConfig was provided to NewSocketServer, or if the
+// action is already registered.
+func (s *SocketServer) HandleAuth(action string, handler AuthActionFunc) {
+	if s.authConfig == nil {
+		panic("service.SocketServer: HandleAuth requires AuthConfig")
+	}
+	s.checkActionAvailable(action)
+	s.authHandlers[action] = handler
+}
+
+// checkActionAvailable panics if the action name is already
+// registered in either handler map.
+func (s *SocketServer) checkActionAvailable(action string) {
 	if _, exists := s.handlers[action]; exists {
 		panic(fmt.Sprintf("service.SocketServer: duplicate handler for action %q", action))
 	}
-	s.handlers[action] = handler
+	if _, exists := s.authHandlers[action]; exists {
+		panic(fmt.Sprintf("service.SocketServer: duplicate handler for action %q", action))
+	}
 }
 
 // Serve starts accepting connections on the Unix socket and dispatches
@@ -171,16 +241,40 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	handler, exists := s.handlers[header.Action]
+	// Try unauthenticated handler first.
+	if handler, exists := s.handlers[header.Action]; exists {
+		result, err := handler(ctx, []byte(raw))
+		if err != nil {
+			s.logger.Debug("action failed",
+				"action", header.Action,
+				"error", err,
+			)
+			s.writeError(conn, err.Error())
+			return
+		}
+		s.writeSuccess(conn, result)
+		return
+	}
+
+	// Try authenticated handler.
+	authHandler, exists := s.authHandlers[header.Action]
 	if !exists {
 		s.writeError(conn, fmt.Sprintf("unknown action %q", header.Action))
 		return
 	}
 
-	result, err := handler(ctx, []byte(raw))
+	// Verify the service token before dispatching.
+	token, err := s.verifyRequestToken(raw, header.Action)
+	if err != nil {
+		s.writeError(conn, err.Error())
+		return
+	}
+
+	result, err := authHandler(ctx, token, []byte(raw))
 	if err != nil {
 		s.logger.Debug("action failed",
 			"action", header.Action,
+			"subject", token.Subject,
 			"error", err,
 		)
 		s.writeError(conn, err.Error())
@@ -188,6 +282,60 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	s.writeSuccess(conn, result)
+}
+
+// verifyRequestToken extracts the "token" field from a CBOR request,
+// verifies signature, expiry, audience, and blacklist status. Returns
+// the decoded token on success. On failure, logs the detailed reason
+// server-side and returns an error with a client-safe message.
+func (s *SocketServer) verifyRequestToken(raw codec.RawMessage, action string) (*servicetoken.Token, error) {
+	var tokenField struct {
+		Token []byte `cbor:"token"`
+	}
+	if err := codec.Unmarshal(raw, &tokenField); err != nil {
+		s.logger.Warn("auth: failed to decode token field",
+			"action", action,
+			"error", err,
+		)
+		return nil, errors.New("authentication failed")
+	}
+	if tokenField.Token == nil {
+		s.logger.Debug("auth: missing token field", "action", action)
+		return nil, errors.New("authentication required: missing token field")
+	}
+
+	// Verify signature, decode payload, check expiry and audience.
+	token, err := servicetoken.VerifyForService(
+		s.authConfig.PublicKey,
+		tokenField.Token,
+		s.authConfig.Audience,
+	)
+	if err != nil {
+		if errors.Is(err, servicetoken.ErrTokenExpired) {
+			s.logger.Info("auth: token expired",
+				"action", action,
+				"error", err,
+			)
+			return nil, errors.New("authentication failed: token expired")
+		}
+		s.logger.Warn("auth: token verification failed",
+			"action", action,
+			"error", err,
+		)
+		return nil, errors.New("authentication failed")
+	}
+
+	// Check blacklist (emergency revocation).
+	if s.authConfig.Blacklist.IsRevoked(token.ID) {
+		s.logger.Info("auth: token revoked",
+			"action", action,
+			"subject", token.Subject,
+			"token_id", token.ID,
+		)
+		return nil, errors.New("authentication failed: token revoked")
+	}
+
+	return token, nil
 }
 
 // writeError sends a failure response: {ok: false, error: "..."}.

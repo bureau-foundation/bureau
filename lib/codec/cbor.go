@@ -1,0 +1,55 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package codec
+
+import (
+	"io"
+
+	"github.com/fxamacker/cbor/v2"
+)
+
+// encMode is the CBOR encoder configured with Core Deterministic
+// Encoding (RFC 8949 §4.2): sorted map keys, smallest integer
+// encoding, no indefinite-length items. Same logical data always
+// produces identical bytes.
+var encMode cbor.EncMode
+
+// decMode is the CBOR decoder configured to accept standard CBOR.
+// Unknown fields are silently ignored for forward compatibility.
+var decMode cbor.DecMode
+
+func init() {
+	var err error
+	encMode, err = cbor.CoreDetEncOptions().EncMode()
+	if err != nil {
+		panic("codec: CBOR encoder initialization failed: " + err.Error())
+	}
+
+	decMode, err = cbor.DecOptions{}.DecMode()
+	if err != nil {
+		panic("codec: CBOR decoder initialization failed: " + err.Error())
+	}
+}
+
+// Marshal encodes v to CBOR using Core Deterministic Encoding.
+func Marshal(v any) ([]byte, error) {
+	return encMode.Marshal(v)
+}
+
+// Unmarshal decodes CBOR data into v.
+func Unmarshal(data []byte, v any) error {
+	return decMode.Unmarshal(data, v)
+}
+
+// NewEncoder returns a CBOR encoder that writes to w using Bureau's
+// standard Core Deterministic Encoding configuration.
+func NewEncoder(w io.Writer) *cbor.Encoder {
+	return encMode.NewEncoder(w)
+}
+
+// NewDecoder returns a CBOR decoder that reads from r using Bureau's
+// standard decoding configuration.
+func NewDecoder(r io.Reader) *cbor.Decoder {
+	return decMode.NewDecoder(r)
+}

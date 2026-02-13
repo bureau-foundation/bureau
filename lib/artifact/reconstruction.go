@@ -6,7 +6,7 @@ package artifact
 import (
 	"fmt"
 
-	"github.com/fxamacker/cbor/v2"
+	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
 // ReconstructionRecord maps an artifact reference to the ordered list
@@ -51,32 +51,10 @@ type Segment struct {
 // ReconstructionRecordVersion is the current record format version.
 const ReconstructionRecordVersion = 1
 
-// cborEncMode is the CBOR encoder configured with Core Deterministic
-// Encoding (RFC 8949 §4.2): sorted map keys, smallest integer
-// encoding, no indefinite-length items. Same logical data always
-// produces identical bytes.
-var cborEncMode cbor.EncMode
-
-// cborDecMode is the CBOR decoder configured to accept standard CBOR.
-var cborDecMode cbor.DecMode
-
-func init() {
-	var err error
-	cborEncMode, err = cbor.CoreDetEncOptions().EncMode()
-	if err != nil {
-		panic("artifact: CBOR encoder initialization failed: " + err.Error())
-	}
-
-	cborDecMode, err = cbor.DecOptions{}.DecMode()
-	if err != nil {
-		panic("artifact: CBOR decoder initialization failed: " + err.Error())
-	}
-}
-
 // MarshalReconstruction encodes a ReconstructionRecord to CBOR using
-// Core Deterministic Encoding.
+// Core Deterministic Encoding (via lib/codec).
 func MarshalReconstruction(record *ReconstructionRecord) ([]byte, error) {
-	data, err := cborEncMode.Marshal(record)
+	data, err := codec.Marshal(record)
 	if err != nil {
 		return nil, fmt.Errorf("encoding reconstruction record: %w", err)
 	}
@@ -88,7 +66,7 @@ func MarshalReconstruction(record *ReconstructionRecord) ([]byte, error) {
 // compatibility).
 func UnmarshalReconstruction(data []byte) (*ReconstructionRecord, error) {
 	var record ReconstructionRecord
-	if err := cborDecMode.Unmarshal(data, &record); err != nil {
+	if err := codec.Unmarshal(data, &record); err != nil {
 		return nil, fmt.Errorf("decoding reconstruction record: %w", err)
 	}
 	if record.Version < 1 {

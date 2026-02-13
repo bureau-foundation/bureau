@@ -17,7 +17,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/artifact",
     visibility = ["//visibility:public"],
     deps = [
-        "@com_github_fxamacker_cbor_v2//:cbor",
+        "//lib/codec",
         "@com_github_klauspost_compress//zstd",
         "@com_github_pierrec_lz4_v4//:lz4",
         "@com_github_zeebo_blake3//:blake3",
@@ -35,4 +35,5 @@ go_test(
         "store_test.go",
     ],
     embed = [":artifact"],
+    deps = ["//lib/codec"],
 )

@@ -1,0 +1,21 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "codec",
+    srcs = [
+        "cbor.go",
+        "doc.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/codec",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_fxamacker_cbor_v2//:cbor"],
+)
+
+go_test(
+    name = "codec_test",
+    srcs = ["cbor_test.go"],
+    embed = [":codec"],
+)

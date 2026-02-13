@@ -47,7 +47,7 @@
 // stored in metadata.
 //
 // On-disk metadata uses CBOR (RFC 8949) with Core Deterministic
-// Encoding for compactness and reproducibility. Wire protocols use JSON
-// via the same Go struct tags (fxamacker/cbor automatically falls back
-// to json tags).
+// Encoding via lib/codec for compactness and reproducibility.
+// Struct types use json struct tags — fxamacker/cbor falls back to
+// json tags, so the same types work with both encoders.
 package artifact

@@ -6,6 +6,8 @@ package artifact
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
 func sampleReconstructionRecord() *ReconstructionRecord {
@@ -249,7 +251,7 @@ func TestUnmarshalReconstructionInvalidVersion(t *testing.T) {
 	// Encode a record with version 0.
 	record := sampleReconstructionRecord()
 	record.Version = 0
-	encoded, err := cborEncMode.Marshal(record)
+	encoded, err := codec.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
 	}

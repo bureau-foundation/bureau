@@ -12,6 +12,7 @@ go_library(
         "doc.go",
         "hash.go",
         "reconstruction.go",
+        "store.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/artifact",
     visibility = ["//visibility:public"],
@@ -31,6 +32,7 @@ go_test(
         "container_test.go",
         "hash_test.go",
         "reconstruction_test.go",
+        "store_test.go",
     ],
     embed = [":artifact"],
 )

@@ -168,9 +168,24 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	// Watch the daemon's config room for service directory updates. Set up
-	// the watch BEFORE publishing the service event to capture the sync
-	// position before any directory change messages arrive.
+	// Deploy a consumer FIRST so the proxy exists when the daemon
+	// processes the service event. The daemon's "Service directory
+	// updated" message is posted after pushServiceDirectory, which
+	// pushes to all running proxies. If the proxy doesn't exist when
+	// the service event is processed, the push is a no-op and the
+	// message becomes a false synchronization signal.
+	agent := registerPrincipal(t, "agent/vis-hr", "vis-hr-password")
+	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:           agent,
+			ServiceVisibility: []string{"service/vis-hr/*"},
+		}},
+	})
+	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
+
+	// Watch the daemon's config room for service directory updates. Set
+	// up the watch BEFORE publishing the service event to capture the
+	// sync position before the directory change message arrives.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	// Publish a test service in #bureau/service. No actual service
@@ -191,21 +206,12 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		t.Fatalf("publish service event: %v", err)
 	}
 
-	// Deploy a consumer with visibility matching the published service.
-	agent := registerPrincipal(t, "agent/vis-hr", "vis-hr-password")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account:           agent,
-			ServiceVisibility: []string{"service/vis-hr/*"},
-		}},
-	})
-	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
-
 	// --- Phase 1: Matching visibility — service is visible ---
 
-	// Wait for the daemon to process the service event. The message is
-	// posted after pushServiceDirectory completes, so the consumer proxy
-	// is guaranteed to have the directory by the time this returns.
+	// Wait for the daemon to process the service event. The proxy was
+	// deployed above, so pushServiceDirectory includes it — the message
+	// is posted after the push completes, guaranteeing the proxy has
+	// the updated directory.
 	serviceWatch.WaitForMessage(t, "added service/vis-hr/test", machine.UserID)
 
 	entries := proxyServiceDiscovery(t, proxyClient, "")

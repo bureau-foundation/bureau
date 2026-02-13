@@ -1053,7 +1053,7 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 
 // tokenTTL is the default TTL for service tokens. Set to 5 minutes to
 // limit exposure from a compromised token. The daemon's refresh goroutine
-// (task bd-15of) renews at 80% of this duration.
+// renews at 80% of this duration.
 const tokenTTL = 5 * time.Minute
 
 // mintServiceTokens mints a signed service token for each required

@@ -1370,12 +1370,12 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		defaultPolicy   *schema.AuthorizationPolicy
-		principalPolicy *schema.AuthorizationPolicy
-		wantGrants      int
-		wantDenials     int
-		wantAllowances  int
+		name             string
+		defaultPolicy    *schema.AuthorizationPolicy
+		principalPolicy  *schema.AuthorizationPolicy
+		wantGrants       int
+		wantDenials      int
+		wantAllowances   int
 		wantAllowDenials int
 	}{
 		{
@@ -1587,7 +1587,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	temporalGrant := schema.Grant{
 		Actions:   []string{"service/register"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
-		Ticket:    "bd-test-temporal",
+		Ticket:    "test-temporal-grant",
 	}
 	if !daemon.authorizationIndex.AddTemporalGrant("agent/alpha", temporalGrant) {
 		t.Fatal("AddTemporalGrant returned false")
@@ -1606,8 +1606,8 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	if len(grants) != 1 {
 		t.Fatalf("after rebuild: grants = %d, want 1 (temporal preserved)", len(grants))
 	}
-	if grants[0].Ticket != "bd-test-temporal" {
-		t.Errorf("preserved grant ticket = %q, want %q", grants[0].Ticket, "bd-test-temporal")
+	if grants[0].Ticket != "test-temporal-grant" {
+		t.Errorf("preserved grant ticket = %q, want %q", grants[0].Ticket, "test-temporal-grant")
 	}
 }
 

@@ -1064,7 +1064,7 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	daemon.authorizationIndex = authorization.NewIndex()
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
-	stateKey := "bd-test-ticket"
+	stateKey := "test-grant-ticket"
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -1080,7 +1080,7 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 									"grant": map[string]any{
 										"actions":    []any{"service/register"},
 										"expires_at": "2099-01-01T00:00:00Z",
-										"ticket":     "bd-test-ticket",
+										"ticket":     "test-grant-ticket",
 									},
 								},
 							},
@@ -1097,8 +1097,8 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	if len(grants) != 1 {
 		t.Fatalf("grants = %d, want 1", len(grants))
 	}
-	if grants[0].Ticket != "bd-test-ticket" {
-		t.Errorf("grant ticket = %q, want %q", grants[0].Ticket, "bd-test-ticket")
+	if grants[0].Ticket != "test-grant-ticket" {
+		t.Errorf("grant ticket = %q, want %q", grants[0].Ticket, "test-grant-ticket")
 	}
 	if grants[0].ExpiresAt != "2099-01-01T00:00:00Z" {
 		t.Errorf("grant expires_at = %q, want %q", grants[0].ExpiresAt, "2099-01-01T00:00:00Z")
@@ -1123,7 +1123,7 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 	added := daemon.authorizationIndex.AddTemporalGrant("agent/alpha", schema.Grant{
 		Actions:   []string{"service/register"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
-		Ticket:    "bd-revoke-ticket",
+		Ticket:    "revoke-grant-ticket",
 	})
 	if !added {
 		t.Fatal("AddTemporalGrant returned false")
@@ -1135,7 +1135,7 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 	}
 
 	// Process a tombstone event (empty content) for the same ticket.
-	stateKey := "bd-revoke-ticket"
+	stateKey := "revoke-grant-ticket"
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -1175,7 +1175,7 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 	daemon.authorizationIndex = authorization.NewIndex()
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
-	stateKey := "bd-statekey-ticket"
+	stateKey := "statekey-grant-ticket"
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -1208,7 +1208,7 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 	if len(grants) != 1 {
 		t.Fatalf("grants = %d, want 1", len(grants))
 	}
-	if grants[0].Ticket != "bd-statekey-ticket" {
-		t.Errorf("grant ticket = %q, want %q (from state key)", grants[0].Ticket, "bd-statekey-ticket")
+	if grants[0].Ticket != "statekey-grant-ticket" {
+		t.Errorf("grant ticket = %q, want %q (from state key)", grants[0].Ticket, "statekey-grant-ticket")
 	}
 }

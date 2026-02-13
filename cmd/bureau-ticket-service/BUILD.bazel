@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "bureau-ticket-service_lib",
@@ -28,4 +28,16 @@ go_binary(
     name = "bureau-ticket-service",
     embed = [":bureau-ticket-service_lib"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-ticket-service_test",
+    srcs = ["sync_test.go"],
+    embed = [":bureau-ticket-service_lib"],
+    deps = [
+        "//lib/clock",
+        "//lib/schema",
+        "//lib/ticket",
+        "//messaging",
+    ],
 )

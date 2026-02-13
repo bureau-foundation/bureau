@@ -14,52 +14,67 @@ import (
 )
 
 // syncFilter restricts the /sync response to event types the ticket
-// service cares about. This includes:
-//   - m.bureau.ticket: ticket state events (core data)
-//   - m.bureau.ticket_config: room ticket configuration (enables/disables
-//     ticket management for a room)
-//   - m.bureau.room_service: room service bindings (which service handles
-//     which role in a room)
+// service cares about. Built from typed constants so that event type
+// renames are caught at compile time.
 //
-// The timeline section includes the same types as state events can
-// appear as timeline events during incremental sync. The limit is
-// generous since the service needs to see all ticket mutations, not
-// just the latest few.
+// The timeline section includes the same types as the state section
+// because state events can appear as timeline events during incremental
+// sync. The limit is generous since the service needs to see all ticket
+// mutations, not just the latest few.
 //
 // Gate evaluation will add more event types to this filter as gate
 // types are implemented (e.g., m.bureau.pipeline_result for pipeline
-// gates). For now, only ticket-related types are included.
-const syncFilter = `{
-	"room": {
-		"state": {
-			"types": [
-				"m.bureau.ticket",
-				"m.bureau.ticket_config",
-				"m.bureau.room_service"
-			]
-		},
-		"timeline": {
-			"types": [
-				"m.bureau.ticket",
-				"m.bureau.ticket_config",
-				"m.bureau.room_service"
-			],
-			"limit": 100
-		},
-		"ephemeral": {
-			"types": []
-		},
-		"account_data": {
-			"types": []
-		}
-	},
-	"presence": {
-		"types": []
-	},
-	"account_data": {
-		"types": []
+// gates).
+var syncFilter = buildSyncFilter()
+
+// buildSyncFilter constructs the Matrix /sync filter JSON from typed
+// schema constants.
+func buildSyncFilter() string {
+	stateEventTypes := []string{
+		schema.EventTypeTicket,
+		schema.EventTypeTicketConfig,
+		schema.EventTypeRoomService,
+		schema.MatrixEventTypeTombstone,
 	}
-}`
+
+	// Timeline includes the same state event types (state events can
+	// appear as timeline events with a non-nil state_key during
+	// incremental sync).
+	timelineEventTypes := make([]string, len(stateEventTypes))
+	copy(timelineEventTypes, stateEventTypes)
+
+	emptyTypes := []string{}
+
+	filter := map[string]any{
+		"room": map[string]any{
+			"state": map[string]any{
+				"types": stateEventTypes,
+			},
+			"timeline": map[string]any{
+				"types": timelineEventTypes,
+				"limit": 100,
+			},
+			"ephemeral": map[string]any{
+				"types": emptyTypes,
+			},
+			"account_data": map[string]any{
+				"types": emptyTypes,
+			},
+		},
+		"presence": map[string]any{
+			"types": emptyTypes,
+		},
+		"account_data": map[string]any{
+			"types": emptyTypes,
+		},
+	}
+
+	data, err := json.Marshal(filter)
+	if err != nil {
+		panic("building sync filter: " + err.Error())
+	}
+	return string(data)
+}
 
 // roomState holds the per-room ticket index and configuration for
 // rooms that have ticket management enabled.
@@ -73,6 +88,12 @@ type roomState struct {
 
 	// index is the in-memory ticket index for this room.
 	index *ticket.Index
+
+	// alias is the room's canonical alias (e.g.,
+	// "#iree/general:bureau.local"), resolved once when the room is
+	// first tracked. Empty if the room has no alias or the fetch
+	// failed. Used for operator-friendly logging only.
+	alias string
 }
 
 // initialSync performs the first /sync and builds the ticket index
@@ -97,7 +118,7 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 	// Build the ticket index from all joined rooms' state.
 	totalTickets := 0
 	for roomID, room := range response.Rooms.Join {
-		tickets := ts.processRoomState(roomID, room.State.Events, room.Timeline.Events)
+		tickets := ts.processRoomState(ctx, roomID, room.State.Events, room.Timeline.Events)
 		totalTickets += tickets
 	}
 
@@ -115,23 +136,33 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 //
 // Called during initial sync for each joined room and can be called
 // when the service joins a new room during incremental sync.
-func (ts *TicketService) processRoomState(roomID string, stateEvents, timelineEvents []messaging.Event) int {
-	// First pass: look for ticket_config to determine if this room
-	// has ticket management enabled. Check both state and timeline
-	// events (timeline events with a state_key are state changes).
+func (ts *TicketService) processRoomState(ctx context.Context, roomID string, stateEvents, timelineEvents []messaging.Event) int {
+	// First pass: check for tombstone and look for ticket_config to
+	// determine if this room has ticket management enabled. Check
+	// both state and timeline events (timeline events with a
+	// state_key are state changes).
 	var config *schema.TicketConfigContent
+	var tombstoned bool
 	for _, event := range stateEvents {
+		if event.Type == schema.MatrixEventTypeTombstone {
+			tombstoned = true
+		}
 		if event.Type == schema.EventTypeTicketConfig && event.StateKey != nil {
 			config = ts.parseTicketConfig(event)
 		}
 	}
 	for _, event := range timelineEvents {
+		if event.Type == schema.MatrixEventTypeTombstone {
+			tombstoned = true
+		}
 		if event.Type == schema.EventTypeTicketConfig && event.StateKey != nil {
 			config = ts.parseTicketConfig(event)
 		}
 	}
 
-	if config == nil {
+	// Skip tombstoned rooms — they are being replaced and should
+	// not be tracked. Also skip rooms without ticket management.
+	if tombstoned || config == nil {
 		return 0
 	}
 
@@ -141,6 +172,7 @@ func (ts *TicketService) processRoomState(roomID string, stateEvents, timelineEv
 		state = &roomState{
 			config: config,
 			index:  ticket.NewIndex(),
+			alias:  ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
 	} else {
@@ -167,6 +199,7 @@ func (ts *TicketService) processRoomState(roomID string, stateEvents, timelineEv
 	if ticketCount > 0 {
 		ts.logger.Info("room tickets indexed",
 			"room_id", roomID,
+			"room_alias", state.alias,
 			"tickets", ticketCount,
 			"total_in_room", state.index.Len(),
 		)
@@ -184,6 +217,24 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 		if accepted > 0 {
 			ts.logger.Info("accepted room invites", "count", accepted)
 		}
+	}
+
+	// Clean up state for rooms the service has been removed from.
+	// This handles kick, ban, and explicit leave. The room appears
+	// in the Leave section when the membership transitions away from
+	// "join". Process leaves before joins so that a leave+rejoin in
+	// the same sync batch re-indexes cleanly from the join state.
+	for roomID := range response.Rooms.Leave {
+		state, exists := ts.rooms[roomID]
+		if !exists {
+			continue
+		}
+		ts.logger.Info("room left, removing ticket state",
+			"room_id", roomID,
+			"room_alias", state.alias,
+			"tickets_removed", state.index.Len(),
+		)
+		delete(ts.rooms, roomID)
 	}
 
 	// Process state changes in joined rooms.
@@ -209,11 +260,21 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, roo
 		return
 	}
 
-	// Check for ticket_config changes first. A room might be gaining
-	// or losing ticket management.
+	// Check for tombstone first. A tombstoned room is being replaced
+	// and should no longer be tracked. No point processing ticket
+	// config or ticket events for a decommissioned room.
+	for _, event := range stateEvents {
+		if event.Type == schema.MatrixEventTypeTombstone {
+			ts.handleRoomTombstone(roomID, event)
+			return
+		}
+	}
+
+	// Check for ticket_config changes. A room might be gaining or
+	// losing ticket management.
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicketConfig {
-			ts.handleTicketConfigChange(roomID, event)
+			ts.handleTicketConfigChange(ctx, roomID, event)
 		}
 	}
 
@@ -238,15 +299,50 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, roo
 	}
 }
 
+// handleRoomTombstone processes a tombstone event for a room. The room
+// is being replaced (decommissioned). If the room was tracked for
+// tickets, clean up its state. The tombstone event's content contains
+// a "replacement_room" field pointing to the successor room; this is
+// logged for operator visibility but the service does not auto-follow
+// the replacement (the replacement room needs its own ticket_config
+// and service invitation).
+func (ts *TicketService) handleRoomTombstone(roomID string, event messaging.Event) {
+	replacementRoom := ""
+	if body, ok := event.Content["replacement_room"]; ok {
+		if replacement, ok := body.(string); ok {
+			replacementRoom = replacement
+		}
+	}
+
+	state, exists := ts.rooms[roomID]
+	if !exists {
+		ts.logger.Info("untracked room tombstoned",
+			"room_id", roomID,
+			"replacement_room", replacementRoom,
+		)
+		return
+	}
+
+	ts.logger.Warn("tracked room tombstoned, removing ticket state",
+		"room_id", roomID,
+		"room_alias", state.alias,
+		"tickets_removed", state.index.Len(),
+		"replacement_room", replacementRoom,
+	)
+	delete(ts.rooms, roomID)
+}
+
 // handleTicketConfigChange processes a change to a room's ticket
 // configuration.
-func (ts *TicketService) handleTicketConfigChange(roomID string, event messaging.Event) {
+func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID string, event messaging.Event) {
 	config := ts.parseTicketConfig(event)
 	if config == nil {
 		// Config was removed or cleared — ticket management disabled.
-		if _, exists := ts.rooms[roomID]; exists {
+		if state, exists := ts.rooms[roomID]; exists {
 			ts.logger.Info("ticket management disabled for room",
 				"room_id", roomID,
+				"room_alias", state.alias,
+				"tickets_removed", state.index.Len(),
 			)
 			delete(ts.rooms, roomID)
 		}
@@ -255,21 +351,73 @@ func (ts *TicketService) handleTicketConfigChange(roomID string, event messaging
 
 	state, exists := ts.rooms[roomID]
 	if !exists {
-		// New ticketed room. We need a full state fetch to pick up
-		// any existing tickets since we don't have them in the sync
-		// response.
 		state = &roomState{
 			config: config,
 			index:  ticket.NewIndex(),
+			alias:  ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
+
+		// Backfill: the room may already contain ticket events from
+		// before this service started tracking it. Fetch the full
+		// room state and index any existing tickets.
+		backfilled := ts.backfillRoomTickets(ctx, roomID, state)
+
 		ts.logger.Info("ticket management enabled for room",
 			"room_id", roomID,
+			"room_alias", state.alias,
 			"prefix", config.Prefix,
+			"backfilled_tickets", backfilled,
 		)
 	} else {
 		state.config = config
 	}
+}
+
+// backfillRoomTickets fetches the full state of a room and indexes
+// any existing ticket events. Called when a room gains ticket_config
+// mid-operation — the initial sync path processes state events from
+// the sync response directly and doesn't need this. Returns the
+// number of tickets indexed.
+func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID string, state *roomState) int {
+	events, err := ts.session.GetRoomState(ctx, roomID)
+	if err != nil {
+		ts.logger.Error("failed to fetch room state for ticket backfill",
+			"room_id", roomID,
+			"error", err,
+		)
+		return 0
+	}
+
+	count := 0
+	for _, event := range events {
+		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
+			if ts.indexTicketEvent(state, event) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// resolveRoomAlias fetches the canonical alias for a room. Returns
+// empty string if the room has no alias or the fetch fails. Called
+// once per room when it is first tracked. Used for logging only.
+func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID string) string {
+	if ts.session == nil {
+		return ""
+	}
+	raw, err := ts.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypeCanonicalAlias, "")
+	if err != nil {
+		return ""
+	}
+	var content struct {
+		Alias string `json:"alias"`
+	}
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return ""
+	}
+	return content.Alias
 }
 
 // parseTicketConfig parses a ticket_config event's content. Returns

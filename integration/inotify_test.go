@@ -65,6 +65,18 @@ func inotifyWaitCreate(ctx context.Context, targetPath string) error {
 			return nil
 		}
 
+		// Check if the deepest existing ancestor has advanced past our
+		// watch point. If a child directory was created between the
+		// deepestExistingAncestor call and InotifyAddWatch, we missed
+		// the IN_CREATE event and would block forever — inotify only
+		// reports direct children, so events deeper in the tree never
+		// arrive on the stale watch. Re-iterate to watch one level
+		// deeper.
+		if deepestExistingAncestor(targetPath) != watchDirectory {
+			unix.Close(fd)
+			continue
+		}
+
 		// Wait for any creation event in the watched directory. With a
 		// fresh per-iteration fd, the single watch is the only source of
 		// events — no watch descriptor filtering needed.

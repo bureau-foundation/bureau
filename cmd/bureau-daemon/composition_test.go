@@ -27,6 +27,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -141,7 +142,7 @@ func TestDaemonLauncherIntegration(t *testing.T) {
 	// Write session.json for the launcher. The launcher loads this on startup
 	// but doesn't use the session after first boot — it only listens for IPC.
 	// The token and URL don't need to reach a real server.
-	sessionJSON, _ := json.Marshal(sessionData{
+	sessionJSON, _ := json.Marshal(service.SessionData{
 		HomeserverURL: matrixServer.URL,
 		UserID:        "@machine/test:bureau.local",
 		AccessToken:   "syt_launcher_session_token",
@@ -465,7 +466,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 		}
 	}()
 
-	sessionJSON, _ := json.Marshal(sessionData{
+	sessionJSON, _ := json.Marshal(service.SessionData{
 		HomeserverURL: matrixServer.URL,
 		UserID:        "@machine/test:bureau.local",
 		AccessToken:   "syt_launcher_session_token",
@@ -802,7 +803,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	sessionJSON, _ := json.Marshal(sessionData{
+	sessionJSON, _ := json.Marshal(service.SessionData{
 		HomeserverURL: matrixServer.URL,
 		UserID:        "@machine/test:bureau.local",
 		AccessToken:   "syt_launcher_session_token",

@@ -27,7 +27,10 @@ go_library(
 
 go_test(
     name = "service_test",
-    srcs = ["socket_test.go"],
+    srcs = [
+        "session_test.go",
+        "socket_test.go",
+    ],
     embed = [":service"],
     deps = [
         "//lib/codec",

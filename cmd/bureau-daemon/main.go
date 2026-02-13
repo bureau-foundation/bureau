@@ -27,7 +27,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -120,15 +120,15 @@ func run() error {
 
 	// Load the Matrix session saved by the launcher. The client is also
 	// needed for the token verifier (creates temporary sessions for whoami).
-	client, session, err := loadSession(stateDir, homeserverURL, logger)
+	client, session, err := service.LoadSession(stateDir, homeserverURL, logger)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
 	}
 
 	// Validate the session is still valid.
-	userID, err := session.WhoAmI(ctx)
+	userID, err := service.ValidateSession(ctx, session)
 	if err != nil {
-		return fmt.Errorf("validating matrix session: %w", err)
+		return err
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
@@ -817,58 +817,6 @@ func uptimeSeconds() int64 {
 		return 0
 	}
 	return info.Uptime
-}
-
-// sessionData is the JSON structure stored by the launcher for the Matrix session.
-type sessionData struct {
-	HomeserverURL string `json:"homeserver_url"`
-	UserID        string `json:"user_id"`
-	AccessToken   string `json:"access_token"`
-}
-
-// loadSession reads the Matrix session from the state directory.
-// This is the same session.json written by bureau-launcher during first-boot.
-// Returns both the client (needed for token verification against the homeserver)
-// and the authenticated session.
-func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*messaging.Client, *messaging.Session, error) {
-	sessionPath := filepath.Join(stateDir, "session.json")
-
-	jsonData, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading session from %s: %w", sessionPath, err)
-	}
-
-	var data sessionData
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		secret.Zero(jsonData)
-		return nil, nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
-	}
-	secret.Zero(jsonData)
-
-	if data.AccessToken == "" {
-		return nil, nil, fmt.Errorf("session file %s has empty access token", sessionPath)
-	}
-
-	// Use the homeserver URL from the flag if provided, falling back to
-	// the saved URL.
-	serverURL := homeserverURL
-	if serverURL == "" {
-		serverURL = data.HomeserverURL
-	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: serverURL,
-		Logger:        logger,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating matrix client: %w", err)
-	}
-
-	session, err := client.SessionFromToken(data.UserID, data.AccessToken)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, session, nil
 }
 
 // ensureConfigRoom ensures the per-machine config room exists. If it doesn't,

@@ -15,9 +15,9 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// sessionData is the JSON structure of session.json, written by the
+// SessionData is the JSON structure of session.json, written by the
 // launcher during first-boot registration of a principal.
-type sessionData struct {
+type SessionData struct {
 	HomeserverURL string `json:"homeserver_url"`
 	UserID        string `json:"user_id"`
 	AccessToken   string `json:"access_token"`
@@ -42,7 +42,7 @@ func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messagin
 		return nil, nil, fmt.Errorf("reading session from %s: %w", sessionPath, err)
 	}
 
-	var data sessionData
+	var data SessionData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		secret.Zero(jsonData)
 		return nil, nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)

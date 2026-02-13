@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
@@ -52,6 +53,7 @@ observation, and structured messaging via Matrix.`,
 			pipelinecmd.Command(),
 			environmentcmd.Command(),
 			workspacecmd.Command(),
+			cborcmd.Command(),
 			{
 				Name:    "version",
 				Summary: "Print version information",

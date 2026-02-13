@@ -82,14 +82,20 @@ func (c *Command) Execute(args []string) error {
 			}
 		}
 
-		// Unknown subcommand — suggest the closest match.
-		suggestion := suggestCommand(name, c.Subcommands)
-		if suggestion != "" {
-			return fmt.Errorf("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",
-				name, suggestion, c.fullName())
+		// No matching subcommand. If this command has a Run
+		// function, fall through to flag parsing and Run — the
+		// unmatched arg may be a positional argument, not a
+		// subcommand name (e.g., "bureau cbor '.field'" where
+		// ".field" is a jq filter, not a subcommand).
+		if c.Run == nil {
+			suggestion := suggestCommand(name, c.Subcommands)
+			if suggestion != "" {
+				return fmt.Errorf("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",
+					name, suggestion, c.fullName())
+			}
+			return fmt.Errorf("unknown command %q\n\nRun '%s --help' for usage.",
+				name, c.fullName())
 		}
-		return fmt.Errorf("unknown command %q\n\nRun '%s --help' for usage.",
-			name, c.fullName())
 	}
 
 	// If we have subcommands but no args (and no Run), show help.

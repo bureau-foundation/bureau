@@ -1,0 +1,36 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cbor",
+    srcs = [
+        "command.go",
+        "decode.go",
+        "diag.go",
+        "doc.go",
+        "encode.go",
+        "filter.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cbor",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/codec",
+        "@com_github_fxamacker_cbor_v2//:cbor",
+        "@com_github_spf13_pflag//:pflag",
+    ],
+)
+
+go_test(
+    name = "cbor_test",
+    srcs = [
+        "decode_test.go",
+        "diag_test.go",
+        "encode_test.go",
+        "filter_test.go",
+    ],
+    embed = [":cbor"],
+    deps = ["//lib/codec"],
+)

@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/hwinfo"
 	"github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu"
@@ -216,6 +217,7 @@ func run() error {
 		tokenVerifier:          newTokenVerifier(client, 5*time.Minute, logger),
 		tokenSigningPublicKey:  tokenSigningPublicKey,
 		tokenSigningPrivateKey: tokenSigningPrivateKey,
+		authorizationIndex:     authorization.NewIndex(),
 		machineName:            machineName,
 		machineUserID:          machineUserID,
 		serverName:             serverName,
@@ -355,6 +357,14 @@ type Daemon struct {
 	// before the first successful reconcile — observation requests are
 	// rejected in that state.
 	lastConfig *schema.MachineConfig
+
+	// authorizationIndex holds per-principal resolved authorization
+	// policies. Built from MachineConfig.DefaultPolicy merged with
+	// per-principal PrincipalAssignment.Authorization and room-level
+	// m.bureau.authorization policies. Updated on every reconcile cycle
+	// and incrementally via temporal grants from /sync. Read by
+	// observation authorization and token minting.
+	authorizationIndex *authorization.Index
 
 	// tokenSigningPublicKey is the Ed25519 public key used to verify
 	// service identity tokens. Published to #bureau/system at startup

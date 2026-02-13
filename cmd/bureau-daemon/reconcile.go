@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -41,6 +42,13 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// place that updates lastConfig — it's always consistent with the
 	// daemon's running state.
 	d.lastConfig = config
+
+	// Rebuild the authorization index from the current config. Each
+	// principal gets its machine-default grants/allowances merged with
+	// any per-principal authorization policy. SetPrincipal preserves
+	// temporal grants that were added incrementally via /sync.
+	// Principals removed from config are cleaned up from the index.
+	d.rebuildAuthorizationIndex(config)
 
 	// Check for Bureau core binary updates before principal reconciliation.
 	// Proxy binary updates take effect immediately (for future sandbox
@@ -846,6 +854,76 @@ func (d *Daemon) readCredentials(ctx context.Context, principalLocalpart string)
 		return nil, fmt.Errorf("parsing credentials for %q: %w", principalLocalpart, err)
 	}
 	return &credentials, nil
+}
+
+// rebuildAuthorizationIndex rebuilds the authorization index from the
+// current MachineConfig. For each principal in the config, it merges the
+// machine-wide DefaultPolicy with the per-principal Authorization policy
+// and calls SetPrincipal to update the index. SetPrincipal preserves any
+// temporal grants that were added incrementally via /sync.
+//
+// Principals that were previously in the index but are no longer in the
+// config are removed. This handles principals being removed from the
+// MachineConfig (decommissioned, moved to another machine, etc.).
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
+	// Lazily initialize the index. Production code always sets this in
+	// the Daemon constructor; tests that predate authorization may omit
+	// it. Lazy init avoids updating every existing test site while
+	// keeping the index available for any test that triggers reconcile.
+	if d.authorizationIndex == nil {
+		d.authorizationIndex = authorization.NewIndex()
+	}
+
+	// Track which principals are in the current config so we can clean
+	// up stale entries afterwards.
+	currentPrincipals := make(map[string]bool, len(config.Principals))
+
+	for _, assignment := range config.Principals {
+		currentPrincipals[assignment.Localpart] = true
+
+		// Merge machine defaults with per-principal policy. Per-principal
+		// policy is additive: grants, denials, allowances, and allowance
+		// denials are appended to the machine defaults. A principal cannot
+		// have fewer permissions than the machine default.
+		merged := mergeAuthorizationPolicy(config.DefaultPolicy, assignment.Authorization)
+		d.authorizationIndex.SetPrincipal(assignment.Localpart, merged)
+	}
+
+	// Remove principals that are no longer in config. This also clears
+	// their temporal grants.
+	for _, localpart := range d.authorizationIndex.Principals() {
+		if !currentPrincipals[localpart] {
+			d.authorizationIndex.RemovePrincipal(localpart)
+			d.logger.Info("removed principal from authorization index",
+				"principal", localpart)
+		}
+	}
+}
+
+// mergeAuthorizationPolicy merges a machine-wide default policy with a
+// per-principal policy. Both may be nil. The result is always a valid
+// (possibly empty) AuthorizationPolicy. Per-principal entries are appended
+// after defaults so they are evaluated after machine-wide rules.
+func mergeAuthorizationPolicy(defaultPolicy, principalPolicy *schema.AuthorizationPolicy) schema.AuthorizationPolicy {
+	var merged schema.AuthorizationPolicy
+
+	if defaultPolicy != nil {
+		merged.Grants = append(merged.Grants, defaultPolicy.Grants...)
+		merged.Denials = append(merged.Denials, defaultPolicy.Denials...)
+		merged.Allowances = append(merged.Allowances, defaultPolicy.Allowances...)
+		merged.AllowanceDenials = append(merged.AllowanceDenials, defaultPolicy.AllowanceDenials...)
+	}
+
+	if principalPolicy != nil {
+		merged.Grants = append(merged.Grants, principalPolicy.Grants...)
+		merged.Denials = append(merged.Denials, principalPolicy.Denials...)
+		merged.Allowances = append(merged.Allowances, principalPolicy.Allowances...)
+		merged.AllowanceDenials = append(merged.AllowanceDenials, principalPolicy.AllowanceDenials...)
+	}
+
+	return merged
 }
 
 // ensurePrincipalRoomAccess invites a principal to a workspace room so it can

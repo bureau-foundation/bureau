@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -1048,5 +1049,166 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	// Verify reconcile ran.
 	if daemon.lastConfig == nil {
 		t.Fatal("lastConfig should be set after initial sync")
+	}
+}
+
+// TestProcessTemporalGrantEvents_AddGrant verifies that temporal grant
+// state events in a sync response are applied to the authorization index.
+func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	// Initialize the index with a principal so temporal grants can attach.
+	daemon.authorizationIndex = authorization.NewIndex()
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	stateKey := "bd-test-ticket"
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[string]messaging.JoinedRoom{
+				"!config:test": {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{
+								Type:     schema.EventTypeTemporalGrant,
+								StateKey: &stateKey,
+								Content: map[string]any{
+									"principal": "agent/alpha",
+									"grant": map[string]any{
+										"actions":    []any{"service/register"},
+										"expires_at": "2099-01-01T00:00:00Z",
+										"ticket":     "bd-test-ticket",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	daemon.processTemporalGrantEvents(response)
+
+	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	if len(grants) != 1 {
+		t.Fatalf("grants = %d, want 1", len(grants))
+	}
+	if grants[0].Ticket != "bd-test-ticket" {
+		t.Errorf("grant ticket = %q, want %q", grants[0].Ticket, "bd-test-ticket")
+	}
+	if grants[0].ExpiresAt != "2099-01-01T00:00:00Z" {
+		t.Errorf("grant expires_at = %q, want %q", grants[0].ExpiresAt, "2099-01-01T00:00:00Z")
+	}
+	if len(grants[0].Actions) != 1 || grants[0].Actions[0] != "service/register" {
+		t.Errorf("grant actions = %v, want [service/register]", grants[0].Actions)
+	}
+}
+
+// TestProcessTemporalGrantEvents_RevokeGrant verifies that a tombstoned
+// temporal grant event (empty content) revokes the grant from the index.
+func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	daemon.authorizationIndex = authorization.NewIndex()
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	// Pre-add a temporal grant.
+	added := daemon.authorizationIndex.AddTemporalGrant("agent/alpha", schema.Grant{
+		Actions:   []string{"service/register"},
+		ExpiresAt: "2099-01-01T00:00:00Z",
+		Ticket:    "bd-revoke-ticket",
+	})
+	if !added {
+		t.Fatal("AddTemporalGrant returned false")
+	}
+
+	// Verify it's there.
+	if grants := daemon.authorizationIndex.Grants("agent/alpha"); len(grants) != 1 {
+		t.Fatalf("before revoke: grants = %d, want 1", len(grants))
+	}
+
+	// Process a tombstone event (empty content) for the same ticket.
+	stateKey := "bd-revoke-ticket"
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[string]messaging.JoinedRoom{
+				"!config:test": {
+					Timeline: messaging.TimelineSection{
+						Events: []messaging.Event{
+							{
+								Type:     schema.EventTypeTemporalGrant,
+								StateKey: &stateKey,
+								Content:  map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	daemon.processTemporalGrantEvents(response)
+
+	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	if len(grants) != 0 {
+		t.Errorf("after revoke: grants = %d, want 0", len(grants))
+	}
+}
+
+// TestProcessTemporalGrantEvents_TicketFromStateKey verifies that when a
+// temporal grant event has no ticket in the grant itself, the state key
+// is used as the ticket value.
+func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	daemon.authorizationIndex = authorization.NewIndex()
+	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	stateKey := "bd-statekey-ticket"
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[string]messaging.JoinedRoom{
+				"!config:test": {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{
+								Type:     schema.EventTypeTemporalGrant,
+								StateKey: &stateKey,
+								Content: map[string]any{
+									"principal": "agent/alpha",
+									"grant": map[string]any{
+										"actions":    []any{"service/register"},
+										"expires_at": "2099-01-01T00:00:00Z",
+										// No "ticket" field — should be filled from state key.
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	daemon.processTemporalGrantEvents(response)
+
+	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	if len(grants) != 1 {
+		t.Fatalf("grants = %d, want 1", len(grants))
+	}
+	if grants[0].Ticket != "bd-statekey-ticket" {
+		t.Errorf("grant ticket = %q, want %q (from state key)", grants[0].Ticket, "bd-statekey-ticket")
 	}
 }

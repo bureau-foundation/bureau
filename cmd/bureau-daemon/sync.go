@@ -69,6 +69,8 @@ func buildSyncFilter() string {
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
 		schema.EventTypeWorktree,
+		schema.EventTypeAuthorization,
+		schema.EventTypeTemporalGrant,
 	}
 
 	timelineEventTypes := make([]string, len(stateEventTypes)+1)
@@ -274,6 +276,11 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		}
 	}
 
+	// Process temporal grant events before reconcile so that grants
+	// added in this sync batch are already in the index when reconcile
+	// calls SetPrincipal (which preserves existing temporal grants).
+	d.processTemporalGrantEvents(response)
+
 	if needsReconcile {
 		d.logger.Info("state changed, reconciling")
 		if err := d.reconcile(ctx); err != nil {
@@ -326,6 +333,102 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// Authorization is checked per-command via room power levels.
 	for roomID, room := range response.Rooms.Join {
 		d.processCommandMessages(ctx, roomID, room.Timeline.Events)
+	}
+}
+
+// processTemporalGrantEvents scans a sync response for m.bureau.temporal_grant
+// state events and applies them to the authorization index. A temporal grant
+// with non-empty content is added; an event with empty content (tombstone)
+// revokes all grants for that principal linked to the same ticket (state key).
+//
+// Called before reconcile so that grants added in this sync batch are already
+// in the index when reconcile calls SetPrincipal (which preserves existing
+// temporal grants).
+func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
+	for roomID, room := range response.Rooms.Join {
+		// Check both state and timeline sections for temporal grant events.
+		allEvents := make([]messaging.Event, 0, len(room.State.Events)+len(room.Timeline.Events))
+		allEvents = append(allEvents, room.State.Events...)
+		allEvents = append(allEvents, room.Timeline.Events...)
+
+		for _, event := range allEvents {
+			if event.Type != schema.EventTypeTemporalGrant {
+				continue
+			}
+			if event.StateKey == nil {
+				continue
+			}
+
+			stateKey := *event.StateKey // ticket reference or grant ID
+
+			// Empty content is a tombstone — revoke the temporal grant.
+			if len(event.Content) == 0 {
+				// We don't know the principal without parsing, but the
+				// state key is the ticket reference. Iterate all principals
+				// in the index and revoke by ticket.
+				for _, localpart := range d.authorizationIndex.Principals() {
+					if count := d.authorizationIndex.RevokeTemporalGrant(localpart, stateKey); count > 0 {
+						d.logger.Info("revoked temporal grant",
+							"principal", localpart,
+							"ticket", stateKey,
+							"room_id", roomID,
+							"revoked_count", count,
+						)
+					}
+				}
+				continue
+			}
+
+			// Event.Content is map[string]any from JSON deserialization.
+			// Re-marshal to JSON so we can unmarshal into the typed struct.
+			contentBytes, err := json.Marshal(event.Content)
+			if err != nil {
+				d.logger.Error("marshaling temporal grant event content",
+					"room_id", roomID,
+					"state_key", stateKey,
+					"error", err,
+				)
+				continue
+			}
+
+			var content schema.TemporalGrantContent
+			if err := json.Unmarshal(contentBytes, &content); err != nil {
+				d.logger.Error("parsing temporal grant event",
+					"room_id", roomID,
+					"state_key", stateKey,
+					"error", err,
+				)
+				continue
+			}
+
+			if content.Principal == "" {
+				d.logger.Warn("temporal grant has empty principal",
+					"room_id", roomID,
+					"state_key", stateKey,
+				)
+				continue
+			}
+
+			// Ensure the ticket field matches the state key for consistency.
+			if content.Grant.Ticket == "" {
+				content.Grant.Ticket = stateKey
+			}
+
+			if d.authorizationIndex.AddTemporalGrant(content.Principal, content.Grant) {
+				d.logger.Info("added temporal grant",
+					"principal", content.Principal,
+					"ticket", content.Grant.Ticket,
+					"expires_at", content.Grant.ExpiresAt,
+					"room_id", roomID,
+				)
+			} else {
+				d.logger.Warn("failed to add temporal grant (missing expiry or ticket)",
+					"principal", content.Principal,
+					"room_id", roomID,
+					"state_key", stateKey,
+				)
+			}
+		}
 	}
 }
 

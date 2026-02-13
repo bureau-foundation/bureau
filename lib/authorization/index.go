@@ -242,6 +242,19 @@ func (idx *Index) SweepExpired(now time.Time) []string {
 	return affected
 }
 
+// Principals returns the localparts of all principals in the index.
+// The order is not guaranteed.
+func (idx *Index) Principals() []string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	result := make([]string, 0, len(idx.grants))
+	for localpart := range idx.grants {
+		result = append(result, localpart)
+	}
+	return result
+}
+
 // Grants returns a deep copy of the resolved grants for a principal.
 // Returns nil if the principal is not in the index.
 func (idx *Index) Grants(localpart string) []schema.Grant {

@@ -29,6 +29,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-daemon",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/authorization",
         "//lib/binhash",
         "//lib/clock",
         "//lib/codec",
@@ -97,6 +98,7 @@ go_test(
         "BUREAU_PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
     },
     deps = [
+        "//lib/authorization",
         "//lib/binhash",
         "//lib/clock",
         "//lib/codec",

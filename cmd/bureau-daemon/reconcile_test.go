@@ -1362,3 +1362,248 @@ func TestReconcileVisibilityUnchanged(t *testing.T) {
 		t.Errorf("expected 0 visibility pushes (patterns unchanged), got %d", visibilityCallCount)
 	}
 }
+
+func TestMergeAuthorizationPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		defaultPolicy   *schema.AuthorizationPolicy
+		principalPolicy *schema.AuthorizationPolicy
+		wantGrants      int
+		wantDenials     int
+		wantAllowances  int
+		wantAllowDenials int
+	}{
+		{
+			name:            "both nil",
+			defaultPolicy:   nil,
+			principalPolicy: nil,
+		},
+		{
+			name: "only default policy",
+			defaultPolicy: &schema.AuthorizationPolicy{
+				Grants:  []schema.Grant{{Actions: []string{"observe/*"}}},
+				Denials: []schema.Denial{{Actions: []string{"admin/*"}}},
+			},
+			principalPolicy: nil,
+			wantGrants:      1,
+			wantDenials:     1,
+		},
+		{
+			name:          "only principal policy",
+			defaultPolicy: nil,
+			principalPolicy: &schema.AuthorizationPolicy{
+				Grants:     []schema.Grant{{Actions: []string{"service/discover"}}},
+				Allowances: []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"admin/**"}}},
+			},
+			wantGrants:     1,
+			wantAllowances: 1,
+		},
+		{
+			name: "both policies merge additively",
+			defaultPolicy: &schema.AuthorizationPolicy{
+				Grants:           []schema.Grant{{Actions: []string{"observe/*"}}},
+				Denials:          []schema.Denial{{Actions: []string{"admin/*"}}},
+				Allowances:       []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/resize"}, Actors: []string{"untrusted/**"}}},
+			},
+			principalPolicy: &schema.AuthorizationPolicy{
+				Grants:           []schema.Grant{{Actions: []string{"service/discover"}}, {Actions: []string{"matrix/join"}}},
+				Denials:          []schema.Denial{{Actions: []string{"service/register"}}},
+				Allowances:       []schema.Allowance{{Actions: []string{"observe/input"}, Actors: []string{"admin/**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/input"}, Actors: []string{"untrusted/**"}}},
+			},
+			wantGrants:       3,
+			wantDenials:      2,
+			wantAllowances:   2,
+			wantAllowDenials: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			merged := mergeAuthorizationPolicy(test.defaultPolicy, test.principalPolicy)
+
+			if got := len(merged.Grants); got != test.wantGrants {
+				t.Errorf("Grants count = %d, want %d", got, test.wantGrants)
+			}
+			if got := len(merged.Denials); got != test.wantDenials {
+				t.Errorf("Denials count = %d, want %d", got, test.wantDenials)
+			}
+			if got := len(merged.Allowances); got != test.wantAllowances {
+				t.Errorf("Allowances count = %d, want %d", got, test.wantAllowances)
+			}
+			if got := len(merged.AllowanceDenials); got != test.wantAllowDenials {
+				t.Errorf("AllowanceDenials count = %d, want %d", got, test.wantAllowDenials)
+			}
+		})
+	}
+}
+
+// TestMergeAuthorizationPolicy_DefaultBeforePrincipal verifies that default
+// policy entries appear before per-principal entries in the merged result.
+// This ordering matters because evaluation may be order-sensitive (first
+// match wins, etc.).
+func TestMergeAuthorizationPolicy_DefaultBeforePrincipal(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeAuthorizationPolicy(
+		&schema.AuthorizationPolicy{
+			Grants: []schema.Grant{{Actions: []string{"default-action"}}},
+		},
+		&schema.AuthorizationPolicy{
+			Grants: []schema.Grant{{Actions: []string{"principal-action"}}},
+		},
+	)
+
+	if len(merged.Grants) != 2 {
+		t.Fatalf("Grants count = %d, want 2", len(merged.Grants))
+	}
+	if merged.Grants[0].Actions[0] != "default-action" {
+		t.Errorf("Grants[0].Actions[0] = %q, want %q", merged.Grants[0].Actions[0], "default-action")
+	}
+	if merged.Grants[1].Actions[0] != "principal-action" {
+		t.Errorf("Grants[1].Actions[0] = %q, want %q", merged.Grants[1].Actions[0], "principal-action")
+	}
+}
+
+func TestRebuildAuthorizationIndex(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	config := &schema.MachineConfig{
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{{Actions: []string{"observe/*"}}},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/alpha",
+				AutoStart: true,
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{{Actions: []string{"service/discover"}}},
+				},
+			},
+			{
+				Localpart: "agent/beta",
+				AutoStart: true,
+				// No per-principal policy — only inherits defaults.
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config)
+
+	// Both principals should be in the index.
+	principals := daemon.authorizationIndex.Principals()
+	if len(principals) != 2 {
+		t.Fatalf("Principals() count = %d, want 2", len(principals))
+	}
+
+	// agent/alpha should have 2 grants (1 default + 1 per-principal).
+	alphaGrants := daemon.authorizationIndex.Grants("agent/alpha")
+	if len(alphaGrants) != 2 {
+		t.Errorf("agent/alpha grants = %d, want 2", len(alphaGrants))
+	}
+
+	// agent/beta should have 1 grant (default only).
+	betaGrants := daemon.authorizationIndex.Grants("agent/beta")
+	if len(betaGrants) != 1 {
+		t.Errorf("agent/beta grants = %d, want 1", len(betaGrants))
+	}
+}
+
+// TestRebuildAuthorizationIndex_RemovesStalePrincipals verifies that
+// principals removed from config are removed from the authorization index.
+func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	// First reconcile: two principals.
+	daemon.rebuildAuthorizationIndex(&schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "agent/alpha"},
+			{Localpart: "agent/beta"},
+		},
+	})
+
+	if len(daemon.authorizationIndex.Principals()) != 2 {
+		t.Fatalf("after first rebuild: principals = %d, want 2", len(daemon.authorizationIndex.Principals()))
+	}
+
+	// Second reconcile: only agent/alpha remains.
+	daemon.rebuildAuthorizationIndex(&schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "agent/alpha"},
+		},
+	})
+
+	principals := daemon.authorizationIndex.Principals()
+	if len(principals) != 1 {
+		t.Fatalf("after second rebuild: principals = %d, want 1", len(principals))
+	}
+	if principals[0] != "agent/alpha" {
+		t.Errorf("remaining principal = %q, want %q", principals[0], "agent/alpha")
+	}
+
+	// agent/beta should have no grants (fully removed).
+	if grants := daemon.authorizationIndex.Grants("agent/beta"); grants != nil {
+		t.Errorf("agent/beta grants should be nil, got %d entries", len(grants))
+	}
+}
+
+// TestRebuildAuthorizationIndex_PreservesTemporalGrants verifies that
+// temporal grants are preserved across rebuilds. SetPrincipal is designed
+// to merge existing temporal grants into the new policy — this test
+// confirms that the rebuild path doesn't accidentally drop them.
+func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
+	t.Parallel()
+
+	daemon := &Daemon{
+		logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Localpart: "agent/alpha"},
+		},
+	}
+
+	// First rebuild establishes the principal.
+	daemon.rebuildAuthorizationIndex(config)
+
+	// Add a temporal grant between rebuilds.
+	temporalGrant := schema.Grant{
+		Actions:   []string{"service/register"},
+		ExpiresAt: "2099-01-01T00:00:00Z",
+		Ticket:    "bd-test-temporal",
+	}
+	if !daemon.authorizationIndex.AddTemporalGrant("agent/alpha", temporalGrant) {
+		t.Fatal("AddTemporalGrant returned false")
+	}
+
+	// Verify it's there.
+	if grants := daemon.authorizationIndex.Grants("agent/alpha"); len(grants) != 1 {
+		t.Fatalf("before rebuild: grants = %d, want 1 (temporal)", len(grants))
+	}
+
+	// Second rebuild with the same config. The temporal grant should survive
+	// because SetPrincipal preserves existing temporal entries.
+	daemon.rebuildAuthorizationIndex(config)
+
+	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	if len(grants) != 1 {
+		t.Fatalf("after rebuild: grants = %d, want 1 (temporal preserved)", len(grants))
+	}
+	if grants[0].Ticket != "bd-test-temporal" {
+		t.Errorf("preserved grant ticket = %q, want %q", grants[0].Ticket, "bd-test-temporal")
+	}
+}

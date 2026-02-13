@@ -20,7 +20,13 @@ go_library(
 go_test(
     name = "schema_test",
     srcs = [
+        "events_artifact_test.go",
+        "events_machine_test.go",
+        "events_pipeline_test.go",
+        "events_template_test.go",
         "events_test.go",
+        "events_ticket_test.go",
+        "events_workspace_test.go",
         "match_test.go",
         "pipeline_ref_test.go",
         "sandbox_spec_test.go",

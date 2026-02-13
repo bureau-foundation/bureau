@@ -337,7 +337,8 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, a
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
 	}
-	// Artifact room uses ArtifactRoomPowerLevels (events_default: 100).
+	// Artifact room uses ArtifactRoomPowerLevels (admin-only, no
+	// member-writable events — metadata lives in the artifact service).
 	if roomID == artifactID {
 		return schema.ArtifactRoomPowerLevels(adminUserID)
 	}

@@ -17,7 +17,7 @@
 //   - [EventTypeWebRTCOffer], [EventTypeWebRTCAnswer] -- signaling
 //   - [EventTypeLayout] -- tmux session structure for observation
 //   - [EventTypeTicket], [EventTypeTicketConfig] -- work item tracking
-//   - [EventTypeArtifact], [EventTypeArtifactTag] -- CAS blob metadata
+//   - [EventTypeArtifactScope] -- artifact service integration config
 //
 // [SandboxSpec] is the fully-resolved sandbox configuration sent over
 // the daemon-to-launcher IPC socket. [TemplateRef] and

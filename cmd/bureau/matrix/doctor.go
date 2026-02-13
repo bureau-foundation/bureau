@@ -290,7 +290,7 @@ var standardRooms = []standardRoom{
 	{
 		alias:           "bureau/artifact",
 		displayName:     "Bureau Artifact",
-		topic:           "Artifact metadata and tags",
+		topic:           "Artifact coordination",
 		name:            "artifact room",
 		credentialKey:   "MATRIX_ARTIFACT_ROOM",
 		powerLevelsFunc: schema.ArtifactRoomPowerLevels,

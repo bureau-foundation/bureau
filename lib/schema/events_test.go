@@ -34,8 +34,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"room_service", EventTypeRoomService, "m.bureau.room_service"},
 		{"ticket", EventTypeTicket, "m.bureau.ticket"},
 		{"ticket_config", EventTypeTicketConfig, "m.bureau.ticket_config"},
-		{"artifact", EventTypeArtifact, "m.bureau.artifact"},
-		{"artifact_tag", EventTypeArtifactTag, "m.bureau.artifact_tag"},
+		{"artifact_scope", EventTypeArtifactScope, "m.bureau.artifact_scope"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -3358,42 +3357,11 @@ func assertField(t *testing.T, object map[string]any, key string, want any) {
 	}
 }
 
-// validArtifactContent returns an ArtifactContent with all required fields
-// set to valid values. Tests modify individual fields to test validation.
-func validArtifactContent() ArtifactContent {
-	return ArtifactContent{
-		Version:        1,
-		Hash:           "a3f9b2c1e7d4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4ab",
-		ContentType:    "text/plain",
-		Size:           1024,
-		ChunkCount:     1,
-		ContainerCount: 1,
-		CreatedBy:      "@service/artifact/main:bureau.local",
-		CreatedAt:      "2026-02-12T10:00:00Z",
-	}
-}
-
-func TestArtifactContentRoundTrip(t *testing.T) {
-	original := ArtifactContent{
-		Version:        1,
-		Hash:           "a3f9b2c1e7d4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4ab",
-		ContentType:    "application/octet-stream",
-		Filename:       "model.safetensors",
-		Size:           10737418240,
-		ChunkCount:     163840,
-		ContainerCount: 160,
-		Compression:    "zstd",
-		Source:         "https://huggingface.co/meta-llama/Llama-3-8B",
-		Description:    "Llama 3 8B model weights",
-		Labels:         []string{"model-weights", "llama"},
-		Visibility:     "public",
-		CreatedBy:      "@service/artifact/main:bureau.local",
-		CreatedAt:      "2026-02-12T10:00:00Z",
-		TTL:            "720h",
-		CachePolicy:    "pin",
-		Extra: map[string]json.RawMessage{
-			"experimental": json.RawMessage(`{"nested":true}`),
-		},
+func TestArtifactScopeRoundTrip(t *testing.T) {
+	original := ArtifactScope{
+		Version:          1,
+		ServicePrincipal: "@service/artifact/main:bureau.local",
+		TagGlobs:         []string{"iree/resnet50/**", "shared/datasets/*"},
 	}
 
 	data, err := json.Marshal(original)
@@ -3401,51 +3369,14 @@ func TestArtifactContentRoundTrip(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	// Verify JSON field names match the wire format.
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "version", float64(1))
-	assertField(t, raw, "hash", original.Hash)
-	assertField(t, raw, "content_type", "application/octet-stream")
-	assertField(t, raw, "filename", "model.safetensors")
-	assertField(t, raw, "size", float64(10737418240))
-	assertField(t, raw, "chunk_count", float64(163840))
-	assertField(t, raw, "container_count", float64(160))
-	assertField(t, raw, "compression", "zstd")
-	assertField(t, raw, "source", original.Source)
-	assertField(t, raw, "description", "Llama 3 8B model weights")
-	assertField(t, raw, "visibility", "public")
-	assertField(t, raw, "created_by", "@service/artifact/main:bureau.local")
-	assertField(t, raw, "created_at", "2026-02-12T10:00:00Z")
-	assertField(t, raw, "ttl", "720h")
-	assertField(t, raw, "cache_policy", "pin")
+	assertField(t, raw, "service_principal", "@service/artifact/main:bureau.local")
 
-	// Labels: verify as JSON array.
-	labels, ok := raw["labels"].([]any)
-	if !ok {
-		t.Fatalf("labels is not an array: %T", raw["labels"])
-	}
-	if len(labels) != 2 || labels[0] != "model-weights" || labels[1] != "llama" {
-		t.Errorf("labels = %v, want [model-weights llama]", labels)
-	}
-
-	// Extra: verify nested structure.
-	extra, ok := raw["extra"].(map[string]any)
-	if !ok {
-		t.Fatalf("extra is not an object: %T", raw["extra"])
-	}
-	experimental, ok := extra["experimental"].(map[string]any)
-	if !ok {
-		t.Fatalf("extra.experimental is not an object: %T", extra["experimental"])
-	}
-	if experimental["nested"] != true {
-		t.Errorf("extra.experimental.nested = %v, want true", experimental["nested"])
-	}
-
-	// Round-trip: marshal → unmarshal → compare.
-	var decoded ArtifactContent
+	var decoded ArtifactScope
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -3454,10 +3385,13 @@ func TestArtifactContentRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArtifactContentOmitsEmptyOptionals(t *testing.T) {
-	content := validArtifactContent()
+func TestArtifactScopeOmitsEmptyOptionals(t *testing.T) {
+	scope := ArtifactScope{
+		Version:          1,
+		ServicePrincipal: "@service/artifact/main:bureau.local",
+	}
 
-	data, err := json.Marshal(content)
+	data, err := json.Marshal(scope)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -3467,397 +3401,54 @@ func TestArtifactContentOmitsEmptyOptionals(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	optionalFields := []string{
-		"filename", "compression", "source", "description",
-		"labels", "visibility", "ttl", "cache_policy", "extra",
-	}
-	for _, field := range optionalFields {
-		if _, exists := raw[field]; exists {
-			t.Errorf("%s should be omitted when empty, but is present", field)
-		}
+	if _, exists := raw["tag_globs"]; exists {
+		t.Error("tag_globs should be omitted when empty, but is present")
 	}
 }
 
-func TestArtifactContentExtraRoundTrip(t *testing.T) {
-	original := validArtifactContent()
-	original.Extra = map[string]json.RawMessage{
-		"string_field":  json.RawMessage(`"hello"`),
-		"number_field":  json.RawMessage(`42`),
-		"object_field":  json.RawMessage(`{"key":"value","count":3}`),
-		"array_field":   json.RawMessage(`[1,2,3]`),
-		"boolean_field": json.RawMessage(`false`),
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var decoded ArtifactContent
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-
-	if len(decoded.Extra) != 5 {
-		t.Fatalf("Extra has %d entries, want 5", len(decoded.Extra))
-	}
-
-	// Verify each Extra value survived the round-trip.
-	for key, want := range original.Extra {
-		got, ok := decoded.Extra[key]
-		if !ok {
-			t.Errorf("Extra[%q] missing after round-trip", key)
-			continue
-		}
-		if string(got) != string(want) {
-			t.Errorf("Extra[%q] = %s, want %s", key, got, want)
-		}
-	}
-}
-
-func TestArtifactContentForwardCompatibility(t *testing.T) {
-	// Simulate a v2 event with an unknown top-level field. This
-	// documents the behavior that CanModify guards against: unknown
-	// fields are silently dropped on unmarshal, so a read-modify-write
-	// cycle through v1 code would lose the "new_v2_field".
-	v2JSON := `{
-		"version": 2,
-		"hash": "a3f9b2c1e7d4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4ab",
-		"content_type": "text/plain",
-		"size": 1024,
-		"chunk_count": 1,
-		"container_count": 1,
-		"created_by": "@service/artifact/main:bureau.local",
-		"created_at": "2026-02-12T10:00:00Z",
-		"new_v2_field": "this field does not exist in v1 ArtifactContent"
-	}`
-
-	// v1 code can unmarshal v2 events without error.
-	var content ArtifactContent
-	if err := json.Unmarshal([]byte(v2JSON), &content); err != nil {
-		t.Fatalf("Unmarshal v2 event: %v", err)
-	}
-
-	// Known fields are correctly populated.
-	if content.Version != 2 {
-		t.Errorf("Version = %d, want 2", content.Version)
-	}
-	if content.Hash != "a3f9b2c1e7d4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4ab" {
-		t.Errorf("Hash = %q, want known value", content.Hash)
-	}
-
-	// CanModify rejects modification of v2 events from v1 code.
-	if err := content.CanModify(); err == nil {
-		t.Error("CanModify() should reject v2 events from v1 code")
-	}
-
-	// Re-marshaling drops the unknown field. This is the silent data
-	// loss that CanModify prevents.
-	remarshaled, err := json.Marshal(content)
-	if err != nil {
-		t.Fatalf("re-Marshal: %v", err)
-	}
-	if strings.Contains(string(remarshaled), "new_v2_field") {
-		t.Error("unknown field survived re-marshal; expected it to be dropped")
-	}
-}
-
-func TestArtifactContentValidate(t *testing.T) {
+func TestArtifactScopeValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		modify  func(*ArtifactContent)
+		scope   ArtifactScope
 		wantErr string
 	}{
 		{
-			name:    "valid",
-			modify:  func(a *ArtifactContent) {},
-			wantErr: "",
-		},
-		{
-			name:    "version_zero",
-			modify:  func(a *ArtifactContent) { a.Version = 0 },
-			wantErr: "version must be >= 1",
-		},
-		{
-			name:    "version_negative",
-			modify:  func(a *ArtifactContent) { a.Version = -1 },
-			wantErr: "version must be >= 1",
-		},
-		{
-			name:    "hash_empty",
-			modify:  func(a *ArtifactContent) { a.Hash = "" },
-			wantErr: "hash is required",
-		},
-		{
-			name:    "hash_wrong_length",
-			modify:  func(a *ArtifactContent) { a.Hash = "abcdef" },
-			wantErr: "hash must be 64 hex characters",
-		},
-		{
-			name: "hash_not_hex",
-			modify: func(a *ArtifactContent) {
-				a.Hash = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+			name: "valid",
+			scope: ArtifactScope{
+				Version:          1,
+				ServicePrincipal: "@service/artifact/main:bureau.local",
 			},
-			wantErr: "hash is not valid hex",
-		},
-		{
-			name:    "content_type_empty",
-			modify:  func(a *ArtifactContent) { a.ContentType = "" },
-			wantErr: "content_type is required",
-		},
-		{
-			name:    "size_zero",
-			modify:  func(a *ArtifactContent) { a.Size = 0 },
-			wantErr: "size must be positive",
-		},
-		{
-			name:    "size_negative",
-			modify:  func(a *ArtifactContent) { a.Size = -1 },
-			wantErr: "size must be positive",
-		},
-		{
-			name:    "chunk_count_zero",
-			modify:  func(a *ArtifactContent) { a.ChunkCount = 0 },
-			wantErr: "chunk_count must be >= 1",
-		},
-		{
-			name:    "container_count_zero",
-			modify:  func(a *ArtifactContent) { a.ContainerCount = 0 },
-			wantErr: "container_count must be >= 1",
-		},
-		{
-			name:    "created_by_empty",
-			modify:  func(a *ArtifactContent) { a.CreatedBy = "" },
-			wantErr: "created_by is required",
-		},
-		{
-			name:    "created_at_empty",
-			modify:  func(a *ArtifactContent) { a.CreatedAt = "" },
-			wantErr: "created_at is required",
-		},
-		{
-			name:    "compression_invalid",
-			modify:  func(a *ArtifactContent) { a.Compression = "gzip" },
-			wantErr: `unknown compression "gzip"`,
-		},
-		{
-			name:    "compression_valid_none",
-			modify:  func(a *ArtifactContent) { a.Compression = "none" },
 			wantErr: "",
 		},
 		{
-			name:    "compression_valid_lz4",
-			modify:  func(a *ArtifactContent) { a.Compression = "lz4" },
+			name: "valid_with_globs",
+			scope: ArtifactScope{
+				Version:          1,
+				ServicePrincipal: "@service/artifact/main:bureau.local",
+				TagGlobs:         []string{"iree/**"},
+			},
 			wantErr: "",
 		},
 		{
-			name:    "compression_valid_zstd",
-			modify:  func(a *ArtifactContent) { a.Compression = "zstd" },
-			wantErr: "",
-		},
-		{
-			name:    "compression_valid_bg4_lz4",
-			modify:  func(a *ArtifactContent) { a.Compression = "bg4_lz4" },
-			wantErr: "",
-		},
-		{
-			name:    "visibility_invalid",
-			modify:  func(a *ArtifactContent) { a.Visibility = "internal" },
-			wantErr: `unknown visibility "internal"`,
-		},
-		{
-			name:    "visibility_valid_public",
-			modify:  func(a *ArtifactContent) { a.Visibility = "public" },
-			wantErr: "",
-		},
-		{
-			name:    "visibility_valid_private",
-			modify:  func(a *ArtifactContent) { a.Visibility = "private" },
-			wantErr: "",
-		},
-		{
-			name:    "cache_policy_invalid",
-			modify:  func(a *ArtifactContent) { a.CachePolicy = "aggressive" },
-			wantErr: `unknown cache_policy "aggressive"`,
-		},
-		{
-			name:    "cache_policy_valid_pin",
-			modify:  func(a *ArtifactContent) { a.CachePolicy = "pin" },
-			wantErr: "",
-		},
-		{
-			name:    "cache_policy_valid_ephemeral",
-			modify:  func(a *ArtifactContent) { a.CachePolicy = "ephemeral" },
-			wantErr: "",
-		},
-		{
-			name:    "cache_policy_valid_replicate",
-			modify:  func(a *ArtifactContent) { a.CachePolicy = "replicate" },
-			wantErr: "",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			content := validArtifactContent()
-			test.modify(&content)
-			err := content.Validate()
-			if test.wantErr == "" {
-				if err != nil {
-					t.Errorf("Validate() = %v, want nil", err)
-				}
-			} else {
-				if err == nil {
-					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
-				}
-				if !strings.Contains(err.Error(), test.wantErr) {
-					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
-				}
-			}
-		})
-	}
-}
-
-func TestArtifactContentCanModify(t *testing.T) {
-	tests := []struct {
-		name    string
-		version int
-		wantErr bool
-	}{
-		{"current_version", ArtifactContentVersion, false},
-		{"older_version", ArtifactContentVersion - 1, false},
-		{"newer_version", ArtifactContentVersion + 1, true},
-		{"far_future_version", ArtifactContentVersion + 100, true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			content := validArtifactContent()
-			content.Version = test.version
-			err := content.CanModify()
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("CanModify() = nil, want error")
-				}
-				// Error message should include both versions for
-				// actionable debugging.
-				message := err.Error()
-				if !strings.Contains(message, "upgrade") {
-					t.Errorf("error should mention upgrade: %q", message)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("CanModify() = %v, want nil", err)
-				}
-			}
-		})
-	}
-}
-
-func TestArtifactTagRoundTrip(t *testing.T) {
-	original := ArtifactTag{
-		Version:     1,
-		Ref:         "art-a3f9b2c1e7d4",
-		PreviousRef: "art-00112233aabb",
-		UpdatedBy:   "@service/artifact/main:bureau.local",
-		UpdatedAt:   "2026-02-12T10:30:00Z",
-		Extra: map[string]json.RawMessage{
-			"optimistic": json.RawMessage(`true`),
-		},
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal to map: %v", err)
-	}
-	assertField(t, raw, "version", float64(1))
-	assertField(t, raw, "ref", "art-a3f9b2c1e7d4")
-	assertField(t, raw, "previous_ref", "art-00112233aabb")
-	assertField(t, raw, "updated_by", "@service/artifact/main:bureau.local")
-	assertField(t, raw, "updated_at", "2026-02-12T10:30:00Z")
-
-	var decoded ArtifactTag
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if !reflect.DeepEqual(decoded, original) {
-		t.Errorf("round-trip mismatch:\n  got:  %+v\n  want: %+v", decoded, original)
-	}
-}
-
-func TestArtifactTagOmitsEmptyOptionals(t *testing.T) {
-	tag := ArtifactTag{
-		Version:   1,
-		Ref:       "art-a3f9b2c1e7d4",
-		UpdatedBy: "@service/artifact/main:bureau.local",
-		UpdatedAt: "2026-02-12T10:30:00Z",
-	}
-
-	data, err := json.Marshal(tag)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal to map: %v", err)
-	}
-
-	for _, field := range []string{"previous_ref", "extra"} {
-		if _, exists := raw[field]; exists {
-			t.Errorf("%s should be omitted when empty, but is present", field)
-		}
-	}
-}
-
-func TestArtifactTagValidate(t *testing.T) {
-	tests := []struct {
-		name    string
-		modify  func(*ArtifactTag)
-		wantErr string
-	}{
-		{
-			name:    "valid",
-			modify:  func(a *ArtifactTag) {},
-			wantErr: "",
-		},
-		{
-			name:    "version_zero",
-			modify:  func(a *ArtifactTag) { a.Version = 0 },
+			name: "version_zero",
+			scope: ArtifactScope{
+				Version:          0,
+				ServicePrincipal: "@service/artifact/main:bureau.local",
+			},
 			wantErr: "version must be >= 1",
 		},
 		{
-			name:    "ref_empty",
-			modify:  func(a *ArtifactTag) { a.Ref = "" },
-			wantErr: "ref is required",
-		},
-		{
-			name:    "updated_by_empty",
-			modify:  func(a *ArtifactTag) { a.UpdatedBy = "" },
-			wantErr: "updated_by is required",
-		},
-		{
-			name:    "updated_at_empty",
-			modify:  func(a *ArtifactTag) { a.UpdatedAt = "" },
-			wantErr: "updated_at is required",
+			name: "service_principal_empty",
+			scope: ArtifactScope{
+				Version: 1,
+			},
+			wantErr: "service_principal is required",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tag := ArtifactTag{
-				Version:   1,
-				Ref:       "art-a3f9b2c1e7d4",
-				UpdatedBy: "@service/artifact/main:bureau.local",
-				UpdatedAt: "2026-02-12T10:30:00Z",
-			}
-			test.modify(&tag)
-			err := tag.Validate()
+			err := test.scope.Validate()
 			if test.wantErr == "" {
 				if err != nil {
 					t.Errorf("Validate() = %v, want nil", err)
@@ -3874,27 +3465,25 @@ func TestArtifactTagValidate(t *testing.T) {
 	}
 }
 
-func TestArtifactTagCanModify(t *testing.T) {
+func TestArtifactScopeCanModify(t *testing.T) {
 	tests := []struct {
 		name    string
 		version int
 		wantErr bool
 	}{
-		{"current_version", ArtifactTagVersion, false},
-		{"older_version", ArtifactTagVersion - 1, false},
-		{"newer_version", ArtifactTagVersion + 1, true},
-		{"far_future_version", ArtifactTagVersion + 100, true},
+		{"current_version", ArtifactScopeVersion, false},
+		{"older_version", ArtifactScopeVersion - 1, false},
+		{"newer_version", ArtifactScopeVersion + 1, true},
+		{"far_future_version", ArtifactScopeVersion + 100, true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tag := ArtifactTag{
-				Version:   test.version,
-				Ref:       "art-a3f9b2c1e7d4",
-				UpdatedBy: "@service/artifact/main:bureau.local",
-				UpdatedAt: "2026-02-12T10:30:00Z",
+			scope := ArtifactScope{
+				Version:          test.version,
+				ServicePrincipal: "@service/artifact/main:bureau.local",
 			}
-			err := tag.CanModify()
+			err := scope.CanModify()
 			if test.wantErr {
 				if err == nil {
 					t.Fatal("CanModify() = nil, want error")
@@ -3908,6 +3497,44 @@ func TestArtifactTagCanModify(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestArtifactScopeForwardCompatibility(t *testing.T) {
+	// Simulate a v2 event with an unknown top-level field. This
+	// documents the behavior that CanModify guards against: unknown
+	// fields are silently dropped on unmarshal/re-marshal.
+	v2JSON := `{
+		"version": 2,
+		"service_principal": "@service/artifact/main:bureau.local",
+		"tag_globs": ["iree/**"],
+		"new_v2_field": "this field does not exist in v1 ArtifactScope"
+	}`
+
+	// v1 code can unmarshal v2 events without error.
+	var scope ArtifactScope
+	if err := json.Unmarshal([]byte(v2JSON), &scope); err != nil {
+		t.Fatalf("Unmarshal v2 event: %v", err)
+	}
+
+	if scope.Version != 2 {
+		t.Errorf("Version = %d, want 2", scope.Version)
+	}
+	if scope.ServicePrincipal != "@service/artifact/main:bureau.local" {
+		t.Errorf("ServicePrincipal mismatch")
+	}
+
+	// CanModify rejects modification of v2 events.
+	if err := scope.CanModify(); err == nil {
+		t.Fatal("CanModify() = nil for v2 event, want error")
+	}
+
+	// Re-marshal drops the unknown field (this is what CanModify prevents).
+	remarshaled, _ := json.Marshal(scope)
+	var raw map[string]any
+	json.Unmarshal(remarshaled, &raw)
+	if _, exists := raw["new_v2_field"]; exists {
+		t.Error("new_v2_field survived round-trip through v1 struct (unexpected)")
 	}
 }
 
@@ -3926,14 +3553,9 @@ func TestArtifactRoomPowerLevels(t *testing.T) {
 		t.Errorf("users_default = %v, want 0", powerLevels["users_default"])
 	}
 
-	// Artifact event types are PL 0 (members can write).
+	// No member-writable event types: all artifact metadata lives in
+	// the artifact service, not Matrix state events.
 	events := powerLevels["events"].(map[string]any)
-	if events[EventTypeArtifact] != 0 {
-		t.Errorf("EventTypeArtifact PL = %v, want 0", events[EventTypeArtifact])
-	}
-	if events[EventTypeArtifactTag] != 0 {
-		t.Errorf("EventTypeArtifactTag PL = %v, want 0", events[EventTypeArtifactTag])
-	}
 
 	// Default event PL is 100 (unknown event types require admin).
 	if powerLevels["events_default"] != 100 {
@@ -3966,11 +3588,8 @@ func TestArtifactRoomPowerLevels(t *testing.T) {
 func TestVersionConstants(t *testing.T) {
 	// Verify version constants are positive. A zero version
 	// constant would mean CanModify can never reject anything.
-	if ArtifactContentVersion < 1 {
-		t.Errorf("ArtifactContentVersion = %d, must be >= 1", ArtifactContentVersion)
-	}
-	if ArtifactTagVersion < 1 {
-		t.Errorf("ArtifactTagVersion = %d, must be >= 1", ArtifactTagVersion)
+	if ArtifactScopeVersion < 1 {
+		t.Errorf("ArtifactScopeVersion = %d, must be >= 1", ArtifactScopeVersion)
 	}
 	if CredentialsVersion < 1 {
 		t.Errorf("CredentialsVersion = %d, must be >= 1", CredentialsVersion)

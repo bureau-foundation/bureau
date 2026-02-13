@@ -4047,7 +4047,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 				ContentType: "text/plain",
 			},
 			{
-				Ref:   "mxc://bureau.local/abc123",
+				Ref:   "art-b7e3d9f0a1c5",
 				Label: "screenshot of rendering bug",
 			},
 		},
@@ -4939,9 +4939,9 @@ func TestTicketAttachmentValidate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name:    "valid_mxc",
+			name:    "rejected_mxc",
 			attach:  TicketAttachment{Ref: "mxc://bureau.local/abc123"},
-			wantErr: "",
+			wantErr: "mxc:// refs are not supported",
 		},
 		{
 			name:    "ref_empty",

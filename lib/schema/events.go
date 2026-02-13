@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Matrix state event type constants. These are the "type" field in Matrix
@@ -2079,8 +2080,7 @@ type TicketContent struct {
 	Notes []TicketNote `json:"notes,omitempty"`
 
 	// Attachments are references to artifacts stored outside the
-	// ticket (in the artifact service or Matrix media repository).
-	// The ticket stores references, not content.
+	// ticket. The ticket stores references, not content.
 	Attachments []TicketAttachment `json:"attachments,omitempty"`
 
 	// CreatedBy is the Matrix user ID of the ticket creator.
@@ -2377,12 +2377,9 @@ func (n *TicketNote) Validate() error {
 }
 
 // TicketAttachment is a reference to an artifact stored outside the
-// ticket state event (in the artifact service or Matrix media
-// repository). The ticket service stores references, not content.
+// ticket state event. The ticket service stores references, not content.
 type TicketAttachment struct {
-	// Ref is the artifact reference. Format depends on the storage
-	// backend: "art-<hash>" for the artifact service, or
-	// "mxc://<server>/<id>" for Matrix media.
+	// Ref is the artifact reference (e.g., "art-<hash>").
 	Ref string `json:"ref"`
 
 	// Label is a human-readable description shown in listings
@@ -2394,10 +2391,15 @@ type TicketAttachment struct {
 	ContentType string `json:"content_type,omitempty"`
 }
 
-// Validate checks that the required ref field is present.
+// Validate checks that the ref field is present and uses a supported
+// format. MXC URIs are not supported — all blob data goes through the
+// artifact service.
 func (a *TicketAttachment) Validate() error {
 	if a.Ref == "" {
 		return errors.New("attachment: ref is required")
+	}
+	if strings.HasPrefix(a.Ref, "mxc://") {
+		return errors.New("attachment: mxc:// refs are not supported, use the artifact service")
 	}
 	return nil
 }

@@ -34,10 +34,19 @@ import (
 )
 
 const (
-	testHomeserverURL     = "http://localhost:6168"
 	testServerName        = "test.bureau.local"
 	testRegistrationToken = "test-registration-token"
-	composeProjectName    = "bureau-test"
+)
+
+var (
+	// testHomeserverURL is set in TestMain after Docker Compose allocates
+	// a random host port for the Continuwuity container. Each test
+	// invocation gets its own port, allowing parallel runs.
+	testHomeserverURL string
+
+	// composeProjectName is unique per process so that concurrent test
+	// runs (e.g., --runs_per_test=N) don't collide on Docker resources.
+	composeProjectName = fmt.Sprintf("bureau-test-%d", os.Getpid())
 )
 
 var (
@@ -70,7 +79,14 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	credentialFile = filepath.Join(workspaceRoot, "deploy", "test", "bureau-creds")
+	// Credential file goes in a temp directory so parallel runs don't
+	// collide on the same file path.
+	credentialDirectory, err := os.MkdirTemp("", "bureau-it-creds-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create credential temp dir: %v\n", err)
+		os.Exit(1)
+	}
+	credentialFile = filepath.Join(credentialDirectory, "bureau-creds")
 
 	if err := checkDockerAccess(); err != nil {
 		fmt.Fprintf(os.Stderr, "Docker not available: %v\n", err)
@@ -84,13 +100,25 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Clean up any leftover state from a previous interrupted run.
+	// Clean up any leftover state from a previous interrupted run with
+	// the same PID (unlikely but defensive).
 	_ = dockerCompose("down", "-v")
 
 	if err := dockerCompose("up", "-d"); err != nil {
 		fmt.Fprintf(os.Stderr, "compose up failed: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Discover the dynamically allocated host port. The compose file
+	// binds 127.0.0.1:0:6167, so Docker picks a free port. We query
+	// it via `docker compose port` which outputs "127.0.0.1:<port>".
+	hostAddress, err := dockerComposeOutput("port", "matrix", "6167")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "discover allocated port: %v\n", err)
+		_ = dockerCompose("down", "-v")
+		os.Exit(1)
+	}
+	testHomeserverURL = "http://" + strings.TrimSpace(hostAddress)
 
 	if err := waitForHealthy(30 * time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "Continuwuity did not become healthy: %v\n", err)
@@ -108,6 +136,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	_ = dockerCompose("down", "-v")
+	_ = os.RemoveAll(credentialDirectory)
 	os.Exit(code)
 }
 
@@ -191,6 +220,23 @@ func dockerCompose(args ...string) error {
 	cmd.Stdout = os.Stderr // test infrastructure output goes to stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// dockerComposeOutput runs docker compose and returns its stdout as a string.
+// Stderr goes to os.Stderr for diagnostic visibility.
+func dockerComposeOutput(args ...string) (string, error) {
+	composeFile := filepath.Join(workspaceRoot, "deploy", "test", "docker-compose.yaml")
+	fullArgs := []string{
+		"compose",
+		"-f", composeFile,
+		"-p", composeProjectName,
+	}
+	fullArgs = append(fullArgs, args...)
+
+	cmd := exec.Command("docker", fullArgs...)
+	cmd.Stderr = os.Stderr
+	output, err := cmd.Output()
+	return string(output), err
 }
 
 // waitForHealthy polls the Continuwuity versions endpoint until it responds.

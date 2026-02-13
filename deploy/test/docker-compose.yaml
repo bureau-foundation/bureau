@@ -6,24 +6,25 @@
 # that must never be used in production.
 #
 # Usage:
-#   sg docker -c "docker compose up -d"
+#   sg docker -c "docker compose -p bureau-test up -d"
+#   PORT=$(docker compose -p bureau-test port matrix 6167 | cut -d: -f2)
 #   bureau matrix setup \
-#     --homeserver http://localhost:6168 \
+#     --homeserver http://localhost:$PORT \
 #     --server-name test.bureau.local \
 #     --registration-token-file <(echo test-registration-token) \
 #     --credential-file ./bureau-creds
 #   bureau matrix doctor --credential-file ./bureau-creds --server-name test.bureau.local
-#   sg docker -c "docker compose down -v"
+#   sg docker -c "docker compose -p bureau-test down -v"
 #
-# Port 6168 avoids collision with the dev Continuwuity at 6167.
+# The host port is dynamically allocated (0:6167) so multiple test
+# runs can execute in parallel without port collisions.
 
 services:
   matrix:
     image: ghcr.io/continuwuity/continuwuity:latest
-    container_name: bureau-test-matrix
     restart: "no"
     ports:
-      - "127.0.0.1:6168:6167"
+      - "127.0.0.1:0:6167"
     volumes:
       - test-matrix-data:/var/lib/continuwuity
       - ./continuwuity.toml:/etc/conduwuit/conduwuit.toml:ro

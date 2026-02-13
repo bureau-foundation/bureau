@@ -5,7 +5,8 @@ load("@rules_go//go:def.bzl", "go_test")
 
 # Integration tests that exercise Bureau against real services (Docker).
 # Tagged "manual" so they don't run with bazel test //... — they require
-# Docker access and a free port (6168).
+# Docker access. Each run allocates a dynamic port and unique project
+# name, so multiple runs can execute in parallel.
 #
 # Run explicitly:
 #   bazel test //integration:integration_test

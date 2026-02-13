@@ -386,34 +386,25 @@ func tempSocketDir(t *testing.T) string {
 	return directory
 }
 
-// waitForFile polls until a file exists on disk.
+// waitForFile blocks until a file exists on disk. Uses inotify for
+// deterministic, event-driven detection instead of polling.
 func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for file: %s", timeout, path)
-		}
-		time.Sleep(50 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	if err := inotifyWaitCreate(ctx, path); err != nil {
+		t.Fatalf("waiting for file %s (timeout %s): %v", path, timeout, err)
 	}
 }
 
-// waitForFileGone polls until a file no longer exists on disk. Used to
-// verify that a proxy socket has been cleaned up after sandbox destruction.
+// waitForFileGone blocks until a file no longer exists on disk. Uses
+// inotify for deterministic, event-driven detection instead of polling.
 func waitForFileGone(t *testing.T, path string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for file to disappear: %s", timeout, path)
-		}
-		time.Sleep(50 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	if err := inotifyWaitDelete(ctx, path); err != nil {
+		t.Fatalf("waiting for file to disappear %s (timeout %s): %v", path, timeout, err)
 	}
 }
 

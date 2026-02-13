@@ -21,8 +21,8 @@ read it back immediately.
 **Genuinely async operations** (daemon /sync propagation, sandbox creation,
 config reconciliation) use the existing helpers in helpers_test.go:
 
-- `waitForFile` — file appears on disk (proxy socket, launcher socket)
-- `waitForFileGone` — file removed (sandbox teardown)
+- `waitForFile` — file appears on disk via inotify (proxy socket, launcher socket)
+- `waitForFileGone` — file removed via inotify (sandbox teardown)
 - `watchRoom` + `roomWatch` methods — all Matrix event waiting
 
 ### Room watches

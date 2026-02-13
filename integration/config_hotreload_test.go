@@ -94,7 +94,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	// checkpoint was taken before the config push, so only new messages
 	// after the push are considered.
 	watch.WaitForMessage(t, "Matrix policy updated for agent/policy-hr",
-		machine.UserID, 30*time.Second)
+		machine.UserID)
 	t.Log("daemon confirmed policy hot-reload to AllowJoin=true")
 
 	// Now the proxy is guaranteed to enforce the new policy.
@@ -127,7 +127,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 
 	// Wait for the daemon's policy revert confirmation via a fresh watch.
 	watch.WaitForMessage(t, "Matrix policy updated for agent/policy-hr",
-		machine.UserID, 30*time.Second)
+		machine.UserID)
 	t.Log("daemon confirmed policy revert to default-deny")
 
 	statusCode, body = proxyTryJoinRoom(t, proxyClient, roomB.RoomID)
@@ -231,7 +231,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Wait for the daemon's visibility hot-reload confirmation, then
 	// verify the service is no longer visible.
 	watch.WaitForMessage(t, "Service visibility updated for agent/vis-hr",
-		machine.UserID, 30*time.Second)
+		machine.UserID)
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 0 {
@@ -253,7 +253,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Wait for the daemon's visibility hot-reload confirmation, then
 	// verify the service is visible again.
 	watch.WaitForMessage(t, "Service visibility updated for agent/vis-hr",
-		machine.UserID, 30*time.Second)
+		machine.UserID)
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {

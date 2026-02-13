@@ -112,6 +112,8 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 		"model":   "test-model",
 	}
 
+	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:  agent,
@@ -126,8 +128,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
 	// Wait for the agent's ready message containing the initial payload.
-	readyMessage := waitForMessageInRoom(t, admin, machine.ConfigRoomID,
-		"quickstart-test-ready", agent.UserID, 30*time.Second)
+	readyMessage := readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID)
 	t.Logf("agent ready message: %s", readyMessage)
 
 	if !strings.Contains(readyMessage, `"version":1`) {
@@ -149,6 +150,8 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 		"model":   "test-model",
 	}
 
+	reloadWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:  agent,
@@ -161,12 +164,14 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	// room. This is the synchronization point: the daemon sends this
 	// message after the IPC response confirms the file has been rewritten.
 	// The admin session watches the config room (not the agent).
-	waitForMessageInRoom(t, admin, machine.ConfigRoomID,
-		"Payload updated for agent/payload-test", machine.UserID, 30*time.Second)
+	reloadWatch.WaitForMessage(t, "Payload updated for agent/payload-test",
+		machine.UserID)
 	t.Log("daemon confirmed payload hot-reload")
 
 	// Send a message to the agent. The agent re-reads payload.json
 	// before sending the ack, so the ack should contain the updated payload.
+	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	_, err = admin.SendMessage(ctx, machine.ConfigRoomID,
 		messaging.NewTextMessage("verify-payload-update"))
 	if err != nil {
@@ -174,8 +179,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	}
 
 	// Wait for the agent's acknowledgment with the updated payload.
-	ackMessage := waitForMessageInRoom(t, admin, machine.ConfigRoomID,
-		"quickstart-test-ok", agent.UserID, 30*time.Second)
+	ackMessage := ackWatch.WaitForMessage(t, "quickstart-test-ok", agent.UserID)
 	t.Logf("agent ack message: %s", ackMessage)
 
 	if !strings.Contains(ackMessage, `"version":2`) {

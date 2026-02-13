@@ -567,109 +567,64 @@ func waitForCommandResults(t *testing.T, session *messaging.Session, roomID, req
 	}
 }
 
-// --- Room Message Polling ---
+// --- Room Watch (sync-based message waiting) ---
 
-// waitForMessageInRoom polls a room's timeline for a message from the
-// specified sender containing the specified substring. Fails the test if the
-// message is not found before the timeout expires.
-func waitForMessageInRoom(t *testing.T, session *messaging.Session, roomID, bodyContains, senderID string, timeout time.Duration) string {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
-			Direction: "b",
-			Limit:     50,
-		})
-		if err != nil {
-			t.Logf("RoomMessages poll error (retrying): %v", err)
-		} else {
-			for _, event := range response.Chunk {
-				if event.Type != "m.room.message" {
-					continue
-				}
-				if event.Sender != senderID {
-					continue
-				}
-				body, _ := event.Content["body"].(string)
-				if strings.Contains(body, bodyContains) {
-					return body
-				}
-			}
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for message containing %q from %s in room %s",
-				timeout, bodyContains, senderID, roomID)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-// --- Room Watch (checkpoint-based message waiting) ---
-
-// roomWatch captures a point in a room's timeline. Create one with watchRoom
-// BEFORE triggering the action that generates the expected message, then call
-// WaitForMessage to find messages that arrived after the checkpoint. This
-// avoids the stale-match problem where waitForMessageInRoom finds an older
-// message with identical content.
+// roomWatch captures a position in the Matrix sync stream. Create one with
+// watchRoom BEFORE triggering the action that generates the expected message,
+// then call WaitForMessage to receive messages that arrive after the
+// checkpoint.
 //
-// The checkpoint records the event ID of the most recent event at creation
-// time. WaitForMessage scans backward from the timeline's current end and
-// stops when it hits the checkpoint event, so only newer events are
-// considered. This uses backward pagination (dir=b), which is well-tested
-// against Continuwuity — forward pagination (dir=f) from backward-origin
-// tokens is not reliably supported.
+// This uses Matrix /sync long-polling: the server holds the connection until
+// new events arrive, then returns immediately. There is no client-side sleep
+// or polling interval. The wait is bounded by t.Context() (test timeout).
 type roomWatch struct {
-	session         *messaging.Session
-	roomID          string
-	checkpointEvent string // event ID of the newest event when the watch was created
+	session   *messaging.Session
+	roomID    string
+	nextBatch string // sync token capturing the stream position at watch creation
 }
 
-// watchRoom captures the current end of a room's timeline as an event ID
-// checkpoint. The returned roomWatch only sees messages arriving after this
-// call returns.
+// watchRoom captures the current position in the Matrix sync stream. The
+// returned roomWatch only sees events arriving after this call returns.
 func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatch {
 	t.Helper()
-	response, err := session.RoomMessages(t.Context(), roomID, messaging.RoomMessagesOptions{
-		Direction: "b",
-		Limit:     1,
+	response, err := session.Sync(t.Context(), messaging.SyncOptions{
+		SetTimeout: true,
+		Timeout:    0, // immediate return with current state
 	})
 	if err != nil {
-		t.Fatalf("watchRoom: capture timeline checkpoint: %v", err)
-	}
-	var checkpointEvent string
-	if len(response.Chunk) > 0 {
-		checkpointEvent = response.Chunk[0].EventID
+		t.Fatalf("watchRoom: initial sync: %v", err)
 	}
 	return roomWatch{
-		session:         session,
-		roomID:          roomID,
-		checkpointEvent: checkpointEvent,
+		session:   session,
+		roomID:    roomID,
+		nextBatch: response.NextBatch,
 	}
 }
 
-// WaitForMessage polls for a message from senderID containing bodyContains
-// that arrived AFTER the watch was created. Scans backward from the current
-// timeline end and stops at the checkpoint event, so pre-existing messages
-// cannot match.
-func (w roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string, timeout time.Duration) string {
+// WaitForMessage blocks until a message from senderID containing bodyContains
+// arrives in the watched room. Uses Matrix /sync long-polling: the server
+// holds the connection until new events arrive, so latency equals event
+// delivery time (typically under 100ms). The wait is bounded by t.Context().
+func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	ctx := t.Context()
 	for {
-		response, err := w.session.RoomMessages(t.Context(), w.roomID, messaging.RoomMessagesOptions{
-			Direction: "b",
-			Limit:     50,
+		response, err := w.session.Sync(ctx, messaging.SyncOptions{
+			Since:      w.nextBatch,
+			SetTimeout: true,
+			Timeout:    30000, // 30s server-side hold
 		})
 		if err != nil {
-			t.Logf("roomWatch poll error (retrying): %v", err)
-		} else {
-			for _, event := range response.Chunk {
-				// Stop at the checkpoint — events at or before this
-				// point were already in the room when the watch was
-				// created.
-				if event.EventID == w.checkpointEvent {
-					break
-				}
+			if ctx.Err() != nil {
+				t.Fatalf("test context cancelled waiting for message containing %q from %s in room %s",
+					bodyContains, senderID, w.roomID)
+			}
+			t.Fatalf("roomWatch sync: %v", err)
+		}
+		w.nextBatch = response.NextBatch
+
+		if joined, ok := response.Rooms.Join[w.roomID]; ok {
+			for _, event := range joined.Timeline.Events {
 				if event.Type != "m.room.message" {
 					continue
 				}
@@ -682,12 +637,6 @@ func (w roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string, t
 				}
 			}
 		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for new message containing %q from %s in room %s",
-				timeout, bodyContains, senderID, w.roomID)
-		}
-		time.Sleep(200 * time.Millisecond)
 	}
 }
 

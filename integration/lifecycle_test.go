@@ -610,10 +610,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	messageFromB := "Hello from fleet-b at " + time.Now().Format(time.RFC3339Nano)
 	proxySendMessage(t, clientB, sharedRoom.RoomID, messageFromB)
 
-	// Brief pause for the homeserver to process events.
-	time.Sleep(500 * time.Millisecond)
-
 	// Verify principal B can see A's message (and vice versa).
+	// No sleep needed: proxySendMessage returned 200 OK with event_id,
+	// meaning the homeserver has persisted the events. A subsequent /sync
+	// sees them immediately.
 	eventsB := proxySyncRoomTimeline(t, clientB, sharedRoom.RoomID)
 	assertMessagePresent(t, eventsB, principalAUserID, messageFromA)
 

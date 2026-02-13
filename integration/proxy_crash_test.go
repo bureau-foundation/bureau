@@ -222,6 +222,10 @@ func TestProxyCrashRecovery(t *testing.T) {
 	t.Logf("proxy PID = %d", proxyPID)
 
 	// --- Phase 4: Kill the proxy with SIGKILL ---
+	// Set up a room watch BEFORE the kill so we only see messages that
+	// arrive after the crash event.
+	watch := watchRoom(t, admin, configRoomID)
+
 	t.Log("killing proxy with SIGKILL")
 	if err := syscall.Kill(proxyPID, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill proxy (pid %d): %v", proxyPID, err)
@@ -232,9 +236,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// then calls reconcile() to recreate the principal, then posts an
 	// outcome message. The recovery message is the definitive signal
 	// that the full cycle (detection → cleanup → re-creation) completed.
-	waitForMessageInRoom(t, admin, configRoomID,
-		"Recovered "+principalLocalpart+" after proxy crash",
-		machineUserID, 15*time.Second)
+	watch.WaitForMessage(t, "Recovered "+principalLocalpart+" after proxy crash",
+		machineUserID)
 	t.Log("recovery message found in config room")
 
 	// --- Phase 6: Verify the new proxy serves the correct identity ---

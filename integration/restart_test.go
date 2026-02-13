@@ -257,6 +257,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("clear machine status sentinel: %v", err)
 	}
 
+	// Set up a room watch before starting the new daemon so we can detect
+	// the adoption message without matching stale events.
+	adoptionWatch := watchRoom(t, admin, configRoomID)
+
 	t.Log("starting new daemon")
 	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir)
 	t.Cleanup(func() {
@@ -287,9 +291,9 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	}
 	t.Log("proxy survived daemon restart, identity preserved")
 
-	// Verify the adoption was logged to the config room.
-	waitForMessageInRoom(t, admin, configRoomID, "Adopted "+principalLocalpart,
-		machineUserID, 10*time.Second)
+	// Verify the adoption was logged to the config room. The watch was set
+	// up before starting daemon2, so only messages from the new daemon match.
+	adoptionWatch.WaitForMessage(t, "Adopted "+principalLocalpart, machineUserID)
 	t.Log("adoption message found in config room")
 
 	t.Log("daemon restart recovery verified: proxy undisturbed, heartbeat correct, adoption logged")

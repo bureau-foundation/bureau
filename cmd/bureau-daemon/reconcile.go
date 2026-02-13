@@ -80,6 +80,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// destroy the sandbox so the "create missing" pass below recreates
 	// it with the new credentials. This handles API key rotation, token
 	// refresh, and any other credential update without manual intervention.
+	var rotatedPrincipals []string
 	for localpart := range d.running {
 		if _, shouldRun := desired[localpart]; !shouldRun {
 			continue // Will be destroyed in the "remove" pass below.
@@ -140,6 +141,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", localpart)
+		rotatedPrincipals = append(rotatedPrincipals, localpart)
 
 		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("Restarting %s: credentials updated", localpart),
@@ -444,6 +446,20 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
 			d.proxyExitWatchers[localpart] = proxyCancel
 			go d.watchProxyExit(proxyCtx, localpart)
+		}
+	}
+
+	// Report credential rotation outcomes. Rotated principals were
+	// destroyed above and should have been recreated by the create loop.
+	for _, localpart := range rotatedPrincipals {
+		if d.running[localpart] {
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("Restarted %s with new credentials", localpart),
+			))
+		} else {
+			d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+				fmt.Sprintf("FAILED to restart %s after credential rotation", localpart),
+			))
 		}
 	}
 

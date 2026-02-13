@@ -5,7 +5,6 @@ package integration_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -81,10 +80,9 @@ func TestTwoAgentMessaging(t *testing.T) {
 			bobEventID := proxySendMessage(t, bobHTTP, chatRoomID, "Hello from Bob")
 			t.Logf("bob sent message: %s", bobEventID)
 
-			// Brief pause for the homeserver to process events.
-			time.Sleep(500 * time.Millisecond)
-
 			// Alice reads the conversation — both messages should be visible.
+			// No sleep needed: proxySendMessage returned 200 OK with event_id,
+			// meaning the homeserver has persisted the events.
 			aliceEvents := proxySyncRoomTimeline(t, aliceHTTP, chatRoomID)
 			assertMessagePresent(t, aliceEvents, alice.UserID, "Hello from Alice")
 			assertMessagePresent(t, aliceEvents, bob.UserID, "Hello from Bob")

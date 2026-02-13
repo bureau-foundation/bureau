@@ -144,10 +144,11 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	t.Log("phase 1: verifying setup starts with pending workspace status")
 	waitForFile(t, setupSocket, 30*time.Second)
 
-	// Give the daemon a few reconcile cycles to process everything.
-	// The agent should NOT have started because the workspace status
-	// is "pending", not "active".
-	time.Sleep(5 * time.Second)
+	// The agent should NOT have started because the workspace status is
+	// "pending", not "active". No sleep needed: reconcile() evaluates all
+	// principals in a single pass, and the setup socket above proves that
+	// pass completed. If the daemon started setup but not agent, the
+	// decision is final until the workspace status changes.
 	if _, err := os.Stat(agentSocket); err == nil {
 		t.Fatal("agent proxy socket should not exist while workspace status is 'pending'")
 	}

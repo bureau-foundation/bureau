@@ -19,18 +19,29 @@ sleep "just in case" — if you sent a state event and got an event_id back,
 read it back immediately.
 
 **Genuinely async operations** (daemon /sync propagation, sandbox creation,
-config reconciliation) use the existing `waitFor*` helpers in helpers_test.go:
+config reconciliation) use the existing helpers in helpers_test.go:
 
 - `waitForFile` — file appears on disk (proxy socket, launcher socket)
 - `waitForFileGone` — file removed (sandbox teardown)
 - `waitForStateEvent` — Matrix state event appears in a room
 - `waitForCommandResults` — command result events in room timeline
 - `waitForServiceDiscovery` — service directory propagation
-- `waitForMessageInRoom` — message from a specific sender
+- `watchRoom` + `roomWatch.WaitForMessage` — message from a specific sender,
+  using Matrix /sync long-polling (event-driven, no client-side sleep)
 
-These have proper timeouts and descriptive failure messages. If none of them
-fit, write a new purpose-built helper with the same pattern — never inline
-a sleep-and-retry loop.
+**Room watches** are the preferred pattern for waiting on messages. Create a
+watch BEFORE triggering the action, then call WaitForMessage after:
+
+```go
+watch := watchRoom(t, admin, machine.ConfigRoomID)
+pushMachineConfig(t, admin, machine, config)  // triggers daemon action
+watch.WaitForMessage(t, "expected message", machine.UserID)
+```
+
+The watch captures a sync checkpoint. WaitForMessage uses Matrix /sync
+long-polling (server holds the connection until events arrive). No timeout
+parameter — bounded by t.Context() (test timeout). Never inline a
+sleep-and-retry loop.
 
 **Unit tests with time-dependent logic** should use injectable clocks, not
 real time.

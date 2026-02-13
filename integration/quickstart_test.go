@@ -113,6 +113,8 @@ func TestQuickstartTestAgent(t *testing.T) {
 	}
 	agentSession.Close()
 
+	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	templateRef := "bureau/template:sysadmin-test"
 	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
@@ -136,12 +138,13 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// Wait for "quickstart-test-ready" from the test agent. This proves:
 	// identity injection, Matrix authentication, room alias resolution,
 	// and message sending all work from inside the sandbox.
-	waitForMessageInRoom(t, admin, machine.ConfigRoomID,
-		"quickstart-test-ready", agent.UserID, 30*time.Second)
+	readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID)
 	t.Log("test agent sent ready signal")
 
 	// Send a message to the config room. The test agent will detect it
 	// (via polling /messages through the proxy) and respond.
+	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	_, err = admin.SendMessage(ctx, machine.ConfigRoomID,
 		messaging.NewTextMessage("hello from test harness"))
 	if err != nil {
@@ -151,8 +154,8 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// Wait for the agent's acknowledgment. This proves bidirectional
 	// messaging: the agent can read messages from the room and write
 	// responses, all through the proxy's Matrix API.
-	waitForMessageInRoom(t, admin, machine.ConfigRoomID,
+	ackWatch.WaitForMessage(t,
 		"quickstart-test-ok: received 'hello from test harness'",
-		agent.UserID, 30*time.Second)
+		agent.UserID)
 	t.Log("test agent acknowledged message — full stack verified")
 }

@@ -9,10 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -135,29 +135,11 @@ func TestPrincipalAssignment(t *testing.T) {
 		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, agent.UserID)
 	}
 
-	// Verify MachineStatus reflects the running sandbox. Poll because the
-	// daemon publishes a new heartbeat on each status tick after reconciliation.
-	ctx := t.Context()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		statusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-			"m.bureau.machine_status", machine.Name)
-		if err == nil {
-			var status struct {
-				Sandboxes struct {
-					Running int `json:"running"`
-				} `json:"sandboxes"`
-			}
-			if err := json.Unmarshal(statusJSON, &status); err == nil && status.Sandboxes.Running > 0 {
-				t.Logf("machine status shows %d running sandbox(es)", status.Sandboxes.Running)
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for MachineStatus to show running sandboxes")
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	// Verify MachineStatus reflects the running sandbox.
+	waitForMachineStatus(t, admin, machine.MachineRoomID, machine.Name,
+		func(status schema.MachineStatus) bool {
+			return status.Sandboxes.Running > 0
+		}, 15*time.Second, "MachineStatus with running sandboxes")
 }
 
 // TestOperatorFlow verifies the operator-facing observation pipeline:
@@ -394,55 +376,20 @@ func TestCredentialRotation(t *testing.T) {
 		t.Fatal("login returned the same token as registration (expected a new device token)")
 	}
 
-	// Record the proxy socket's identity before rotation. After the daemon
-	// destroys and recreates the proxy, the new socket file will differ.
-	// We compare both inode number AND ctime (nanosecond precision) because
-	// the filesystem can reuse the same inode number for the new file when
-	// the destroy+create cycle completes within milliseconds. Ctime is
-	// always different because it's set at inode allocation time.
-	//
-	// We can't use waitForFileGone+waitForFile because the destroy+create
-	// cycle runs within a single reconcile call and completes in ~5ms,
-	// too fast for any practical poll interval to catch the gap.
-	originalInfo, err := os.Stat(proxySocket)
-	if err != nil {
-		t.Fatalf("stat original proxy socket: %v", err)
-	}
-	originalStat := originalInfo.Sys().(*syscall.Stat_t)
-	originalInode := originalStat.Ino
-	originalCtim := originalStat.Ctim
-
 	// Push new credentials. The ciphertext will differ because:
 	//   (a) the token payload is different, and
 	//   (b) age encryption uses a fresh ephemeral key per Encrypt call.
 	// The daemon compares ciphertext on each reconcile cycle and triggers
 	// a destroy+create when it changes.
+	watch := watchRoom(t, admin, machine.ConfigRoomID)
 	pushCredentials(t, admin, machine, rotated)
 
-	// Poll until the proxy socket is recreated. Detection uses both inode
-	// number and ctime: either changing means a new file exists at the path.
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		info, statError := os.Stat(proxySocket)
-		if statError != nil {
-			// Socket briefly absent during the destroy→create transition.
-			if time.Now().After(deadline) {
-				t.Fatal("timed out waiting for proxy socket to be recreated after credential rotation")
-			}
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-		currentStat := info.Sys().(*syscall.Stat_t)
-		if currentStat.Ino != originalInode || currentStat.Ctim != originalCtim {
-			t.Logf("proxy socket changed: inode %d→%d, ctime %v→%v (credential rotation complete)",
-				originalInode, currentStat.Ino, originalCtim, currentStat.Ctim)
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for proxy socket to change after credential push")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	// Wait for the daemon to complete the rotation. The daemon posts
+	// "Restarted X with new credentials" after destroying the old sandbox
+	// and creating the new one. This is a deterministic completion signal
+	// (no inode polling needed).
+	watch.WaitForMessage(t, "Restarted "+agent.Localpart+" with new credentials",
+		machine.UserID)
 
 	// Verify the restarted proxy serves the correct identity. The new proxy
 	// process holds the rotated token, so whoami still returns the same
@@ -760,28 +707,10 @@ func TestConfigReconciliation(t *testing.T) {
 
 		waitForFileGone(t, betaSocket, 15*time.Second)
 
-		// Verify MachineStatus reflects zero running sandboxes. The daemon
-		// publishes a heartbeat on each status tick, so poll until the
-		// count reaches zero (the previous heartbeat may still show 1).
-		deadline := time.Now().Add(15 * time.Second)
-		for {
-			statusJSON, err := admin.GetStateEvent(t.Context(), machine.MachineRoomID,
-				"m.bureau.machine_status", machine.Name)
-			if err == nil {
-				var status struct {
-					Sandboxes struct {
-						Running int `json:"running"`
-					} `json:"sandboxes"`
-				}
-				if err := json.Unmarshal(statusJSON, &status); err == nil && status.Sandboxes.Running == 0 {
-					t.Logf("machine status shows 0 running sandboxes")
-					break
-				}
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("timed out waiting for MachineStatus to show 0 running sandboxes")
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
+		// Verify MachineStatus reflects zero running sandboxes.
+		waitForMachineStatus(t, admin, machine.MachineRoomID, machine.Name,
+			func(status schema.MachineStatus) bool {
+				return status.Sandboxes.Running == 0
+			}, 15*time.Second, "MachineStatus with 0 running sandboxes")
 	})
 }

@@ -53,7 +53,7 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 	}
 
 	// Mint initial tokens (with both grants).
-	tokenDirectory, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}

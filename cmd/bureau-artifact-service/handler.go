@@ -191,6 +191,8 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 			return
 		}
 		as.handleCacheStatus(ctx, conn, raw)
+	case "revoke-tokens":
+		as.handleRevokeTokens(conn, raw)
 	case "status":
 		// Status is unauthenticated — pure liveness check that
 		// reveals only uptime and artifact count.
@@ -1079,6 +1081,47 @@ func (as *ArtifactService) handleCacheStatus(ctx context.Context, conn net.Conn,
 }
 
 // --- Wire helpers ---
+
+// handleRevokeTokens processes a signed token revocation request from
+// the daemon. Verifies the signature using the daemon's public key
+// (from authConfig) and adds the specified token IDs to the blacklist.
+// This is an unauthenticated action — the signed revocation blob
+// itself is the authentication.
+func (as *ArtifactService) handleRevokeTokens(conn net.Conn, raw []byte) {
+	if as.authConfig == nil {
+		as.writeError(conn, "revocation requires auth config")
+		return
+	}
+
+	var envelope struct {
+		Revocation []byte `cbor:"revocation"`
+	}
+	if err := codec.Unmarshal(raw, &envelope); err != nil {
+		as.writeError(conn, fmt.Sprintf("decoding revocation envelope: %v", err))
+		return
+	}
+	if envelope.Revocation == nil {
+		as.writeError(conn, "missing required field: revocation")
+		return
+	}
+
+	request, err := servicetoken.VerifyRevocation(as.authConfig.PublicKey, envelope.Revocation)
+	if err != nil {
+		as.logger.Warn("revocation request verification failed", "error", err)
+		as.writeError(conn, "revocation verification failed")
+		return
+	}
+
+	for _, entry := range request.Entries {
+		as.authConfig.Blacklist.Revoke(entry.TokenID, time.Unix(entry.ExpiresAt, 0))
+	}
+
+	as.logger.Info("tokens revoked via daemon push",
+		"count", len(request.Entries),
+	)
+
+	as.writeResult(conn, map[string]bool{"ok": true})
+}
 
 // writeError sends an ErrorResponse to the client.
 func (as *ArtifactService) writeError(conn net.Conn, message string) {

@@ -9,6 +9,7 @@ go_library(
         "blacklist.go",
         "doc.go",
         "keypair.go",
+        "revocation.go",
         "token.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/servicetoken",
@@ -24,6 +25,7 @@ go_test(
     srcs = [
         "blacklist_test.go",
         "keypair_test.go",
+        "revocation_test.go",
         "token_test.go",
     ],
     embed = [":servicetoken"],

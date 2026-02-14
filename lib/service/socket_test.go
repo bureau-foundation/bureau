@@ -893,3 +893,205 @@ func waitForSocket(t *testing.T, path string) {
 		runtime.Gosched()
 	}
 }
+
+func TestRevocationHandler_RevokesTokens(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+	server.RegisterRevocationHandler()
+
+	// Register an authenticated action so we can verify the blacklist
+	// takes effect on subsequent requests.
+	server.HandleAuth("read", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		return map[string]string{"status": "allowed"}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Mint a token and verify it works before revocation.
+	tokenBytes := mintTestToken(t, privateKey, "agent/alpha")
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "read",
+		"token":  tokenBytes,
+	})
+	if !response.OK {
+		t.Fatalf("read before revocation: expected ok=true, got error %q", response.Error)
+	}
+
+	// Send a signed revocation for the token ID used by mintTestToken.
+	revocationRequest := &servicetoken.RevocationRequest{
+		Entries: []servicetoken.RevocationEntry{
+			{TokenID: "test-token-id", ExpiresAt: 4070908800},
+		},
+		IssuedAt: 1735689600,
+	}
+	signedRevocation, err := servicetoken.SignRevocation(privateKey, revocationRequest)
+	if err != nil {
+		t.Fatalf("SignRevocation: %v", err)
+	}
+
+	response = sendRequest(t, socketPath, map[string]any{
+		"action":     "revoke-tokens",
+		"revocation": signedRevocation,
+	})
+	if !response.OK {
+		t.Fatalf("revoke-tokens: expected ok=true, got error %q", response.Error)
+	}
+
+	// The same token should now be rejected.
+	response = sendRequest(t, socketPath, map[string]any{
+		"action": "read",
+		"token":  tokenBytes,
+	})
+	if response.OK {
+		t.Error("read after revocation: expected ok=false, got ok=true")
+	}
+	if !strings.Contains(response.Error, "token revoked") {
+		t.Errorf("expected 'token revoked' in error, got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestRevocationHandler_RejectsWrongSignature(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, _ := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+	server.RegisterRevocationHandler()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Sign with a different key than the one the server expects.
+	_, wrongPrivate := testKeypair(t)
+	revocationRequest := &servicetoken.RevocationRequest{
+		Entries:  []servicetoken.RevocationEntry{{TokenID: "aabb", ExpiresAt: 4070908800}},
+		IssuedAt: 1735689600,
+	}
+	signed, err := servicetoken.SignRevocation(wrongPrivate, revocationRequest)
+	if err != nil {
+		t.Fatalf("SignRevocation: %v", err)
+	}
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action":     "revoke-tokens",
+		"revocation": signed,
+	})
+	if response.OK {
+		t.Error("expected ok=false for revocation with wrong key, got ok=true")
+	}
+	if !strings.Contains(response.Error, "verification failed") {
+		t.Errorf("expected 'verification failed' in error, got %q", response.Error)
+	}
+
+	// Blacklist should be empty — nothing was revoked.
+	if authConfig.Blacklist.Len() != 0 {
+		t.Errorf("blacklist should be empty after rejected revocation, got %d entries", authConfig.Blacklist.Len())
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestRevocationHandler_MissingRevocationField(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, _ := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+	server.RegisterRevocationHandler()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action": "revoke-tokens",
+	})
+	if response.OK {
+		t.Error("expected ok=false for missing revocation field, got ok=true")
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestRevocationHandler_MultipleTokens(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+	server.RegisterRevocationHandler()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Revoke three token IDs in one request.
+	revocationRequest := &servicetoken.RevocationRequest{
+		Entries: []servicetoken.RevocationEntry{
+			{TokenID: "token-aaa", ExpiresAt: 4070908800},
+			{TokenID: "token-bbb", ExpiresAt: 4070908800},
+			{TokenID: "token-ccc", ExpiresAt: 4070908800},
+		},
+		IssuedAt: 1735689600,
+	}
+	signed, err := servicetoken.SignRevocation(privateKey, revocationRequest)
+	if err != nil {
+		t.Fatalf("SignRevocation: %v", err)
+	}
+
+	response := sendRequest(t, socketPath, map[string]any{
+		"action":     "revoke-tokens",
+		"revocation": signed,
+	})
+	if !response.OK {
+		t.Fatalf("revoke-tokens: expected ok=true, got error %q", response.Error)
+	}
+
+	if authConfig.Blacklist.Len() != 3 {
+		t.Errorf("blacklist length = %d, want 3", authConfig.Blacklist.Len())
+	}
+	for _, tokenID := range []string{"token-aaa", "token-bbb", "token-ccc"} {
+		if !authConfig.Blacklist.IsRevoked(tokenID) {
+			t.Errorf("token %q should be revoked", tokenID)
+		}
+	}
+
+	cancel()
+	wg.Wait()
+}

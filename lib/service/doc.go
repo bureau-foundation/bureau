@@ -48,4 +48,14 @@
 // [LoadTokenSigningKey] fetches the public key from #bureau/system
 // where the daemon publishes it at startup. [ResolveSystemRoom]
 // resolves the system room alias and joins it.
+//
+// # Revocation
+//
+// When a sandbox is destroyed, the daemon pushes signed revocation
+// requests to services via the "revoke-tokens" action. Services that
+// use [SocketServer] call [SocketServer.RegisterRevocationHandler] to
+// register this standard handler. The handler verifies the daemon's
+// Ed25519 signature on the revocation payload and adds the specified
+// token IDs to the [AuthConfig.Blacklist]. Subsequent requests
+// carrying a blacklisted token ID are rejected.
 package service

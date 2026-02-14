@@ -102,7 +102,7 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 			return
 		}
 
-		_, err := d.mintServiceTokens(candidate.localpart, candidate.requiredServices)
+		_, minted, err := d.mintServiceTokens(candidate.localpart, candidate.requiredServices)
 		if err != nil {
 			d.logger.Error("token refresh failed",
 				"principal", candidate.localpart,
@@ -111,9 +111,12 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 			continue
 		}
 
-		// Update the mint timestamp.
+		// Update the mint timestamp and record the new tokens for
+		// emergency revocation tracking. recordMintedTokens also
+		// prunes expired entries from previous mints.
 		d.reconcileMu.Lock()
 		d.lastTokenMint[candidate.localpart] = d.clock.Now()
+		d.recordMintedTokens(candidate.localpart, minted)
 		d.reconcileMu.Unlock()
 
 		refreshed++

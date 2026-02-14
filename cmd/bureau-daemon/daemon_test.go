@@ -45,6 +45,8 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		lastCredentials:       make(map[string]string),
 		lastGrants:            make(map[string][]schema.Grant),
 		lastTokenMint:         make(map[string]time.Time),
+		activeTokens:          make(map[string][]activeToken),
+		lastServiceMounts:     make(map[string][]launcherServiceMount),
 		lastObserveAllowances: make(map[string][]schema.Allowance),
 		lastSpecs:             make(map[string]*schema.SandboxSpec),
 		previousSpecs:         make(map[string]*schema.SandboxSpec),

@@ -142,6 +142,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
+		d.revokeAndCleanupTokens(ctx, localpart)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
@@ -344,8 +345,9 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// disk and bind-mounted read-only at /run/bureau/tokens/ so the
 		// agent can authenticate to services without a daemon round-trip.
 		var tokenDirectory string
+		var mintedTokens []activeToken
 		if sandboxSpec != nil && len(sandboxSpec.RequiredServices) > 0 {
-			tokenDir, err := d.mintServiceTokens(localpart, sandboxSpec.RequiredServices)
+			tokenDir, minted, err := d.mintServiceTokens(localpart, sandboxSpec.RequiredServices)
 			if err != nil {
 				d.logger.Error("minting service tokens",
 					"principal", localpart,
@@ -357,6 +359,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			tokenDirectory = tokenDir
+			mintedTokens = minted
 		}
 
 		// Resolve authorization grants before sandbox creation so the
@@ -391,6 +394,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastGrants[localpart] = grants
 		d.lastTokenMint[localpart] = d.clock.Now()
+		d.recordMintedTokens(localpart, mintedTokens)
+		d.lastServiceMounts[localpart] = serviceMounts
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal started", "principal", localpart)
 
@@ -494,6 +499,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
+		d.revokeAndCleanupTokens(ctx, localpart)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
@@ -582,6 +588,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		// to this previous working configuration.
 		d.previousSpecs[localpart] = d.lastSpecs[localpart]
 
+		d.revokeAndCleanupTokens(ctx, localpart)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
@@ -1027,8 +1034,9 @@ const tokenTTL = 5 * time.Minute
 
 // mintServiceTokens mints a signed service token for each required
 // service and writes them to disk. Returns the host-side directory path
-// containing the token files, suitable for bind-mounting into the sandbox
-// at /run/bureau/tokens/.
+// containing the token files (suitable for bind-mounting into the sandbox
+// at /run/bureau/tokens/) and the list of minted token entries for
+// tracking by the caller.
 //
 // For each required service role:
 //   - Resolves the principal's grants from the authorization index
@@ -1038,31 +1046,32 @@ const tokenTTL = 5 * time.Minute
 //   - Mints a servicetoken.Token with the daemon's signing key
 //   - Writes the raw signed bytes to <stateDir>/tokens/<localpart>/<role>
 //
-// Returns ("", nil) if there are no required services. Returns an error
-// if token minting or file I/O fails — callers should treat this as a
-// fatal condition that blocks sandbox creation.
-func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) (string, error) {
+// Returns ("", nil, nil) if there are no required services. Returns an
+// error if token minting or file I/O fails — callers should treat this
+// as a fatal condition that blocks sandbox creation.
+func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) (string, []activeToken, error) {
 	if len(requiredServices) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 
 	if d.tokenSigningPrivateKey == nil {
-		return "", fmt.Errorf("token signing keypair not initialized (required for service token minting)")
+		return "", nil, fmt.Errorf("token signing keypair not initialized (required for service token minting)")
 	}
 	if d.stateDir == "" {
-		return "", fmt.Errorf("state directory not configured (required for writing service tokens)")
+		return "", nil, fmt.Errorf("state directory not configured (required for writing service tokens)")
 	}
 
 	// Ensure the token directory exists.
 	tokenDir := filepath.Join(d.stateDir, "tokens", localpart)
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		return "", fmt.Errorf("creating token directory: %w", err)
+		return "", nil, fmt.Errorf("creating token directory: %w", err)
 	}
 
 	// Get the principal's resolved grants from the authorization index.
 	grants := d.authorizationIndex.Grants(localpart)
 
 	now := d.clock.Now()
+	var minted []activeToken
 
 	for _, role := range requiredServices {
 		// Filter grants to those relevant to this service's namespace.
@@ -1089,7 +1098,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 		// Generate a unique token ID for emergency revocation.
 		tokenID, err := generateTokenID()
 		if err != nil {
-			return "", fmt.Errorf("generating token ID for service %q: %w", role, err)
+			return "", nil, fmt.Errorf("generating token ID for service %q: %w", role, err)
 		}
 
 		token := &servicetoken.Token{
@@ -1104,13 +1113,19 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 
 		tokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, token)
 		if err != nil {
-			return "", fmt.Errorf("minting token for service %q: %w", role, err)
+			return "", nil, fmt.Errorf("minting token for service %q: %w", role, err)
 		}
 
 		tokenPath := filepath.Join(tokenDir, role)
 		if err := atomicWriteFile(tokenPath, tokenBytes, 0600); err != nil {
-			return "", fmt.Errorf("writing token for service %q: %w", role, err)
+			return "", nil, fmt.Errorf("writing token for service %q: %w", role, err)
 		}
+
+		minted = append(minted, activeToken{
+			id:          tokenID,
+			serviceRole: role,
+			expiresAt:   now.Add(tokenTTL),
+		})
 
 		d.logger.Info("minted service token",
 			"principal", localpart,
@@ -1121,7 +1136,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 		)
 	}
 
-	return tokenDir, nil
+	return tokenDir, minted, nil
 }
 
 // atomicWriteFile writes data to path atomically by writing to a
@@ -1232,6 +1247,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		d.cancelProxyExitWatcher(localpart)
 		d.stopHealthMonitor(localpart)
 		d.stopLayoutWatcher(localpart)
+		d.revokeAndCleanupTokens(ctx, localpart)
 		delete(d.running, localpart)
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
@@ -1662,6 +1678,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			"principal", localpart, "error", response.Error)
 	}
 
+	d.revokeAndCleanupTokens(ctx, localpart)
 	delete(d.running, localpart)
 	delete(d.exitWatchers, localpart)
 	delete(d.proxyExitWatchers, localpart)

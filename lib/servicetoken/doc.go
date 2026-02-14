@@ -35,6 +35,18 @@
 //   - Services reject expired tokens unconditionally
 //   - Emergency revocation via Blacklist (token ID set with TTL-based auto-cleanup)
 //
+// # Revocation
+//
+// When a sandbox is destroyed, the daemon pushes signed revocation
+// requests to each service that held tokens for the destroyed principal.
+// The revocation wire format mirrors token signing: CBOR-encoded
+// [RevocationRequest] followed by a 64-byte Ed25519 signature from the
+// daemon's signing key. Services verify the signature using the same
+// public key they use for token verification, then add the token IDs
+// to their [Blacklist]. The 5-minute token TTL provides a natural
+// fallback — revocation push is best-effort, and tokens expire shortly
+// regardless.
+//
 // # Dependencies
 //
 // This package depends on crypto/ed25519 for signing, lib/codec for

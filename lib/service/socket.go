@@ -382,3 +382,50 @@ func (s *SocketServer) writeSuccess(conn net.Conn, result any) {
 		s.logger.Debug("failed to write success response", "error", err)
 	}
 }
+
+// RegisterRevocationHandler registers the standard "revoke-tokens"
+// action. This handler accepts signed revocation requests from the
+// daemon and adds the specified token IDs to the blacklist. The request
+// is verified using the daemon's public key (from AuthConfig), so only
+// the daemon can issue revocations.
+//
+// Requires an AuthConfig — panics if called without one (the public key
+// and blacklist are required for verification and revocation).
+func (s *SocketServer) RegisterRevocationHandler() {
+	if s.authConfig == nil {
+		panic("service.SocketServer: RegisterRevocationHandler requires AuthConfig")
+	}
+
+	// Registered as an unauthenticated handler because the request
+	// carries its own Ed25519 signature from the daemon's signing key.
+	// Service tokens authenticate principals to services; revocation
+	// requests authenticate the daemon to services. Different trust
+	// relationship, same cryptographic key.
+	s.Handle("revoke-tokens", func(ctx context.Context, raw []byte) (any, error) {
+		var envelope struct {
+			Revocation []byte `cbor:"revocation"`
+		}
+		if err := codec.Unmarshal(raw, &envelope); err != nil {
+			return nil, fmt.Errorf("decoding revocation envelope: %w", err)
+		}
+		if envelope.Revocation == nil {
+			return nil, errors.New("missing required field: revocation")
+		}
+
+		request, err := servicetoken.VerifyRevocation(s.authConfig.PublicKey, envelope.Revocation)
+		if err != nil {
+			s.logger.Warn("revocation request verification failed", "error", err)
+			return nil, errors.New("revocation verification failed")
+		}
+
+		for _, entry := range request.Entries {
+			s.authConfig.Blacklist.Revoke(entry.TokenID, time.Unix(entry.ExpiresAt, 0))
+		}
+
+		s.logger.Info("tokens revoked via daemon push",
+			"count", len(request.Entries),
+		)
+
+		return nil, nil
+	})
+}

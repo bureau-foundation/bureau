@@ -178,6 +178,7 @@ func run() error {
 	// Start the socket server in a goroutine.
 	socketPath := principal.RunDirSocketPath(runDir, principalName)
 	socketServer := service.NewSocketServer(socketPath, logger, authConfig)
+	socketServer.RegisterRevocationHandler()
 	ticketService.registerActions(socketServer)
 
 	socketDone := make(chan error, 1)

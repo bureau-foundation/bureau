@@ -449,6 +449,21 @@ type Daemon struct {
 	// trigger an early re-mint. Protected by reconcileMu.
 	lastTokenMint map[string]time.Time
 
+	// activeTokens tracks unexpired token IDs for each running
+	// principal. Updated on mint and refresh; read on destroy for
+	// emergency revocation push to services. Each entry includes the
+	// token ID, its service role (for routing the revocation to the
+	// correct service), and its natural expiry time (for blacklist
+	// auto-cleanup on the service side). Expired entries are pruned
+	// on each mint. Protected by reconcileMu.
+	activeTokens map[string][]activeToken
+
+	// lastServiceMounts stores the resolved service socket paths for
+	// each running principal. Populated at sandbox creation from
+	// resolveServiceMounts; read at destroy time to push token
+	// revocations to the relevant services. Protected by reconcileMu.
+	lastServiceMounts map[string][]launcherServiceMount
+
 	// lastObserveAllowances stores the per-principal resolved allowances
 	// from the authorization index at the end of the most recent reconcile
 	// cycle. Used purely for change detection: when a principal's

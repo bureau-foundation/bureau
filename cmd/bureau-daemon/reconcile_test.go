@@ -1369,13 +1369,24 @@ func TestMintServiceTokens(t *testing.T) {
 		},
 	})
 
-	tokenDir, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
 	if err != nil {
 		t.Fatalf("mintServiceTokens: %v", err)
 	}
 
 	if tokenDir == "" {
 		t.Fatal("tokenDir should not be empty")
+	}
+
+	// Verify minted token entries are returned.
+	if len(minted) != 1 {
+		t.Fatalf("minted = %d entries, want 1", len(minted))
+	}
+	if minted[0].serviceRole != "ticket" {
+		t.Errorf("minted[0].serviceRole = %q, want %q", minted[0].serviceRole, "ticket")
+	}
+	if minted[0].id == "" {
+		t.Error("minted[0].id should not be empty")
 	}
 
 	// Verify the token file exists.
@@ -1421,12 +1432,15 @@ func TestMintServiceTokens_NoRequiredServices(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 
-	tokenDir, err := daemon.mintServiceTokens("agent/alpha", nil)
+	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", nil)
 	if err != nil {
 		t.Fatalf("mintServiceTokens with nil services: %v", err)
 	}
 	if tokenDir != "" {
 		t.Errorf("tokenDir should be empty for no required services, got %q", tokenDir)
+	}
+	if len(minted) != 0 {
+		t.Errorf("minted should be empty for no required services, got %d", len(minted))
 	}
 }
 
@@ -1438,7 +1452,7 @@ func TestMintServiceTokens_MissingPrivateKey(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
-	_, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	_, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
 	if err == nil {
 		t.Fatal("expected error when private key is nil")
 	}
@@ -1469,7 +1483,7 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 		},
 	})
 
-	tokenDir, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket", "artifact"})
+	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket", "artifact"})
 	if err != nil {
 		t.Fatalf("mintServiceTokens: %v", err)
 	}
@@ -1480,6 +1494,18 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 		if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
 			t.Errorf("token file for %q should exist", role)
 		}
+	}
+
+	// Verify minted entries cover both services.
+	if len(minted) != 2 {
+		t.Fatalf("minted = %d entries, want 2", len(minted))
+	}
+	roles := map[string]bool{}
+	for _, entry := range minted {
+		roles[entry.serviceRole] = true
+	}
+	if !roles["ticket"] || !roles["artifact"] {
+		t.Errorf("minted roles = %v, want ticket and artifact", roles)
 	}
 }
 

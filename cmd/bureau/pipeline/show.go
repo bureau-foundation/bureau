@@ -13,9 +13,14 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
+// pipelineShowParams holds the parameters for the pipeline show command.
+type pipelineShowParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+}
+
 // showCommand returns the "show" subcommand for displaying a pipeline.
 func showCommand() *cli.Command {
-	var serverName string
+	var params pipelineShowParams
 
 	return &cli.Command{
 		Name:    "show",
@@ -34,10 +39,9 @@ see is what the executor runs.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("show", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			return flagSet
+			return cli.FlagsFromParams("show", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline show [flags] <pipeline-ref>")
@@ -54,7 +58,7 @@ see is what the executor runs.`,
 			}
 			defer cancel()
 
-			roomAlias := ref.RoomAlias(serverName)
+			roomAlias := ref.RoomAlias(params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return fmt.Errorf("resolving room alias %q: %w", roomAlias, err)

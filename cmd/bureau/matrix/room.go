@@ -144,11 +144,15 @@ such as m.bureau.machine_key or m.bureau.service.`,
 	}
 }
 
+// roomListParams holds the parameters for the matrix room list command.
+type roomListParams struct {
+	cli.SessionConfig
+	Space      string `json:"space"  flag:"space"  desc:"list only rooms that are children of this space (alias or room ID)"`
+	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+}
+
 func roomListCommand() *cli.Command {
-	var (
-		session cli.SessionConfig
-		space   string
-	)
+	var params roomListParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -168,11 +172,9 @@ lists all joined rooms that are NOT spaces.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("room list", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&space, "space", "", "list only rooms that are children of this space (alias or room ID)")
-			return flagSet
+			return cli.FlagsFromParams("room list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -181,22 +183,30 @@ lists all joined rooms that are NOT spaces.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
 
-			if space != "" {
-				return listSpaceChildren(ctx, sess, space)
+			if params.Space != "" {
+				return listSpaceChildren(ctx, sess, params.Space, params.OutputJSON)
 			}
-			return listAllRooms(ctx, sess)
+			return listAllRooms(ctx, sess, params.OutputJSON)
 		},
 	}
 }
 
+// roomEntry holds the JSON-serializable data for a single room.
+type roomEntry struct {
+	RoomID string `json:"room_id"`
+	Alias  string `json:"alias,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Topic  string `json:"topic,omitempty"`
+}
+
 // listSpaceChildren lists rooms that are children of a space by reading
 // m.space.child state events from the space, then inspecting each child.
-func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string) error {
+func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string, outputJSON bool) error {
 	spaceRoomID, err := resolveRoom(ctx, session, spaceTarget)
 	if err != nil {
 		return fmt.Errorf("resolve space: %w", err)
@@ -217,36 +227,60 @@ func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTar
 		}
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME\tTOPIC")
-
+	var rooms []roomEntry
 	for _, childRoomID := range childRoomIDs {
 		roomName, roomAlias, roomTopic := inspectRoomState(ctx, session, childRoomID)
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", childRoomID, roomAlias, roomName, roomTopic)
+		rooms = append(rooms, roomEntry{
+			RoomID: childRoomID,
+			Alias:  roomAlias,
+			Name:   roomName,
+			Topic:  roomTopic,
+		})
 	}
 
+	if outputJSON {
+		return cli.WriteJSON(rooms)
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME\tTOPIC")
+	for _, room := range rooms {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", room.RoomID, room.Alias, room.Name, room.Topic)
+	}
 	return writer.Flush()
 }
 
 // listAllRooms lists all joined rooms that are not spaces.
-func listAllRooms(ctx context.Context, session *messaging.Session) error {
+func listAllRooms(ctx context.Context, session *messaging.Session, outputJSON bool) error {
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return fmt.Errorf("list joined rooms: %w", err)
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME\tTOPIC")
-
+	var rooms []roomEntry
 	for _, roomID := range roomIDs {
 		isSpace, _, _ := inspectSpaceState(ctx, session, roomID)
 		if isSpace {
 			continue
 		}
 		roomName, roomAlias, roomTopic := inspectRoomState(ctx, session, roomID)
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", roomID, roomAlias, roomName, roomTopic)
+		rooms = append(rooms, roomEntry{
+			RoomID: roomID,
+			Alias:  roomAlias,
+			Name:   roomName,
+			Topic:  roomTopic,
+		})
 	}
 
+	if outputJSON {
+		return cli.WriteJSON(rooms)
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME\tTOPIC")
+	for _, room := range rooms {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", room.RoomID, room.Alias, room.Name, room.Topic)
+	}
 	return writer.Flush()
 }
 
@@ -337,8 +371,14 @@ to clear the m.space.child event in the space.`,
 	}
 }
 
+// roomMembersParams holds the parameters for the matrix room members command.
+type roomMembersParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func roomMembersCommand() *cli.Command {
-	var session cli.SessionConfig
+	var params roomMembersParams
 
 	return &cli.Command{
 		Name:    "members",
@@ -355,10 +395,9 @@ Displays a table of user ID, display name, and membership state
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("room members", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("room members", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")
@@ -371,7 +410,7 @@ Displays a table of user ID, display name, and membership state
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -384,6 +423,10 @@ Displays a table of user ID, display name, and membership state
 			members, err := sess.GetRoomMembers(ctx, roomID)
 			if err != nil {
 				return fmt.Errorf("get room members: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(members)
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

@@ -19,11 +19,15 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// listParams holds the parameters for the machine list command.
+type listParams struct {
+	cli.SessionConfig
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
+}
+
 func listCommand() *cli.Command {
-	var (
-		session    cli.SessionConfig
-		serverName string
-	)
+	var params listParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -34,11 +38,9 @@ Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the #bureau/machine room state.`,
 		Usage: "bureau machine list [flags]",
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-			return flagSet
+			return cli.FlagsFromParams("list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -47,30 +49,30 @@ Shows each machine's name, public key, and last status heartbeat
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			matrixSession, err := session.Connect(ctx)
+			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, serverName)
+			return runList(ctx, matrixSession, params.ServerName, params.OutputJSON)
 		},
 	}
 }
 
 // machineEntry collects the key, status, and hardware info for a single machine.
 type machineEntry struct {
-	name      string
-	publicKey string
-	algorithm string
-	lastSeen  string
-	gpuCount  int
-	gpuModel  string // first GPU's model name or vendor+device for display
-	cpuModel  string
-	memoryMB  int
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+	Algorithm string `json:"algorithm"`
+	LastSeen  string `json:"last_seen,omitempty"`
+	GPUCount  int    `json:"gpu_count"`
+	GPUModel  string `json:"gpu_model,omitempty"`
+	CPUModel  string `json:"cpu_model,omitempty"`
+	MemoryMB  int    `json:"memory_mb"`
 }
 
-func runList(ctx context.Context, session *messaging.Session, serverName string) error {
+func runList(ctx context.Context, session *messaging.Session, serverName string, outputJSON bool) error {
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
@@ -106,8 +108,8 @@ func runList(ctx context.Context, session *messaging.Session, serverName string)
 				continue
 			}
 			entry := getOrCreate(machines, stateKey)
-			entry.publicKey = key.PublicKey
-			entry.algorithm = key.Algorithm
+			entry.PublicKey = key.PublicKey
+			entry.Algorithm = key.Algorithm
 
 		case schema.EventTypeMachineInfo:
 			var info schema.MachineInfo
@@ -119,11 +121,11 @@ func runList(ctx context.Context, session *messaging.Session, serverName string)
 				continue
 			}
 			entry := getOrCreate(machines, stateKey)
-			entry.cpuModel = info.CPU.Model
-			entry.memoryMB = info.MemoryTotalMB
-			entry.gpuCount = len(info.GPUs)
+			entry.CPUModel = info.CPU.Model
+			entry.MemoryMB = info.MemoryTotalMB
+			entry.GPUCount = len(info.GPUs)
 			if len(info.GPUs) > 0 {
-				entry.gpuModel = gpuDisplayName(info.GPUs[0])
+				entry.GPUModel = gpuDisplayName(info.GPUs[0])
 			}
 
 		case schema.EventTypeMachineStatus:
@@ -141,10 +143,10 @@ func runList(ctx context.Context, session *messaging.Session, serverName string)
 			// because it reflects actual daemon activity, not just
 			// the most recent heartbeat.
 			if status.LastActivityAt != "" {
-				entry.lastSeen = status.LastActivityAt
+				entry.LastSeen = status.LastActivityAt
 			} else if status.Principal != "" {
 				// Status exists but no activity yet — mark as online.
-				entry.lastSeen = "(online, no activity)"
+				entry.LastSeen = "(online, no activity)"
 			}
 		}
 	}
@@ -154,27 +156,37 @@ func runList(ctx context.Context, session *messaging.Session, serverName string)
 		return nil
 	}
 
+	// Collect into a stable slice for output.
+	entries := make([]*machineEntry, 0, len(machines))
+	for _, entry := range machines {
+		entries = append(entries, entry)
+	}
+
+	if outputJSON {
+		return cli.WriteJSON(entries)
+	}
+
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(writer, "MACHINE\tGPUS\tMEMORY\tLAST SEEN")
 
-	for _, entry := range machines {
+	for _, entry := range entries {
 		gpuDisplay := "-"
-		if entry.gpuCount > 0 {
-			if entry.gpuCount == 1 {
-				gpuDisplay = fmt.Sprintf("1x %s", entry.gpuModel)
+		if entry.GPUCount > 0 {
+			if entry.GPUCount == 1 {
+				gpuDisplay = fmt.Sprintf("1x %s", entry.GPUModel)
 			} else {
-				gpuDisplay = fmt.Sprintf("%dx %s", entry.gpuCount, entry.gpuModel)
+				gpuDisplay = fmt.Sprintf("%dx %s", entry.GPUCount, entry.GPUModel)
 			}
 		}
 		memoryDisplay := "-"
-		if entry.memoryMB > 0 {
-			memoryDisplay = fmt.Sprintf("%d GB", entry.memoryMB/1024)
+		if entry.MemoryMB > 0 {
+			memoryDisplay = fmt.Sprintf("%d GB", entry.MemoryMB/1024)
 		}
-		lastSeen := entry.lastSeen
+		lastSeen := entry.LastSeen
 		if lastSeen == "" {
 			lastSeen = "-"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", entry.name, gpuDisplay, memoryDisplay, lastSeen)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", entry.Name, gpuDisplay, memoryDisplay, lastSeen)
 	}
 	writer.Flush()
 
@@ -186,7 +198,7 @@ func runList(ctx context.Context, session *messaging.Session, serverName string)
 func getOrCreate(machines map[string]*machineEntry, name string) *machineEntry {
 	entry, exists := machines[name]
 	if !exists {
-		entry = &machineEntry{name: name}
+		entry = &machineEntry{Name: name}
 		machines[name] = entry
 	}
 	return entry

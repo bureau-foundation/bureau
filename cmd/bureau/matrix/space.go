@@ -110,8 +110,21 @@ if not specified.`,
 	}
 }
 
+// spaceListParams holds the parameters for the matrix space list command.
+type spaceListParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// spaceEntry holds the JSON-serializable data for a single space.
+type spaceEntry struct {
+	RoomID string `json:"room_id"`
+	Alias  string `json:"alias,omitempty"`
+	Name   string `json:"name,omitempty"`
+}
+
 func spaceListCommand() *cli.Command {
-	var session cli.SessionConfig
+	var params spaceListParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -129,10 +142,9 @@ table of room ID, alias, and name.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("space list", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("space list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -141,7 +153,7 @@ table of room ID, alias, and name.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -151,17 +163,28 @@ table of room ID, alias, and name.`,
 				return fmt.Errorf("list joined rooms: %w", err)
 			}
 
-			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME")
-
+			var spaces []spaceEntry
 			for _, roomID := range roomIDs {
 				isSpace, name, alias := inspectSpaceState(ctx, sess, roomID)
 				if !isSpace {
 					continue
 				}
-				fmt.Fprintf(writer, "%s\t%s\t%s\n", roomID, alias, name)
+				spaces = append(spaces, spaceEntry{
+					RoomID: roomID,
+					Alias:  alias,
+					Name:   name,
+				})
 			}
 
+			if params.OutputJSON {
+				return cli.WriteJSON(spaces)
+			}
+
+			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(writer, "ROOM ID\tALIAS\tNAME")
+			for _, space := range spaces {
+				fmt.Fprintf(writer, "%s\t%s\t%s\n", space.RoomID, space.Alias, space.Name)
+			}
 			return writer.Flush()
 		},
 	}
@@ -226,8 +249,14 @@ reclaim the room.`,
 	}
 }
 
+// spaceMembersParams holds the parameters for the matrix space members command.
+type spaceMembersParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func spaceMembersCommand() *cli.Command {
-	var session cli.SessionConfig
+	var params spaceMembersParams
 
 	return &cli.Command{
 		Name:    "members",
@@ -244,10 +273,9 @@ Displays a table of user ID, display name, and membership state
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("space members", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("space members", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("space alias or room ID is required\n\nUsage: bureau matrix space members <alias-or-id> [flags]")
@@ -260,7 +288,7 @@ Displays a table of user ID, display name, and membership state
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -273,6 +301,10 @@ Displays a table of user ID, display name, and membership state
 			members, err := sess.GetRoomMembers(ctx, roomID)
 			if err != nil {
 				return fmt.Errorf("get space members: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(members)
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

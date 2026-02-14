@@ -14,12 +14,26 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// whoamiParams holds the parameters for the whoami command.
+type whoamiParams struct {
+	Verify     bool `json:"verify"  flag:"verify"  desc:"verify the session against the homeserver"`
+	OutputJSON bool `json:"-"       flag:"json"     desc:"output as JSON"`
+}
+
+// whoamiOutput is the JSON output for the whoami command.
+type whoamiOutput struct {
+	UserID      string `json:"user_id"`
+	Homeserver  string `json:"homeserver"`
+	SessionFile string `json:"session_file"`
+	Status      string `json:"status,omitempty"`
+}
+
 // WhoAmICommand returns the "whoami" command for displaying the current
 // operator identity. Shows the saved session's user ID, homeserver, and
 // session file path. With --verify, checks the token against the homeserver
 // to confirm the session is still valid.
 func WhoAmICommand() *Command {
-	var verify bool
+	var params whoamiParams
 
 	return &Command{
 		Name:    "whoami",
@@ -44,10 +58,9 @@ session file is read (no network access).`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("whoami", pflag.ContinueOnError)
-			flagSet.BoolVar(&verify, "verify", false, "verify the session against the homeserver")
-			return flagSet
+			return FlagsFromParams("whoami", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -59,11 +72,13 @@ session file is read (no network access).`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "User ID:      %s\n", session.UserID)
-			fmt.Fprintf(os.Stdout, "Homeserver:   %s\n", session.Homeserver)
-			fmt.Fprintf(os.Stdout, "Session file: %s\n", path)
+			output := whoamiOutput{
+				UserID:      session.UserID,
+				Homeserver:  session.Homeserver,
+				SessionFile: path,
+			}
 
-			if verify {
+			if params.Verify {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 
@@ -82,11 +97,29 @@ session file is read (no network access).`,
 
 				verifiedUserID, err := matrixSession.WhoAmI(ctx)
 				if err != nil {
+					output.Status = "invalid"
+					if params.OutputJSON {
+						return WriteJSON(output)
+					}
+					fmt.Fprintf(os.Stdout, "User ID:      %s\n", output.UserID)
+					fmt.Fprintf(os.Stdout, "Homeserver:   %s\n", output.Homeserver)
+					fmt.Fprintf(os.Stdout, "Session file: %s\n", output.SessionFile)
 					fmt.Fprintf(os.Stdout, "Status:       INVALID (token rejected by homeserver)\n")
 					return fmt.Errorf("session expired or revoked — run \"bureau login\" to refresh")
 				}
 
-				fmt.Fprintf(os.Stdout, "Status:       valid (verified as %s)\n", verifiedUserID)
+				output.Status = fmt.Sprintf("valid (verified as %s)", verifiedUserID)
+			}
+
+			if params.OutputJSON {
+				return WriteJSON(output)
+			}
+
+			fmt.Fprintf(os.Stdout, "User ID:      %s\n", output.UserID)
+			fmt.Fprintf(os.Stdout, "Homeserver:   %s\n", output.Homeserver)
+			fmt.Fprintf(os.Stdout, "Session file: %s\n", output.SessionFile)
+			if output.Status != "" {
+				fmt.Fprintf(os.Stdout, "Status:       %s\n", output.Status)
 			}
 
 			return nil

@@ -14,11 +14,15 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
+// environmentListParams holds the parameters for the environment list command.
+type environmentListParams struct {
+	FlakeRef      string   `json:"flake_ref"       flag:"flake"          desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
+	OverrideInput []string `json:"override_input"  flag:"override-input" desc:"override a flake input (format: name=flakeref)"`
+	OutputJSON    bool     `json:"-"               flag:"json"           desc:"output as JSON"`
+}
+
 func listCommand() *cli.Command {
-	var (
-		flakeRef      string
-		overrideInput []string
-	)
+	var params environmentListParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -32,11 +36,9 @@ By default, queries the Bureau environment repo
 different source.`,
 		Usage: "bureau environment list [flags]",
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			flagSet.StringVar(&flakeRef, "flake", defaultFlakeRef, "flake reference for the environment repo")
-			flagSet.StringArrayVar(&overrideInput, "override-input", nil, "override a flake input (format: name=flakeref)")
-			return flagSet
+			return cli.FlagsFromParams("list", &params)
 		},
+		Params: func() any { return &params },
 		Examples: []cli.Example{
 			{
 				Description: "List profiles from the default environment repo",
@@ -56,24 +58,31 @@ different source.`,
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
 
-			options, err := parseOverrideInputs(overrideInput)
+			options, err := parseOverrideInputs(params.OverrideInput)
 			if err != nil {
 				return err
 			}
 
-			profiles, err := listProfiles(flakeRef, options)
+			profiles, err := listProfiles(params.FlakeRef, options)
 			if err != nil {
 				return err
 			}
 
 			if len(profiles) == 0 {
-				fmt.Fprintf(os.Stderr, "No profiles found for %s on %s.\n", flakeRef, currentSystem())
+				if params.OutputJSON {
+					return cli.WriteJSON([]profileInfo{})
+				}
+				fmt.Fprintf(os.Stderr, "No profiles found for %s on %s.\n", params.FlakeRef, currentSystem())
 				return nil
 			}
 
 			sort.Slice(profiles, func(i, j int) bool {
 				return profiles[i].Name < profiles[j].Name
 			})
+
+			if params.OutputJSON {
+				return cli.WriteJSON(profiles)
+			}
 
 			tw := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
 			fmt.Fprintf(tw, "PROFILE\tPACKAGE\n")

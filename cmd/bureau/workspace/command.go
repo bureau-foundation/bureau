@@ -198,7 +198,14 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 	return nil
 }
 
+// workspaceListParams holds the parameters for the workspace list command.
+type workspaceListParams struct {
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func listCommand() *cli.Command {
+	var params workspaceListParams
+
 	return &cli.Command{
 		Name:    "list",
 		Summary: "List workspaces across the fleet",
@@ -207,20 +214,26 @@ the workspace alias, project, repository, and status.
 
 This is a Matrix-only query — works from any machine without needing
 access to the workspace filesystem.`,
-		Run: runList,
+		Flags: func() *pflag.FlagSet {
+			return cli.FlagsFromParams("list", &params)
+		},
+		Params: func() any { return &params },
+		Run: func(args []string) error {
+			return runList(args, params.OutputJSON)
+		},
 	}
 }
 
 // workspaceInfo holds the display data for a single workspace, extracted
 // from the Matrix room's state events.
 type workspaceInfo struct {
-	Alias      string
-	Project    string
-	Repository string
-	Status     string
+	Alias      string `json:"alias"`
+	Project    string `json:"project"`
+	Repository string `json:"repository,omitempty"`
+	Status     string `json:"status"`
 }
 
-func runList(args []string) error {
+func runList(args []string, outputJSON bool) error {
 	// Use a 60-second timeout — this scans all joined rooms, issuing
 	// one GetRoomState call per room. For a fleet with many rooms this
 	// can take a while.
@@ -253,8 +266,15 @@ func runList(args []string) error {
 	}
 
 	if len(workspaces) == 0 {
+		if outputJSON {
+			return cli.WriteJSON([]workspaceInfo{})
+		}
 		fmt.Println("No workspaces found.")
 		return nil
+	}
+
+	if outputJSON {
+		return cli.WriteJSON(workspaces)
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

@@ -4,12 +4,7 @@
 package pipeline
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // Command returns the "pipeline" command group.
@@ -69,11 +64,6 @@ All commands that access Matrix require an operator session. Run
 }
 
 // printPipelineJSON marshals a PipelineContent as indented JSON to stdout.
-func printPipelineJSON(content *schema.PipelineContent) error {
-	data, err := json.MarshalIndent(content, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
-	}
-	_, err = fmt.Fprintln(os.Stdout, string(data))
-	return err
+func printPipelineJSON(content any) error {
+	return cli.WriteJSON(content)
 }

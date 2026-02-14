@@ -13,12 +13,15 @@ import (
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 )
 
+// templateShowParams holds the parameters for the template show command.
+type templateShowParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	Raw        bool   `json:"raw"         flag:"raw"         desc:"show the template as stored, without resolving inheritance"`
+}
+
 // showCommand returns the "show" subcommand for displaying a template.
 func showCommand() *cli.Command {
-	var (
-		serverName string
-		raw        bool
-	)
+	var params templateShowParams
 
 	return &cli.Command{
 		Name:    "show",
@@ -41,11 +44,9 @@ template overrides versus what it inherits.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("show", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			flagSet.BoolVar(&raw, "raw", false, "show the template as stored, without resolving inheritance")
-			return flagSet
+			return cli.FlagsFromParams("show", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau template show [flags] <template-ref>")
@@ -59,19 +60,19 @@ template overrides versus what it inherits.`,
 			}
 			defer cancel()
 
-			if raw {
+			if params.Raw {
 				ref, err := schema.ParseTemplateRef(templateRefString)
 				if err != nil {
 					return fmt.Errorf("parsing template reference: %w", err)
 				}
-				content, err := libtmpl.Fetch(ctx, session, ref, serverName)
+				content, err := libtmpl.Fetch(ctx, session, ref, params.ServerName)
 				if err != nil {
 					return err
 				}
 				return printTemplateJSON(content)
 			}
 
-			resolved, err := libtmpl.Resolve(ctx, session, templateRefString, serverName)
+			resolved, err := libtmpl.Resolve(ctx, session, templateRefString, params.ServerName)
 			if err != nil {
 				return err
 			}

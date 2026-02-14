@@ -4,12 +4,7 @@
 package template
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // Command returns the "template" command group.
@@ -84,11 +79,6 @@ All commands that access Matrix require an operator session. Run
 }
 
 // printTemplateJSON marshals a TemplateContent as indented JSON to stdout.
-func printTemplateJSON(template *schema.TemplateContent) error {
-	data, err := json.MarshalIndent(template, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
-	}
-	_, err = fmt.Fprintln(os.Stdout, string(data))
-	return err
+func printTemplateJSON(content any) error {
+	return cli.WriteJSON(content)
 }

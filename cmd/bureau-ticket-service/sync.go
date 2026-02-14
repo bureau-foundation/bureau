@@ -242,6 +242,13 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 	for roomID, room := range response.Rooms.Join {
 		ts.processRoomSync(ctx, roomID, room)
 	}
+
+	// Evaluate cross-room gates. Events from rooms that aren't
+	// ticket-configured may still satisfy state_event gates in
+	// ticket rooms that specify a RoomAlias. This runs after
+	// per-room processing so that ticket state changes (indexing,
+	// same-room gate evaluation) are visible first.
+	ts.evaluateCrossRoomGates(ctx, response.Rooms.Join)
 }
 
 // processRoomSync handles state changes in a single room during
@@ -249,13 +256,7 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, room messaging.JoinedRoom) {
 	// Collect all state events from both the state and timeline sections.
 	// State events in the timeline section have a non-nil StateKey.
-	var stateEvents []messaging.Event
-	stateEvents = append(stateEvents, room.State.Events...)
-	for _, event := range room.Timeline.Events {
-		if event.StateKey != nil {
-			stateEvents = append(stateEvents, event)
-		}
-	}
+	stateEvents := collectStateEvents(room)
 
 	if len(stateEvents) == 0 {
 		return

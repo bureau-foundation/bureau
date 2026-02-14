@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -488,10 +489,11 @@ func TestEvaluateTimerGatesSatisfiesExpired(t *testing.T) {
 	// Clock set to 2h after gate creation — timer has expired.
 	fakeClock := clock.Fake(time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC))
 	ts := &TicketService{
-		writer: writer,
-		clock:  fakeClock,
-		rooms:  make(map[string]*roomState),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:     writer,
+		clock:      fakeClock,
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	roomID := "!room:local"
@@ -537,10 +539,11 @@ func TestEvaluateTimerGatesSkipsUnexpired(t *testing.T) {
 	// Clock set to 30m after gate creation — timer has NOT expired (1h duration).
 	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC))
 	ts := &TicketService{
-		writer: writer,
-		clock:  fakeClock,
-		rooms:  make(map[string]*roomState),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:     writer,
+		clock:      fakeClock,
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	roomID := "!room:local"
@@ -581,10 +584,11 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	fakeClock := clock.Fake(time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC))
 	ts := &TicketService{
-		writer: writer,
-		clock:  fakeClock,
-		rooms:  make(map[string]*roomState),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:     writer,
+		clock:      fakeClock,
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	roomID := "!room:local"
@@ -1100,7 +1104,773 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 	}
 }
 
+// --- matchStateEventCondition unit tests ---
+//
+// These verify the extracted condition logic works independently of
+// room routing. Same-room tests are covered by the existing
+// matchStateEventGate tests above; these ensure the extracted
+// function matches identically.
+
+func TestMatchStateEventConditionBasic(t *testing.T) {
+	gate := &schema.TicketGate{
+		Type:      "state_event",
+		EventType: "m.bureau.workspace",
+	}
+	event := messaging.Event{
+		Type:     "m.bureau.workspace",
+		StateKey: stringPtr("ws-1"),
+		Content:  map[string]any{"status": "active"},
+	}
+	if !matchStateEventCondition(gate, event) {
+		t.Fatal("condition should match on event type alone")
+	}
+}
+
+func TestMatchStateEventConditionWrongType(t *testing.T) {
+	gate := &schema.TicketGate{
+		Type:      "state_event",
+		EventType: "m.bureau.workspace",
+	}
+	event := messaging.Event{
+		Type:     "m.bureau.pipeline_result",
+		StateKey: stringPtr(""),
+		Content:  map[string]any{},
+	}
+	if matchStateEventCondition(gate, event) {
+		t.Fatal("condition should not match on different event type")
+	}
+}
+
+func TestMatchStateEventConditionStateKey(t *testing.T) {
+	gate := &schema.TicketGate{
+		Type:      "state_event",
+		EventType: "m.bureau.workspace",
+		StateKey:  "ws-1",
+	}
+	event := messaging.Event{
+		Type:     "m.bureau.workspace",
+		StateKey: stringPtr("ws-1"),
+		Content:  map[string]any{},
+	}
+	if !matchStateEventCondition(gate, event) {
+		t.Fatal("condition should match on event type + state key")
+	}
+}
+
+func TestMatchStateEventConditionWrongStateKey(t *testing.T) {
+	gate := &schema.TicketGate{
+		Type:      "state_event",
+		EventType: "m.bureau.workspace",
+		StateKey:  "ws-1",
+	}
+	event := messaging.Event{
+		Type:     "m.bureau.workspace",
+		StateKey: stringPtr("ws-2"),
+		Content:  map[string]any{},
+	}
+	if matchStateEventCondition(gate, event) {
+		t.Fatal("condition should not match on different state key")
+	}
+}
+
+// --- Cross-room gate evaluation tests ---
+
+func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci/results:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	// Ticket room has a cross-room gate watching CI results.
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "needs CI from other room",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					StateKey:  "build-check",
+					RoomAlias: "#ci/results:bureau.local",
+				},
+			},
+		},
+	})
+
+	// Sync batch includes events from the CI room (not a ticket room).
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!ci-room:local": {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$ci-result-1",
+						Type:     schema.EventTypePipelineResult,
+						StateKey: stringPtr("build-check"),
+						Content: map[string]any{
+							"pipeline_ref": "build-check",
+							"conclusion":   "success",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "satisfied" {
+		t.Fatalf("cross-room gate should be satisfied, got %q", content.Gates[0].Status)
+	}
+	if content.Gates[0].SatisfiedBy != "$ci-result-1" {
+		t.Fatalf("satisfied_by should be event ID, got %q", content.Gates[0].SatisfiedBy)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("expected 1 Matrix write, got %d", len(writer.events))
+	}
+	// The write should target the ticket room, not the watched room.
+	if writer.events[0].RoomID != ticketRoomID {
+		t.Fatalf("write should target ticket room %q, got %q", ticketRoomID, writer.events[0].RoomID)
+	}
+}
+
+func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci/results:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "needs CI",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					RoomAlias: "#ci/results:bureau.local",
+				},
+			},
+		},
+	})
+
+	// Sync batch has no events from the watched room.
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!other-room:local": {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$ev1",
+						Type:     "m.room.topic",
+						StateKey: stringPtr(""),
+						Content:  map[string]any{"topic": "hello"},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("gate should remain pending when watched room has no events, got %q", content.Gates[0].Status)
+	}
+	if len(writer.events) != 0 {
+		t.Fatalf("expected no writes, got %d", len(writer.events))
+	}
+}
+
+func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{}, // empty — alias not found
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "bad alias gate",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					RoomAlias: "#nonexistent:bureau.local",
+				},
+			},
+		},
+	})
+
+	joinedRooms := map[string]messaging.JoinedRoom{}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("gate should remain pending when alias is unresolvable, got %q", content.Gates[0].Status)
+	}
+}
+
+func TestCrossRoomGateAliasCaching(t *testing.T) {
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci/results:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	// First resolution should call the resolver.
+	roomID, err := ts.resolveAliasWithCache(context.Background(), "#ci/results:bureau.local")
+	if err != nil {
+		t.Fatalf("first resolve failed: %v", err)
+	}
+	if roomID != "!ci-room:local" {
+		t.Fatalf("expected !ci-room:local, got %q", roomID)
+	}
+	if resolver.callCount != 1 {
+		t.Fatalf("expected 1 resolver call, got %d", resolver.callCount)
+	}
+
+	// Second resolution should use the cache.
+	roomID, err = ts.resolveAliasWithCache(context.Background(), "#ci/results:bureau.local")
+	if err != nil {
+		t.Fatalf("cached resolve failed: %v", err)
+	}
+	if roomID != "!ci-room:local" {
+		t.Fatalf("expected !ci-room:local from cache, got %q", roomID)
+	}
+	if resolver.callCount != 1 {
+		t.Fatalf("expected still 1 resolver call (cached), got %d", resolver.callCount)
+	}
+}
+
+func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
+	// Same-room state_event gates (no RoomAlias) should be handled by
+	// the regular evaluateGatesForEvents path, not cross-room evaluation.
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{aliases: map[string]string{}}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "same-room gate",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "local",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: "m.bureau.workspace",
+					// No RoomAlias — same-room gate.
+				},
+			},
+		},
+	})
+
+	joinedRooms := map[string]messaging.JoinedRoom{
+		ticketRoomID: {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$ev1",
+						Type:     "m.bureau.workspace",
+						StateKey: stringPtr("ws-1"),
+						Content:  map[string]any{"status": "active"},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	// Same-room gate should NOT be touched by cross-room evaluation.
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("same-room gate should remain pending in cross-room evaluation, got %q", content.Gates[0].Status)
+	}
+	if len(writer.events) != 0 {
+		t.Fatalf("expected no writes for same-room gate in cross-room path, got %d", len(writer.events))
+	}
+}
+
+func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
+	// Only state_event gates use RoomAlias. Pipeline and ticket gates
+	// should not be processed by cross-room evaluation even if they
+	// somehow had RoomAlias set (which they shouldn't, but defensive).
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "pipeline gate with alias",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:          "ci",
+					Type:        "pipeline",
+					Status:      "pending",
+					PipelineRef: "build",
+				},
+			},
+		},
+	})
+
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!ci-room:local": {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$ev1",
+						Type:     schema.EventTypePipelineResult,
+						StateKey: stringPtr("build"),
+						Content: map[string]any{
+							"pipeline_ref": "build",
+							"conclusion":   "success",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("pipeline gate should not be touched by cross-room evaluation, got %q", content.Gates[0].Status)
+	}
+}
+
+func TestCrossRoomGateContentMatch(t *testing.T) {
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#deploy/staging:bureau.local": "!deploy-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "wait for staging deploy",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "staging-deploy",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: "m.bureau.deploy",
+					RoomAlias: "#deploy/staging:bureau.local",
+					ContentMatch: schema.ContentMatch{
+						"status": schema.Eq("live"),
+					},
+				},
+			},
+		},
+	})
+
+	// Event matches type but not content.
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!deploy-room:local": {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$deploy-1",
+						Type:     "m.bureau.deploy",
+						StateKey: stringPtr("staging"),
+						Content:  map[string]any{"status": "deploying"},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("gate should remain pending when content doesn't match, got %q", content.Gates[0].Status)
+	}
+
+	// Now send an event that matches content.
+	joinedRooms["!deploy-room:local"] = messaging.JoinedRoom{
+		State: messaging.StateSection{
+			Events: []messaging.Event{
+				{
+					EventID:  "$deploy-2",
+					Type:     "m.bureau.deploy",
+					StateKey: stringPtr("staging"),
+					Content:  map[string]any{"status": "live"},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ = ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "satisfied" {
+		t.Fatalf("gate should be satisfied when content matches, got %q", content.Gates[0].Status)
+	}
+	if content.Gates[0].SatisfiedBy != "$deploy-2" {
+		t.Fatalf("satisfied_by should be $deploy-2, got %q", content.Gates[0].SatisfiedBy)
+	}
+}
+
+func TestCrossRoomGateTimelineEvents(t *testing.T) {
+	// State events can arrive in the timeline section during incremental
+	// sync. Cross-room evaluation should pick them up.
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci/results:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "timeline event gate",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					StateKey:  "lint",
+					RoomAlias: "#ci/results:bureau.local",
+				},
+			},
+		},
+	})
+
+	// Event arrives in the timeline section (not state section).
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!ci-room:local": {
+			Timeline: messaging.TimelineSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$lint-result",
+						Type:     schema.EventTypePipelineResult,
+						StateKey: stringPtr("lint"),
+						Content: map[string]any{
+							"pipeline_ref": "lint",
+							"conclusion":   "success",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "satisfied" {
+		t.Fatalf("gate should be satisfied by timeline state event, got %q", content.Gates[0].Status)
+	}
+}
+
+func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
+	// When no resolver is configured (tests, or session not available),
+	// cross-room evaluation should be a no-op.
+	writer := &fakeWriterForGates{}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   nil, // no resolver
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "cross-room gate",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					RoomAlias: "#ci/results:bureau.local",
+				},
+			},
+		},
+	})
+
+	joinedRooms := map[string]messaging.JoinedRoom{
+		"!ci-room:local": {
+			State: messaging.StateSection{
+				Events: []messaging.Event{
+					{
+						EventID:  "$ev1",
+						Type:     schema.EventTypePipelineResult,
+						StateKey: stringPtr("build"),
+						Content:  map[string]any{"pipeline_ref": "build"},
+					},
+				},
+			},
+		},
+	}
+
+	// Should not panic or error — just no-op.
+	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "pending" {
+		t.Fatalf("gate should remain pending with nil resolver, got %q", content.Gates[0].Status)
+	}
+}
+
+func TestCollectStateEvents(t *testing.T) {
+	room := messaging.JoinedRoom{
+		State: messaging.StateSection{
+			Events: []messaging.Event{
+				{EventID: "$s1", Type: "m.room.name", StateKey: stringPtr("")},
+				{EventID: "$s2", Type: "m.bureau.ticket", StateKey: stringPtr("tkt-1")},
+			},
+		},
+		Timeline: messaging.TimelineSection{
+			Events: []messaging.Event{
+				{EventID: "$t1", Type: "m.room.message"},                                // no state key — timeline-only
+				{EventID: "$t2", Type: "m.bureau.ticket", StateKey: stringPtr("tkt-2")}, // state event in timeline
+			},
+		},
+	}
+
+	events := collectStateEvents(room)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 state events (2 from state + 1 from timeline), got %d", len(events))
+	}
+	// Verify order: state events first, then timeline state events.
+	if events[0].EventID != "$s1" {
+		t.Fatalf("first event should be $s1, got %s", events[0].EventID)
+	}
+	if events[1].EventID != "$s2" {
+		t.Fatalf("second event should be $s2, got %s", events[1].EventID)
+	}
+	if events[2].EventID != "$t2" {
+		t.Fatalf("third event should be $t2, got %s", events[2].EventID)
+	}
+}
+
+// --- handleSync cross-room integration test ---
+
+func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
+	writer := &fakeWriterForGates{}
+	resolver := &fakeAliasResolver{
+		aliases: map[string]string{
+			"#ci/results:bureau.local": "!ci-room:local",
+		},
+	}
+	ts := &TicketService{
+		writer:     writer,
+		resolver:   resolver,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	ticketRoomID := "!tickets:local"
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {
+			Version:   1,
+			Title:     "cross-room via handleSync",
+			Status:    "open",
+			Type:      "task",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Gates: []schema.TicketGate{
+				{
+					ID:        "cross-ci",
+					Type:      "state_event",
+					Status:    "pending",
+					EventType: schema.EventTypePipelineResult,
+					StateKey:  "build-check",
+					RoomAlias: "#ci/results:bureau.local",
+				},
+			},
+		},
+	})
+
+	// Full sync response with events from both the ticket room and
+	// the watched CI room.
+	response := &messaging.SyncResponse{
+		Rooms: messaging.RoomsSection{
+			Join: map[string]messaging.JoinedRoom{
+				ticketRoomID: {}, // ticket room, no new events
+				"!ci-room:local": {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{
+								EventID:  "$ci-result",
+								Type:     schema.EventTypePipelineResult,
+								StateKey: stringPtr("build-check"),
+								Content: map[string]any{
+									"pipeline_ref": "build-check",
+									"conclusion":   "success",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ts.handleSync(context.Background(), response)
+
+	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
+	if content.Gates[0].Status != "satisfied" {
+		t.Fatalf("cross-room gate should be satisfied via handleSync, got %q", content.Gates[0].Status)
+	}
+}
+
 // --- Test helpers ---
+
+// fakeAliasResolver implements aliasResolver for tests. Returns the
+// room ID from the aliases map, or an error if not found.
+type fakeAliasResolver struct {
+	aliases   map[string]string
+	callCount int
+}
+
+func (f *fakeAliasResolver) ResolveAlias(_ context.Context, alias string) (string, error) {
+	f.callCount++
+	roomID, exists := f.aliases[alias]
+	if !exists {
+		return "", fmt.Errorf("alias not found: %s", alias)
+	}
+	return roomID, nil
+}
 
 // fakeWriterForGates records state events without actually writing to
 // Matrix. Simpler than the socket_test.go fakeWriter since gate tests
@@ -1130,10 +1900,11 @@ func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID, eventType
 // with no writer (suitable for match-only tests that don't call satisfyGate).
 func newGateTestService() *TicketService {
 	return &TicketService{
-		clock:     clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[string]*roomState),
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -1141,10 +1912,11 @@ func newGateTestService() *TicketService {
 // evaluation tests that also verify Matrix writes.
 func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 	return &TicketService{
-		writer:    writer,
-		clock:     clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[string]*roomState),
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:     writer,
+		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:      make(map[string]*roomState),
+		aliasCache: make(map[string]string),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }

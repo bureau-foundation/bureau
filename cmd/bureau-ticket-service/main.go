@@ -131,6 +131,7 @@ func run() error {
 	ticketService := &TicketService{
 		session:       session,
 		writer:        session,
+		resolver:      session,
 		clock:         clk,
 		principalName: principalName,
 		machineName:   machineName,
@@ -139,6 +140,7 @@ func run() error {
 		serviceRoomID: serviceRoomID,
 		startedAt:     clk.Now(),
 		rooms:         make(map[string]*roomState),
+		aliasCache:    make(map[string]string),
 		logger:        logger,
 	}
 
@@ -216,9 +218,10 @@ func run() error {
 
 // TicketService is the core service state.
 type TicketService struct {
-	session *messaging.Session
-	writer  matrixWriter
-	clock   clock.Clock
+	session  *messaging.Session
+	writer   matrixWriter
+	resolver aliasResolver
+	clock    clock.Clock
 
 	principalName string
 	machineName   string
@@ -230,6 +233,14 @@ type TicketService struct {
 	// rooms maps room IDs to per-room state. Only rooms with
 	// m.bureau.ticket_config are tracked here.
 	rooms map[string]*roomState
+
+	// aliasCache maps room aliases to resolved room IDs. Used by
+	// cross-room gate evaluation to avoid re-resolving the same
+	// alias on every sync batch. Entries persist for the service's
+	// lifetime; stale entries are harmless (alias changes cause a
+	// new room ID that won't match the old one, and the gate won't
+	// fire — operator action is needed anyway when aliases change).
+	aliasCache map[string]string
 
 	logger *slog.Logger
 }

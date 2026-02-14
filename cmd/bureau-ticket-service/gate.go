@@ -172,21 +172,23 @@ func matchTicketGate(gate *schema.TicketGate, event messaging.Event) bool {
 }
 
 // matchStateEventGate checks whether a state event satisfies a
-// general-purpose state_event gate. Matches on event type, optionally
-// state key, and optionally content match criteria.
-//
-// Cross-room gates (RoomAlias set) are not evaluated here — they
-// require alias resolution and cross-room event routing, which is a
-// separate feature. Gates with RoomAlias set are skipped; they can
-// still be resolved manually via the update-gate API.
+// same-room state_event gate. Gates with RoomAlias set are cross-room
+// and evaluated separately by evaluateCrossRoomGates.
 func matchStateEventGate(gate *schema.TicketGate, event messaging.Event) bool {
-	// Cross-room gates require alias resolution. Skip for now;
-	// these are handled by the update-gate API or future cross-room
-	// evaluation.
 	if gate.RoomAlias != "" {
 		return false
 	}
+	return matchStateEventCondition(gate, event)
+}
 
+// matchStateEventCondition checks whether an event satisfies a
+// state_event gate's event type, state key, and content match
+// criteria. This is the shared matching logic used by both same-room
+// evaluation (via matchStateEventGate) and cross-room evaluation
+// (via evaluateCrossRoomGates). It does not check room identity —
+// the caller is responsible for ensuring the event comes from the
+// correct room.
+func matchStateEventCondition(gate *schema.TicketGate, event messaging.Event) bool {
 	if event.Type != gate.EventType {
 		return false
 	}
@@ -211,6 +213,151 @@ func matchStateEventGate(gate *schema.TicketGate, event messaging.Event) bool {
 	}
 
 	return true
+}
+
+// --- Cross-room gate evaluation ---
+
+// aliasResolver resolves Matrix room aliases to room IDs. The
+// *messaging.Session implements this interface. Tests substitute a
+// fake implementation.
+type aliasResolver interface {
+	ResolveAlias(ctx context.Context, alias string) (string, error)
+}
+
+// evaluateCrossRoomGates checks events from non-ticket rooms against
+// pending cross-room state_event gates. A cross-room gate has
+// RoomAlias set, indicating it watches a different room than the
+// ticket's own room.
+//
+// This scans all ticket rooms' pending gates for state_event gates
+// with RoomAlias, resolves each alias to a room ID, and checks if
+// the sync response delivered matching events from that room.
+//
+// The alias resolution result is cached on the TicketService so
+// subsequent sync batches don't re-resolve the same aliases.
+//
+// Cross-room gates can only auto-evaluate for event types included
+// in the /sync filter. If a gate references an event type the filter
+// doesn't include, the homeserver won't deliver those events and the
+// gate must be resolved manually via the resolve-gate API.
+func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms map[string]messaging.JoinedRoom) {
+	if ts.resolver == nil {
+		return
+	}
+
+	// Collect cross-room gates across all ticket rooms. For each,
+	// resolve the alias and check if events arrived from that room.
+	for ticketRoomID, state := range ts.rooms {
+		candidates := state.index.PendingGates()
+		for _, entry := range candidates {
+			for gateIndex := range entry.Content.Gates {
+				gate := &entry.Content.Gates[gateIndex]
+				if gate.Status != "pending" || gate.Type != "state_event" || gate.RoomAlias == "" {
+					continue
+				}
+
+				watchedRoomID, err := ts.resolveAliasWithCache(ctx, gate.RoomAlias)
+				if err != nil {
+					ts.logger.Warn("failed to resolve cross-room gate alias",
+						"ticket_id", entry.ID,
+						"gate_id", gate.ID,
+						"room_alias", gate.RoomAlias,
+						"error", err,
+					)
+					continue
+				}
+
+				// Check if the sync batch included events from
+				// the watched room.
+				watchedRoom, hasEvents := joinedRooms[watchedRoomID]
+				if !hasEvents {
+					continue
+				}
+
+				// Collect state events from the watched room.
+				events := collectStateEvents(watchedRoom)
+				for _, event := range events {
+					if !matchStateEventCondition(gate, event) {
+						continue
+					}
+
+					// Re-read the ticket for the current version.
+					current, exists := state.index.Get(entry.ID)
+					if !exists {
+						break
+					}
+					if gateIndex >= len(current.Gates) {
+						break
+					}
+					currentGate := &current.Gates[gateIndex]
+					if currentGate.ID != gate.ID || currentGate.Status != "pending" {
+						break
+					}
+
+					satisfiedBy := event.EventID
+					if satisfiedBy == "" {
+						satisfiedBy = event.Type
+						if event.StateKey != nil {
+							satisfiedBy += "/" + *event.StateKey
+						}
+					}
+
+					if err := ts.satisfyGate(ctx, ticketRoomID, state, entry.ID, current, gateIndex, satisfiedBy); err != nil {
+						ts.logger.Error("failed to satisfy cross-room gate",
+							"ticket_id", entry.ID,
+							"gate_id", gate.ID,
+							"room_alias", gate.RoomAlias,
+							"watched_room", watchedRoomID,
+							"error", err,
+						)
+					} else {
+						ts.logger.Info("cross-room gate satisfied",
+							"ticket_id", entry.ID,
+							"gate_id", gate.ID,
+							"room_alias", gate.RoomAlias,
+							"watched_room", watchedRoomID,
+							"satisfied_by", satisfiedBy,
+							"ticket_room", ticketRoomID,
+						)
+					}
+					// Gate satisfied — stop checking events for
+					// this gate.
+					break
+				}
+			}
+		}
+	}
+}
+
+// collectStateEvents extracts state events from a joined room's sync
+// response (both the state section and state events in the timeline).
+func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
+	var events []messaging.Event
+	events = append(events, room.State.Events...)
+	for _, event := range room.Timeline.Events {
+		if event.StateKey != nil {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+// resolveAliasWithCache resolves a room alias to a room ID, caching
+// the result. Cache entries persist for the lifetime of the service.
+// Aliases that fail to resolve are not cached (the room may not exist
+// yet, and a future attempt should retry).
+func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string) (string, error) {
+	if roomID, cached := ts.aliasCache[alias]; cached {
+		return roomID, nil
+	}
+
+	roomID, err := ts.resolver.ResolveAlias(ctx, alias)
+	if err != nil {
+		return "", err
+	}
+
+	ts.aliasCache[alias] = roomID
+	return roomID, nil
 }
 
 // satisfyGate marks a gate as satisfied, writes the updated ticket to

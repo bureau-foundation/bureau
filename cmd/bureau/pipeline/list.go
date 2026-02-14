@@ -4,7 +4,6 @@
 package pipeline
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -115,16 +114,10 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			}
 
 			if params.OutputJSON {
-				// Ensure empty array in JSON output, not null.
 				if pipelines == nil {
 					pipelines = []pipelineEntry{}
 				}
-				data, err := json.MarshalIndent(pipelines, "", "  ")
-				if err != nil {
-					return fmt.Errorf("marshal JSON: %w", err)
-				}
-				fmt.Fprintln(os.Stdout, string(data))
-				return nil
+				return cli.WriteJSON(pipelines)
 			}
 
 			if len(pipelines) == 0 {

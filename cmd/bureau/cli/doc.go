@@ -24,6 +24,14 @@
 // types. Types implementing [FlagBinder] (like [SessionConfig]) compose
 // into parameter structs via embedding or named fields.
 //
+// # JSON output
+//
+// Commands that support --json output use a bool field tagged
+// `json:"-" flag:"json"` in their params struct. When set, they call
+// [WriteJSON] to produce indented JSON on stdout instead of human-readable
+// tables. The MCP server forces this flag via [enableJSONOutput] so that
+// tool results are always structured.
+//
 // # Authentication
 //
 // The package provides two authentication mechanisms used by CLI

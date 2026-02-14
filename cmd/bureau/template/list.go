@@ -4,7 +4,6 @@
 package template
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -111,16 +110,10 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			}
 
 			if params.OutputJSON {
-				// Ensure empty array in JSON output, not null.
 				if templates == nil {
 					templates = []templateEntry{}
 				}
-				data, err := json.MarshalIndent(templates, "", "  ")
-				if err != nil {
-					return fmt.Errorf("marshal JSON: %w", err)
-				}
-				fmt.Fprintln(os.Stdout, string(data))
-				return nil
+				return cli.WriteJSON(templates)
 			}
 
 			if len(templates) == 0 {

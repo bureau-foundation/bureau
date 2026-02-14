@@ -13,7 +13,6 @@ package artifact
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -86,10 +85,18 @@ BUREAU_ARTIFACT_TOKEN environment variables.`,
 	}
 }
 
-// connectFlags adds --socket and --token-file flags to a flag set,
-// returning pointers to the captured values. The flags default to
-// environment variables if set, falling back to the in-sandbox paths.
-func connectFlags(flagSet *pflag.FlagSet) (socketPath, tokenPath *string) {
+// artifactConnection manages socket and token flags for artifact commands.
+// Implements [cli.FlagBinder] so it integrates with the params struct system
+// while handling dynamic defaults from environment variables. Excluded from
+// JSON Schema generation since MCP callers don't specify socket paths.
+type artifactConnection struct {
+	SocketPath string
+	TokenPath  string
+}
+
+// AddFlags registers --socket and --token-file flags with dynamic defaults
+// from BUREAU_ARTIFACT_SOCKET and BUREAU_ARTIFACT_TOKEN environment variables.
+func (c *artifactConnection) AddFlags(flagSet *pflag.FlagSet) {
 	socketDefault := defaultSocketPath
 	if envSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); envSocket != "" {
 		socketDefault = envSocket
@@ -99,21 +106,13 @@ func connectFlags(flagSet *pflag.FlagSet) (socketPath, tokenPath *string) {
 		tokenDefault = envToken
 	}
 
-	socket := flagSet.String("socket", socketDefault, "artifact service socket path")
-	token := flagSet.String("token-file", tokenDefault, "path to service token file")
-	return socket, token
+	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "artifact service socket path")
+	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file")
 }
 
-// connect creates an artifact client from the flag values.
-func connect(socketPath, tokenPath string) (*artifact.Client, error) {
-	return artifact.NewClient(socketPath, tokenPath)
-}
-
-// writeJSON marshals v to stdout as indented JSON.
-func writeJSON(v any) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(v)
+// connect creates an artifact client from the connection parameters.
+func (c *artifactConnection) connect() (*artifact.Client, error) {
+	return artifact.NewClient(c.SocketPath, c.TokenPath)
 }
 
 // formatSize returns a human-readable file size.
@@ -132,11 +131,20 @@ func formatSize(bytes int64) string {
 
 // --- store ---
 
+type storeParams struct {
+	artifactConnection
+	ContentType string   `json:"content_type" flag:"content-type" desc:"MIME content type (guessed from filename if omitted)"`
+	Description string   `json:"description"  flag:"description"  desc:"human-readable description"`
+	Tag         string   `json:"tag"          flag:"tag"          desc:"tag the artifact after storing"`
+	CachePolicy string   `json:"cache_policy" flag:"cache-policy" desc:"cache policy (e.g. pin)"`
+	Visibility  string   `json:"visibility"   flag:"visibility"   desc:"visibility level"`
+	TTL         string   `json:"ttl"          flag:"ttl"          desc:"time-to-live (e.g. 72h, 7d)"`
+	Labels      []string `json:"labels"       flag:"label"        desc:"labels (repeatable)"`
+	OutputJSON  bool     `json:"-"            flag:"json"         desc:"output result as JSON"`
+}
+
 func storeCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var contentType, description, tag, cachePolicy, visibility, ttl string
-	var labels []string
-	var jsonOutput bool
+	var params storeParams
 
 	return &cli.Command{
 		Name:    "store",
@@ -165,21 +173,12 @@ unrecognized extensions.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("store", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.StringVar(&contentType, "content-type", "", "MIME content type (guessed from filename if omitted)")
-			flagSet.StringVar(&description, "description", "", "human-readable description")
-			flagSet.StringVar(&tag, "tag", "", "tag the artifact after storing")
-			flagSet.StringVar(&cachePolicy, "cache-policy", "", "cache policy (e.g., \"pin\")")
-			flagSet.StringVar(&visibility, "visibility", "", "visibility level")
-			flagSet.StringVar(&ttl, "ttl", "", "time-to-live (e.g., \"72h\", \"7d\")")
-			flagSet.StringSliceVar(&labels, "label", nil, "labels (repeatable)")
-			flagSet.BoolVar(&jsonOutput, "json", false, "output result as JSON")
-			return flagSet
+			return cli.FlagsFromParams("store", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -189,7 +188,6 @@ unrecognized extensions.`,
 			var size int64
 
 			if len(args) == 0 || args[0] == "-" {
-				// Read from stdin — size unknown, use chunked transfer.
 				content = os.Stdin
 				size = artifact.SizeUnknown
 			} else {
@@ -208,26 +206,25 @@ unrecognized extensions.`,
 				content = file
 				filename = file.Name()
 
-				// Guess content type from extension if not specified.
-				if contentType == "" {
-					contentType = guessContentType(filename)
+				if params.ContentType == "" {
+					params.ContentType = guessContentType(filename)
 				}
 			}
 
-			if contentType == "" {
-				contentType = "application/octet-stream"
+			if params.ContentType == "" {
+				params.ContentType = "application/octet-stream"
 			}
 
 			header := &artifact.StoreHeader{
-				ContentType: contentType,
+				ContentType: params.ContentType,
 				Filename:    filename,
 				Size:        size,
-				Description: description,
-				Labels:      labels,
-				Tag:         tag,
-				CachePolicy: cachePolicy,
-				Visibility:  visibility,
-				TTL:         ttl,
+				Description: params.Description,
+				Labels:      params.Labels,
+				Tag:         params.Tag,
+				CachePolicy: params.CachePolicy,
+				Visibility:  params.Visibility,
+				TTL:         params.TTL,
 			}
 
 			// For small files, embed data in the header.
@@ -246,8 +243,8 @@ unrecognized extensions.`,
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			fmt.Println(response.Ref)
@@ -258,9 +255,13 @@ unrecognized extensions.`,
 
 // --- fetch ---
 
+type fetchParams struct {
+	artifactConnection
+	OutputPath string `json:"-" flag:"output,o" desc:"output file path (default: stdout)"`
+}
+
 func fetchCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var outputPath string
+	var params fetchParams
 
 	return &cli.Command{
 		Name:    "fetch",
@@ -281,18 +282,16 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("fetch", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.StringVarP(&outputPath, "output", "o", "", "output file path (default: stdout)")
-			return flagSet
+			return cli.FlagsFromParams("fetch", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -304,8 +303,8 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 			defer result.Content.Close()
 
 			var output io.Writer
-			if outputPath != "" {
-				file, err := os.Create(outputPath)
+			if params.OutputPath != "" {
+				file, err := os.Create(params.OutputPath)
 				if err != nil {
 					return fmt.Errorf("creating output file: %w", err)
 				}
@@ -325,9 +324,13 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 
 // --- show ---
 
+type showParams struct {
+	artifactConnection
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func showCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var jsonOutput bool
+	var params showParams
 
 	return &cli.Command{
 		Name:    "show",
@@ -348,18 +351,16 @@ storage details.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("show", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("show", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -369,8 +370,8 @@ storage details.`,
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(meta)
+			if params.OutputJSON {
+				return cli.WriteJSON(meta)
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -408,9 +409,13 @@ storage details.`,
 
 // --- exists ---
 
+type existsParams struct {
+	artifactConnection
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func existsCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var jsonOutput bool
+	var params existsParams
 
 	return &cli.Command{
 		Name:    "exists",
@@ -419,18 +424,16 @@ func existsCommand() *cli.Command {
 		Description: `Check if an artifact exists in the store. Exits 0 if it exists,
 1 if it does not. With --json, outputs the exists response.`,
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("exists", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("exists", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -440,8 +443,8 @@ func existsCommand() *cli.Command {
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			if response.Exists {
@@ -449,9 +452,6 @@ func existsCommand() *cli.Command {
 				return nil
 			}
 
-			// Not found — exit 1 for scripting. Print to stderr so
-			// callers see what was checked, then return ExitError to
-			// suppress the framework's redundant "error:" line.
 			fmt.Fprintf(os.Stderr, "not found: %s\n", args[0])
 			return &cli.ExitError{Code: 1}
 		},
@@ -460,12 +460,21 @@ func existsCommand() *cli.Command {
 
 // --- list ---
 
+type listParams struct {
+	artifactConnection
+	ContentType string `json:"content_type" flag:"content-type" desc:"filter by content type"`
+	Label       string `json:"label"        flag:"label"        desc:"filter by label"`
+	CachePolicy string `json:"cache_policy" flag:"cache-policy" desc:"filter by cache policy"`
+	Visibility  string `json:"visibility"   flag:"visibility"   desc:"filter by visibility"`
+	MinSize     int64  `json:"min_size"     flag:"min-size"     desc:"minimum size in bytes"`
+	MaxSize     int64  `json:"max_size"     flag:"max-size"     desc:"maximum size in bytes"`
+	Limit       int    `json:"limit"        flag:"limit"        desc:"maximum results (default: server decides)"`
+	Offset      int    `json:"offset"       flag:"offset"       desc:"skip this many results"`
+	OutputJSON  bool   `json:"-"            flag:"json"         desc:"output as JSON"`
+}
+
 func listCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var contentType, label, cachePolicy, visibility string
-	var minSize, maxSize int64
-	var limit, offset int
-	var jsonOutput bool
+	var params listParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -493,42 +502,32 @@ are sorted by storage time (newest first).`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.StringVar(&contentType, "content-type", "", "filter by content type")
-			flagSet.StringVar(&label, "label", "", "filter by label")
-			flagSet.StringVar(&cachePolicy, "cache-policy", "", "filter by cache policy")
-			flagSet.StringVar(&visibility, "visibility", "", "filter by visibility")
-			flagSet.Int64Var(&minSize, "min-size", 0, "minimum size in bytes")
-			flagSet.Int64Var(&maxSize, "max-size", 0, "maximum size in bytes")
-			flagSet.IntVar(&limit, "limit", 0, "maximum results (default: server decides)")
-			flagSet.IntVar(&offset, "offset", 0, "skip this many results")
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
 			response, err := client.List(ctx, artifact.ListRequest{
-				ContentType: contentType,
-				Label:       label,
-				CachePolicy: cachePolicy,
-				Visibility:  visibility,
-				MinSize:     minSize,
-				MaxSize:     maxSize,
-				Limit:       limit,
-				Offset:      offset,
+				ContentType: params.ContentType,
+				Label:       params.Label,
+				CachePolicy: params.CachePolicy,
+				Visibility:  params.Visibility,
+				MinSize:     params.MinSize,
+				MaxSize:     params.MaxSize,
+				Limit:       params.Limit,
+				Offset:      params.Offset,
 			})
 			if err != nil {
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			if len(response.Artifacts) == 0 {
@@ -559,11 +558,15 @@ are sorted by storage time (newest first).`,
 
 // --- tag ---
 
+type tagParams struct {
+	artifactConnection
+	Optimistic       bool   `json:"optimistic" flag:"optimistic" desc:"overwrite existing tag without CAS check"`
+	ExpectedPrevious string `json:"expected"   flag:"expected"   desc:"expected current target hash (for CAS update)"`
+	OutputJSON       bool   `json:"-"          flag:"json"       desc:"output as JSON"`
+}
+
 func tagCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var optimistic bool
-	var expectedPrevious string
-	var jsonOutput bool
+	var params tagParams
 
 	return &cli.Command{
 		Name:    "tag",
@@ -590,31 +593,27 @@ specify the previous target hash for CAS updates.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("tag", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&optimistic, "optimistic", false, "overwrite existing tag without CAS check")
-			flagSet.StringVar(&expectedPrevious, "expected", "", "expected current target hash (for CAS update)")
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("tag", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
-			response, err := client.Tag(ctx, args[0], args[1], optimistic, expectedPrevious)
+			response, err := client.Tag(ctx, args[0], args[1], params.Optimistic, params.ExpectedPrevious)
 			if err != nil {
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			fmt.Printf("%s → %s\n", response.Name, response.Ref)
@@ -625,9 +624,13 @@ specify the previous target hash for CAS updates.`,
 
 // --- resolve ---
 
+type resolveParams struct {
+	artifactConnection
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func resolveCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var jsonOutput bool
+	var params resolveParams
 
 	return &cli.Command{
 		Name:    "resolve",
@@ -637,18 +640,16 @@ func resolveCommand() *cli.Command {
 canonical artifact reference. Useful for scripting: the output is
 always the full ref.`,
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("resolve", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("resolve", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -658,8 +659,8 @@ always the full ref.`,
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			fmt.Println(response.Ref)
@@ -670,10 +671,14 @@ always the full ref.`,
 
 // --- tags ---
 
+type tagsParams struct {
+	artifactConnection
+	Prefix     string `json:"prefix" flag:"prefix" desc:"filter tags by name prefix"`
+	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+}
+
 func tagsCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var prefix string
-	var jsonOutput bool
+	var params tagsParams
 
 	return &cli.Command{
 		Name:        "tags",
@@ -691,26 +696,23 @@ func tagsCommand() *cli.Command {
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("tags", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.StringVar(&prefix, "prefix", "", "filter tags by name prefix")
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("tags", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
-			response, err := client.Tags(ctx, prefix)
+			response, err := client.Tags(ctx, params.Prefix)
 			if err != nil {
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			if len(response.Tags) == 0 {
@@ -731,25 +733,28 @@ func tagsCommand() *cli.Command {
 
 // --- delete-tag ---
 
+type deleteTagParams struct {
+	artifactConnection
+}
+
 func deleteTagCommand() *cli.Command {
-	var socketPath, tokenPath *string
+	var params deleteTagParams
 
 	return &cli.Command{
 		Name:    "delete-tag",
 		Summary: "Delete a tag",
 		Usage:   "bureau artifact delete-tag <name> [flags]",
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("delete-tag", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("delete-tag", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -767,6 +772,11 @@ func deleteTagCommand() *cli.Command {
 
 // --- pin / unpin ---
 
+type pinParams struct {
+	artifactConnection
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 // pinToggleCommand builds either "pin" or "unpin" — the two commands
 // differ only in name, help text, which client method is called, and
 // the human-readable confirmation verb.
@@ -774,8 +784,7 @@ func pinToggleCommand(
 	name, summary, verb string,
 	call func(*artifact.Client, context.Context, string) (*artifact.PinResponse, error),
 ) *cli.Command {
-	var socketPath, tokenPath *string
-	var jsonOutput bool
+	var params pinParams
 
 	usage := fmt.Sprintf("bureau artifact %s <ref> [flags]", name)
 
@@ -784,18 +793,16 @@ func pinToggleCommand(
 		Summary: summary,
 		Usage:   usage,
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet(name, pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams(name, &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: %s", usage)
 			}
 
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
@@ -805,8 +812,8 @@ func pinToggleCommand(
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			fmt.Printf("%s: %s\n", verb, response.Ref)
@@ -827,10 +834,14 @@ func unpinCommand() *cli.Command {
 
 // --- gc ---
 
+type gcParams struct {
+	artifactConnection
+	DryRun     bool `json:"dry_run" flag:"dry-run" desc:"report what would be collected without deleting"`
+	OutputJSON bool `json:"-"       flag:"json"    desc:"output as JSON"`
+}
+
 func gcCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var dryRun bool
-	var jsonOutput bool
+	var params gcParams
 
 	return &cli.Command{
 		Name:    "gc",
@@ -851,26 +862,23 @@ Use --dry-run to see what would be removed without actually deleting.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("gc", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&dryRun, "dry-run", false, "report what would be collected without deleting")
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("gc", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			ctx := context.Background()
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
-			response, err := client.GC(ctx, dryRun)
+			response, err := client.GC(ctx, params.DryRun)
 			if err != nil {
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			prefix := ""
@@ -890,9 +898,13 @@ Use --dry-run to see what would be removed without actually deleting.`,
 
 // --- status ---
 
+type statusParams struct {
+	artifactConnection
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
 func statusCommand() *cli.Command {
-	var socketPath, tokenPath *string
-	var jsonOutput bool
+	var params statusParams
 
 	return &cli.Command{
 		Name:    "status",
@@ -901,19 +913,16 @@ func statusCommand() *cli.Command {
 		Description: `Show service liveness information. This action does not require
 authentication — it is a health check.`,
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("status", pflag.ContinueOnError)
-			socketPath, tokenPath = connectFlags(flagSet)
-			flagSet.BoolVar(&jsonOutput, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("status", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			ctx := context.Background()
 			// Status is unauthenticated — use token if available,
 			// but don't fail if the token file is missing.
-			client, err := connect(*socketPath, *tokenPath)
+			client, err := params.connect()
 			if err != nil {
-				// Fall back to unauthenticated.
-				client = artifact.NewClientFromToken(*socketPath, nil)
+				client = artifact.NewClientFromToken(params.SocketPath, nil)
 			}
 
 			response, err := client.Status(ctx)
@@ -921,8 +930,8 @@ authentication — it is a health check.`,
 				return err
 			}
 
-			if jsonOutput {
-				return writeJSON(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

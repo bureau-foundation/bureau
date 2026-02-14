@@ -357,11 +357,16 @@ func defaultTmuxSocket() string {
 	return filepath.Join(tmpDirectory, fmt.Sprintf("tmux-%d", os.Getuid()), "default")
 }
 
+// listParams holds the parameters for the observe list command.
+type listParams struct {
+	Observable bool   `json:"observable"   flag:"observable"   desc:"show only targets that can be observed"`
+	SocketPath string `json:"-"            flag:"socket"       desc:"daemon observation socket path" default:"/run/bureau/observe.sock"`
+	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON"`
+}
+
 // ListCommand returns the "list" subcommand for querying observable targets.
 func ListCommand() *cli.Command {
-	var observable bool
-	var socketPath string
-	var outputJSON bool
+	var params listParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -405,12 +410,9 @@ Machine statuses:
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			flagSet.BoolVar(&observable, "observable", false, "show only targets that can be observed")
-			flagSet.BoolVar(&outputJSON, "json", false, "output as JSON")
-			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
-			return flagSet
+			return cli.FlagsFromParams("list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -421,8 +423,8 @@ Machine statuses:
 				return err
 			}
 
-			response, err := observe.ListTargets(socketPath, observe.ListRequest{
-				Observable: observable,
+			response, err := observe.ListTargets(params.SocketPath, observe.ListRequest{
+				Observable: params.Observable,
 				Observer:   operatorSession.UserID,
 				Token:      operatorSession.AccessToken,
 			})
@@ -430,10 +432,8 @@ Machine statuses:
 				return err
 			}
 
-			if outputJSON {
-				encoder := json.NewEncoder(os.Stdout)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(response)
+			if params.OutputJSON {
+				return cli.WriteJSON(response)
 			}
 
 			return formatListOutput(response)

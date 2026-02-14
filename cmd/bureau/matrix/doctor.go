@@ -20,16 +20,21 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// doctorParams holds the parameters for the matrix doctor command.
+// SessionConfig is embedded as a FlagBinder — its flags are registered
+// via AddFlags and excluded from JSON Schema generation.
+type doctorParams struct {
+	cli.SessionConfig
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for constructing aliases" default:"bureau.local"`
+	OutputJSON bool   `json:"-"            flag:"json"         desc:"machine-readable JSON output"`
+	Fix        bool   `json:"fix"          flag:"fix"          desc:"automatically repair fixable issues"`
+	DryRun     bool   `json:"dry_run"      flag:"dry-run"      desc:"preview repairs without executing (requires --fix)"`
+}
+
 // DoctorCommand returns the "doctor" subcommand for checking Bureau Matrix
 // infrastructure health and optionally repairing fixable issues.
 func DoctorCommand() *cli.Command {
-	var (
-		session    cli.SessionConfig
-		serverName string
-		jsonOutput bool
-		fix        bool
-		dryRun     bool
-	)
+	var params doctorParams
 
 	return &cli.Command{
 		Name:    "doctor",
@@ -64,33 +69,28 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("doctor", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing aliases")
-			flagSet.BoolVar(&jsonOutput, "json", false, "machine-readable JSON output")
-			flagSet.BoolVar(&fix, "fix", false, "automatically repair fixable issues")
-			flagSet.BoolVar(&dryRun, "dry-run", false, "preview repairs without executing (requires --fix)")
-			return flagSet
+			return cli.FlagsFromParams("doctor", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
-			if dryRun && !fix {
+			if params.DryRun && !params.Fix {
 				return fmt.Errorf("--dry-run requires --fix")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			homeserverURL, err := session.ResolveHomeserverURL()
+			homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
 			if err != nil {
 				return err
 			}
 
 			var storedCredentials map[string]string
-			if session.CredentialFile != "" {
-				storedCredentials, err = cli.ReadCredentialFile(session.CredentialFile)
+			if params.SessionConfig.CredentialFile != "" {
+				storedCredentials, err = cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 				if err != nil {
 					return fmt.Errorf("read credential file: %w", err)
 				}
@@ -103,7 +103,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				return fmt.Errorf("create client: %w", err)
 			}
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -124,9 +124,9 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 
 			for iteration := range maxFixIterations {
 				_ = iteration
-				results = runDoctor(ctx, client, sess, serverName, storedCredentials, session.CredentialFile, logger)
+				results = runDoctor(ctx, client, sess, params.ServerName, storedCredentials, params.SessionConfig.CredentialFile, logger)
 
-				if !fix {
+				if !params.Fix {
 					break
 				}
 
@@ -142,15 +142,15 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 					}
 				}
 
-				fixCount := executeFixes(ctx, sess, results, dryRun)
-				if fixCount == 0 || dryRun {
+				fixCount := executeFixes(ctx, sess, results, params.DryRun)
+				if fixCount == 0 || params.DryRun {
 					break
 				}
 
 				// Re-read credential file for the next iteration since
 				// a fix may have updated it.
-				if session.CredentialFile != "" {
-					storedCredentials, err = cli.ReadCredentialFile(session.CredentialFile)
+				if params.SessionConfig.CredentialFile != "" {
+					storedCredentials, err = cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 					if err != nil {
 						return fmt.Errorf("re-read credential file: %w", err)
 					}
@@ -166,10 +166,10 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				}
 			}
 
-			if jsonOutput {
-				return printDoctorJSON(results, fix, dryRun)
+			if params.OutputJSON {
+				return printDoctorJSON(results, params.Fix, params.DryRun)
 			}
-			return printChecklist(results, fix, dryRun)
+			return printChecklist(results, params.Fix, params.DryRun)
 		},
 	}
 }
@@ -992,11 +992,9 @@ func printDoctorJSON(results []checkResult, fixMode, dryRun bool) error {
 		DryRun: dryRun,
 	}
 
-	data, err := json.MarshalIndent(output, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
+	if err := cli.WriteJSON(output); err != nil {
+		return err
 	}
-	fmt.Fprintln(os.Stdout, string(data))
 
 	if anyFailed {
 		return &cli.ExitError{Code: 1}

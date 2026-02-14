@@ -21,13 +21,17 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// impactParams holds the parameters for the template impact command. The
+// template ref and optional file path are positional in CLI mode.
+type impactParams struct {
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON"`
+}
+
 // impactCommand returns the "impact" subcommand for analyzing the effect of a
 // template change across all machines.
 func impactCommand() *cli.Command {
-	var (
-		serverName string
-		outputJSON bool
-	)
+	var params impactParams
 
 	return &cli.Command{
 		Name:    "impact",
@@ -55,11 +59,9 @@ With a file argument, also classifies each change:
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("impact", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			flagSet.BoolVar(&outputJSON, "json", false, "output as JSON")
-			return flagSet
+			return cli.FlagsFromParams("impact", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 || len(args) > 2 {
 				return fmt.Errorf("usage: bureau template impact [flags] <template-ref> [file]")
@@ -88,7 +90,7 @@ With a file argument, also classifies each change:
 
 			analyzer := &impactAnalyzer{
 				session:    session,
-				serverName: serverName,
+				serverName: params.ServerName,
 				ctx:        ctx,
 				cache:      make(map[string]*schema.TemplateContent),
 			}
@@ -118,7 +120,7 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			return printImpactResults(affected, targetRefCanonical, proposedContent != nil, outputJSON)
+			return printImpactResults(affected, targetRefCanonical, proposedContent != nil, params.OutputJSON)
 		},
 	}
 }
@@ -498,12 +500,7 @@ func classifyTemplateChange(current, proposed *schema.TemplateContent) (string, 
 // printImpactResults formats and prints the impact analysis.
 func printImpactResults(results []*impactResult, targetRef string, hasFile bool, asJSON bool) error {
 	if asJSON {
-		data, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal JSON: %w", err)
-		}
-		fmt.Fprintln(os.Stdout, string(data))
-		return nil
+		return cli.WriteJSON(results)
 	}
 
 	if len(results) == 0 {

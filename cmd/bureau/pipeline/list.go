@@ -16,10 +16,13 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-// listParams holds the flags for the pipeline list command.
+// listParams holds the parameters for the pipeline list command. The
+// Room field is positional in CLI mode (args[0]) and a named property
+// in JSON/MCP mode.
 type listParams struct {
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	OutputJSON bool   `json:"-"            flag:"json"        desc:"output as JSON instead of a table"`
+	Room       string `json:"room"         desc:"room alias localpart (e.g. bureau/pipeline)" required:"true"`
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON instead of a table"`
 }
 
 // listCommand returns the "list" subcommand for listing pipelines in a room.
@@ -49,12 +52,18 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			return cli.FlagsFromParams("list", &params)
 		},
 		Run: func(args []string) error {
-			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau pipeline list [flags] <room-alias-localpart>")
+			// In CLI mode, the room comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Room = args[0]
+			} else if len(args) > 1 {
+				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+			}
+			if params.Room == "" {
+				return fmt.Errorf("room is required\n\nusage: bureau pipeline list [flags] <room-alias-localpart>")
 			}
 
-			roomLocalpart := args[0]
-			roomAlias := principal.RoomAlias(roomLocalpart, params.ServerName)
+			roomAlias := principal.RoomAlias(params.Room, params.ServerName)
 
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {

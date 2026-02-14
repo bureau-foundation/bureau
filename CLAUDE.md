@@ -157,7 +157,7 @@ Bureau runs untrusted code. Every design decision must account for this.
 ## Conventions
 
 - Go is the primary language for infrastructure code
-- Pre-commit hooks enforce gofmt and go vet
+- Lefthook pre-commit hooks enforce gofmt, go vet, and license headers
 - SPDX license headers on all source files
 - Tests live next to the code they test (`foo_test.go` beside `foo.go`)
 - BUILD.bazel files are maintained by gazelle; manual edits go in `data`, `env`,

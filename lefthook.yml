@@ -1,0 +1,167 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pre-commit hooks for Bureau. Designed as hard gates for agent commits:
+# slow is fine, correctness is mandatory.
+#
+# All formatting hooks (Tier 1) run through script/format-staged, which
+# extracts staged content from the git index, formats it in a temp
+# directory, and writes the result back to the index. The working tree
+# is never read or written during formatting, so unstaged changes from
+# other agents are invisible. This is the critical safety property.
+#
+# With piped: true, commands run sequentially sorted by priority (lower
+# first). This ensures formatters finish before analysis, analysis
+# finishes before build/test, etc.
+
+pre-commit:
+  piped: true
+  exclude: '\.local\.'
+
+  commands:
+    # ===================================================================
+    # Tier 1: Auto-fix formatting (index-only via format-staged)
+    # ===================================================================
+
+    gofmt:
+      run: script/format-staged gofmt -w -- {staged_files}
+      glob: "*.go"
+      priority: 1
+
+    buildifier:
+      run: script/format-staged buildifier -- {staged_files}
+      glob: "*.{bazel,bzl}"
+      priority: 1
+
+    license-go:
+      run: script/format-staged script/insert-license --comment-style "//" -- {staged_files}
+      glob: "*.go"
+      priority: 1
+
+    license-bazel:
+      run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
+      glob: "*.{bazel,bzl}"
+      priority: 1
+
+    license-shell:
+      run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
+      files: '^script/'
+      exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
+      priority: 1
+
+    license-nix:
+      run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
+      glob: "*.nix"
+      priority: 1
+
+    trailing-whitespace:
+      run: "script/format-staged sed -i 's/[[:space:]]*$//' -- {staged_files}"
+      priority: 1
+
+    end-of-file-fixer:
+      run: script/format-staged script/fix-eof -- {staged_files}
+      priority: 1
+
+    # ===================================================================
+    # Tier 2: Static analysis (runs against working tree, not index)
+    # ===================================================================
+
+    go-vet:
+      run: go vet ./...
+      glob: "*.go"
+      priority: 2
+
+    golangci-lint:
+      run: golangci-lint run --new-from-rev HEAD --timeout=5m
+      glob: "*.go"
+      priority: 2
+
+    buildifier-lint:
+      run: buildifier --lint=warn {staged_files}
+      glob: "*.{bazel,bzl}"
+      priority: 2
+
+    shellcheck:
+      run: shellcheck --severity=warning {staged_files}
+      files: '^script/'
+      exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
+      priority: 2
+
+    lychee:
+      run: lychee --offline --no-progress {staged_files}
+      glob: "*.md"
+      priority: 2
+
+    check-merge-conflict:
+      run: "! grep -rlE '<<<<<<< |=======$|>>>>>>> ' {staged_files}"
+      priority: 2
+
+    check-large-files:
+      run: script/check-large-files {staged_files}
+      priority: 2
+
+    detect-private-key:
+      run: "! grep -l 'BEGIN.*PRIVATE KEY' {staged_files}"
+      priority: 2
+
+    check-case-conflict:
+      run: script/check-case-conflict
+      priority: 2
+
+    check-bead-references:
+      run: script/check-bead-references
+      priority: 2
+
+    check-real-clock:
+      run: script/check-real-clock
+      glob: "*_test.go"
+      priority: 2
+
+    # ===================================================================
+    # Tier 3: Build and test verification (Bazel)
+    # ===================================================================
+
+    gazelle:
+      run: script/check-gazelle
+      files: '\.(go|bazel|bzl)$|^go\.(mod|sum)$'
+      priority: 3
+
+    bazel-build:
+      run: bazel build //...
+      priority: 3
+
+    bazel-test:
+      run: bazel test //...
+      priority: 3
+
+    # ===================================================================
+    # Tier 4: Nix
+    # ===================================================================
+
+    nixfmt:
+      run: script/format-staged script/nix-hook nixfmt -- {staged_files}
+      glob: "*.nix"
+      priority: 4
+
+    statix:
+      run: script/nix-hook statix
+      glob: "*.nix"
+      priority: 4
+
+    deadnix:
+      run: script/nix-hook deadnix
+      glob: "*.nix"
+      priority: 4
+
+    nix-flake-check:
+      run: script/nix-hook flake-check
+      glob: "*.nix"
+      priority: 4
+
+    # ===================================================================
+    # Tier 5: Side effects
+    # ===================================================================
+
+    beads-flush:
+      run: bash -c 'if command -v br >/dev/null 2>&1; then br sync --flush-only; fi'
+      priority: 5

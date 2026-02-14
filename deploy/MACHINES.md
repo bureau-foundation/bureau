@@ -29,7 +29,7 @@ typically a dev machine during early deployment.
 ### Dev (full development workstation)
 
 Builds, tests, and pushes binaries. Has write access to the binary cache.
-Runs the Nix dev shell, Bazel, and pre-commit hooks.
+Runs the Nix dev shell, Bazel, and lefthook pre-commit hooks.
 
 ### Worker (agent execution host)
 

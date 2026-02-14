@@ -1,0 +1,34 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check that staged file blobs do not exceed a size limit. Checks blob
+# sizes in the git index (not the working tree) so the check reflects
+# what will actually be committed.
+#
+# Usage: check-large-files FILE [FILE...]
+#
+# Exits non-zero if any file exceeds 1,000,000 bytes (1 MB).
+
+set -euo pipefail
+
+maximum_bytes=1000000
+failed=false
+
+for file in "$@"; do
+    # Get the blob hash from the index.
+    blob_hash="$(git ls-files -s "$file" | awk '{print $2}')"
+    if [ -z "$blob_hash" ]; then
+        continue
+    fi
+
+    blob_size="$(git cat-file -s "$blob_hash")"
+    if [ "$blob_size" -gt "$maximum_bytes" ]; then
+        echo "check-large-files: $file is $blob_size bytes (limit: $maximum_bytes)" >&2
+        failed=true
+    fi
+done
+
+if $failed; then
+    exit 1
+fi

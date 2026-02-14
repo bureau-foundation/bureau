@@ -1,0 +1,19 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ensure files end with exactly one newline. Modifies files in place.
+#
+# Usage: fix-eof FILE
+
+set -euo pipefail
+
+for file in "$@"; do
+    if [ ! -s "$file" ]; then
+        continue
+    fi
+    # Command substitution strips all trailing newlines from the output.
+    # Re-adding exactly one produces the correct ending.
+    content="$(cat "$file")"
+    printf '%s\n' "$content" > "$file"
+done

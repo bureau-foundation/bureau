@@ -1,0 +1,79 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Index-only formatter for staged files. Extracts staged content from
+# the git index, runs a formatter on it in a temp directory, and writes
+# the result back to the index. The working tree is never read or
+# modified, so unstaged changes from other agents are invisible.
+#
+# Usage: format-staged FORMATTER [ARGS...] -- FILE [FILE...]
+#
+# FORMATTER is run once per file with the temp path appended to the
+# argument list. The formatter must modify the file in place.
+#
+# Safety properties:
+#   - Working tree untouched (no stash, no checkout, no reset)
+#   - Interrupted at any point: worst case is a partially-formatted
+#     index entry, trivially fixable by re-running the formatter
+#   - Other agents' unstaged changes are completely invisible
+
+set -euo pipefail
+
+# Parse arguments: everything before -- is the formatter command,
+# everything after -- is the file list.
+formatter=()
+files=()
+seen_separator=false
+for argument in "$@"; do
+    if [ "$argument" = "--" ]; then
+        seen_separator=true
+        continue
+    fi
+    if $seen_separator; then
+        files+=("$argument")
+    else
+        formatter+=("$argument")
+    fi
+done
+
+if [ ${#formatter[@]} -eq 0 ]; then
+    echo "format-staged: no formatter specified" >&2
+    exit 1
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+    # No files to format (glob matched nothing). This is not an error.
+    exit 0
+fi
+
+temporary=$(mktemp -d)
+trap 'rm -rf "$temporary"' EXIT
+
+for file in "${files[@]}"; do
+    # Skip files not in the index (newly untracked, deleted, etc).
+    if ! git ls-files --error-unmatch "$file" > /dev/null 2>&1; then
+        continue
+    fi
+
+    # Extract the staged version to a temp file preserving directory
+    # structure so formatters that care about paths still work.
+    target_directory="$temporary/$(dirname "$file")"
+    mkdir -p "$target_directory"
+    target_file="$temporary/$file"
+    git show ":$file" > "$target_file"
+
+    # Save a copy for comparison.
+    original_file="$target_file.orig"
+    cp "$target_file" "$original_file"
+
+    # Run the formatter. It modifies target_file in place.
+    "${formatter[@]}" "$target_file"
+
+    # If the formatter changed the content, update the index.
+    if ! cmp -s "$target_file" "$original_file"; then
+        object_hash=$(git hash-object -w "$target_file")
+        file_mode=$(git ls-files -s "$file" | awk '{print $1}')
+        git update-index --cacheinfo "$file_mode,$object_hash,$file"
+    fi
+done

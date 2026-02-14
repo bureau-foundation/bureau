@@ -330,7 +330,7 @@
             pkgs.docker-compose
 
             # Code quality.
-            pkgs.pre-commit
+            pkgs.lefthook
             pkgs.shellcheck
             pkgs.lychee
             pkgs.golangci-lint
@@ -371,11 +371,11 @@
               export PATH="/nix/var/nix/profiles/default/bin:$PATH"
             fi
 
-            # Install pre-commit hook on first shell entry. Uses the
-            # checked-in script/pre-commit which auto-restages files
-            # modified by formatting hooks (gofmt, buildifier, gazelle)
-            # instead of failing and requiring a manual re-add cycle.
-            # Note: pre-commit install can't run with core.hooksPath set.
+            # Install pre-commit hook trampoline. Global core.hooksPath
+            # hooks in ~/.config/git/hooks/ cascade to .git/hooks/, so
+            # we install here. script/pre-commit delegates to lefthook
+            # which reads lefthook.yml. All formatting hooks run through
+            # script/format-staged (index-only, working tree untouched).
             if [ -f script/pre-commit ] && [ -d .git ]; then
               hook=".git/hooks/pre-commit"
               mkdir -p "$(dirname "$hook")"

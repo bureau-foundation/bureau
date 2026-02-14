@@ -30,7 +30,6 @@ filtered=$(echo "$matches" \
     | grep -v "^\./lib/ticketui/beads" \
     | grep -v "CONTRIBUTING.md" \
     | grep -v "CLAUDE.md" \
-    | grep -v ".pre-commit-config.yaml" \
     | grep -v "check-bead-references" \
     || true)
 

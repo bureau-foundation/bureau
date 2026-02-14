@@ -1,0 +1,80 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Insert license header into source files. Reads .license-header.txt
+# from the repository root, wraps each line with the given comment
+# style, and prepends the header if the file does not already contain
+# it. Modifies files in place.
+#
+# If the file starts with a shebang (#!), the header is inserted
+# immediately after the shebang line.
+#
+# Usage: insert-license --comment-style STYLE FILE
+
+set -euo pipefail
+
+comment_style=""
+files=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --comment-style)
+            comment_style="$2"
+            shift 2
+            ;;
+        *)
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$comment_style" ]; then
+    echo "insert-license: --comment-style is required" >&2
+    exit 1
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+header_file="$repo_root/.license-header.txt"
+
+if [ ! -f "$header_file" ]; then
+    echo "insert-license: $header_file not found" >&2
+    exit 1
+fi
+
+# Build the commented header. Each line of the template is prefixed
+# with the comment style. Empty lines become bare comment markers.
+commented_header=""
+while IFS= read -r line || [ -n "$line" ]; do
+    if [ -z "$line" ]; then
+        commented_header+="$comment_style"$'\n'
+    else
+        commented_header+="$comment_style $line"$'\n'
+    fi
+done < "$header_file"
+
+for file in "${files[@]}"; do
+    content="$(cat "$file")"
+
+    # Already has the header at the start — nothing to do.
+    if [[ "$content" == "$commented_header"* ]]; then
+        continue
+    fi
+
+    # Handle shebang: header goes immediately after the first line.
+    if [[ "$content" == '#!'* ]]; then
+        first_line="${content%%$'\n'*}"
+        rest="${content#*$'\n'}"
+        # Check if the header is already present after the shebang.
+        if [[ "$rest" == "$commented_header"* ]]; then
+            continue
+        fi
+        printf '%s\n%s\n%s' "$first_line" "$commented_header" "$rest" > "$file"
+    else
+        printf '%s\n%s' "$commented_header" "$content" > "$file"
+    fi
+done

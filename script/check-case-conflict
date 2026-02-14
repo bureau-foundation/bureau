@@ -1,0 +1,20 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check for case-insensitive filename conflicts among staged files.
+# On case-insensitive filesystems (macOS HFS+/APFS), two files whose
+# names differ only in case cannot coexist and cause silent data loss.
+#
+# Usage: check-case-conflict
+
+set -euo pipefail
+
+# Get all staged filenames, lowercase them, sort, and find duplicates.
+duplicates="$(git ls-files -s | awk '{print $4}' | tr '[:upper:]' '[:lower:]' | sort | uniq -d)"
+
+if [ -n "$duplicates" ]; then
+    echo "check-case-conflict: case-insensitive filename conflicts detected:" >&2
+    echo "$duplicates" >&2
+    exit 1
+fi

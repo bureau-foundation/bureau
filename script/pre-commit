@@ -2,76 +2,13 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Git pre-commit hook with auto-restage. Runs pre-commit hooks and, if
-# hooks only modified files (auto-formatting by gofmt, buildifier,
-# license insertion, gazelle), restages the changes and retries once.
+# Manual pre-commit hook entry point. Delegates to lefthook which reads
+# lefthook.yml for the actual hook configuration.
 #
-# Pre-commit intentionally fails when hooks modify files so that humans
-# can review the changes. For fully deterministic auto-fixers this
-# review step has zero value — the fix is always "stage and retry."
-# This script eliminates that roundtrip.
-#
-# The key subtlety: hooks can modify files that weren't originally
-# staged. For example, staging a new .go file causes gazelle to update
-# BUILD.bazel. Pre-commit's own stash mechanism then undoes those
-# modifications on the retry unless we stage them first. We detect
-# hook-modified files by diffing the unstaged file set before and
-# after the pre-commit run.
-#
-# Install: symlink or copy to .git/hooks/pre-commit, or call from a
-# global hook chain (core.hooksPath).
+# Lefthook installs its own .git/hooks/pre-commit during nix develop
+# (via shellHook). This script exists for running hooks manually
+# outside of a git commit (e.g., script/pre-commit to validate before
+# pushing).
 
 set -euo pipefail
-
-staged_files="$(git diff --cached --name-only --diff-filter=d)"
-
-if [ -z "$staged_files" ]; then
-    # Nothing staged (e.g., --allow-empty). Let pre-commit decide.
-    exec pre-commit run --config=.pre-commit-config.yaml
-fi
-
-# Snapshot files with unstaged changes before hooks run. These are
-# pre-existing working tree modifications (from another agent, manual
-# edits, etc.) that we must not touch.
-unstaged_before="$(git diff --name-only)"
-
-# First attempt.
-if pre-commit run --config=.pre-commit-config.yaml; then
-    exit 0
-fi
-
-# Pre-commit failed. Find files modified by hooks: files that have
-# unstaged changes now but didn't before hooks ran. This catches both
-# originally-staged files that hooks reformatted AND collateral files
-# like BUILD.bazel that gazelle updated.
-unstaged_after="$(git diff --name-only)"
-
-hook_modified=""
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    # Skip files that had unstaged changes before hooks ran — those
-    # belong to someone else, not this commit.
-    if echo "$unstaged_before" | grep -qFx "$file" 2>/dev/null; then
-        continue
-    fi
-    hook_modified="${hook_modified}${file}"$'\n'
-done <<< "$unstaged_after"
-
-if [ -z "$hook_modified" ]; then
-    # No new modifications — this is a real hook failure (lint error,
-    # build failure, test failure). Report it as-is.
-    exit 1
-fi
-
-# Restage hook-modified files and retry once.
-echo ""
-echo "Auto-formatting hooks modified files. Restaging and retrying..."
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    echo "  restaged: $file"
-    git add "$file"
-done <<< "$hook_modified"
-echo ""
-
-# Second attempt. If this fails, it's a real error.
-exec pre-commit run --config=.pre-commit-config.yaml
+exec lefthook run pre-commit

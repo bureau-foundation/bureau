@@ -20,11 +20,14 @@ matches=$(grep -rn \
     . 2>/dev/null || true)
 
 # Filter out files that legitimately discuss beads as a concept, and
-# directories that are gitignored (local-only state).
+# directories that are gitignored (local-only state). The ticketui
+# package renders beads data — its test fixtures, format examples,
+# and column width constants naturally contain bd-XXX patterns.
 filtered=$(echo "$matches" \
     | grep -v "^\./.beads/" \
     | grep -v "^\./.bv/" \
     | grep -v "^\./.notes/" \
+    | grep -v "^\./lib/ticketui/" \
     | grep -v "CONTRIBUTING.md" \
     | grep -v "CLAUDE.md" \
     | grep -v ".pre-commit-config.yaml" \

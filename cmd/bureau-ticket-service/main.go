@@ -191,6 +191,11 @@ func run() error {
 		Filter: syncFilter,
 	}, sinceToken, ticketService.handleSync, clk, logger)
 
+	// Start the timer gate ticker. Timer gates can't be evaluated
+	// from incoming events alone — they need a periodic check against
+	// the current time.
+	go ticketService.startTimerTicker(ctx)
+
 	logger.Info("ticket service running",
 		"principal", principalName,
 		"socket", socketPath,

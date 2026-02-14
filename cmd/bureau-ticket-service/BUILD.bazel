@@ -7,6 +7,7 @@ go_library(
     name = "bureau-ticket-service_lib",
     srcs = [
         "doc.go",
+        "gate.go",
         "main.go",
         "socket.go",
         "sync.go",
@@ -35,6 +36,7 @@ go_binary(
 go_test(
     name = "bureau-ticket-service_test",
     srcs = [
+        "gate_test.go",
         "socket_test.go",
         "sync_test.go",
     ],

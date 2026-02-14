@@ -22,9 +22,9 @@ import (
 // sync. The limit is generous since the service needs to see all ticket
 // mutations, not just the latest few.
 //
-// Gate evaluation will add more event types to this filter as gate
-// types are implemented (e.g., m.bureau.pipeline_result for pipeline
-// gates).
+// The filter includes event types needed for gate evaluation:
+// pipeline result events for pipeline gates, and ticket events which
+// serve double duty (indexing + ticket gate evaluation).
 var syncFilter = buildSyncFilter()
 
 // buildSyncFilter constructs the Matrix /sync filter JSON from typed
@@ -34,6 +34,7 @@ func buildSyncFilter() string {
 		schema.EventTypeTicket,
 		schema.EventTypeTicketConfig,
 		schema.EventTypeRoomService,
+		schema.EventTypePipelineResult,
 		schema.MatrixEventTypeTombstone,
 	}
 
@@ -284,19 +285,20 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, roo
 		return
 	}
 
+	// Phase 1: Index ticket events. This must complete before gate
+	// evaluation so that ticket gates can see updated statuses
+	// (e.g., a ticket reaching "closed" satisfies ticket gates).
 	for _, event := range stateEvents {
-		switch event.Type {
-		case schema.EventTypeTicket:
-			if event.StateKey != nil {
-				ts.indexTicketEvent(state, event)
-			}
-		default:
-			// Other state events may satisfy pending gates. Gate
-			// evaluation will be implemented here: check if any
-			// pending gates in this room match the event, and if so,
-			// update the affected tickets.
+		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
+			ts.indexTicketEvent(state, event)
 		}
 	}
+
+	// Phase 2: Evaluate gates against ALL state events in the batch.
+	// Pipeline result events, ticket events, and any other state
+	// events may satisfy pending gates. Gate evaluation is idempotent
+	// (already-satisfied gates are skipped).
+	ts.evaluateGatesForEvents(ctx, roomID, state, stateEvents)
 }
 
 // handleRoomTombstone processes a tombstone event for a room. The room

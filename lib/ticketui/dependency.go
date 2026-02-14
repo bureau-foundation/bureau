@@ -27,9 +27,9 @@ type depNode struct {
 //
 // Layout for 3 left, 2 right:
 //
-//	● bd-abc ─┐              ┌─ ● bd-ghi
-//	● bd-def ─┼── bd-center ─┤
-//	● bd-xyz ─┘              └─ ● bd-jkl
+//	● tkt-abc ─┐               ┌─ ● tkt-ghi
+//	● tkt-def ─┼── tkt-center ─┤
+//	● tkt-xyz ─┘               └─ ● tkt-jkl
 //
 // All neighbor nodes are clickable. Returns the rendered graph and
 // click targets with line offsets relative to the graph (no header).

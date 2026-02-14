@@ -15,7 +15,7 @@ import (
 // Column widths for the list table. The title column fills remaining
 // space; all others are fixed.
 const (
-	columnWidthID = 11 // "bd-xxxxx" + space (typical beads ID)
+	columnWidthID = 11 // short ID + space (e.g. "tkt-xxxxx ")
 
 	// maxLeftWidth is the worst-case width of the left portion before
 	// the ID column: 1 (indent) + 4 (emoji + "P1") + 3 (" ● ") = 8.
@@ -71,8 +71,8 @@ func NewListRenderer(theme Theme, width int) ListRenderer {
 // the icon appears between the priority and ID with surrounding spaces.
 // Open tickets omit the icon entirely, keeping the gap tight:
 //
-//	🐛P0 ● bd-3vk5  Fix connection pooling leak [infra]
-//	📋P2 bd-2ccg    Implement retry backoff [transport]
+//	🐛P0 ● tkt-3vk5  Fix connection pooling leak [infra]
+//	📋P2 tkt-2ccg    Implement retry backoff [transport]
 func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool) string {
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.

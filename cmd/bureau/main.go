@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	artifactcmd "github.com/bureau-foundation/bureau/cmd/bureau/artifact"
 	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
@@ -55,6 +56,7 @@ observation, and structured messaging via Matrix.`,
 			environmentcmd.Command(),
 			workspacecmd.Command(),
 			ticketcmd.Command(),
+			artifactcmd.Command(),
 			cborcmd.Command(),
 			{
 				Name:    "version",

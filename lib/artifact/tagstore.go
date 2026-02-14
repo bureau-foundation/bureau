@@ -30,10 +30,10 @@ const MaxTagNameLength = 512
 // TagRecord holds the on-disk and in-memory representation of a single
 // tag. Each tag file on disk contains a CBOR-encoded TagRecord.
 type TagRecord struct {
-	Name      string    `cbor:"name"       json:"name"`
-	Target    Hash      `cbor:"target"     json:"target"`
-	CreatedAt time.Time `cbor:"created_at" json:"created_at"`
-	UpdatedAt time.Time `cbor:"updated_at" json:"updated_at"`
+	Name      string    `cbor:"name"`
+	Target    Hash      `cbor:"target"`
+	CreatedAt time.Time `cbor:"created_at"`
+	UpdatedAt time.Time `cbor:"updated_at"`
 }
 
 // TagStore manages mutable name-to-hash tag mappings with an in-memory

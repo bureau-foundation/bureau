@@ -375,7 +375,7 @@ func TestExistsFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var response existsResponse
+	var response artifact.ExistsResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,7 @@ func TestExistsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var response existsResponse
+	var response artifact.ExistsResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -464,12 +464,12 @@ func TestStatus(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	if err := artifact.WriteMessage(conn, struct {
-		Action string `cbor:"action"`
+		Action string `json:"action"`
 	}{Action: "status"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response statusResponse
+	var response artifact.StatusResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,7 @@ func TestUnknownAction(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	if err := artifact.WriteMessage(conn, struct {
-		Action string `cbor:"action"`
+		Action string `json:"action"`
 	}{Action: "bogus"}); err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +516,7 @@ func TestMissingAction(t *testing.T) {
 
 	// Send a CBOR message without an action field.
 	if err := artifact.WriteMessage(conn, struct {
-		Value int `cbor:"value"`
+		Value int `json:"value"`
 	}{Value: 42}); err != nil {
 		t.Fatal(err)
 	}
@@ -803,9 +803,7 @@ func TestDeleteTag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var resp struct {
-		Deleted string `cbor:"deleted"`
-	}
+	var resp artifact.DeleteTagResponse
 	if err := artifact.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -1388,7 +1386,7 @@ func TestCacheStatus(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	if err := artifact.WriteMessage(conn, struct {
-		Action string `cbor:"action"`
+		Action string `json:"action"`
 	}{Action: "cache-status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1510,8 +1508,8 @@ func TestAuthMissingToken(t *testing.T) {
 
 	// Send a request with no token field.
 	if err := artifact.WriteMessage(conn, struct {
-		Action string `cbor:"action"`
-		Ref    string `cbor:"ref"`
+		Action string `json:"action"`
+		Ref    string `json:"ref"`
 	}{Action: "show", Ref: "art-000000000000"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1600,7 +1598,7 @@ func TestAuthValidToken(t *testing.T) {
 	}
 
 	// Should get a valid response (not an auth error).
-	var response existsResponse
+	var response artifact.ExistsResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -1653,12 +1651,12 @@ func TestAuthStatusWithoutToken(t *testing.T) {
 
 	// Status should work without any token even when auth is configured.
 	if err := artifact.WriteMessage(conn, struct {
-		Action string `cbor:"action"`
+		Action string `json:"action"`
 	}{Action: "status"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response statusResponse
+	var response artifact.StatusResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -1704,7 +1702,7 @@ func TestAuthAllActionsRequireToken(t *testing.T) {
 			conn, wait := startHandler(t, as)
 
 			if err := artifact.WriteMessage(conn, struct {
-				Action string `cbor:"action"`
+				Action string `json:"action"`
 			}{Action: action.action}); err != nil {
 				t.Fatal(err)
 			}
@@ -1748,7 +1746,7 @@ func TestAuthWildcardGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var response existsResponse
+	var response artifact.ExistsResponse
 	if err := artifact.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}

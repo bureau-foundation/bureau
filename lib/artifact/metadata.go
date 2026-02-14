@@ -27,20 +27,20 @@ const metadataDir = "metadata"
 // layout (segments, container references); this struct holds the
 // application-level metadata.
 type ArtifactMetadata struct {
-	FileHash       Hash      `cbor:"file_hash"              json:"file_hash"`
-	Ref            string    `cbor:"ref"                    json:"ref"`
-	ContentType    string    `cbor:"content_type"           json:"content_type"`
-	Filename       string    `cbor:"filename,omitempty"     json:"filename,omitempty"`
-	Description    string    `cbor:"description,omitempty"  json:"description,omitempty"`
-	Labels         []string  `cbor:"labels,omitempty"       json:"labels,omitempty"`
-	CachePolicy    string    `cbor:"cache_policy,omitempty" json:"cache_policy,omitempty"`
-	Visibility     string    `cbor:"visibility,omitempty"   json:"visibility,omitempty"`
-	TTL            string    `cbor:"ttl,omitempty"          json:"ttl,omitempty"`
-	Size           int64     `cbor:"size"                   json:"size"`
-	ChunkCount     int       `cbor:"chunk_count"            json:"chunk_count"`
-	ContainerCount int       `cbor:"container_count"        json:"container_count"`
-	Compression    string    `cbor:"compression"            json:"compression"`
-	StoredAt       time.Time `cbor:"stored_at"              json:"stored_at"`
+	FileHash       Hash      `json:"file_hash"`
+	Ref            string    `json:"ref"`
+	ContentType    string    `json:"content_type"`
+	Filename       string    `json:"filename,omitempty"`
+	Description    string    `json:"description,omitempty"`
+	Labels         []string  `json:"labels,omitempty"`
+	CachePolicy    string    `json:"cache_policy,omitempty"`
+	Visibility     string    `json:"visibility,omitempty"`
+	TTL            string    `json:"ttl,omitempty"`
+	Size           int64     `json:"size"`
+	ChunkCount     int       `json:"chunk_count"`
+	ContainerCount int       `json:"container_count"`
+	Compression    string    `json:"compression"`
+	StoredAt       time.Time `json:"stored_at"`
 }
 
 // MetadataStore persists per-artifact metadata as sharded CBOR files

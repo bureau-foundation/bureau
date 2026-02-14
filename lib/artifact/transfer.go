@@ -30,70 +30,72 @@ const (
 
 // --- Protocol types ---
 //
-// These structs define the CBOR-encoded messages in the artifact
-// transfer protocol. Each uses cbor struct tags; json tags serve as
-// automatic fallback for the CBOR library (fxamacker/cbor reads
-// json tags when cbor tags are absent) and for debugging output.
+// These structs define the messages in the artifact transfer protocol.
+// All types use json struct tags per the lib/codec convention: they
+// participate in both CBOR (wire protocol) and JSON (CLI --json
+// output, future JSON-mode transports). The CBOR library reads json
+// tags as fallback when cbor tags are absent.
 
-// StoreHeader is the CBOR metadata sent by the client before
-// uploading artifact content.
+// StoreHeader is the metadata sent by the client before uploading
+// artifact content.
 //
 // For small artifacts (data fits in a single CBOR message), the
 // Data field contains the content as a CBOR byte string and Size
 // is set to the byte length. For large artifacts, Data is nil and
 // the content follows as a binary stream after this header.
 type StoreHeader struct {
-	Action      string `cbor:"action"       json:"action"`
-	ContentType string `cbor:"content_type" json:"content_type"`
-	Filename    string `cbor:"filename,omitempty" json:"filename,omitempty"`
+	Action      string `json:"action"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename,omitempty"`
+	Token       []byte `json:"token,omitempty"`
 
 	// Size is the total uncompressed content size in bytes, or
 	// SizeUnknown (-1) if the size is not known upfront. When
 	// SizeUnknown, the binary stream uses chunked framing.
-	Size int64 `cbor:"size" json:"size"`
+	Size int64 `json:"size"`
 
 	// Data holds the content for small artifacts (< SmallArtifactThreshold).
 	// CBOR byte strings are transferred without base64 encoding.
 	// Nil for large artifacts — content follows as a binary stream.
-	Data []byte `cbor:"data,omitempty" json:"data,omitempty"`
+	Data []byte `json:"data,omitempty"`
 
-	Description string   `cbor:"description,omitempty" json:"description,omitempty"`
-	Labels      []string `cbor:"labels,omitempty"      json:"labels,omitempty"`
-	Tag         string   `cbor:"tag,omitempty"          json:"tag,omitempty"`
-	CachePolicy string   `cbor:"cache_policy,omitempty" json:"cache_policy,omitempty"`
-	Visibility  string   `cbor:"visibility,omitempty"   json:"visibility,omitempty"`
-	TTL         string   `cbor:"ttl,omitempty"          json:"ttl,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Labels      []string `json:"labels,omitempty"`
+	Tag         string   `json:"tag,omitempty"`
+	CachePolicy string   `json:"cache_policy,omitempty"`
+	Visibility  string   `json:"visibility,omitempty"`
+	TTL         string   `json:"ttl,omitempty"`
 }
 
-// StoreResponse is the CBOR response after a store operation completes.
+// StoreResponse is the response after a store operation completes.
 type StoreResponse struct {
-	Ref            string `cbor:"ref"             json:"ref"`
-	Hash           string `cbor:"hash"            json:"hash"`
-	Size           int64  `cbor:"size"            json:"size"`
-	ChunkCount     int    `cbor:"chunk_count"     json:"chunk_count"`
-	ContainerCount int    `cbor:"container_count" json:"container_count"`
-	Compression    string `cbor:"compression"     json:"compression"`
-	BytesStored    int64  `cbor:"bytes_stored"    json:"bytes_stored"`
-	BytesDeduped   int64  `cbor:"bytes_deduped"   json:"bytes_deduped"`
+	Ref            string `json:"ref"`
+	Hash           string `json:"hash"`
+	Size           int64  `json:"size"`
+	ChunkCount     int    `json:"chunk_count"`
+	ContainerCount int    `json:"container_count"`
+	Compression    string `json:"compression"`
+	BytesStored    int64  `json:"bytes_stored"`
+	BytesDeduped   int64  `json:"bytes_deduped"`
 }
 
-// FetchRequest is the CBOR request sent by the client to download
+// FetchRequest is the request sent by the client to download
 // artifact content.
 type FetchRequest struct {
-	Action string `cbor:"action" json:"action"`
+	Action string `json:"action"`
 
 	// Ref is the artifact reference (e.g., "art-a3f9b2c1e7d4") or
 	// tag name to resolve and fetch.
-	Ref string `cbor:"ref" json:"ref"`
+	Ref string `json:"ref"`
 
 	// Offset and Length specify an optional byte range. When both
 	// are zero, the entire artifact is fetched. When set, only the
 	// specified range is streamed.
-	Offset int64 `cbor:"offset,omitempty" json:"offset,omitempty"`
-	Length int64 `cbor:"length,omitempty" json:"length,omitempty"`
+	Offset int64 `json:"offset,omitempty"`
+	Length int64 `json:"length,omitempty"`
 }
 
-// FetchResponse is the CBOR metadata sent by the service before
+// FetchResponse is the metadata sent by the service before
 // streaming download content.
 //
 // For small artifacts, the Data field contains the content as a
@@ -101,16 +103,16 @@ type FetchRequest struct {
 // artifacts, Data is nil and the content follows as a sized binary
 // stream (the receiver reads exactly Size bytes).
 type FetchResponse struct {
-	Size        int64  `cbor:"size"         json:"size"`
-	ContentType string `cbor:"content_type" json:"content_type"`
-	Filename    string `cbor:"filename,omitempty" json:"filename,omitempty"`
-	Hash        string `cbor:"hash"         json:"hash"`
-	ChunkCount  int    `cbor:"chunk_count"  json:"chunk_count"`
-	Compression string `cbor:"compression"  json:"compression"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename,omitempty"`
+	Hash        string `json:"hash"`
+	ChunkCount  int    `json:"chunk_count"`
+	Compression string `json:"compression"`
 
 	// Data holds the content for small artifacts. Nil for large
 	// artifacts — content follows as a binary stream.
-	Data []byte `cbor:"data,omitempty" json:"data,omitempty"`
+	Data []byte `json:"data,omitempty"`
 }
 
 // --- Frame writer ---
@@ -381,12 +383,12 @@ func ReadRawMessage(r io.Reader) ([]byte, error) {
 	return data, nil
 }
 
-// ErrorResponse is the CBOR error message sent when an action fails.
+// ErrorResponse is the error message sent when an action fails.
 // Used by the artifact service's connection handler for both streaming
 // and simple protocol paths. Clients check for the presence of the
 // "error" field to distinguish error responses from success responses.
 type ErrorResponse struct {
-	Error string `cbor:"error" json:"error"`
+	Error string `json:"error"`
 }
 
 // WriteStoreHeader writes a length-prefixed CBOR StoreHeader to w.
@@ -459,161 +461,185 @@ func ReadFetchResponse(r io.Reader) (*FetchResponse, error) {
 	return &response, nil
 }
 
-// --- List protocol types ---
+// --- Exists protocol types ---
 
-// ListRequest is the CBOR request for the "list" action (filtered
-// artifact query).
-type ListRequest struct {
-	Action      string `cbor:"action"                  json:"action"`
-	ContentType string `cbor:"content_type,omitempty"   json:"content_type,omitempty"`
-	Label       string `cbor:"label,omitempty"          json:"label,omitempty"`
-	CachePolicy string `cbor:"cache_policy,omitempty"   json:"cache_policy,omitempty"`
-	Visibility  string `cbor:"visibility,omitempty"     json:"visibility,omitempty"`
-	MinSize     int64  `cbor:"min_size,omitempty"       json:"min_size,omitempty"`
-	MaxSize     int64  `cbor:"max_size,omitempty"       json:"max_size,omitempty"`
-	Limit       int    `cbor:"limit,omitempty"          json:"limit,omitempty"`
-	Offset      int    `cbor:"offset,omitempty"         json:"offset,omitempty"`
+// ExistsResponse is the response for the "exists" action.
+type ExistsResponse struct {
+	Exists bool   `json:"exists"`
+	Hash   string `json:"hash,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	Size   int64  `json:"size,omitempty"`
 }
 
-// ListResponse is the CBOR response for the "list" action.
+// --- Status protocol types ---
+
+// StatusResponse is the response for the "status" action
+// (unauthenticated liveness check).
+type StatusResponse struct {
+	UptimeSeconds float64 `json:"uptime_seconds"`
+	Artifacts     int     `json:"artifacts"`
+	Rooms         int     `json:"rooms"`
+}
+
+// --- Delete-tag protocol types ---
+
+// DeleteTagResponse is the response for the "delete-tag" action.
+type DeleteTagResponse struct {
+	Deleted string `json:"deleted"`
+}
+
+// --- List protocol types ---
+
+// ListRequest is the request for the "list" action (filtered
+// artifact query).
+type ListRequest struct {
+	Action      string `json:"action"`
+	ContentType string `json:"content_type,omitempty"`
+	Label       string `json:"label,omitempty"`
+	CachePolicy string `json:"cache_policy,omitempty"`
+	Visibility  string `json:"visibility,omitempty"`
+	MinSize     int64  `json:"min_size,omitempty"`
+	MaxSize     int64  `json:"max_size,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+	Offset      int    `json:"offset,omitempty"`
+}
+
+// ListResponse is the response for the "list" action.
 type ListResponse struct {
-	Artifacts []ArtifactSummary `cbor:"artifacts" json:"artifacts"`
-	Total     int               `cbor:"total"     json:"total"`
+	Artifacts []ArtifactSummary `json:"artifacts"`
+	Total     int               `json:"total"`
 }
 
 // ArtifactSummary is a single artifact in a ListResponse. Contains
 // enough metadata for display without a separate "show" call.
 type ArtifactSummary struct {
-	Hash        string   `cbor:"hash"                    json:"hash"`
-	Ref         string   `cbor:"ref"                     json:"ref"`
-	ContentType string   `cbor:"content_type"            json:"content_type"`
-	Filename    string   `cbor:"filename,omitempty"      json:"filename,omitempty"`
-	Size        int64    `cbor:"size"                    json:"size"`
-	Labels      []string `cbor:"labels,omitempty"        json:"labels,omitempty"`
-	CachePolicy string   `cbor:"cache_policy,omitempty"  json:"cache_policy,omitempty"`
-	StoredAt    string   `cbor:"stored_at"               json:"stored_at"`
+	Hash        string   `json:"hash"`
+	Ref         string   `json:"ref"`
+	ContentType string   `json:"content_type"`
+	Filename    string   `json:"filename,omitempty"`
+	Size        int64    `json:"size"`
+	Labels      []string `json:"labels,omitempty"`
+	CachePolicy string   `json:"cache_policy,omitempty"`
+	StoredAt    string   `json:"stored_at"`
 }
 
 // --- Tag protocol types ---
 
-// TagRequest is the CBOR request for the "tag" action (create or
+// TagRequest is the request for the "tag" action (create or
 // update a mutable tag pointing to an artifact).
 type TagRequest struct {
-	Action           string `cbor:"action"                       json:"action"`
-	Name             string `cbor:"name"                         json:"name"`
-	Ref              string `cbor:"ref"                          json:"ref"`
-	Optimistic       bool   `cbor:"optimistic,omitempty"         json:"optimistic,omitempty"`
-	ExpectedPrevious string `cbor:"expected_previous,omitempty"  json:"expected_previous,omitempty"`
+	Action           string `json:"action"`
+	Name             string `json:"name"`
+	Ref              string `json:"ref"`
+	Optimistic       bool   `json:"optimistic,omitempty"`
+	ExpectedPrevious string `json:"expected_previous,omitempty"`
 }
 
-// TagResponse is the CBOR response for the "tag" action.
+// TagResponse is the response for the "tag" action.
 type TagResponse struct {
-	Name     string `cbor:"name"               json:"name"`
-	Hash     string `cbor:"hash"               json:"hash"`
-	Ref      string `cbor:"ref"                json:"ref"`
-	Previous string `cbor:"previous,omitempty" json:"previous,omitempty"`
+	Name     string `json:"name"`
+	Hash     string `json:"hash"`
+	Ref      string `json:"ref"`
+	Previous string `json:"previous,omitempty"`
 }
 
-// DeleteTagRequest is the CBOR request for the "delete-tag" action.
+// DeleteTagRequest is the request for the "delete-tag" action.
 type DeleteTagRequest struct {
-	Action string `cbor:"action" json:"action"`
-	Name   string `cbor:"name"   json:"name"`
+	Action string `json:"action"`
+	Name   string `json:"name"`
 }
 
-// ResolveRequest is the CBOR request for the "resolve" action. The
+// ResolveRequest is the request for the "resolve" action. The
 // ref can be a full hash, short ref (art-<hex>), or tag name.
 type ResolveRequest struct {
-	Action string `cbor:"action" json:"action"`
-	Ref    string `cbor:"ref"    json:"ref"`
+	Action string `json:"action"`
+	Ref    string `json:"ref"`
 }
 
-// ResolveResponse is the CBOR response for the "resolve" action.
+// ResolveResponse is the response for the "resolve" action.
 type ResolveResponse struct {
-	Hash string `cbor:"hash"          json:"hash"`
-	Ref  string `cbor:"ref"           json:"ref"`
-	Tag  string `cbor:"tag,omitempty" json:"tag,omitempty"`
+	Hash string `json:"hash"`
+	Ref  string `json:"ref"`
+	Tag  string `json:"tag,omitempty"`
 }
 
-// TagsRequest is the CBOR request for the "tags" action (list tags).
+// TagsRequest is the request for the "tags" action (list tags).
 type TagsRequest struct {
-	Action string `cbor:"action"           json:"action"`
-	Prefix string `cbor:"prefix,omitempty" json:"prefix,omitempty"`
+	Action string `json:"action"`
+	Prefix string `json:"prefix,omitempty"`
 }
 
-// TagsResponse is the CBOR response for the "tags" action.
+// TagsResponse is the response for the "tags" action.
 type TagsResponse struct {
-	Tags []TagEntry `cbor:"tags" json:"tags"`
+	Tags []TagEntry `json:"tags"`
 }
 
 // TagEntry is a single tag in a TagsResponse.
 type TagEntry struct {
-	Name string `cbor:"name" json:"name"`
-	Hash string `cbor:"hash" json:"hash"`
-	Ref  string `cbor:"ref"  json:"ref"`
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+	Ref  string `json:"ref"`
 }
 
 // --- Pin/Unpin protocol types ---
 
-// PinRequest is the CBOR request for the "pin" action (mark an
+// PinRequest is the request for the "pin" action (mark an
 // artifact as protected from GC and pin containers in the cache).
 type PinRequest struct {
-	Action string `cbor:"action" json:"action"`
-	Ref    string `cbor:"ref"    json:"ref"`
+	Action string `json:"action"`
+	Ref    string `json:"ref"`
 }
 
-// PinResponse is the CBOR response for the "pin" action.
+// PinResponse is the response for the "pin" action.
 type PinResponse struct {
-	Hash        string `cbor:"hash"         json:"hash"`
-	Ref         string `cbor:"ref"          json:"ref"`
-	CachePolicy string `cbor:"cache_policy" json:"cache_policy"`
+	Hash        string `json:"hash"`
+	Ref         string `json:"ref"`
+	CachePolicy string `json:"cache_policy"`
 }
 
-// UnpinRequest is the CBOR request for the "unpin" action.
+// UnpinRequest is the request for the "unpin" action.
 type UnpinRequest struct {
-	Action string `cbor:"action" json:"action"`
-	Ref    string `cbor:"ref"    json:"ref"`
+	Action string `json:"action"`
+	Ref    string `json:"ref"`
 }
 
-// UnpinResponse is the CBOR response for the "unpin" action.
-type UnpinResponse struct {
-	Hash        string `cbor:"hash"         json:"hash"`
-	Ref         string `cbor:"ref"          json:"ref"`
-	CachePolicy string `cbor:"cache_policy" json:"cache_policy"`
-}
+// UnpinResponse is the same shape as PinResponse — both report the
+// artifact's ref and resulting cache policy after the operation.
+type UnpinResponse = PinResponse
 
 // --- GC protocol types ---
 
-// GCRequest is the CBOR request for the "gc" action (mark-and-sweep
+// GCRequest is the request for the "gc" action (mark-and-sweep
 // garbage collection of expired, unprotected artifacts).
 type GCRequest struct {
-	Action string `cbor:"action"            json:"action"`
-	DryRun bool   `cbor:"dry_run,omitempty" json:"dry_run,omitempty"`
+	Action string `json:"action"`
+	DryRun bool   `json:"dry_run,omitempty"`
 }
 
-// GCResponse is the CBOR response for the "gc" action.
+// GCResponse is the response for the "gc" action.
 type GCResponse struct {
-	ArtifactsRemoved  int   `cbor:"artifacts_removed"  json:"artifacts_removed"`
-	ContainersRemoved int   `cbor:"containers_removed" json:"containers_removed"`
-	BytesFreed        int64 `cbor:"bytes_freed"        json:"bytes_freed"`
-	DryRun            bool  `cbor:"dry_run"            json:"dry_run"`
+	ArtifactsRemoved  int   `json:"artifacts_removed"`
+	ContainersRemoved int   `json:"containers_removed"`
+	BytesFreed        int64 `json:"bytes_freed"`
+	DryRun            bool  `json:"dry_run"`
 }
 
 // --- Cache status protocol types ---
 
-// CacheStatusResponse is the CBOR response for the "cache-status"
+// CacheStatusResponse is the response for the "cache-status"
 // action. Includes store-level stats and, if a cache is configured,
 // cache ring stats.
 type CacheStatusResponse struct {
-	StoreArtifacts int   `cbor:"store_artifacts"          json:"store_artifacts"`
-	StoreSizeBytes int64 `cbor:"store_size_bytes"         json:"store_size_bytes"`
-	TagCount       int   `cbor:"tag_count"                json:"tag_count"`
+	StoreArtifacts int   `json:"store_artifacts"`
+	StoreSizeBytes int64 `json:"store_size_bytes"`
+	TagCount       int   `json:"tag_count"`
 
 	// Cache fields are present only when a cache is configured.
-	CacheDeviceSize       int64 `cbor:"cache_device_size,omitempty"       json:"cache_device_size,omitempty"`
-	CacheBlockSize        int64 `cbor:"cache_block_size,omitempty"        json:"cache_block_size,omitempty"`
-	CacheBlockCount       int   `cbor:"cache_block_count,omitempty"       json:"cache_block_count,omitempty"`
-	CacheLiveContainers   int   `cbor:"cache_live_containers,omitempty"   json:"cache_live_containers,omitempty"`
-	CachePinnedContainers int   `cbor:"cache_pinned_containers,omitempty" json:"cache_pinned_containers,omitempty"`
+	CacheDeviceSize       int64 `json:"cache_device_size,omitempty"`
+	CacheBlockSize        int64 `json:"cache_block_size,omitempty"`
+	CacheBlockCount       int   `json:"cache_block_count,omitempty"`
+	CacheLiveContainers   int   `json:"cache_live_containers,omitempty"`
+	CachePinnedContainers int   `json:"cache_pinned_containers,omitempty"`
 }
 
 // DataReader returns the appropriate io.Reader for the binary data

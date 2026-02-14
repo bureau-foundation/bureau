@@ -956,7 +956,7 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 		} else {
 			fmt.Fprintln(os.Stdout, "Some checks failed.")
 		}
-		return &exitError{code: 1}
+		return &cli.ExitError{Code: 1}
 	}
 
 	if fixedCount > 0 {
@@ -996,29 +996,7 @@ func printDoctorJSON(results []checkResult, fixMode, dryRun bool) error {
 	fmt.Fprintln(os.Stdout, string(data))
 
 	if anyFailed {
-		return &exitError{code: 1}
+		return &cli.ExitError{Code: 1}
 	}
 	return nil
 }
-
-// exitError signals a non-zero exit code without printing an extra error
-// message. The CLI framework can check for this via ExitCode() to distinguish
-// "command failed with output already printed" from "command failed with an
-// error to display".
-type exitError struct {
-	code int
-}
-
-func (e *exitError) Error() string {
-	return fmt.Sprintf("exit code %d", e.code)
-}
-
-// ExitCode returns the exit code. When the CLI framework encounters an error
-// implementing this interface, it exits with the returned code without printing
-// the error message (since the command already printed its own output).
-func (e *exitError) ExitCode() int {
-	return e.code
-}
-
-// Ensure exitError implements the error interface at compile time.
-var _ error = (*exitError)(nil)

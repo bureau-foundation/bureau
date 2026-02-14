@@ -1260,7 +1260,7 @@ func TestResolveHomeserverURL(t *testing.T) {
 }
 
 func TestExitError(t *testing.T) {
-	err := &exitError{code: 42}
+	err := &cli.ExitError{Code: 42}
 	if err.Error() != "exit code 42" {
 		t.Errorf("unexpected error string: %s", err.Error())
 	}

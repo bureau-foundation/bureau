@@ -29,8 +29,23 @@
 //	encoder := codec.NewEncoder(conn)
 //	decoder := codec.NewDecoder(conn)
 //
-// Struct tag convention: types used exclusively with CBOR use `cbor`
-// struct tags. Types that serve both JSON and CBOR use `json` struct
-// tags — fxamacker/cbor falls back to json tags when cbor tags are
-// absent.
+// # Struct Tag Rules
+//
+// The struct tag on a type documents its serialization format:
+//
+//   - `cbor` tag: this type is ONLY ever serialized as CBOR. It will
+//     never be marshaled to JSON or interact with CLI tooling.
+//     Examples: daemon↔launcher IPC messages, on-disk CBOR state
+//     files, internal protocol envelopes (auth revocations, etc.).
+//   - `json` tag: this type may be serialized as BOTH JSON and CBOR.
+//     fxamacker/cbor v2 reads `json` tags as fallback when `cbor`
+//     tags are absent, so a single `json` tag controls field naming
+//     and omitempty for both formats. Examples: service socket
+//     protocol types (which CLI and MCP tools consume), types used
+//     in CLI --json output, types shared between Matrix (JSON) and
+//     socket (CBOR) protocols.
+//
+// Never use both `cbor` and `json` tags on the same field. The tag
+// choice documents the contract — doubling up is noise that obscures
+// whether a type participates in JSON serialization.
 package codec

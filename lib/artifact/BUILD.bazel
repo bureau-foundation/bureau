@@ -11,6 +11,7 @@ go_library(
         "cache_index.go",
         "cache_ring.go",
         "chunker.go",
+        "client.go",
         "compress.go",
         "container.go",
         "doc.go",

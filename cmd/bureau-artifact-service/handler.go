@@ -109,7 +109,7 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 
 	// Extract the action field for routing.
 	var header struct {
-		Action string `cbor:"action"`
+		Action string `json:"action"`
 	}
 	if err := codec.Unmarshal(raw, &header); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid request: %v", err))
@@ -419,8 +419,8 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 // refRequest is the shared request type for actions that take a
 // single artifact reference: exists, show, reconstruction.
 type refRequest struct {
-	Action string `cbor:"action"`
-	Ref    string `cbor:"ref"`
+	Action string `json:"action"`
+	Ref    string `json:"ref"`
 }
 
 // resolveRefRequest unmarshals a refRequest from raw CBOR and
@@ -443,13 +443,6 @@ func (as *ArtifactService) resolveRefRequest(conn net.Conn, raw []byte) (artifac
 	return fileHash, true
 }
 
-type existsResponse struct {
-	Exists bool   `cbor:"exists"          json:"exists"`
-	Hash   string `cbor:"hash,omitempty"  json:"hash,omitempty"`
-	Ref    string `cbor:"ref,omitempty"   json:"ref,omitempty"`
-	Size   int64  `cbor:"size,omitempty"  json:"size,omitempty"`
-}
-
 func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw []byte) {
 	var request refRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
@@ -460,11 +453,11 @@ func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw 
 	fileHash, err := as.resolveRef(request.Ref)
 	if err != nil {
 		// Not found is a valid "false" result for exists, not an error.
-		as.writeResult(conn, existsResponse{Exists: false})
+		as.writeResult(conn, artifact.ExistsResponse{Exists: false})
 		return
 	}
 
-	response := existsResponse{
+	response := artifact.ExistsResponse{
 		Exists: true,
 		Hash:   artifact.FormatHash(fileHash),
 		Ref:    artifact.FormatRef(fileHash),
@@ -508,16 +501,10 @@ func (as *ArtifactService) handleReconstruction(ctx context.Context, conn net.Co
 	as.writeResult(conn, record)
 }
 
-type statusResponse struct {
-	UptimeSeconds float64 `cbor:"uptime_seconds" json:"uptime_seconds"`
-	Artifacts     int     `cbor:"artifacts"      json:"artifacts"`
-	Rooms         int     `cbor:"rooms"          json:"rooms"`
-}
-
 func (as *ArtifactService) handleStatus(ctx context.Context, conn net.Conn, raw []byte) {
 	uptime := as.clock.Now().Sub(as.startedAt)
 
-	as.writeResult(conn, statusResponse{
+	as.writeResult(conn, artifact.StatusResponse{
 		UptimeSeconds: uptime.Seconds(),
 		Artifacts:     as.refIndex.Len(),
 		Rooms:         len(as.rooms),
@@ -686,9 +673,7 @@ func (as *ArtifactService) handleDeleteTag(ctx context.Context, conn net.Conn, r
 
 	as.logger.Info("tag deleted", "tag", request.Name)
 
-	as.writeResult(conn, struct {
-		Deleted string `cbor:"deleted" json:"deleted"`
-	}{Deleted: request.Name})
+	as.writeResult(conn, artifact.DeleteTagResponse{Deleted: request.Name})
 }
 
 func (as *ArtifactService) handleResolve(ctx context.Context, conn net.Conn, raw []byte) {

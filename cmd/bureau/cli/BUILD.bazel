@@ -9,6 +9,7 @@ go_library(
         "command.go",
         "connect.go",
         "doc.go",
+        "exit.go",
         "local_machine.go",
         "login.go",
         "operator_session.go",

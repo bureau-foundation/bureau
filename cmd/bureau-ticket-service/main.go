@@ -120,13 +120,14 @@ func run() error {
 	}
 	logger.Info("token signing key loaded", "machine", machineName)
 
+	clk := clock.Real()
+
 	authConfig := &service.AuthConfig{
 		PublicKey: signingKey,
 		Audience:  "ticket",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     clk,
 	}
-
-	clk := clock.Real()
 
 	ticketService := &TicketService{
 		session:       session,

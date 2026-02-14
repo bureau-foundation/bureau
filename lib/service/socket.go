@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -52,6 +53,11 @@ type AuthConfig struct {
 	// cryptographic verification succeeds. The service receives
 	// revocation notices from the daemon and adds token IDs here.
 	Blacklist *servicetoken.Blacklist
+
+	// Clock provides the current time for token expiry checks.
+	// Production callers pass clock.Real(); tests pass a fake
+	// clock for deterministic token verification.
+	Clock clock.Clock
 }
 
 // Response is the wire-format envelope for all socket protocol
@@ -98,6 +104,9 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 		}
 		if authConfig.Blacklist == nil {
 			panic("service.SocketServer: AuthConfig.Blacklist must not be nil")
+		}
+		if authConfig.Clock == nil {
+			panic("service.SocketServer: AuthConfig.Clock must not be nil")
 		}
 	}
 	return &SocketServer{
@@ -309,10 +318,11 @@ func VerifyRequestToken(config *AuthConfig, raw []byte, action string, logger *s
 	}
 
 	// Verify signature, decode payload, check expiry and audience.
-	token, err := servicetoken.VerifyForService(
+	token, err := servicetoken.VerifyForServiceAt(
 		config.PublicKey,
 		tokenField.Token,
 		config.Audience,
+		config.Clock.Now(),
 	)
 	if err != nil {
 		if errors.Is(err, servicetoken.ErrTokenExpired) {

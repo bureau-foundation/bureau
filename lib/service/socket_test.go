@@ -17,10 +17,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
+
+// testClockEpoch is the fixed time used by the fake clock in auth
+// tests. Token timestamps are relative to this epoch.
+var testClockEpoch = time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
 // sendRequest connects to a Unix socket, sends a CBOR request, and
 // returns the decoded response envelope.
@@ -85,8 +90,8 @@ func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return public, private
 }
 
-// testAuthConfig creates an AuthConfig with a fresh keypair and
-// blacklist for testing. Returns the config and the private key
+// testAuthConfig creates an AuthConfig with a fresh keypair, blacklist,
+// and fake clock for testing. Returns the config and the private key
 // (for minting test tokens).
 func testAuthConfig(t *testing.T) (*AuthConfig, ed25519.PrivateKey) {
 	t.Helper()
@@ -95,13 +100,13 @@ func testAuthConfig(t *testing.T) (*AuthConfig, ed25519.PrivateKey) {
 		PublicKey: public,
 		Audience:  "test-service",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     clock.Fake(testClockEpoch),
 	}, private
 }
 
 // mintTestToken creates a signed test token with the given subject.
-// Uses fixed timestamps: issued 2025-01-01, expires 2099-01-01. The
-// far-future expiry means the token is always valid without needing
-// wall-clock access.
+// Timestamps are relative to testClockEpoch: issued 5 minutes before
+// the epoch, expires 5 minutes after.
 func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
@@ -112,8 +117,8 @@ func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) 
 			{Actions: []string{"test/read", "test/write"}},
 		},
 		ID:        "test-token-id",
-		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
-		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+		IssuedAt:  testClockEpoch.Add(-5 * time.Minute).Unix(),
+		ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix(),
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -623,9 +628,10 @@ func TestSocketServerAuthRevokedToken(t *testing.T) {
 
 	waitForSocket(t, socketPath)
 
-	// Mint a valid token, then blacklist it.
+	// Mint a valid token, then blacklist it. The expiry here is the
+	// token's natural expiry — used by blacklist GC, not verification.
 	tokenBytes := mintTestToken(t, privateKey, "agent/test")
-	authConfig.Blacklist.Revoke("test-token-id", time.Unix(4070908800, 0)) // 2099-01-01: always in the future
+	authConfig.Blacklist.Revoke("test-token-id", testClockEpoch.Add(5*time.Minute))
 
 	response := sendRequest(t, socketPath, map[string]any{
 		"action": "create",
@@ -853,8 +859,8 @@ func TestSocketServerAuthWrongAudience(t *testing.T) {
 		Machine:   "machine/test",
 		Audience:  "wrong-service",
 		ID:        "wrong-audience-token",
-		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
-		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+		IssuedAt:  testClockEpoch.Add(-5 * time.Minute).Unix(),
+		ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix(),
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -932,9 +938,9 @@ func TestRevocationHandler_RevokesTokens(t *testing.T) {
 	// Send a signed revocation for the token ID used by mintTestToken.
 	revocationRequest := &servicetoken.RevocationRequest{
 		Entries: []servicetoken.RevocationEntry{
-			{TokenID: "test-token-id", ExpiresAt: 4070908800},
+			{TokenID: "test-token-id", ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix()},
 		},
-		IssuedAt: 1735689600,
+		IssuedAt: testClockEpoch.Add(-5 * time.Minute).Unix(),
 	}
 	signedRevocation, err := servicetoken.SignRevocation(privateKey, revocationRequest)
 	if err != nil {
@@ -986,8 +992,8 @@ func TestRevocationHandler_RejectsWrongSignature(t *testing.T) {
 	// Sign with a different key than the one the server expects.
 	_, wrongPrivate := testKeypair(t)
 	revocationRequest := &servicetoken.RevocationRequest{
-		Entries:  []servicetoken.RevocationEntry{{TokenID: "aabb", ExpiresAt: 4070908800}},
-		IssuedAt: 1735689600,
+		Entries:  []servicetoken.RevocationEntry{{TokenID: "aabb", ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix()}},
+		IssuedAt: testClockEpoch.Add(-5 * time.Minute).Unix(),
 	}
 	signed, err := servicetoken.SignRevocation(wrongPrivate, revocationRequest)
 	if err != nil {
@@ -1062,13 +1068,14 @@ func TestRevocationHandler_MultipleTokens(t *testing.T) {
 	waitForSocket(t, socketPath)
 
 	// Revoke three token IDs in one request.
+	tokenExpiry := testClockEpoch.Add(5 * time.Minute).Unix()
 	revocationRequest := &servicetoken.RevocationRequest{
 		Entries: []servicetoken.RevocationEntry{
-			{TokenID: "token-aaa", ExpiresAt: 4070908800},
-			{TokenID: "token-bbb", ExpiresAt: 4070908800},
-			{TokenID: "token-ccc", ExpiresAt: 4070908800},
+			{TokenID: "token-aaa", ExpiresAt: tokenExpiry},
+			{TokenID: "token-bbb", ExpiresAt: tokenExpiry},
+			{TokenID: "token-ccc", ExpiresAt: tokenExpiry},
 		},
-		IssuedAt: 1735689600,
+		IssuedAt: testClockEpoch.Add(-5 * time.Minute).Unix(),
 	}
 	signed, err := servicetoken.SignRevocation(privateKey, revocationRequest)
 	if err != nil {

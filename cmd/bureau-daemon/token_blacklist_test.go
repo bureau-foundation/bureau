@@ -171,6 +171,7 @@ func TestPushRevocations_SendsToCorrectService(t *testing.T) {
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: blacklist,
+		Clock:     clock.Fake(testDaemonEpoch),
 	}
 
 	server := service.NewSocketServer(socketPath, daemon.logger, authConfig)
@@ -232,6 +233,7 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: ticketBlacklist,
+		Clock:     clock.Fake(testDaemonEpoch),
 	})
 	ticketServer.RegisterRevocationHandler()
 
@@ -239,6 +241,7 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 		PublicKey: publicKey,
 		Audience:  "artifact",
 		Blacklist: artifactBlacklist,
+		Clock:     clock.Fake(testDaemonEpoch),
 	})
 	artifactServer.RegisterRevocationHandler()
 
@@ -395,6 +398,7 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: blacklist,
+		Clock:     clock.Fake(testDaemonEpoch),
 	})
 	server.RegisterRevocationHandler()
 

@@ -37,6 +37,7 @@ go_test(
     ],
     embed = [":service"],
     deps = [
+        "//lib/clock",
         "//lib/codec",
         "//lib/schema",
         "//lib/servicetoken",

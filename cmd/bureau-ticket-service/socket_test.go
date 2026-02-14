@@ -24,6 +24,10 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
 
+// testClockEpoch is the fixed time used by the fake clock in ticket
+// service tests. Token timestamps and service clock share this epoch.
+var testClockEpoch = time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
 // --- Test infrastructure ---
 
 // testServer creates a TicketService with a running socket server and
@@ -38,10 +42,12 @@ func testServer(t *testing.T, rooms map[string]*roomState) (*service.ServiceClie
 		t.Fatalf("generating keypair: %v", err)
 	}
 
+	testClock := clock.Fake(testClockEpoch)
 	authConfig := &service.AuthConfig{
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     testClock,
 	}
 
 	socketDir := t.TempDir()
@@ -51,7 +57,7 @@ func testServer(t *testing.T, rooms map[string]*roomState) (*service.ServiceClie
 	server := service.NewSocketServer(socketPath, logger, authConfig)
 
 	ts := &TicketService{
-		clock:     clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		clock:     testClock,
 		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:     rooms,
 		logger:    logger,
@@ -90,10 +96,12 @@ func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.Ser
 		t.Fatalf("generating keypair: %v", err)
 	}
 
+	testClock := clock.Fake(testClockEpoch)
 	authConfig := &service.AuthConfig{
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     testClock,
 	}
 
 	socketDir := t.TempDir()
@@ -103,7 +111,7 @@ func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.Ser
 	server := service.NewSocketServer(socketPath, logger, authConfig)
 
 	ts := &TicketService{
-		clock:     clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		clock:     testClock,
 		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:     rooms,
 		logger:    logger,
@@ -131,6 +139,7 @@ func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.Ser
 }
 
 // mintToken creates a signed test token with specific grants.
+// Timestamps are relative to testClockEpoch.
 func mintToken(t *testing.T, privateKey ed25519.PrivateKey, subject string, grants []servicetoken.Grant) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
@@ -139,8 +148,8 @@ func mintToken(t *testing.T, privateKey ed25519.PrivateKey, subject string, gran
 		Audience:  "ticket",
 		Grants:    grants,
 		ID:        "test-token",
-		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
-		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+		IssuedAt:  testClockEpoch.Add(-5 * time.Minute).Unix(),
+		ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix(),
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -1100,10 +1109,12 @@ func testMutationServer(t *testing.T, rooms map[string]*roomState) *testEnv {
 		t.Fatalf("generating keypair: %v", err)
 	}
 
+	testClock := clock.Fake(testClockEpoch)
 	authConfig := &service.AuthConfig{
 		PublicKey: publicKey,
 		Audience:  "ticket",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     testClock,
 	}
 
 	socketDir := t.TempDir()
@@ -1115,7 +1126,7 @@ func testMutationServer(t *testing.T, rooms map[string]*roomState) *testEnv {
 	writer := &fakeWriter{}
 	ts := &TicketService{
 		writer:     writer,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		clock:      testClock,
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		serverName: "bureau.local",
 		rooms:      rooms,

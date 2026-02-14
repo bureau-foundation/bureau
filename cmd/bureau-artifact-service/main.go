@@ -138,6 +138,7 @@ func run() error {
 		PublicKey: signingKey,
 		Audience:  "artifact",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     clock.Real(),
 	}
 
 	// Initialize the artifact store.

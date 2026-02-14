@@ -21,6 +21,10 @@ import (
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
+// testClockEpoch is the fixed time used by the fake clock in artifact
+// service tests. Token timestamps are relative to this epoch.
+var testClockEpoch = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
 // testService creates an ArtifactService backed by temporary
 // directories for testing. The Store, MetadataStore, and RefIndex
 // are real — no mocking. The Matrix session and sync machinery are
@@ -45,15 +49,14 @@ func testService(t *testing.T) *ArtifactService {
 		t.Fatal(err)
 	}
 
-	testTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	return &ArtifactService{
 		store:         store,
 		metadataStore: metadataStore,
 		refIndex:      artifact.NewRefIndex(),
 		tagStore:      tagStore,
 		artifactIndex: artifact.NewArtifactIndex(),
-		clock:         clock.Fake(testTime),
-		startedAt:     testTime,
+		clock:         clock.Fake(testClockEpoch),
+		startedAt:     testClockEpoch,
 		rooms:         make(map[string]*artifactRoomState),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -1438,13 +1441,14 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 		t.Fatal(err)
 	}
 
+	testClock := clock.Fake(testClockEpoch)
 	authConfig := &service.AuthConfig{
 		PublicKey: publicKey,
 		Audience:  "artifact",
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     testClock,
 	}
 
-	testTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	as := &ArtifactService{
 		store:         store,
 		metadataStore: metadataStore,
@@ -1452,8 +1456,8 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 		tagStore:      tagStore,
 		artifactIndex: artifact.NewArtifactIndex(),
 		authConfig:    authConfig,
-		clock:         clock.Fake(testTime),
-		startedAt:     testTime,
+		clock:         testClock,
+		startedAt:     testClockEpoch,
 		rooms:         make(map[string]*artifactRoomState),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -1462,7 +1466,7 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 }
 
 // mintArtifactToken creates a signed test token with specific grants
-// and audience "artifact".
+// and audience "artifact". Timestamps are relative to testClockEpoch.
 func mintArtifactToken(t *testing.T, privateKey ed25519.PrivateKey, grants []servicetoken.Grant) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
@@ -1471,8 +1475,8 @@ func mintArtifactToken(t *testing.T, privateKey ed25519.PrivateKey, grants []ser
 		Audience:  "artifact",
 		Grants:    grants,
 		ID:        "test-token",
-		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
-		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+		IssuedAt:  testClockEpoch.Add(-5 * time.Minute).Unix(),
+		ExpiresAt: testClockEpoch.Add(5 * time.Minute).Unix(),
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
@@ -1482,7 +1486,7 @@ func mintArtifactToken(t *testing.T, privateKey ed25519.PrivateKey, grants []ser
 }
 
 // mintExpiredArtifactToken creates a signed token that has already
-// expired.
+// expired relative to the test clock.
 func mintExpiredArtifactToken(t *testing.T, privateKey ed25519.PrivateKey) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
@@ -1491,8 +1495,8 @@ func mintExpiredArtifactToken(t *testing.T, privateKey ed25519.PrivateKey) []byt
 		Audience:  "artifact",
 		Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 		ID:        "expired-token",
-		IssuedAt:  1609459200, // 2021-01-01T00:00:00Z
-		ExpiresAt: 1609545600, // 2021-01-02T00:00:00Z (expired)
+		IssuedAt:  testClockEpoch.Add(-2 * time.Hour).Unix(),
+		ExpiresAt: testClockEpoch.Add(-1 * time.Hour).Unix(),
 	}
 	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {

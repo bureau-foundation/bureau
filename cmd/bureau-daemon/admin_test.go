@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -107,9 +108,7 @@ func newCredentialTestDaemon(t *testing.T) (
 	t.Cleanup(func() { listener.Close() })
 
 	// Token helper: mints a signed service token with the given grants.
-	// Uses far-future timestamps because the SocketServer verifies
-	// token expiry with wall-clock time, not the daemon's fake clock.
-	// 4070908800 = 2099-01-01T00:00:00Z — always valid during tests.
+	// Timestamps are relative to the daemon's fake clock epoch.
 	mintToken := func(subject string, grants []servicetoken.Grant) []byte {
 		token := &servicetoken.Token{
 			Subject:   subject,
@@ -117,8 +116,8 @@ func newCredentialTestDaemon(t *testing.T) (
 			Audience:  credentialServiceRole,
 			Grants:    grants,
 			ID:        "test-token-id",
-			IssuedAt:  4070908800,
-			ExpiresAt: 4070908800 + 300, // 5 minutes after IssuedAt
+			IssuedAt:  testDaemonEpoch.Add(-5 * time.Minute).Unix(),
+			ExpiresAt: testDaemonEpoch.Add(5 * time.Minute).Unix(),
 		}
 		tokenBytes, mintError := servicetoken.Mint(daemon.tokenSigningPrivateKey, token)
 		if mintError != nil {

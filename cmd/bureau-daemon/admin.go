@@ -52,6 +52,7 @@ func (d *Daemon) startCredentialService(ctx context.Context) (string, error) {
 		PublicKey: d.tokenSigningPublicKey,
 		Audience:  credentialServiceRole,
 		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     d.clock,
 	}
 
 	server := service.NewSocketServer(socketPath, d.logger, authConfig)

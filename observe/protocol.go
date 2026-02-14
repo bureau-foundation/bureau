@@ -128,14 +128,14 @@ func NewMetadataMessage(jsonPayload []byte) Message {
 //
 // Authentication is mandatory: both Observer and Token must be present.
 // The daemon verifies the token against the homeserver and checks the
-// verified identity against the target principal's ObservePolicy.
+// verified identity against the target principal's observation allowances.
 type ObserveRequest struct {
 	// Principal is the localpart of the target to observe
 	// (e.g., "iree/amdgpu/pm").
 	Principal string `json:"principal"`
 
 	// Mode is "readwrite" or "readonly". The daemon may downgrade
-	// readwrite to readonly based on the target's ObservePolicy —
+	// readwrite to readonly based on the target's observation allowances —
 	// the granted mode is reported in the ObserveResponse.
 	Mode string `json:"mode"`
 
@@ -167,7 +167,7 @@ type ObserveResponse struct {
 	Machine string `json:"machine,omitempty"`
 
 	// GrantedMode is the observation mode the daemon actually granted.
-	// May differ from the requested mode if the ObservePolicy allows
+	// May differ from the requested mode if the target's allowances permit
 	// the observer but only for readonly access. Clients should check
 	// this to know whether their input will be forwarded.
 	GrantedMode string `json:"granted_mode,omitempty"`

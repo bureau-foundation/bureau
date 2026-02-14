@@ -563,22 +563,12 @@ type MachineConfig struct {
 	// Principals is the list of principals assigned to this machine.
 	Principals []PrincipalAssignment `json:"principals"`
 
-	// DefaultObservePolicy is the fallback observation policy for
-	// principals on this machine that do not specify their own
-	// ObservePolicy in PrincipalAssignment. When nil, observation is
-	// denied for any principal without an explicit per-principal policy.
-	// This provides a convenient machine-wide default while allowing
-	// per-principal overrides.
-	DefaultObservePolicy *ObservePolicy `json:"default_observe_policy,omitempty"`
-
 	// DefaultPolicy is the machine-wide baseline authorization policy.
 	// Its grants and allowances apply to every principal on this
 	// machine unless overridden. Per-principal policy is additive on
 	// top of machine defaults — it adds grants and allowances, it
 	// does not remove them. A principal cannot have fewer permissions
 	// than the machine default.
-	//
-	// Coexists with DefaultObservePolicy during migration.
 	DefaultPolicy *AuthorizationPolicy `json:"default_policy,omitempty"`
 
 	// BureauVersion specifies the desired versions of Bureau core
@@ -661,8 +651,8 @@ type PrincipalAssignment struct {
 
 	// Labels are free-form key-value metadata for organizational purposes:
 	// observation layout filtering, dashboard grouping, UI categorization.
-	// Labels do not affect access control — that's handled by ObservePolicy,
-	// MatrixPolicy, and localpart glob patterns. Changing labels does not
+	// Labels do not affect access control — that's handled by the
+	// authorization policy and localpart glob patterns. Changing labels does not
 	// require a sandbox restart; the daemon picks up label changes on the
 	// next config sync.
 	//
@@ -681,18 +671,10 @@ type PrincipalAssignment struct {
 	// it in.
 	MatrixPolicy *MatrixPolicy `json:"matrix_policy,omitempty"`
 
-	// ObservePolicy controls who may observe this principal's terminal
-	// session and at what access level. When nil, the principal cannot
-	// be observed by anyone — default-deny. If set, the daemon checks
-	// each observation request against these rules before forking a
-	// relay. Overrides MachineConfig.DefaultObservePolicy for this
-	// principal.
-	ObservePolicy *ObservePolicy `json:"observe_policy,omitempty"`
-
 	// ServiceVisibility is a list of glob patterns that control which
 	// services this principal can discover via GET /v1/services. Patterns
 	// match against service localparts using Bureau's hierarchical glob
-	// syntax (same as ObservePolicy patterns):
+	// syntax:
 	//   - "service/stt/*" — all STT services
 	//   - "service/**" — all services under service/
 	//   - "**" — all services (use with caution)
@@ -707,10 +689,10 @@ type PrincipalAssignment struct {
 	// others can do to it (allowances, allowance denials).
 	//
 	// This is the advanced alternative to the shorthand fields above
-	// (MatrixPolicy, ObservePolicy, ServiceVisibility). When set, the
-	// daemon uses it for all authorization decisions and ignores the
-	// shorthand fields. When absent, the daemon synthesizes grants
-	// from the shorthand fields.
+	// (MatrixPolicy, ServiceVisibility). When set, the daemon uses
+	// it for all authorization decisions and ignores the shorthand
+	// fields. When absent, the daemon synthesizes grants from the
+	// shorthand fields.
 	Authorization *AuthorizationPolicy `json:"authorization,omitempty"`
 
 	// CommandOverride replaces the template's Command for this specific
@@ -828,38 +810,6 @@ type MatrixPolicy struct {
 	// AllowRoomCreate permits the agent to create new rooms (e.g.,
 	// backchannel rooms for ad-hoc collaboration between agents).
 	AllowRoomCreate bool `json:"allow_room_create,omitempty"`
-}
-
-// ObservePolicy controls who may observe a principal's terminal session
-// and at what access level. Default-deny: a nil or empty policy means no
-// observation is permitted. The daemon evaluates this policy on every
-// observation request before forking a relay process.
-//
-// Patterns use the same glob syntax as Bureau's namespace hierarchy:
-// "bureau-admin" matches exactly that localpart, "iree/**" matches any
-// localpart under the iree/ prefix, and "*" matches any single-segment
-// localpart. See principal.MatchPattern for the matching semantics.
-type ObservePolicy struct {
-	// AllowedObservers lists glob patterns matching observer localparts
-	// (the localpart portion of the observer's Matrix user ID) that may
-	// observe this principal. An empty list means no one may observe.
-	//
-	// Examples:
-	//   - "bureau-admin" — only the admin account
-	//   - "iree/**" — any principal under the iree/ namespace
-	//   - "**" — any authenticated identity (use with caution)
-	AllowedObservers []string `json:"allowed_observers,omitempty"`
-
-	// ReadWriteObservers lists glob patterns matching observer localparts
-	// that may observe with read-write (interactive) access. Observers
-	// matching AllowedObservers but not ReadWriteObservers are
-	// downgraded to read-only mode regardless of what they request.
-	// An empty list means all observers get read-only access.
-	//
-	// Read-only observation is enforced at the relay level: the relay
-	// attaches to tmux with the -r flag and does not forward input to
-	// the PTY.
-	ReadWriteObservers []string `json:"readwrite_observers,omitempty"`
 }
 
 // TemplateContent is the content of an EventTypeTemplate state event. It

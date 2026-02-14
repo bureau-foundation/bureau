@@ -238,7 +238,7 @@ func run() error {
 		lastCredentials:        make(map[string]string),
 		lastGrants:             make(map[string][]schema.Grant),
 		lastTokenMint:          make(map[string]time.Time),
-		lastObservePolicy:      make(map[string]*schema.ObservePolicy),
+		lastObserveAllowances:  make(map[string][]schema.Allowance),
 		lastSpecs:              make(map[string]*schema.SandboxSpec),
 		previousSpecs:          make(map[string]*schema.SandboxSpec),
 		lastTemplates:          make(map[string]*schema.TemplateContent),
@@ -354,10 +354,8 @@ type Daemon struct {
 	tokenVerifier *tokenVerifier
 
 	// lastConfig is the MachineConfig from the most recent successful
-	// reconciliation. Used by observation authorization to look up
-	// per-principal ObservePolicy and the machine-level default. Nil
-	// before the first successful reconcile — observation requests are
-	// rejected in that state.
+	// reconciliation. Used by observation and service routing to access
+	// principal assignments. Nil before the first successful reconcile.
 	lastConfig *schema.MachineConfig
 
 	// authorizationIndex holds per-principal resolved authorization
@@ -451,18 +449,13 @@ type Daemon struct {
 	// trigger an early re-mint. Protected by reconcileMu.
 	lastTokenMint map[string]time.Time
 
-	// lastObservePolicy stores the per-principal ObservePolicy from
-	// the most recent reconcile cycle. Used purely for change detection:
-	// when a principal's ObservePolicy differs from the stored value,
-	// the daemon re-evaluates active observation sessions against the
-	// new policy and terminates any that no longer pass authorization.
-	lastObservePolicy map[string]*schema.ObservePolicy
-
-	// lastDefaultObservePolicy stores the machine-level DefaultObservePolicy
-	// from the most recent reconcile cycle. A change to the default
-	// triggers re-evaluation of all active observation sessions, since
-	// principals without a per-principal override inherit the default.
-	lastDefaultObservePolicy *schema.ObservePolicy
+	// lastObserveAllowances stores the per-principal resolved allowances
+	// from the authorization index at the end of the most recent reconcile
+	// cycle. Used purely for change detection: when a principal's
+	// allowances in the index differ from the stored value, the daemon
+	// re-evaluates active observation sessions and terminates any that
+	// no longer pass authorization. Compared by reflect.DeepEqual.
+	lastObserveAllowances map[string][]schema.Allowance
 
 	// lastSpecs stores the SandboxSpec sent to the launcher for each
 	// running principal. Used to detect payload-only changes that can
@@ -597,9 +590,9 @@ type Daemon struct {
 	observeRelayBinary string
 
 	// observeSessions tracks active observation connections. The daemon
-	// maintains this registry so that enforceObservePolicyChange can
+	// maintains this registry so that enforceObserveAllowanceChange can
 	// terminate sessions whose observers no longer pass authorization
-	// after a policy tightening.
+	// after an allowance tightening.
 	observeSessions   []*activeObserveSession
 	observeSessionsMu sync.Mutex
 

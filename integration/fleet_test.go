@@ -147,8 +147,8 @@ func TestPrincipalAssignment(t *testing.T) {
 // TestOperatorFlow verifies the operator-facing observation pipeline:
 // list targets, observe a principal's terminal, and confirm authorization
 // enforcement. This builds a full stack (launcher + daemon + principal with
-// ObservePolicy), then exercises the daemon's observe socket as both a Go
-// library client and through the bureau CLI binary.
+// observation allowances), then exercises the daemon's observe socket as
+// both a Go library client and through the bureau CLI binary.
 func TestOperatorFlow(t *testing.T) {
 	t.Parallel()
 
@@ -166,9 +166,11 @@ func TestOperatorFlow(t *testing.T) {
 	observed := registerPrincipal(t, "test/observed", "test-observe-password")
 	deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"bureau-admin"},
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Allowances: []schema.Allowance{
+				{Actions: []string{"observe"}, Actors: []string{"**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin"}},
+			},
 		},
 	})
 
@@ -409,8 +411,7 @@ func TestCredentialRotation(t *testing.T) {
 //   - HTTP observation protocol forwarding through the data channel
 //   - Relay fork on the provider machine
 //   - Bidirectional byte bridge through the consumer daemon
-//   - Dual authorization: consumer checks its DefaultObservePolicy,
-//     provider checks the principal's ObservePolicy
+//   - Provider-side authorization via the target's observation allowances
 func TestCrossMachineObservation(t *testing.T) {
 	t.Parallel()
 
@@ -438,28 +439,24 @@ func TestCrossMachineObservation(t *testing.T) {
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 	})
 
-	// Deploy a principal on the provider with an observe policy that
-	// allows the admin to observe in readwrite mode.
+	// Deploy a principal on the provider with observation allowances
+	// that let the admin observe in readwrite mode.
 	observed := registerPrincipal(t, "test/xm-obs", "xm-observe-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"bureau-admin"},
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Allowances: []schema.Allowance{
+				{Actions: []string{"observe"}, Actors: []string{"**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin"}},
+			},
 		},
 	})
 
-	// Push a MachineConfig on the consumer with a DefaultObservePolicy.
-	// The consumer doesn't host any principals, but it needs a policy so
-	// authorizeObserve succeeds when the operator requests observation of
-	// a remote principal (the consumer authorizes the proxy role before
-	// forwarding to the provider).
-	pushMachineConfig(t, admin, consumer, deploymentConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"bureau-admin"},
-		},
-	})
+	// Push a MachineConfig on the consumer. The consumer doesn't host
+	// any principals — it routes observation requests to the provider,
+	// which performs its own authorization. No observation allowances
+	// are needed on the consumer side.
+	pushMachineConfig(t, admin, consumer, deploymentConfig{})
 
 	// Publish a service entry in #bureau/service so the consumer daemon
 	// can discover the principal on the provider machine. In production,
@@ -494,13 +491,11 @@ func TestCrossMachineObservation(t *testing.T) {
 	// --- Sub-test: list targets from consumer shows remote principal ---
 	t.Run("ListRemoteTargets", func(t *testing.T) {
 		// Poll until the remote principal appears as observable. This is
-		// the convergence point that proves three independent subsystems
+		// the convergence point that proves two independent subsystems
 		// have synced:
 		//   (a) Service directory: consumer synced m.bureau.service events
 		//   (b) Peer discovery: consumer read provider's MachineStatus
 		//       and extracted its transport address
-		//   (c) Auth policy: consumer reconciled its MachineConfig and
-		//       has a DefaultObservePolicy loaded
 		var response *observe.ListResponse
 		for {
 			var listError error

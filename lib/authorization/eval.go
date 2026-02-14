@@ -208,6 +208,48 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	}
 }
 
+// TargetAllows checks whether a target's allowances permit an actor to
+// perform an action. This evaluates only the target side of the
+// authorization model: allowances and allowance denials.
+//
+// Used for authorization decisions where the relevant question is
+// "does the target permit this actor?" rather than "does the actor have
+// permission to act on this target?" Authentication establishes the
+// actor's identity independently; the target's allowance policy
+// controls access. Observation is the primary example: the observer
+// authenticates via Matrix token verification, and the target
+// principal's allowances determine who may observe.
+//
+// Returns false if the target has no matching allowance, or if a
+// matching allowance denial overrides it.
+func TargetAllows(index *Index, actor, action, target string) bool {
+	index.mu.RLock()
+	defer index.mu.RUnlock()
+
+	// Find a matching allowance on the target.
+	allowances := index.allowances[target]
+	matched := false
+	for i := range allowances {
+		if allowanceMatches(allowances[i], action, actor) {
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		return false
+	}
+
+	// Check target allowance denials.
+	for _, denial := range index.allowanceDenials[target] {
+		if allowanceDenialMatches(denial, action, actor) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // GrantsAllow checks whether a slice of grants authorizes a specific
 // action on a specific target. This is the same matching logic as
 // Authorized() steps 1-2 but operates on a pre-resolved grant slice

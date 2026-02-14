@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/principal"
-	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // authenticateObserver verifies a Matrix access token and returns the
@@ -33,47 +33,38 @@ type observeAuthorization struct {
 	Allowed bool
 
 	// GrantedMode is "readwrite" or "readonly". When the observer requests
-	// "readwrite" but is only in AllowedObservers (not ReadWriteObservers),
-	// the daemon downgrades to "readonly".
+	// "readwrite" but lacks an "observe/read-write" allowance on the
+	// target, the daemon downgrades to "readonly".
 	GrantedMode string
 }
 
 // authorizeObserve checks whether an observer is permitted to observe a
-// specific principal, and at what mode. The check uses the principal's
-// ObservePolicy from MachineConfig, falling back to the machine-level
-// DefaultObservePolicy.
+// specific principal, and at what mode. The check uses the target
+// principal's allowances in the authorization index — observation is a
+// target-side authorization decision.
 //
-// Default-deny: if no policy exists at either level, observation is rejected.
-// The requestedMode is "readwrite" or "readonly"; the granted mode may be
-// downgraded from readwrite to readonly based on policy.
+// Default-deny: if the target has no matching allowance, observation is
+// rejected. The requestedMode is "readwrite" or "readonly"; the granted
+// mode may be downgraded from readwrite to readonly based on allowances.
 func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedMode string) observeAuthorization {
-	if d.lastConfig == nil {
-		return observeAuthorization{Allowed: false}
-	}
-
-	policy := d.findObservePolicy(principalLocalpart)
-	if policy == nil {
-		return observeAuthorization{Allowed: false}
-	}
-
 	observerLocalpart, err := principal.LocalpartFromMatrixID(observerUserID)
 	if err != nil {
 		// The observer's Matrix user ID doesn't follow Bureau naming
 		// conventions (e.g., "@admin:bureau.local" without a hierarchical
 		// localpart). Fall back to matching against the full user ID.
-		// This allows policies to use patterns like "@admin:bureau.local".
+		// This allows allowance actor patterns like "@admin:bureau.local".
 		observerLocalpart = observerUserID
 	}
 
-	// Check if the observer matches any AllowedObservers pattern.
-	if !principal.MatchAnyPattern(policy.AllowedObservers, observerLocalpart) {
+	// All observation requires an "observe" allowance on the target.
+	if !authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart) {
 		return observeAuthorization{Allowed: false}
 	}
 
-	// Observer is allowed. Determine the granted mode.
+	// Determine the granted mode.
 	grantedMode := requestedMode
 	if requestedMode == "readwrite" {
-		if !principal.MatchAnyPattern(policy.ReadWriteObservers, observerLocalpart) {
+		if !authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe/read-write", principalLocalpart) {
 			grantedMode = "readonly"
 		}
 	}
@@ -85,25 +76,13 @@ func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedM
 }
 
 // authorizeList checks whether an observer is permitted to see a specific
-// principal in a list response. Uses the same ObservePolicy lookup as
-// authorizeObserve — if the observer would be allowed to observe the
-// principal (in any mode), it appears in the list.
+// principal in a list response. Uses the same authorization index check
+// as authorizeObserve — if the target's allowances permit the observer
+// for the "observe" action, the principal appears in the list.
 func (d *Daemon) authorizeList(observerUserID, principalLocalpart string) bool {
-	authz := d.authorizeObserve(observerUserID, principalLocalpart, "readonly")
-	return authz.Allowed
-}
-
-// findObservePolicy looks up the ObservePolicy for a principal. Checks the
-// principal's PrincipalAssignment first, then falls back to the machine-level
-// DefaultObservePolicy. Returns nil if no policy exists (default-deny).
-func (d *Daemon) findObservePolicy(principalLocalpart string) *schema.ObservePolicy {
-	for _, assignment := range d.lastConfig.Principals {
-		if assignment.Localpart == principalLocalpart {
-			if assignment.ObservePolicy != nil {
-				return assignment.ObservePolicy
-			}
-			break
-		}
+	observerLocalpart, err := principal.LocalpartFromMatrixID(observerUserID)
+	if err != nil {
+		observerLocalpart = observerUserID
 	}
-	return d.lastConfig.DefaultObservePolicy
+	return authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart)
 }

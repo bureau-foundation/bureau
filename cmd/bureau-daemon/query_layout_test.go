@@ -27,9 +27,10 @@ import (
 
 // newTestDaemonWithQuery creates a Daemon with a mock Matrix server that
 // supports alias resolution, state events, and room members — everything
-// handleQueryLayout needs. Also sets up authentication via a permissive
-// ObservePolicy and a token verifier backed by a mock whoami endpoint.
-// Returns the daemon and mock for test setup.
+// handleQueryLayout needs. Sets up authentication via a token verifier
+// backed by a mock whoami endpoint. Tests that need observation
+// authorization must populate daemon.authorizationIndex with allowances
+// for their principals. Returns the daemon and mock for test setup.
 func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	t.Helper()
 
@@ -80,12 +81,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	daemon.session = session
 	daemon.client = matrixClient
 	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, clock.Real(), logger)
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
-	}
+	daemon.lastConfig = &schema.MachineConfig{}
 	daemon.machineName = "machine/test"
 	daemon.machineUserID = "@machine/test:bureau.local"
 	daemon.serverName = "bureau.local"
@@ -379,12 +375,9 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	// become observe panes.
 	daemon, matrixState := newTestDaemonWithQuery(t)
 
-	// Give the daemon a config with labeled principals.
+	// Give the daemon a config with labeled principals and permissive
+	// observe allowances in the authorization index.
 	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
@@ -399,6 +392,9 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 				Labels:    map[string]string{"role": "service"},
 			},
 		},
+	}
+	for _, localpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/compiler", "service/stt/whisper"} {
+		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
 
 	channelAlias := "#iree/amdgpu/general:bureau.local"
@@ -454,10 +450,6 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 	daemon, matrixState := newTestDaemonWithQuery(t)
 
 	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
@@ -472,6 +464,9 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 				Labels:    map[string]string{"role": "service", "team": "iree"},
 			},
 		},
+	}
+	for _, localpart := range []string{"iree/amdgpu/pm", "infra/ci/runner", "service/stt/whisper"} {
+		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
 
 	channelAlias := "#all:bureau.local"
@@ -524,10 +519,6 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 
 	// Only one local principal configured.
 	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
 		Principals: []schema.PrincipalAssignment{
 			{
 				Localpart: "iree/amdgpu/pm",
@@ -535,6 +526,8 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 			},
 		},
 	}
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", permissiveObserveAllowances)
+	daemon.authorizationIndex.SetPrincipal("remote/agent", permissiveObserveAllowances)
 
 	channelAlias := "#cross:bureau.local"
 	channelRoomID := "!cross-room:bureau.local"
@@ -628,8 +621,9 @@ func TestQueryLayoutBackwardCompatibility(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// The daemon should process this as an observe request and return
-	// "not found" for the principal (since no principals are running).
+	// The daemon should process this as an observe request. The principal
+	// is not running locally and not in the service directory, so the
+	// request is rejected as "not found".
 	if response["ok"] != false {
 		t.Errorf("expected ok=false, got %v", response["ok"])
 	}

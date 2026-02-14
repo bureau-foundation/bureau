@@ -78,10 +78,10 @@ type principalSpec struct {
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
-// any machine-level configuration (observe policy, etc.).
+// any machine-level authorization policy.
 type deploymentConfig struct {
-	Principals           []principalSpec
-	DefaultObservePolicy *schema.ObservePolicy // optional machine-level observe policy
+	Principals    []principalSpec
+	DefaultPolicy *schema.AuthorizationPolicy // optional machine-level authorization policy
 }
 
 // newTestMachine creates the directory structure for a machine. Does not
@@ -382,8 +382,8 @@ func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMach
 	}
 
 	machineConfig := schema.MachineConfig{
-		Principals:           assignments,
-		DefaultObservePolicy: config.DefaultObservePolicy,
+		Principals:    assignments,
+		DefaultPolicy: config.DefaultPolicy,
 	}
 
 	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,

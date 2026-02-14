@@ -86,7 +86,7 @@ type observeResponse struct {
 
 	// GrantedMode is the observation mode actually granted by the
 	// daemon. May be "readonly" even if "readwrite" was requested,
-	// when the ObservePolicy only grants the observer readonly access.
+	// when the target's allowances only permit readonly observation.
 	GrantedMode string `json:"granted_mode,omitempty"`
 
 	// Error describes why the request failed.
@@ -94,9 +94,9 @@ type observeResponse struct {
 }
 
 // activeObserveSession tracks a single in-flight observation connection.
-// The daemon maintains a registry of these so it can enforce ObservePolicy
-// changes: when a policy tightens, sessions that no longer pass
-// authorization are terminated by closing their client connection.
+// The daemon maintains a registry of these so it can enforce allowance
+// changes: when observation allowances tighten, sessions that no longer
+// pass authorization are terminated by closing their client connection.
 type activeObserveSession struct {
 	principal   string
 	observer    string
@@ -125,11 +125,12 @@ func (d *Daemon) unregisterObserveSession(session *activeObserveSession) {
 	}
 }
 
-// enforceObservePolicyChange re-evaluates all active observation sessions
-// for a principal against the current policy (in d.lastConfig). Sessions
-// that no longer pass authorization are terminated by closing the client
-// connection, which unblocks bridgeConnections and triggers relay cleanup.
-func (d *Daemon) enforceObservePolicyChange(principalLocalpart string) {
+// enforceObserveAllowanceChange re-evaluates all active observation sessions
+// for a principal against the current allowances in the authorization
+// index. Sessions that no longer pass authorization are terminated by
+// closing the client connection, which unblocks bridgeConnections and
+// triggers relay cleanup.
+func (d *Daemon) enforceObserveAllowanceChange(principalLocalpart string) {
 	d.observeSessionsMu.Lock()
 	defer d.observeSessionsMu.Unlock()
 
@@ -271,9 +272,16 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 }
 
 // handleObserveSession handles a streaming observation request. It validates
-// the principal, checks authorization against the ObservePolicy, determines
-// whether it is local or remote, and either forks a relay or forwards through
-// the transport.
+// the principal, determines whether it is local or remote, and either
+// authorizes locally and forks a relay, or forwards through the transport
+// to the hosting machine.
+//
+// Authorization model: only the hosting machine authorizes observation.
+// For local principals, this daemon checks the authorization index. For
+// remote principals, this daemon authenticates the observer (already done
+// by handleObserveClient) and forwards — the provider daemon authorizes
+// via handleTransportObserve. This avoids dual-authorization where the
+// consumer would need to duplicate the provider's allowance policy.
 //
 // The observer identity in request.Observer is already verified by
 // handleObserveClient before this method is called.
@@ -289,54 +297,56 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 		return
 	}
 
-	// Authorize the observer against the principal's ObservePolicy.
-	requestedMode := request.Mode
-	authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
-	if !authz.Allowed {
-		d.logger.Warn("observation denied",
-			"observer", request.Observer,
-			"principal", request.Principal,
-			"requested_mode", requestedMode,
-		)
-		d.sendObserveError(clientConnection,
-			fmt.Sprintf("not authorized to observe %q — check AllowedObservers in the principal's ObservePolicy or the machine's DefaultObservePolicy", request.Principal))
-		return
-	}
+	// Check if the principal is running locally.
+	if d.running[request.Principal] {
+		// Authorize the observer against the principal's allowances.
+		// Only the hosting machine authorizes — this IS the host.
+		requestedMode := request.Mode
+		authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
+		if !authz.Allowed {
+			d.logger.Warn("observation denied",
+				"observer", request.Observer,
+				"principal", request.Principal,
+				"requested_mode", requestedMode,
+			)
+			d.sendObserveError(clientConnection,
+				fmt.Sprintf("not authorized to observe %q — the principal's authorization policy has no observe allowance matching your identity", request.Principal))
+			return
+		}
 
-	// Enforce the granted mode. The daemon decides the mode, not the client.
-	request.Mode = authz.GrantedMode
+		// Enforce the granted mode. The daemon decides the mode, not the client.
+		request.Mode = authz.GrantedMode
 
-	if requestedMode != authz.GrantedMode {
-		d.logger.Info("observation mode downgraded",
+		if requestedMode != authz.GrantedMode {
+			d.logger.Info("observation mode downgraded",
+				"observer", request.Observer,
+				"principal", request.Principal,
+				"requested_mode", requestedMode,
+				"granted_mode", authz.GrantedMode,
+			)
+		}
+
+		d.logger.Info("observation authorized",
 			"observer", request.Observer,
 			"principal", request.Principal,
 			"requested_mode", requestedMode,
 			"granted_mode", authz.GrantedMode,
 		)
-	}
 
-	d.logger.Info("observation authorized",
-		"observer", request.Observer,
-		"principal", request.Principal,
-		"requested_mode", requestedMode,
-		"granted_mode", authz.GrantedMode,
-	)
-
-	// Check if the principal is running locally.
-	if d.running[request.Principal] {
 		d.handleLocalObserve(clientConnection, request, authz.GrantedMode)
 		return
 	}
 
 	// Check if the principal is a known service on a remote machine
-	// reachable via the transport.
+	// reachable via the transport. Authentication is already done;
+	// the provider will authorize the forwarded request.
 	if peerAddress, ok := d.findPrincipalPeer(request.Principal); ok {
 		d.handleRemoteObserve(clientConnection, request, peerAddress)
 		return
 	}
 
 	d.sendObserveError(clientConnection,
-		fmt.Sprintf("principal %q not found", request.Principal))
+		fmt.Sprintf("principal %q not found on this machine or any reachable peer", request.Principal))
 }
 
 // handleQueryLayout handles a query_layout request: resolves a channel alias
@@ -495,9 +505,13 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 // handleList handles a "list" request: enumerates all known principals and
 // machines, returning each with observability and location metadata.
 //
-// Authentication is handled by handleObserveClient before dispatch. The
-// returned list is filtered to only principals the observer is authorized
-// to see per their ObservePolicy.
+// Authentication is handled by handleObserveClient before dispatch. Local
+// principals are filtered by the observer's authorization — only principals
+// whose allowances permit the observer appear in the list. Remote service
+// directory entries are included without local authorization filtering
+// because this daemon does not have the remote principal's allowance
+// policy; the hosting machine's daemon will authorize when an actual
+// observation session is established.
 //
 // Principals come from two sources:
 //   - d.running: principals with active sandboxes on this machine (always observable)
@@ -516,12 +530,10 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	seen := make(map[string]bool)
 	var principals []observe.ListPrincipal
 
-	// Locally running principals.
+	// Locally running principals — filtered by authorization.
 	for localpart := range d.running {
 		seen[localpart] = true
 
-		// Filter by authorization — only include principals the
-		// observer is allowed to see.
 		if !d.authorizeList(request.Observer, localpart) {
 			continue
 		}
@@ -534,19 +546,13 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		})
 	}
 
-	// Service directory entries (may include remote services and local
-	// services not yet in the seen set — though in practice, a local
-	// service that's in d.services should also be in d.running).
+	// Service directory entries. Remote entries are not filtered by
+	// local authorization — the hosting machine gates actual access.
 	for localpart, service := range d.services {
 		if seen[localpart] {
 			continue
 		}
 		seen[localpart] = true
-
-		// Filter by authorization.
-		if !d.authorizeList(request.Observer, localpart) {
-			continue
-		}
 
 		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
 		if err != nil {
@@ -655,8 +661,8 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 
 	startTime := time.Now()
 
-	// Register the session so enforceObservePolicyChange can terminate
-	// it if the ObservePolicy tightens while the session is active.
+	// Register the session so enforceObserveAllowanceChange can terminate
+	// it if the observation allowances tighten while the session is active.
 	observeSession := &activeObserveSession{
 		principal:   request.Principal,
 		observer:    request.Observer,
@@ -815,7 +821,7 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 // request carries the verified observer identity in the Observer field.
 // This daemon trusts the forwarded identity (transport connections are
 // authenticated via WebRTC signaling through Matrix) and checks its own
-// local ObservePolicy to authorize the observation.
+// local observation allowances to authorize the observation.
 func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -872,7 +878,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(observeResponse{
-			Error: fmt.Sprintf("not authorized to observe %q — check AllowedObservers in the principal's ObservePolicy or the machine's DefaultObservePolicy", request.Principal),
+			Error: fmt.Sprintf("not authorized to observe %q — the principal's authorization policy has no observe allowance matching your identity", request.Principal),
 		})
 		return
 	}

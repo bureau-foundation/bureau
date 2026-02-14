@@ -128,10 +128,19 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 	}
 }
 
+// permissiveObserveAllowances is the authorization policy used by most
+// observation tests: any observer can observe in any mode.
+var permissiveObserveAllowances = schema.AuthorizationPolicy{
+	Allowances: []schema.Allowance{
+		{Actions: []string{"observe"}, Actors: []string{"**"}},
+		{Actions: []string{"observe/read-write"}, Actors: []string{"**"}},
+	},
+}
+
 // newTestDaemonWithObserve creates a minimal Daemon wired for observation
-// testing. It starts a mock Matrix server for token verification, configures
-// a permissive ObservePolicy (AllowedObservers: ["**"], ReadWriteObservers:
-// ["**"]), starts the observe listener, and returns the daemon.
+// testing. It starts a mock Matrix server for token verification, populates
+// the authorization index with permissive observe allowances for each running
+// principal, starts the observe listener, and returns the daemon.
 func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipals []string) *Daemon {
 	t.Helper()
 
@@ -170,8 +179,6 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// Build PrincipalAssignment list for the test config. Each running
-	// principal gets a permissive ObservePolicy.
 	var principals []schema.PrincipalAssignment
 	for _, localpart := range runningPrincipals {
 		principals = append(principals, schema.PrincipalAssignment{
@@ -185,10 +192,6 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	daemon.client = client
 	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
 		Principals: principals,
 	}
 	daemon.machineName = "machine/test"
@@ -196,6 +199,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	daemon.serverName = "bureau.local"
 	for _, localpart := range runningPrincipals {
 		daemon.running[localpart] = true
+		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
 	daemon.observeSocketPath = observeSocketPath
 	daemon.tmuxServer = tmuxServer
@@ -300,6 +304,7 @@ func TestListWithRemoteServices(t *testing.T) {
 		Machine:   "@machine/cloud-gpu:bureau.local",
 		Protocol:  "http",
 	}
+	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
 	// Add the peer address so the remote service is reachable.
 	daemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = "192.168.1.100:9090"
 	daemon.transportDialer = &testTCPDialer{}
@@ -352,6 +357,7 @@ func TestListObservableFilter(t *testing.T) {
 		Machine:   "@machine/cloud-gpu:bureau.local",
 		Protocol:  "http",
 	}
+	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
 	// No peer address and no transport dialer → not observable.
 
 	// Without filter: both principals appear.
@@ -404,6 +410,9 @@ func TestObserveErrorUnknownPrincipal(t *testing.T) {
 	if response.OK {
 		t.Error("expected error response, got OK")
 	}
+	// The principal is not running locally and not in the service
+	// directory, so the request is rejected as "not found" before
+	// reaching the authorization step.
 	if !strings.Contains(response.Error, "not found") {
 		t.Errorf("error = %q, expected to contain 'not found'", response.Error)
 	}

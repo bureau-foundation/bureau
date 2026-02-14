@@ -305,6 +305,158 @@ func TestAuthorizedAt_Deterministic(t *testing.T) {
 	}
 }
 
+func TestTargetAllows_BasicAllow(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+		},
+	})
+
+	if !TargetAllows(index, "ops/alice", "observe", "agent/alpha") {
+		t.Error("ops/alice should be allowed to observe agent/alpha")
+	}
+}
+
+func TestTargetAllows_NoAllowance(t *testing.T) {
+	index := NewIndex()
+
+	// Target has no allowances at all.
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	if TargetAllows(index, "ops/alice", "observe", "agent/alpha") {
+		t.Error("should deny when target has no allowances")
+	}
+}
+
+func TestTargetAllows_ActorDoesNotMatch(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/alice"}},
+		},
+	})
+
+	if TargetAllows(index, "ops/bob", "observe", "agent/alpha") {
+		t.Error("ops/bob should not match allowance for ops/alice")
+	}
+}
+
+func TestTargetAllows_ActionDoesNotMatch(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+		},
+	})
+
+	if TargetAllows(index, "ops/alice", "observe/read-write", "agent/alpha") {
+		t.Error("observe/read-write should not match allowance for observe")
+	}
+}
+
+func TestTargetAllows_AllowanceDenialOverrides(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+		},
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe"}, Actors: []string{"ops/untrusted"}},
+		},
+	})
+
+	// ops/alice passes: matches allowance, no denial.
+	if !TargetAllows(index, "ops/alice", "observe", "agent/alpha") {
+		t.Error("ops/alice should be allowed")
+	}
+
+	// ops/untrusted blocked: matches allowance but also matches denial.
+	if TargetAllows(index, "ops/untrusted", "observe", "agent/alpha") {
+		t.Error("ops/untrusted should be denied by allowance denial")
+	}
+}
+
+func TestTargetAllows_GlobPatterns(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/*"}},
+		},
+	})
+
+	// ops/alice matches ops/* (single segment).
+	if !TargetAllows(index, "ops/alice", "observe", "agent/alpha") {
+		t.Error("ops/alice should match ops/*")
+	}
+
+	// ops/team/lead does NOT match ops/* (multi-segment).
+	if TargetAllows(index, "ops/team/lead", "observe", "agent/alpha") {
+		t.Error("ops/team/lead should not match ops/* (single segment only)")
+	}
+}
+
+func TestTargetAllows_TargetNotInIndex(t *testing.T) {
+	index := NewIndex()
+
+	// Target not in index at all — should deny.
+	if TargetAllows(index, "ops/alice", "observe", "unknown/principal") {
+		t.Error("should deny when target is not in the index")
+	}
+}
+
+func TestTargetAllows_MultipleAllowances(t *testing.T) {
+	index := NewIndex()
+
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/alice"}},
+		},
+	})
+
+	// ops/alice gets observe (first allowance).
+	if !TargetAllows(index, "ops/alice", "observe", "agent/alpha") {
+		t.Error("ops/alice should be allowed to observe")
+	}
+
+	// ops/alice gets observe/read-write (second allowance).
+	if !TargetAllows(index, "ops/alice", "observe/read-write", "agent/alpha") {
+		t.Error("ops/alice should be allowed observe/read-write")
+	}
+
+	// ops/bob gets observe but not observe/read-write.
+	if !TargetAllows(index, "ops/bob", "observe", "agent/alpha") {
+		t.Error("ops/bob should be allowed to observe")
+	}
+	if TargetAllows(index, "ops/bob", "observe/read-write", "agent/alpha") {
+		t.Error("ops/bob should not be allowed observe/read-write")
+	}
+}
+
+func TestTargetAllows_ActorNotInIndex(t *testing.T) {
+	index := NewIndex()
+
+	// The actor does not need to be in the index — TargetAllows only
+	// checks the target's allowances and the actor string as a match
+	// parameter. This is the key difference from Authorized(): external
+	// actors (humans, cross-machine principals) work without index entries.
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ben"}},
+		},
+	})
+
+	if !TargetAllows(index, "ben", "observe", "agent/alpha") {
+		t.Error("external actor 'ben' should be allowed by target's allowance")
+	}
+}
+
 func TestGrantsAllow(t *testing.T) {
 	grants := []schema.Grant{
 		{Actions: []string{"ticket/create", "ticket/assign"}},

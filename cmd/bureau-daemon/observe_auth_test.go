@@ -20,83 +20,67 @@ func TestAuthorizeObserveDefaultDeny(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	// No lastConfig — everything should be denied.
+	// No allowances in the authorization index — everything should be denied.
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if authz.Allowed {
-		t.Error("expected default deny when lastConfig is nil")
+		t.Error("expected default deny when target has no allowances")
 	}
 }
 
-func TestAuthorizeObserveNoPolicyDeny(t *testing.T) {
+func TestAuthorizeObserveNoAllowanceDeny(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm", AutoStart: true},
-		},
-		// No DefaultObservePolicy and no per-principal ObservePolicy.
-	}
+	// Target principal exists in the index but has no allowances.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{})
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if authz.Allowed {
-		t.Error("expected deny when no ObservePolicy exists at any level")
+		t.Error("expected deny when target has no observation allowances")
 	}
 }
 
-func TestAuthorizeObserveDefaultPolicyAllows(t *testing.T) {
+func TestAuthorizeObserveAllowAllObservers(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers: []string{"**"},
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"**"}},
 		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm", AutoStart: true},
-		},
-	}
+	})
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readonly")
 	if !authz.Allowed {
-		t.Error("expected allow with ** default policy")
+		t.Error("expected allow with ** observer allowance")
 	}
 	if authz.GrantedMode != "readonly" {
 		t.Errorf("GrantedMode = %q, want readonly", authz.GrantedMode)
 	}
 }
 
-func TestAuthorizeObservePrincipalPolicyOverridesDefault(t *testing.T) {
+func TestAuthorizeObserveSpecificAllowanceOverridesWildcard(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers: []string{"**"},
+	// Only ops/alice is allowed.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/alice"}},
 		},
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					// Principal-level policy only allows specific observer.
-					AllowedObservers: []string{"ops/alice"},
-				},
-			},
-		},
-	}
+	})
 
-	// ben is not in the principal's policy, even though default allows **.
+	// ben does not match ops/alice.
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readonly")
 	if authz.Allowed {
-		t.Error("expected deny: principal policy overrides default, ben not in AllowedObservers")
+		t.Error("expected deny: ben not in observation allowances")
 	}
 
-	// alice matches the principal's policy.
+	// alice matches.
 	authz = daemon.authorizeObserve("@ops/alice:bureau.local", "iree/amdgpu/pm", "readonly")
 	if !authz.Allowed {
-		t.Error("expected allow: alice matches principal policy")
+		t.Error("expected allow: ops/alice matches observation allowance")
 	}
 }
 
@@ -105,18 +89,15 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"ops/**"},
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/**"}},
 		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm", AutoStart: true},
-		},
-	}
+	})
 
-	// ben requests readwrite but is not in ReadWriteObservers — should
-	// be downgraded to readonly.
+	// ben requests readwrite but is not in observe/read-write allowance —
+	// should be downgraded to readonly.
 	authz := daemon.authorizeObserve("@ben:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if !authz.Allowed {
 		t.Fatal("expected allow")
@@ -125,7 +106,7 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 		t.Errorf("GrantedMode = %q, want readonly (downgraded)", authz.GrantedMode)
 	}
 
-	// ops/alice requests readwrite and is in ReadWriteObservers — should get it.
+	// ops/alice requests readwrite and matches observe/read-write — should get it.
 	authz = daemon.authorizeObserve("@ops/alice:bureau.local", "iree/amdgpu/pm", "readwrite")
 	if !authz.Allowed {
 		t.Fatal("expected allow")
@@ -140,15 +121,12 @@ func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"**"}},
 		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm", AutoStart: true},
-		},
-	}
+	})
 
 	// Even though observer has readwrite permission, requesting readonly
 	// should stay readonly.
@@ -166,14 +144,11 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers: []string{"ops/*"},
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/*"}},
 		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm", AutoStart: true},
-		},
-	}
+	})
 
 	// ops/alice matches ops/*
 	authz := daemon.authorizeObserve("@ops/alice:bureau.local", "iree/amdgpu/pm", "readonly")
@@ -194,22 +169,42 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 	}
 }
 
-func TestAuthorizeObserveUnknownPrincipal(t *testing.T) {
+func TestAuthorizeObserveTargetNotInIndex(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers: []string{"**"},
+	// Target not in the authorization index at all.
+	authz := daemon.authorizeObserve("@ben:bureau.local", "unknown/principal", "readonly")
+	if authz.Allowed {
+		t.Error("expected deny: target not in authorization index")
+	}
+}
+
+func TestAuthorizeObserveAllowanceDenialOverrides(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
 		},
-		// No principals listed — an unknown principal still uses
-		// the default policy.
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe"}, Actors: []string{"ops/untrusted"}},
+		},
+	})
+
+	// ops/alice is allowed.
+	authz := daemon.authorizeObserve("@ops/alice:bureau.local", "iree/amdgpu/pm", "readonly")
+	if !authz.Allowed {
+		t.Error("expected allow: ops/alice should pass allowance")
 	}
 
-	authz := daemon.authorizeObserve("@ben:bureau.local", "unknown/principal", "readonly")
-	if !authz.Allowed {
-		t.Error("expected allow: unknown principal should fall back to default policy")
+	// ops/untrusted is denied by allowance denial.
+	authz = daemon.authorizeObserve("@ops/untrusted:bureau.local", "iree/amdgpu/pm", "readonly")
+	if authz.Allowed {
+		t.Error("expected deny: ops/untrusted should be blocked by allowance denial")
 	}
 }
 
@@ -218,24 +213,16 @@ func TestAuthorizeListFiltering(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"ops/**"},
-				},
-			},
-			{
-				Localpart: "iree/amdgpu/builder",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"**"},
-				},
-			},
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
 		},
-	}
+	})
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/builder", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"**"}},
+		},
+	})
 
 	// ben can only see builder, not pm.
 	if daemon.authorizeList("@ben:bureau.local", "iree/amdgpu/pm") {
@@ -254,52 +241,8 @@ func TestAuthorizeListFiltering(t *testing.T) {
 	}
 }
 
-func TestFindObservePolicyFallback(t *testing.T) {
-	t.Parallel()
-
-	defaultPolicy := &schema.ObservePolicy{
-		AllowedObservers: []string{"**"},
-	}
-	principalPolicy := &schema.ObservePolicy{
-		AllowedObservers: []string{"ops/**"},
-	}
-
-	daemon, _ := newTestDaemon(t)
-	daemon.runDir = principal.DefaultRunDir
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: defaultPolicy,
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart:     "with-policy",
-				ObservePolicy: principalPolicy,
-			},
-			{
-				Localpart: "without-policy",
-			},
-		},
-	}
-
-	// Principal with its own policy should use it.
-	result := daemon.findObservePolicy("with-policy")
-	if result != principalPolicy {
-		t.Error("expected principal-level policy for with-policy")
-	}
-
-	// Principal without its own policy should fall back to default.
-	result = daemon.findObservePolicy("without-policy")
-	if result != defaultPolicy {
-		t.Error("expected default policy for without-policy")
-	}
-
-	// Unknown principal should also fall back to default.
-	result = daemon.findObservePolicy("unknown")
-	if result != defaultPolicy {
-		t.Error("expected default policy for unknown principal")
-	}
-}
-
 // mockConn is a minimal net.Conn that tracks whether Close was called.
-// Used to verify that enforceObservePolicyChange terminates sessions
+// Used to verify that enforceObserveAllowanceChange terminates sessions
 // by closing the client connection.
 type mockConn struct {
 	net.Conn // embed to satisfy interface; unused methods will panic
@@ -323,7 +266,7 @@ func (c *mockConn) wasClosed() bool {
 
 // Satisfy the net.Conn interface methods that bridgeConnections or
 // other callers might touch. These are never called in the unit tests
-// below (enforceObservePolicyChange only calls Close), but providing
+// below (enforceObserveAllowanceChange only calls Close), but providing
 // them avoids nil-pointer panics if the test setup changes.
 func (c *mockConn) LocalAddr() net.Addr              { return &net.UnixAddr{Name: "mock"} }
 func (c *mockConn) RemoteAddr() net.Addr             { return &net.UnixAddr{Name: "mock"} }
@@ -333,7 +276,7 @@ func (c *mockConn) SetWriteDeadline(time.Time) error { return nil }
 func (c *mockConn) Read([]byte) (int, error)         { return 0, nil }
 func (c *mockConn) Write(b []byte) (int, error)      { return len(b), nil }
 
-func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
+func TestEnforceObserveAllowanceChangeRevoke(t *testing.T) {
 	t.Parallel()
 
 	connection := &mockConn{}
@@ -341,20 +284,13 @@ func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	// Policy initially allowed ops/** to observe, but has now been
-	// changed to only allow ops/alice. The session below is for
-	// ops/bob, who is no longer in AllowedObservers.
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"ops/alice"},
-				},
-			},
+	// Allowance only permits ops/alice. The session below is for
+	// ops/bob, who is not in the allowance.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/alice"}},
 		},
-	}
+	})
 	daemon.observeSessions = []*activeObserveSession{
 		{
 			principal:   "iree/amdgpu/pm",
@@ -364,14 +300,14 @@ func TestEnforceObservePolicyChangeRevoke(t *testing.T) {
 		},
 	}
 
-	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+	daemon.enforceObserveAllowanceChange("iree/amdgpu/pm")
 
 	if !connection.wasClosed() {
-		t.Error("expected connection to be closed: ops/bob is no longer in AllowedObservers")
+		t.Error("expected connection to be closed: ops/bob is not in observation allowances")
 	}
 }
 
-func TestEnforceObservePolicyChangeRetain(t *testing.T) {
+func TestEnforceObserveAllowanceChangeRetain(t *testing.T) {
 	t.Parallel()
 
 	connection := &mockConn{}
@@ -379,18 +315,12 @@ func TestEnforceObservePolicyChangeRetain(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	// Policy allows ops/** — ops/bob is still authorized.
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"ops/**"},
-				},
-			},
+	// Allowance permits ops/** — ops/bob is still authorized.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
 		},
-	}
+	})
 	daemon.observeSessions = []*activeObserveSession{
 		{
 			principal:   "iree/amdgpu/pm",
@@ -400,14 +330,14 @@ func TestEnforceObservePolicyChangeRetain(t *testing.T) {
 		},
 	}
 
-	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+	daemon.enforceObserveAllowanceChange("iree/amdgpu/pm")
 
 	if connection.wasClosed() {
-		t.Error("expected connection to remain open: ops/bob is still in AllowedObservers")
+		t.Error("expected connection to remain open: ops/bob matches observation allowance")
 	}
 }
 
-func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
+func TestEnforceObserveAllowanceChangeModeDowngrade(t *testing.T) {
 	t.Parallel()
 
 	connection := &mockConn{}
@@ -415,21 +345,15 @@ func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	// Policy still allows ops/** to observe, but ReadWriteObservers
-	// has been narrowed to only ops/alice. The session below was
-	// granted readwrite for ops/bob, who now would only get readonly.
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers:   []string{"ops/**"},
-					ReadWriteObservers: []string{"ops/alice"},
-				},
-			},
+	// Allowance still permits ops/** for observation, but
+	// observe/read-write is now limited to ops/alice. The session was
+	// granted readwrite for ops/bob, who would now only get readonly.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/alice"}},
 		},
-	}
+	})
 	daemon.observeSessions = []*activeObserveSession{
 		{
 			principal:   "iree/amdgpu/pm",
@@ -439,14 +363,14 @@ func TestEnforceObservePolicyChangeModeDowngrade(t *testing.T) {
 		},
 	}
 
-	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+	daemon.enforceObserveAllowanceChange("iree/amdgpu/pm")
 
 	if !connection.wasClosed() {
 		t.Error("expected connection to be closed: ops/bob's readwrite session would now be downgraded to readonly")
 	}
 }
 
-func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
+func TestEnforceObserveAllowanceChangeOtherPrincipalUntouched(t *testing.T) {
 	t.Parallel()
 
 	targetConnection := &mockConn{}
@@ -455,25 +379,14 @@ func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					// Nobody allowed — revokes all sessions.
-					AllowedObservers: []string{},
-				},
-			},
-			{
-				Localpart: "iree/amdgpu/builder",
-				AutoStart: true,
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"ops/**"},
-				},
-			},
+	// pm has empty allowances — revokes all sessions.
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{})
+	// builder allows ops/**
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/builder", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
 		},
-	}
+	})
 	daemon.observeSessions = []*activeObserveSession{
 		{
 			principal:   "iree/amdgpu/pm",
@@ -490,7 +403,7 @@ func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
 	}
 
 	// Only enforce on pm — builder's session should be untouched.
-	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+	daemon.enforceObserveAllowanceChange("iree/amdgpu/pm")
 
 	if !targetConnection.wasClosed() {
 		t.Error("expected pm connection to be closed")
@@ -500,22 +413,15 @@ func TestEnforceObservePolicyChangeOtherPrincipalUntouched(t *testing.T) {
 	}
 }
 
-func TestEnforceObservePolicyChangeNoSessions(t *testing.T) {
+func TestEnforceObserveAllowanceChangeNoSessions(t *testing.T) {
 	t.Parallel()
 
 	// Verify no panic when there are no sessions.
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.lastConfig = &schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: "iree/amdgpu/pm",
-				AutoStart: true,
-			},
-		},
-	}
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{})
 
 	// Should not panic with nil observeSessions.
-	daemon.enforceObservePolicyChange("iree/amdgpu/pm")
+	daemon.enforceObserveAllowanceChange("iree/amdgpu/pm")
 }

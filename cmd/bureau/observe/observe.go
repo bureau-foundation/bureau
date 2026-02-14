@@ -49,9 +49,9 @@ are not forwarded, making it safe for monitoring.
 To disconnect, press Ctrl-C or close your terminal. There is no detach
 mechanism — each observation is a live stream, not a tmux client attach.
 
-Access is controlled by the ObservePolicy on the target's MachineConfig.
-If you get "not authorized", ask a deployment admin to add your principal
-to the target's AllowedObservers list.`,
+Access is controlled by the target principal's observation allowances in
+its authorization policy. If you get "not authorized", ask a deployment
+admin to add an observe allowance for your identity on the target.`,
 		Usage: "bureau observe <target> [flags]",
 		Examples: []cli.Example{
 			{

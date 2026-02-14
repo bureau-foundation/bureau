@@ -52,10 +52,11 @@ func sendMachineLayout(t *testing.T, socketPath string) observe.QueryLayoutRespo
 func TestMachineLayoutBasic(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	// Mark three principals as running.
-	daemon.running["iree/amdgpu/test"] = true
-	daemon.running["iree/amdgpu/pm"] = true
-	daemon.running["iree/amdgpu/codegen"] = true
+	// Mark three principals as running with permissive observe allowances.
+	for _, localpart := range []string{"iree/amdgpu/test", "iree/amdgpu/pm", "iree/amdgpu/codegen"} {
+		daemon.running[localpart] = true
+		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
+	}
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)
 
@@ -106,59 +107,45 @@ func TestMachineLayoutBasic(t *testing.T) {
 func TestMachineLayoutAuthFiltering(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	// Restrictive DefaultObservePolicy: AllowedObservers only permits
-	// observers matching "iree/**". The test observer is
-	// "@ops/test-observer:bureau.local" (localpart "ops/test-observer"),
-	// which does NOT match "iree/**". So no principals are visible to
-	// this observer, and the daemon should return an error.
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"iree/**"},
-			ReadWriteObservers: []string{"iree/**"},
-		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm"},
-			{Localpart: "service/stt/whisper"},
-			{Localpart: "infra/ci/runner"},
+	// Restrictive observe allowances: only observers matching "iree/**"
+	// may observe. The test observer is "@ops/test-observer:bureau.local"
+	// (localpart "ops/test-observer"), which does NOT match "iree/**".
+	// So no principals are visible to this observer, and the daemon
+	// should return an error.
+	restrictedPolicy := schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"iree/**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"iree/**"}},
 		},
 	}
-
-	daemon.running["iree/amdgpu/pm"] = true
-	daemon.running["service/stt/whisper"] = true
-	daemon.running["infra/ci/runner"] = true
+	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper", "infra/ci/runner"} {
+		daemon.running[localpart] = true
+		daemon.authorizationIndex.SetPrincipal(localpart, restrictedPolicy)
+	}
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)
 
 	if response.OK {
-		t.Fatal("expected error (observer not in AllowedObservers), got OK")
+		t.Fatal("expected error (observer not in observe allowances), got OK")
 	}
 }
 
 func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	// Default policy allows everyone. Per-principal policy on one
-	// principal restricts it to a different observer.
-	daemon.lastConfig = &schema.MachineConfig{
-		DefaultObservePolicy: &schema.ObservePolicy{
-			AllowedObservers:   []string{"**"},
-			ReadWriteObservers: []string{"**"},
-		},
-		Principals: []schema.PrincipalAssignment{
-			{Localpart: "iree/amdgpu/pm"},
-			{
-				Localpart: "secret/agent",
-				ObservePolicy: &schema.ObservePolicy{
-					AllowedObservers: []string{"@secret-admin:bureau.local"},
-				},
-			},
-			{Localpart: "iree/amdgpu/codegen"},
-		},
+	// Most principals allow any observer. secret/agent restricts
+	// observation to a specific admin account that is NOT our test
+	// observer, so it should be filtered from the layout.
+	for _, localpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/codegen"} {
+		daemon.running[localpart] = true
+		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
-
-	daemon.running["iree/amdgpu/pm"] = true
 	daemon.running["secret/agent"] = true
-	daemon.running["iree/amdgpu/codegen"] = true
+	daemon.authorizationIndex.SetPrincipal("secret/agent", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"@secret-admin:bureau.local"}},
+		},
+	})
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)
 
@@ -166,8 +153,8 @@ func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 		t.Fatalf("expected OK, got error: %s", response.Error)
 	}
 
-	// secret/agent should be filtered out — its ObservePolicy only
-	// allows @secret-admin, not our test observer.
+	// secret/agent should be filtered out — its observe allowance only
+	// permits @secret-admin, not our test observer.
 	if len(response.Layout.Windows) != 1 {
 		t.Fatalf("window count = %d, want 1", len(response.Layout.Windows))
 	}
@@ -200,6 +187,7 @@ func TestMachineLayoutNoPrincipals(t *testing.T) {
 func TestMachineLayoutMachineName(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 	daemon.running["test/agent"] = true
+	daemon.authorizationIndex.SetPrincipal("test/agent", permissiveObserveAllowances)
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)
 

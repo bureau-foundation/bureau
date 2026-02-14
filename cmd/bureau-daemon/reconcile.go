@@ -151,7 +151,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
 		delete(d.lastTokenMint, localpart)
-		delete(d.lastObservePolicy, localpart)
+		delete(d.lastObserveAllowances, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", localpart)
@@ -194,27 +194,23 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Enforce ObservePolicy changes on active observation sessions.
-	// When a principal's policy tightens (fewer allowed observers, or
+	// Enforce observation allowance changes on active sessions. When a
+	// principal's allowances tighten (fewer allowed observers, or
 	// readwrite downgraded to readonly), in-flight sessions that no
 	// longer pass authorization are terminated by closing their client
-	// connection. This uses separate tracking maps from lastConfig —
-	// lastConfig is updated above (so authorizeObserve uses the new
-	// policy), while these maps detect which principals changed.
-	defaultPolicyChanged := !reflect.DeepEqual(
-		d.lastDefaultObservePolicy, config.DefaultObservePolicy)
-	if defaultPolicyChanged {
-		d.lastDefaultObservePolicy = config.DefaultObservePolicy
-	}
-	for localpart, assignment := range desired {
+	// connection. The authorization index was rebuilt above (so
+	// authorizeObserve uses the new allowances); this block detects
+	// which principals changed by comparing index allowances to the
+	// last-known state.
+	for localpart := range desired {
 		if !d.running[localpart] {
 			continue
 		}
-		oldPolicy := d.lastObservePolicy[localpart]
-		newPolicy := assignment.ObservePolicy
-		if defaultPolicyChanged || !reflect.DeepEqual(oldPolicy, newPolicy) {
-			d.lastObservePolicy[localpart] = newPolicy
-			d.enforceObservePolicyChange(localpart)
+		newAllowances := d.authorizationIndex.Allowances(localpart)
+		oldAllowances := d.lastObserveAllowances[localpart]
+		if !reflect.DeepEqual(oldAllowances, newAllowances) {
+			d.lastObserveAllowances[localpart] = newAllowances
+			d.enforceObserveAllowanceChange(localpart)
 		}
 	}
 
@@ -231,7 +227,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// the launcher's list-sandboxes response, those entries have no exit
 	// watcher, layout watcher, health monitor, or consumer proxy config.
 	// The earlier reconcile passes (credential tracking, authorization
-	// grants push, ObservePolicy, reconcileRunningPrincipal for lastSpecs)
+	// grants push, observe allowances, reconcileRunningPrincipal for lastSpecs)
 	// already handled their state — this pass starts the goroutines.
 	//
 	// On subsequent reconcile calls all d.running entries have exit
@@ -390,7 +386,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.running[localpart] = true
 		d.lastCredentials[localpart] = credentials.Ciphertext
-		d.lastObservePolicy[localpart] = assignment.ObservePolicy
+		d.lastObserveAllowances[localpart] = d.authorizationIndex.Allowances(localpart)
 		d.lastSpecs[localpart] = sandboxSpec
 		d.lastTemplates[localpart] = resolvedTemplate
 		d.lastGrants[localpart] = grants
@@ -504,7 +500,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
 		delete(d.lastTokenMint, localpart)
-		delete(d.lastObservePolicy, localpart)
+		delete(d.lastObserveAllowances, localpart)
 		delete(d.lastSpecs, localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
@@ -592,7 +588,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		delete(d.lastSpecs, localpart)
 		delete(d.lastGrants, localpart)
 		delete(d.lastTokenMint, localpart)
-		delete(d.lastObservePolicy, localpart)
+		delete(d.lastObserveAllowances, localpart)
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
 			"principal", localpart)
@@ -641,7 +637,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 // that survived a daemon restart. The launcher continued running the sandbox
 // while the daemon was down — adoptPreExistingSandboxes added the principal
 // to d.running, and earlier reconcile passes handled state tracking
-// (credentials, grants, ObservePolicy, lastSpecs). This method starts the
+// (credentials, grants, observe allowances, lastSpecs). This method starts the
 // goroutines that the "create missing" pass normally starts: exit watcher,
 // layout watcher, health monitor, and consumer proxy configuration.
 // Authorization grants are handled by the hot-reload block that runs before
@@ -1245,7 +1241,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.lastCredentials, localpart)
 		delete(d.lastGrants, localpart)
 		delete(d.lastTokenMint, localpart)
-		delete(d.lastObservePolicy, localpart)
+		delete(d.lastObserveAllowances, localpart)
 		d.lastActivityAt = d.clock.Now()
 	}
 	d.reconcileMu.Unlock()
@@ -1675,7 +1671,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	delete(d.lastCredentials, localpart)
 	delete(d.lastGrants, localpart)
 	delete(d.lastTokenMint, localpart)
-	delete(d.lastObservePolicy, localpart)
+	delete(d.lastObserveAllowances, localpart)
 	d.lastActivityAt = d.clock.Now()
 	d.reconcileMu.Unlock()
 

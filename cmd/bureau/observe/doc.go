@@ -13,7 +13,7 @@
 // ObserveCommand attaches to a single principal's terminal session,
 // relaying I/O between the operator's terminal and the remote PTY.
 // It supports readwrite (default) and readonly modes, controlled by
-// ObservePolicy on the target's MachineConfig.
+// the target principal's observation allowances.
 //
 // DashboardCommand creates a local tmux session with one pane per
 // principal. Layout sources include: no arguments (machine dashboard

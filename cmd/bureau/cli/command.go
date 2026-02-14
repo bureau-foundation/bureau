@@ -36,6 +36,23 @@ type Command struct {
 	// lazily on first use. If nil, the command accepts no flags.
 	Flags func() *pflag.FlagSet
 
+	// Params returns a pointer to the command's parameter struct. Used
+	// by the MCP server to generate JSON Schema for tool descriptions
+	// and to populate parameters from JSON input before calling Run.
+	//
+	// The returned pointer must be the same value that Run reads from,
+	// so that populating the struct via json.Unmarshal before calling
+	// Run(nil) passes the parameters through:
+	//
+	//     var params listParams
+	//     return &Command{
+	//         Params: func() any { return &params },
+	//         Run: func(args []string) error { /* reads params */ },
+	//     }
+	//
+	// If nil, the command is not exposed as an MCP tool.
+	Params func() any
+
 	// Subcommands are nested commands dispatched by the first positional arg.
 	Subcommands []*Command
 

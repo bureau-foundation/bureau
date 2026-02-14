@@ -13,6 +13,7 @@ import (
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
+	mcpcmd "github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	quickstartcmd "github.com/bureau-foundation/bureau/cmd/bureau/quickstart"
@@ -106,6 +107,11 @@ observation, and structured messaging via Matrix.`,
 			},
 		},
 	}
+
+	// Add MCP command with access to the full command tree. Tool
+	// discovery walks root.Subcommands, so this must be added after
+	// the tree is constructed.
+	root.Subcommands = append(root.Subcommands, mcpcmd.Command(root))
 
 	return root.Execute(os.Args[1:])
 }

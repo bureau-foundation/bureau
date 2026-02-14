@@ -1,0 +1,30 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "mcp",
+    srcs = [
+        "command.go",
+        "doc.go",
+        "protocol.go",
+        "server.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/mcp",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/version",
+    ],
+)
+
+go_test(
+    name = "mcp_test",
+    srcs = ["server_test.go"],
+    embed = [":mcp"],
+    deps = [
+        "//cmd/bureau/cli",
+        "@com_github_spf13_pflag//:pflag",
+    ],
+)

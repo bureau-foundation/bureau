@@ -16,12 +16,15 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
+// listParams holds the flags for the template list command.
+type listParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	OutputJSON bool   `json:"-"            flag:"json"        desc:"output as JSON instead of a table"`
+}
+
 // listCommand returns the "list" subcommand for listing templates in a room.
 func listCommand() *cli.Command {
-	var (
-		serverName string
-		outputJSON bool
-	)
+	var params listParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -43,10 +46,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			flagSet.BoolVar(&outputJSON, "json", false, "output as JSON instead of a table")
-			return flagSet
+			return cli.FlagsFromParams("list", &params)
 		},
 		Run: func(args []string) error {
 			if len(args) != 1 {
@@ -54,7 +54,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			}
 
 			roomLocalpart := args[0]
-			roomAlias := principal.RoomAlias(roomLocalpart, serverName)
+			roomAlias := principal.RoomAlias(roomLocalpart, params.ServerName)
 
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
@@ -99,7 +99,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				})
 			}
 
-			if outputJSON {
+			if params.OutputJSON {
 				// Ensure empty array in JSON output, not null.
 				if templates == nil {
 					templates = []templateEntry{}

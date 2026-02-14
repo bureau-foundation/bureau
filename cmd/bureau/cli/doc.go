@@ -14,7 +14,19 @@
 // closest match (threshold: distance <= 3). This is implemented in
 // suggest.go.
 //
-// The package also provides two authentication mechanisms used by CLI
+// # Typed parameters
+//
+// [BindFlags] and [FlagsFromParams] generate [pflag.FlagSet] entries from
+// struct tags, replacing imperative flag registration with declarative
+// parameter structs. The struct serves as the single source of truth for
+// CLI flags, JSON input, and (future) JSON Schema generation for MCP
+// tool descriptions. See [BindFlags] for the tag format and supported
+// types. Types implementing [FlagBinder] (like [SessionConfig]) compose
+// into parameter structs via embedding or named fields.
+//
+// # Authentication
+//
+// The package provides two authentication mechanisms used by CLI
 // subcommand packages:
 //
 //   - [OperatorSession] / [LoadSession] / [SaveSession]: operator-level

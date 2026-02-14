@@ -820,8 +820,9 @@ func (d *Daemon) handleRemoteObserve(clientConnection net.Conn, request observeR
 // The originating daemon has already verified the observer's token. The
 // request carries the verified observer identity in the Observer field.
 // This daemon trusts the forwarded identity (transport connections are
-// authenticated via WebRTC signaling through Matrix) and checks its own
-// local observation allowances to authorize the observation.
+// authenticated via a mutual Ed25519 challenge-response handshake; see
+// transport.PeerAuthenticator) and checks its own local observation
+// allowances to authorize the observation.
 func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

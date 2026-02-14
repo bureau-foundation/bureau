@@ -17,7 +17,16 @@
 // shares a single PeerConnection with SCTP-multiplexed data channels,
 // avoiding head-of-line blocking between concurrent service requests.
 // [WebRTCTransport] implements both Listener and Dialer on a single
-// instance. [HTTPTransport] wraps a Dialer as an http.RoundTripper for
+// instance. When a [PeerAuthenticator] is configured, each new
+// PeerConnection completes a mutual Ed25519 challenge-response
+// handshake before HTTP data channels are accepted. This binds the
+// transport connection to the machines' cryptographic identities
+// (token signing keys published to the Matrix system room), preventing
+// impersonation by rogue peers that gain access to the signaling
+// channel. The handshake adds one round-trip per peer connection, which
+// is amortized because PeerConnections are long-lived.
+//
+// [HTTPTransport] wraps a Dialer as an http.RoundTripper for
 // integration with standard HTTP client code.
 //
 // Signaling is abstracted behind the [Signaler] interface, which publishes

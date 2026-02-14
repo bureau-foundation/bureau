@@ -9,6 +9,7 @@ go_library(
         "datachannel_conn.go",
         "doc.go",
         "ice.go",
+        "peer_auth.go",
         "signaler.go",
         "signaler_matrix.go",
         "signaler_memory.go",
@@ -29,6 +30,7 @@ go_test(
     srcs = [
         "datachannel_conn_test.go",
         "ice_test.go",
+        "peer_auth_test.go",
         "signaler_matrix_test.go",
         "webrtc_test.go",
     ],

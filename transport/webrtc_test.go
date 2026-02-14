@@ -5,6 +5,8 @@ package transport
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,11 +30,11 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 	config := ICEConfig{}
 
 	// Transport A (client/dialer side).
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, logger)
+	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
 
 	// Transport B (server/listener side).
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, logger)
+	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
 	defer transportB.Close()
 
 	// Transport B serves HTTP.
@@ -88,10 +90,10 @@ func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, logger)
+	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, logger)
+	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
 	defer transportB.Close()
 
 	// Server echoes the request path back in the response body.
@@ -137,10 +139,10 @@ func TestWebRTCTransport_ConcurrentDials(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, logger)
+	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, logger)
+	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
 	defer transportB.Close()
 
 	// Server echoes the request path back in the response body.
@@ -200,7 +202,7 @@ func TestWebRTCTransport_Address(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/workstation", ICEConfig{}, logger)
+	wt := NewWebRTCTransport(signaler, "machine/workstation", ICEConfig{}, nil, logger)
 	defer wt.Close()
 
 	if address := wt.Address(); address != "machine/workstation" {
@@ -214,7 +216,7 @@ func TestWebRTCTransport_DialAfterClose(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, logger)
+	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, nil, logger)
 	wt.Close()
 
 	_, err := wt.DialContext(context.Background(), "machine/beta")
@@ -231,10 +233,10 @@ func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, logger)
+	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, logger)
+	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
 	defer transportB.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -292,7 +294,7 @@ func TestWebRTCTransport_UpdateICEConfig(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, logger)
+	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, nil, logger)
 	defer wt.Close()
 
 	// Initially empty.
@@ -399,4 +401,119 @@ func TestMemorySignaler_IndependentConsumers(t *testing.T) {
 	if len(offers) != 0 {
 		t.Errorf("expected 0 offers for C, got %d", len(offers))
 	}
+}
+
+// TestWebRTCTransport_AuthenticatedConnection verifies that two
+// transports with matching Ed25519 keypairs complete the mutual
+// authentication handshake and successfully exchange HTTP traffic.
+func TestWebRTCTransport_AuthenticatedConnection(t *testing.T) {
+	signaler := NewMemorySignaler()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	config := ICEConfig{}
+
+	publicKeyAlpha, privateKeyAlpha, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating alpha keypair: %v", err)
+	}
+	publicKeyBeta, privateKeyBeta, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating beta keypair: %v", err)
+	}
+
+	authAlpha := &testAuthenticator{
+		privateKey: privateKeyAlpha,
+		peerKeys:   map[string]ed25519.PublicKey{"machine/beta": publicKeyBeta},
+	}
+	authBeta := &testAuthenticator{
+		privateKey: privateKeyBeta,
+		peerKeys:   map[string]ed25519.PublicKey{"machine/alpha": publicKeyAlpha},
+	}
+
+	transportAlpha := NewWebRTCTransport(signaler, "machine/alpha", config, authAlpha, logger)
+	defer transportAlpha.Close()
+
+	transportBeta := NewWebRTCTransport(signaler, "machine/beta", config, authBeta, logger)
+	defer transportBeta.Close()
+
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(writer, "authenticated")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go transportBeta.Serve(ctx, handler)
+	testutil.RequireClosed(t, transportBeta.Ready(), 5*time.Second, "transportBeta ready")
+
+	client := &http.Client{
+		Transport: HTTPTransport(transportAlpha, "machine/beta"),
+		Timeout:   30 * time.Second,
+	}
+
+	response, err := client.Get("http://transport/test")
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, _ := io.ReadAll(response.Body)
+	if string(body) != "authenticated" {
+		t.Errorf("body = %q, want %q", string(body), "authenticated")
+	}
+}
+
+// TestWebRTCTransport_AuthenticationFailure verifies that DialContext
+// returns an error when the peer presents a signature from a different
+// key than the one the verifier expects.
+func TestWebRTCTransport_AuthenticationFailure(t *testing.T) {
+	signaler := NewMemorySignaler()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	config := ICEConfig{}
+
+	publicKeyAlpha, privateKeyAlpha, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating alpha keypair: %v", err)
+	}
+	publicKeyBeta, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating beta keypair: %v", err)
+	}
+	_, privateKeyRogue, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating rogue keypair: %v", err)
+	}
+
+	// Alpha knows beta's real public key, but the "beta" transport
+	// uses a rogue private key that doesn't match.
+	authAlpha := &testAuthenticator{
+		privateKey: privateKeyAlpha,
+		peerKeys:   map[string]ed25519.PublicKey{"machine/beta": publicKeyBeta},
+	}
+	authRogue := &testAuthenticator{
+		privateKey: privateKeyRogue,
+		peerKeys:   map[string]ed25519.PublicKey{"machine/alpha": publicKeyAlpha},
+	}
+
+	transportAlpha := NewWebRTCTransport(signaler, "machine/alpha", config, authAlpha, logger)
+	defer transportAlpha.Close()
+
+	transportRogue := NewWebRTCTransport(signaler, "machine/beta", config, authRogue, logger)
+	defer transportRogue.Close()
+
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprint(writer, "should not reach here")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go transportRogue.Serve(ctx, handler)
+	testutil.RequireClosed(t, transportRogue.Ready(), 5*time.Second, "transportRogue ready")
+
+	_, err = transportAlpha.DialContext(ctx, "machine/beta")
+	if err == nil {
+		t.Fatal("expected DialContext error for authentication failure, got nil")
+	}
+	t.Logf("got expected error: %v", err)
 }

@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -37,8 +39,18 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 	// Create the Matrix signaler for SDP exchange.
 	signaler := transport.NewMatrixSignaler(d.session, d.machineRoomID, d.logger)
 
+	// Create the peer authenticator for mutual Ed25519 authentication
+	// on each new PeerConnection. Uses the daemon's token signing
+	// keypair (already published to #bureau/system) so no new key
+	// management infrastructure is needed.
+	authenticator := &peerAuthenticator{
+		privateKey:   d.tokenSigningPrivateKey,
+		session:      d.session,
+		systemRoomID: d.systemRoomID,
+	}
+
 	// Create the WebRTC transport (implements both Listener and Dialer).
-	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machineName, iceConfig, d.logger)
+	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machineName, iceConfig, authenticator, d.logger)
 	d.transportListener = webrtcTransport
 	d.transportDialer = webrtcTransport
 	d.relaySocketPath = relaySocketPath
@@ -449,4 +461,57 @@ func parseServiceFromPath(path string) (string, error) {
 		return "", fmt.Errorf("empty service name in path")
 	}
 	return parts[0], nil
+}
+
+// peerAuthenticator implements transport.PeerAuthenticator using the
+// daemon's Ed25519 token signing keypair. Peer public keys are fetched
+// from #bureau/system via m.bureau.token_signing_key state events.
+type peerAuthenticator struct {
+	privateKey   ed25519.PrivateKey
+	session      peerAuthSession
+	systemRoomID string
+}
+
+// peerAuthSession is the subset of messaging.Session needed by
+// peerAuthenticator, extracted for testability.
+type peerAuthSession interface {
+	GetStateEvent(ctx context.Context, roomID, eventType, stateKey string) (json.RawMessage, error)
+}
+
+func (a *peerAuthenticator) Sign(message []byte) []byte {
+	return ed25519.Sign(a.privateKey, message)
+}
+
+func (a *peerAuthenticator) VerifyPeer(peerLocalpart string, message, signature []byte) error {
+	// Fetch the peer's token signing public key from Matrix room state.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rawContent, err := a.session.GetStateEvent(ctx, a.systemRoomID,
+		schema.EventTypeTokenSigningKey, peerLocalpart)
+	if err != nil {
+		return fmt.Errorf("fetching token signing key for %s: %w", peerLocalpart, err)
+	}
+
+	var content schema.TokenSigningKeyContent
+	if err := json.Unmarshal(rawContent, &content); err != nil {
+		return fmt.Errorf("parsing token signing key for %s: %w", peerLocalpart, err)
+	}
+
+	publicKeyBytes, err := hex.DecodeString(content.PublicKey)
+	if err != nil {
+		return fmt.Errorf("decoding public key hex for %s: %w", peerLocalpart, err)
+	}
+
+	if len(publicKeyBytes) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid public key length for %s: got %d bytes, want %d",
+			peerLocalpart, len(publicKeyBytes), ed25519.PublicKeySize)
+	}
+
+	publicKey := ed25519.PublicKey(publicKeyBytes)
+	if !ed25519.Verify(publicKey, message, signature) {
+		return fmt.Errorf("Ed25519 signature verification failed for %s", peerLocalpart)
+	}
+
+	return nil
 }

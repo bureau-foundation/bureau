@@ -6,6 +6,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -55,10 +56,17 @@ const iceConnectTimeout = 30 * time.Second
 // production, in-process channels in tests). Connection establishment uses
 // vanilla ICE: all candidates are gathered before the SDP is published,
 // so signaling requires exactly one round-trip.
+//
+// When a [PeerAuthenticator] is configured, each new PeerConnection
+// completes a mutual Ed25519 challenge-response handshake before HTTP
+// data channels are accepted. This binds the transport connection to
+// the machines' cryptographic identities, preventing impersonation by
+// rogue peers.
 type WebRTCTransport struct {
-	signaler  Signaler
-	localpart string
-	logger    *slog.Logger
+	signaler      Signaler
+	localpart     string
+	authenticator PeerAuthenticator // nil disables peer authentication
+	logger        *slog.Logger
 
 	// iceConfig is the ICE server configuration. Protected by configMu
 	// because the daemon refreshes TURN credentials periodically.
@@ -94,17 +102,40 @@ type WebRTCTransport struct {
 type peerState struct {
 	connection  *webrtc.PeerConnection
 	localpart   string
-	established chan struct{} // closed when ICE reaches Connected/Completed
+	established chan struct{} // closed when peer is ready for HTTP data channels
+
+	// establishedOnce guards closing the established channel. Multiple
+	// code paths may attempt to close it (auth success, auth failure,
+	// ICE failure, ICE closed), and this ensures exactly one close.
+	establishedOnce sync.Once
+
+	// authOnce ensures authentication starts exactly once per
+	// PeerConnection. The ICE state handler triggers auth on the first
+	// Connected/Completed transition.
+	authOnce sync.Once
+
+	// authChannel receives the "auth" data channel from the inbound
+	// handler. The side that does NOT create the auth channel (determined
+	// by lexicographic tie-breaking) waits on this channel.
+	authChannel chan io.ReadWriteCloser
+
+	// authError is set before established is closed when authentication
+	// fails. Callers waiting on established must check this field after
+	// the channel closes to distinguish success from failure.
+	authError error
 }
 
 // NewWebRTCTransport creates a WebRTC transport. The localpart identifies
 // this machine in signaling (e.g., "machine/workstation"). The signaler
-// provides the mechanism for exchanging SDP offers and answers.
-func NewWebRTCTransport(signaler Signaler, localpart string, iceConfig ICEConfig, logger *slog.Logger) *WebRTCTransport {
+// provides the mechanism for exchanging SDP offers and answers. The
+// authenticator, if non-nil, enables mutual Ed25519 peer authentication
+// on each new PeerConnection.
+func NewWebRTCTransport(signaler Signaler, localpart string, iceConfig ICEConfig, authenticator PeerAuthenticator, logger *slog.Logger) *WebRTCTransport {
 	return &WebRTCTransport{
 		signaler:           signaler,
 		localpart:          localpart,
 		iceConfig:          iceConfig,
+		authenticator:      authenticator,
 		logger:             logger,
 		peers:              make(map[string]*peerState),
 		inboundConnections: make(chan net.Conn, 64),
@@ -207,13 +238,18 @@ func (wt *WebRTCTransport) DialContext(ctx context.Context, address string) (net
 		return nil, fmt.Errorf("establishing peer connection to %s: %w", address, err)
 	}
 
-	// Wait for the PeerConnection to be established.
+	// Wait for the PeerConnection to be established (including
+	// authentication if a PeerAuthenticator is configured).
 	select {
 	case <-peer.established:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-wt.closed:
 		return nil, net.ErrClosed
+	}
+
+	if peer.authError != nil {
+		return nil, fmt.Errorf("peer authentication failed for %s: %w", address, peer.authError)
 	}
 
 	return wt.openDataChannel(peer)
@@ -251,6 +287,7 @@ func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerLocalpart st
 		connection:  pc,
 		localpart:   peerLocalpart,
 		established: make(chan struct{}),
+		authChannel: make(chan io.ReadWriteCloser, 1),
 	}
 	wt.peers[peerLocalpart] = peer
 	wt.mu.Unlock()
@@ -280,7 +317,7 @@ func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerStat
 
 	// Register inbound data channel handler (the peer may open channels to us).
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		wt.handleInboundDataChannel(dc, peerLocalpart)
+		wt.handleInboundDataChannel(dc, peer)
 	})
 
 	// Monitor ICE connection state.
@@ -450,11 +487,12 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 		connection:  pc,
 		localpart:   offer.PeerLocalpart,
 		established: make(chan struct{}),
+		authChannel: make(chan io.ReadWriteCloser, 1),
 	}
 
 	// Register inbound data channel handler.
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		wt.handleInboundDataChannel(dc, offer.PeerLocalpart)
+		wt.handleInboundDataChannel(dc, peer)
 	})
 
 	// Monitor ICE connection state.
@@ -515,9 +553,13 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 	return nil
 }
 
-// handleInboundDataChannel wraps an incoming data channel as a net.Conn
-// and pushes it to the inbound connection channel for the HTTP handler.
-func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peerLocalpart string) {
+// handleInboundDataChannel routes incoming data channels. The "init"
+// channel is discarded (it only forces SDP to include data channels).
+// The "auth" channel is routed to the peer's authChannel for the
+// authentication handshake. All other channels are gated on successful
+// authentication (if a PeerAuthenticator is configured) and then
+// dispatched to the HTTP handler.
+func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer *peerState) {
 	// The "init" data channel is a trigger used by establishOutbound to
 	// force pion to include a data channel section in the SDP offer.
 	// Neither side sends data on it. Accepting it into the http.Server
@@ -533,19 +575,63 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 		return
 	}
 
+	// Route the auth data channel to the authentication handler.
+	if dc.Label() == authChannelLabel {
+		dc.OnOpen(func() {
+			rawChannel, err := dc.Detach()
+			if err != nil {
+				wt.logger.Error("detaching auth data channel failed",
+					"peer", peer.localpart,
+					"error", err,
+				)
+				return
+			}
+			select {
+			case peer.authChannel <- rawChannel:
+			default:
+				wt.logger.Warn("duplicate auth channel received, closing",
+					"peer", peer.localpart,
+				)
+				rawChannel.Close()
+			}
+		})
+		return
+	}
+
 	wt.logger.Debug("inbound data channel received",
-		"peer", peerLocalpart,
+		"peer", peer.localpart,
 		"label", dc.Label(),
 	)
 	dc.OnOpen(func() {
+		// Gate HTTP channels on successful authentication when a
+		// PeerAuthenticator is configured. Wait for the auth handshake
+		// to complete (established is closed on both success and
+		// failure), then check the result.
+		if wt.authenticator != nil {
+			select {
+			case <-peer.established:
+			case <-wt.closed:
+				dc.Close()
+				return
+			}
+			if peer.authError != nil {
+				wt.logger.Warn("rejecting data channel from unauthenticated peer",
+					"peer", peer.localpart,
+					"label", dc.Label(),
+				)
+				dc.Close()
+				return
+			}
+		}
+
 		wt.logger.Debug("inbound data channel opened",
-			"peer", peerLocalpart,
+			"peer", peer.localpart,
 			"label", dc.Label(),
 		)
 		rawChannel, err := dc.Detach()
 		if err != nil {
 			wt.logger.Error("detaching inbound data channel failed",
-				"peer", peerLocalpart,
+				"peer", peer.localpart,
 				"label", dc.Label(),
 				"error", err,
 			)
@@ -555,7 +641,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 		conn := NewDataChannelConn(
 			rawChannel,
 			wt.localpart+"/"+dc.Label(),
-			peerLocalpart+"/"+dc.Label(),
+			peer.localpart+"/"+dc.Label(),
 		)
 
 		select {
@@ -567,7 +653,9 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 }
 
 // handleICEStateChange monitors PeerConnection state and manages the
-// established signal.
+// established signal. When a PeerAuthenticator is configured, ICE
+// Connected triggers the authentication handshake rather than
+// immediately signaling established.
 func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peerState, state webrtc.ICEConnectionState) {
 	wt.logger.Info("ICE state change",
 		"peer", peerLocalpart,
@@ -576,12 +664,16 @@ func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peer
 
 	switch state {
 	case webrtc.ICEConnectionStateConnected, webrtc.ICEConnectionStateCompleted:
-		// Signal that the connection is ready for data channels.
-		select {
-		case <-peer.established:
-			// Already signaled.
-		default:
-			close(peer.established)
+		if wt.authenticator != nil {
+			// Start authentication exactly once. The auth handshake
+			// runs in a goroutine because it does blocking I/O on
+			// the data channel.
+			peer.authOnce.Do(func() {
+				go wt.authenticatePeer(peer)
+			})
+		} else {
+			// No authenticator: signal ready immediately.
+			peer.establishedOnce.Do(func() { close(peer.established) })
 		}
 
 	case webrtc.ICEConnectionStateFailed:
@@ -590,6 +682,12 @@ func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peer
 		)
 		// Don't remove from peers map here — DialContext/getOrCreatePeer
 		// checks the state and re-establishes if needed.
+		//
+		// Ensure established is closed so waiters don't hang forever.
+		// If auth never started, this unblocks DialContext with an
+		// authError. If auth already completed, this is a no-op.
+		peer.authError = fmt.Errorf("ICE connection failed before authentication")
+		peer.establishedOnce.Do(func() { close(peer.established) })
 
 	case webrtc.ICEConnectionStateClosed:
 		wt.mu.Lock()
@@ -597,7 +695,102 @@ func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peer
 			delete(wt.peers, peerLocalpart)
 		}
 		wt.mu.Unlock()
+
+		// Ensure established is closed so waiters don't hang forever.
+		peer.authError = fmt.Errorf("ICE connection closed before authentication")
+		peer.establishedOnce.Do(func() { close(peer.established) })
 	}
+}
+
+// authenticatePeer runs the mutual Ed25519 challenge-response handshake
+// on a new PeerConnection. One side creates the "auth" data channel
+// (determined by lexicographic comparison of localparts) and the other
+// side receives it via the inbound data channel handler. Both sides
+// then run the authentication protocol on this shared channel.
+//
+// On success, peer.established is closed with no authError.
+// On failure, peer.authError is set and peer.established is closed,
+// then the PeerConnection is torn down and removed from the peers map.
+// This ensures DialContext never hangs — it always gets unblocked.
+func (wt *WebRTCTransport) authenticatePeer(peer *peerState) {
+	err := wt.performPeerAuth(peer)
+	if err != nil {
+		wt.logger.Error("peer authentication failed",
+			"peer", peer.localpart,
+			"error", err,
+		)
+		peer.authError = err
+		peer.establishedOnce.Do(func() { close(peer.established) })
+		wt.removePeer(peer)
+		return
+	}
+
+	wt.logger.Info("peer authenticated", "peer", peer.localpart)
+	peer.establishedOnce.Do(func() { close(peer.established) })
+}
+
+// performPeerAuth executes the authentication protocol and returns any
+// error. Factored out of authenticatePeer to separate the protocol
+// logic from the established/cleanup lifecycle management.
+func (wt *WebRTCTransport) performPeerAuth(peer *peerState) error {
+	// Deterministic tie-breaking: the lexicographically smaller
+	// localpart creates the auth data channel.
+	weCreate := wt.localpart < peer.localpart
+
+	var authChannel io.ReadWriteCloser
+	if weCreate {
+		dc, err := peer.connection.CreateDataChannel(authChannelLabel, nil)
+		if err != nil {
+			return fmt.Errorf("creating auth data channel: %w", err)
+		}
+
+		// Wait for the data channel to open.
+		opened := make(chan struct{})
+		dc.OnOpen(func() { close(opened) })
+
+		select {
+		case <-opened:
+		case <-time.After(authTimeout):
+			dc.Close()
+			return fmt.Errorf("auth data channel open timed out")
+		case <-wt.closed:
+			dc.Close()
+			return fmt.Errorf("transport closed during auth")
+		}
+
+		rawChannel, err := dc.Detach()
+		if err != nil {
+			dc.Close()
+			return fmt.Errorf("detaching auth data channel: %w", err)
+		}
+		authChannel = rawChannel
+	} else {
+		// Wait for the peer to create the auth data channel and for
+		// the inbound handler to deliver it via peer.authChannel.
+		select {
+		case channel := <-peer.authChannel:
+			authChannel = channel
+		case <-time.After(authTimeout):
+			return fmt.Errorf("timed out waiting for auth data channel from peer")
+		case <-wt.closed:
+			return fmt.Errorf("transport closed during auth")
+		}
+	}
+	defer authChannel.Close()
+
+	return runPeerAuth(authChannel, wt.authenticator, wt.localpart, peer.localpart)
+}
+
+// removePeer tears down a peer's PeerConnection and removes it from the
+// peers map if the entry still points to the same peerState (another
+// goroutine may have already replaced it).
+func (wt *WebRTCTransport) removePeer(peer *peerState) {
+	wt.mu.Lock()
+	if current, ok := wt.peers[peer.localpart]; ok && current == peer {
+		delete(wt.peers, peer.localpart)
+	}
+	wt.mu.Unlock()
+	peer.connection.Close()
 }
 
 // openDataChannel creates a new ordered, reliable data channel on the

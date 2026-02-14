@@ -27,7 +27,9 @@ type Server struct {
 // tool is a discovered CLI command exposed as an MCP tool.
 type tool struct {
 	name        string
+	title       string
 	description string
+	annotations *toolAnnotations
 	inputSchema *cli.Schema
 	command     *cli.Command
 }
@@ -133,12 +135,11 @@ func (s *Server) handleInitialize(encoder *json.Encoder, req *request) error {
 		return writeError(encoder, req.ID, codeInvalidParams, "invalid initialize params: "+err.Error())
 	}
 
-	if params.ProtocolVersion != protocolVersion {
-		return writeError(encoder, req.ID, codeInvalidRequest,
-			fmt.Sprintf("unsupported protocol version %q (server supports %q)",
-				params.ProtocolVersion, protocolVersion))
-	}
-
+	// The MCP specification says the server responds with its own
+	// protocol version and the client decides whether it can proceed.
+	// We do not reject clients that request a different version —
+	// all MCP versions are additive, so older clients will simply
+	// ignore fields they don't recognize.
 	s.initialized = true
 
 	return writeResult(encoder, req.ID, initializeResult{
@@ -162,8 +163,10 @@ func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
 	for i, t := range s.tools {
 		descriptions[i] = toolDescription{
 			Name:        t.name,
+			Title:       t.title,
 			Description: t.description,
 			InputSchema: t.inputSchema,
+			Annotations: t.annotations,
 		}
 	}
 	return writeResult(encoder, req.ID, toolsListResult{Tools: descriptions})
@@ -310,7 +313,9 @@ func discoverTools(command *cli.Command, path []string, tools *[]tool) {
 		} else {
 			*tools = append(*tools, tool{
 				name:        strings.Join(current, "_"),
+				title:       command.Summary,
 				description: toolDescriptionText(command),
+				annotations: deriveAnnotations(command),
 				inputSchema: schema,
 				command:     command,
 			})
@@ -329,6 +334,28 @@ func toolDescriptionText(command *cli.Command) string {
 		return command.Description
 	}
 	return command.Summary
+}
+
+// deriveAnnotations infers tool annotations from the command name.
+// List commands are marked read-only, idempotent, and non-destructive.
+// Returns nil when no annotations can be confidently inferred, letting
+// clients apply the MCP defaults (destructive, non-idempotent, open-world).
+func deriveAnnotations(command *cli.Command) *toolAnnotations {
+	switch command.Name {
+	case "list":
+		return &toolAnnotations{
+			ReadOnlyHint:    boolPtr(true),
+			DestructiveHint: boolPtr(false),
+			IdempotentHint:  boolPtr(true),
+			OpenWorldHint:   boolPtr(false),
+		}
+	default:
+		return nil
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 // writeResult sends a JSON-RPC 2.0 success response.

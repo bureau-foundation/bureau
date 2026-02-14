@@ -43,10 +43,14 @@ func testCommandTree() *cli.Command {
 		Value      string `json:"value" flag:"value" desc:"value to print"`
 		OutputJSON bool   `json:"-" flag:"json" desc:"output as JSON"`
 	}
+	type listParams struct {
+		Prefix string `json:"prefix" flag:"prefix" desc:"filter prefix" default:""`
+	}
 
 	var echoP echoParams
 	var failP failParams
 	var formatP formatParams
+	var listP listParams
 
 	return &cli.Command{
 		Name: "test",
@@ -83,6 +87,16 @@ func testCommandTree() *cli.Command {
 					} else {
 						fmt.Printf("VALUE: %s", formatP.Value)
 					}
+					return nil
+				},
+			},
+			{
+				Name:    "list",
+				Summary: "List items",
+				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("list", &listP) },
+				Params:  func() any { return &listP },
+				Run: func(args []string) error {
+					fmt.Println("items")
 					return nil
 				},
 			},
@@ -161,13 +175,13 @@ func TestNewServer_ToolDiscovery(t *testing.T) {
 	root := testCommandTree()
 	server := NewServer(root)
 
-	// Should discover: test_echo, test_fail, test_format.
+	// Should discover: test_echo, test_fail, test_format, test_list.
 	// Should NOT discover: test_noparams (no Params function).
-	if len(server.tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(server.tools))
+	if len(server.tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(server.tools))
 	}
 
-	expected := []string{"test_echo", "test_fail", "test_format"}
+	expected := []string{"test_echo", "test_fail", "test_format", "test_list"}
 	for i, name := range expected {
 		if server.tools[i].name != name {
 			t.Errorf("tools[%d].name = %q, want %q", i, server.tools[i].name, name)
@@ -178,6 +192,13 @@ func TestNewServer_ToolDiscovery(t *testing.T) {
 	for _, discovered := range server.tools {
 		if discovered.inputSchema == nil {
 			t.Errorf("tool %q has nil inputSchema", discovered.name)
+		}
+	}
+
+	// Verify titles were populated from Summary.
+	for _, discovered := range server.tools {
+		if discovered.title == "" {
+			t.Errorf("tool %q has empty title", discovered.name)
 		}
 	}
 
@@ -219,28 +240,38 @@ func TestServer_Initialize(t *testing.T) {
 	}
 }
 
-func TestServer_InitializeWrongVersion(t *testing.T) {
+func TestServer_InitializeVersionNegotiation(t *testing.T) {
+	// The server accepts any client version and responds with its own
+	// version, per the MCP specification. Older clients will simply
+	// ignore fields they don't recognize.
 	root := testCommandTree()
 	responses := mcpSession(t, root, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "initialize",
 		"params": map[string]any{
-			"protocolVersion": "1999-01-01",
+			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "test"},
+			"clientInfo":      map[string]any{"name": "old-client"},
 		},
 	})
 
 	if len(responses) != 1 {
 		t.Fatalf("expected 1 response, got %d", len(responses))
 	}
-	if responses[0].Error == nil {
-		t.Fatal("expected error response for wrong protocol version")
+	if responses[0].Error != nil {
+		t.Fatalf("unexpected error: code=%d message=%q",
+			responses[0].Error.Code, responses[0].Error.Message)
 	}
-	if !strings.Contains(responses[0].Error.Message, "unsupported protocol version") {
-		t.Errorf("error message = %q, want it to contain 'unsupported protocol version'",
-			responses[0].Error.Message)
+
+	var result initializeResult
+	if err := json.Unmarshal(responses[0].Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	// Server must respond with its own version, not the client's.
+	if result.ProtocolVersion != protocolVersion {
+		t.Errorf("protocolVersion = %q, want %q", result.ProtocolVersion, protocolVersion)
 	}
 }
 
@@ -289,24 +320,27 @@ func TestServer_ToolsList(t *testing.T) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	if len(result.Tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(result.Tools))
+	if len(result.Tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(result.Tools))
 	}
 
 	names := make(map[string]bool)
 	for _, discovered := range result.Tools {
 		names[discovered.Name] = true
 	}
-	for _, expected := range []string{"test_echo", "test_fail", "test_format"} {
+	for _, expected := range []string{"test_echo", "test_fail", "test_format", "test_list"} {
 		if !names[expected] {
 			t.Errorf("missing tool %q in tools/list", expected)
 		}
 	}
 
-	// Verify each tool has a non-nil inputSchema.
+	// Verify each tool has a non-nil inputSchema and a title.
 	for _, discovered := range result.Tools {
 		if discovered.InputSchema == nil {
 			t.Errorf("tool %q has nil inputSchema", discovered.Name)
+		}
+		if discovered.Title == "" {
+			t.Errorf("tool %q has empty title", discovered.Name)
 		}
 	}
 }
@@ -582,4 +616,115 @@ func TestEnableJSONOutput_NoFlag(t *testing.T) {
 	p := &params{Name: "test"}
 	// Should not panic when there's no json flag field.
 	enableJSONOutput(p)
+}
+
+func TestDeriveAnnotations(t *testing.T) {
+	tests := []struct {
+		name           string
+		commandName    string
+		wantNil        bool
+		wantReadOnly   bool
+		wantIdempotent bool
+	}{
+		{
+			name:           "list command is read-only and idempotent",
+			commandName:    "list",
+			wantReadOnly:   true,
+			wantIdempotent: true,
+		},
+		{
+			name:        "non-list command has no annotations",
+			commandName: "create",
+			wantNil:     true,
+		},
+		{
+			name:        "empty name has no annotations",
+			commandName: "",
+			wantNil:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			command := &cli.Command{Name: tt.commandName}
+			annotations := deriveAnnotations(command)
+
+			if tt.wantNil {
+				if annotations != nil {
+					t.Fatalf("expected nil annotations for %q, got %+v",
+						tt.commandName, annotations)
+				}
+				return
+			}
+
+			if annotations == nil {
+				t.Fatalf("expected non-nil annotations for %q", tt.commandName)
+			}
+			if annotations.ReadOnlyHint == nil || *annotations.ReadOnlyHint != tt.wantReadOnly {
+				t.Errorf("readOnlyHint = %v, want %v", annotations.ReadOnlyHint, tt.wantReadOnly)
+			}
+			if annotations.IdempotentHint == nil || *annotations.IdempotentHint != tt.wantIdempotent {
+				t.Errorf("idempotentHint = %v, want %v", annotations.IdempotentHint, tt.wantIdempotent)
+			}
+			if annotations.DestructiveHint == nil || *annotations.DestructiveHint != false {
+				t.Errorf("destructiveHint should be false for list commands")
+			}
+			if annotations.OpenWorldHint == nil || *annotations.OpenWorldHint != false {
+				t.Errorf("openWorldHint should be false for list commands")
+			}
+		})
+	}
+}
+
+func TestServer_ToolsListAnnotations(t *testing.T) {
+	root := testCommandTree()
+	messages := append(initMessages(), map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+
+	responses := mcpSession(t, root, messages...)
+	resp := responses[1]
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	var result toolsListResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	// Find the list tool and verify it has annotations.
+	var listTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_list" {
+			listTool = &result.Tools[i]
+			break
+		}
+	}
+	if listTool == nil {
+		t.Fatal("test_list not found in tools/list response")
+	}
+	if listTool.Annotations == nil {
+		t.Fatal("test_list should have annotations")
+	}
+	if listTool.Annotations.ReadOnlyHint == nil || !*listTool.Annotations.ReadOnlyHint {
+		t.Error("test_list should have readOnlyHint=true")
+	}
+
+	// Find the echo tool and verify it has no annotations.
+	var echoTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_echo" {
+			echoTool = &result.Tools[i]
+			break
+		}
+	}
+	if echoTool == nil {
+		t.Fatal("test_echo not found in tools/list response")
+	}
+	if echoTool.Annotations != nil {
+		t.Errorf("test_echo should have nil annotations, got %+v", echoTool.Annotations)
+	}
 }

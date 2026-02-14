@@ -5,8 +5,11 @@ package mcp
 
 import "encoding/json"
 
-// protocolVersion is the MCP protocol version supported by this server.
-const protocolVersion = "2024-11-05"
+// protocolVersion is the MCP protocol version implemented by this server.
+// The server responds with this version during initialization regardless
+// of what version the client requests, per the MCP specification: the
+// client then decides whether it can work with the server's version.
+const protocolVersion = "2025-11-25"
 
 // JSON-RPC 2.0 standard error codes.
 const (
@@ -75,8 +78,11 @@ type serverCapabilities struct {
 }
 
 // toolCapability indicates the server supports tool operations.
-// Empty struct — presence alone signals the capability.
-type toolCapability struct{}
+// Its presence in capabilities signals tool support; listChanged
+// declares whether the server sends notifications/tools/list_changed.
+type toolCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
 
 // serverInfo identifies the MCP server.
 type serverInfo struct {
@@ -84,16 +90,42 @@ type serverInfo struct {
 	Version string `json:"version"`
 }
 
-// toolsListResult is the result for tools/list.
+// toolsListResult is the result for tools/list. NextCursor supports
+// pagination per the MCP specification; when empty it is omitted.
 type toolsListResult struct {
-	Tools []toolDescription `json:"tools"`
+	Tools      []toolDescription `json:"tools"`
+	NextCursor string            `json:"nextCursor,omitempty"`
 }
 
 // toolDescription describes a single tool for the tools/list response.
+// Title is the human-readable display name; Annotations carry behavioral
+// hints; OutputSchema declares the JSON Schema for structured results;
+// Icons are optional sized images for client UIs.
 type toolDescription struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	InputSchema any    `json:"inputSchema"`
+	Name         string           `json:"name"`
+	Title        string           `json:"title,omitempty"`
+	Description  string           `json:"description"`
+	InputSchema  any              `json:"inputSchema"`
+	OutputSchema any              `json:"outputSchema,omitempty"`
+	Annotations  *toolAnnotations `json:"annotations,omitempty"`
+	Icons        []toolIcon       `json:"icons,omitempty"`
+}
+
+// toolAnnotations provides behavioral hints about a tool. All fields
+// are optional pointers; when nil the MCP-specified defaults apply:
+// readOnly=false, destructive=true, idempotent=false, openWorld=true.
+type toolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
+}
+
+// toolIcon is a sized icon that clients can display for a tool.
+type toolIcon struct {
+	Source   string   `json:"src"`
+	MIMEType string   `json:"mimeType"`
+	Sizes    []string `json:"sizes,omitempty"`
 }
 
 // toolsCallParams is the client's tools/call request parameters.
@@ -102,10 +134,14 @@ type toolsCallParams struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
-// toolsCallResult is the server's tools/call response.
+// toolsCallResult is the server's tools/call response. StructuredContent
+// carries typed JSON when the tool declares an outputSchema; per the spec,
+// the serialized JSON is also included in a text content block for
+// backward compatibility.
 type toolsCallResult struct {
-	Content []contentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content           []contentBlock `json:"content"`
+	StructuredContent any            `json:"structuredContent,omitempty"`
+	IsError           bool           `json:"isError,omitempty"`
 }
 
 // contentBlock is an MCP content block within a tool result.

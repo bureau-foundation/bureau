@@ -94,7 +94,8 @@ type Request struct {
 
 	// KeyValue is the plaintext credential value (for "provision-credential").
 	// Safe over local IPC — same trust boundary as DirectCredentials.
-	// The launcher zeros this after use.
+	// The re-encrypted JSON bundle is zeroed after use; the Go string
+	// itself is immutable and relies on GC for cleanup.
 	KeyValue string `cbor:"key_value,omitempty"`
 
 	// RecipientKeys lists age public key strings (age1... format) to

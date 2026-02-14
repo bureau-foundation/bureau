@@ -542,13 +542,14 @@ func (model *Model) scrollListDown(count int) {
 // within the content area. Selects the clicked item, or toggles
 // collapse on headers.
 func (model *Model) handleListClick(rowOffset int) {
+	// Clicking anywhere in the list pane focuses it, even on empty
+	// space below the last item.
+	model.focusRegion = FocusList
+
 	itemIndex := model.scrollOffset + rowOffset
 	if itemIndex < 0 || itemIndex >= len(model.items) {
 		return
 	}
-
-	// Clicking focuses the list pane.
-	model.focusRegion = FocusList
 
 	item := model.items[itemIndex]
 	if item.IsHeader {

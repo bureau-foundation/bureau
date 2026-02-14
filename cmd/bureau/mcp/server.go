@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
@@ -21,6 +23,7 @@ import (
 type Server struct {
 	tools       []tool
 	toolsByName map[string]*tool
+	grants      []schema.Grant
 	initialized bool
 }
 
@@ -38,8 +41,14 @@ type tool struct {
 // discover all commands with a Params function. Each such command
 // becomes an MCP tool with a JSON Schema derived from its parameter
 // struct.
-func NewServer(root *cli.Command) *Server {
-	s := &Server{}
+//
+// Grants control which tools are visible and callable. Only tools
+// whose RequiredGrants are all satisfied by the provided grants
+// appear in tools/list and are accepted by tools/call. Commands
+// without RequiredGrants are hidden (default-deny). Use a wildcard
+// grant (actions: ["command/**"]) for operator/development access.
+func NewServer(root *cli.Command, grants []schema.Grant) *Server {
+	s := &Server{grants: grants}
 
 	discoverTools(root, nil, &s.tools)
 
@@ -159,15 +168,21 @@ func (s *Server) handlePing(encoder *json.Encoder, req *request) error {
 }
 
 func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
-	descriptions := make([]toolDescription, len(s.tools))
-	for i, t := range s.tools {
-		descriptions[i] = toolDescription{
+	var descriptions []toolDescription
+	for _, t := range s.tools {
+		if !s.toolAuthorized(&t) {
+			continue
+		}
+		descriptions = append(descriptions, toolDescription{
 			Name:        t.name,
 			Title:       t.title,
 			Description: t.description,
 			InputSchema: t.inputSchema,
 			Annotations: t.annotations,
-		}
+		})
+	}
+	if descriptions == nil {
+		descriptions = []toolDescription{}
 	}
 	return writeResult(encoder, req.ID, toolsListResult{Tools: descriptions})
 }
@@ -185,6 +200,10 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 	t, ok := s.toolsByName[params.Name]
 	if !ok {
 		return writeError(encoder, req.ID, codeInvalidParams, "unknown tool: "+params.Name)
+	}
+
+	if !s.toolAuthorized(t) {
+		return writeError(encoder, req.ID, codeInvalidParams, "tool not authorized: "+params.Name)
 	}
 
 	output, runErr := s.executeTool(t, params.Arguments)
@@ -209,6 +228,21 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 	}
 
 	return writeResult(encoder, req.ID, result)
+}
+
+// toolAuthorized returns true if the principal's grants satisfy all of
+// the tool's required grants. Commands without RequiredGrants are hidden
+// (default-deny): every MCP-eligible command must declare its grants.
+func (s *Server) toolAuthorized(t *tool) bool {
+	if len(t.command.RequiredGrants) == 0 {
+		return false
+	}
+	for _, action := range t.command.RequiredGrants {
+		if !authorization.GrantsAllow(s.grants, action, "") {
+			return false
+		}
+	}
+	return true
 }
 
 // executeTool runs a CLI command as an MCP tool, capturing stdout.

@@ -62,6 +62,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 	agentMux := http.NewServeMux()
 	agentMux.HandleFunc("POST /v1/proxy", handler.HandleProxy)
 	agentMux.HandleFunc("GET /v1/identity", handler.HandleIdentity)
+	agentMux.HandleFunc("GET /v1/grants", handler.HandleGrants)
 	agentMux.HandleFunc("GET /v1/services", handler.HandleServiceDirectory)
 	agentMux.HandleFunc("GET /health", handler.HandleHealth)
 	agentMux.HandleFunc("GET /v1/matrix/whoami", handler.HandleMatrixWhoami)

@@ -53,6 +53,22 @@ type Command struct {
 	// If nil, the command is not exposed as an MCP tool.
 	Params func() any
 
+	// RequiredGrants lists the authorization action strings needed to
+	// invoke this command via MCP. The MCP server checks all required
+	// grants against the principal's grants (fetched from the credential
+	// proxy); only tools whose grants are all satisfied appear in
+	// tools/list and are callable.
+	//
+	// Actions use the hierarchical slash-separated naming convention
+	// (e.g., "command/pipeline/list"). Glob patterns in grants match
+	// against these strings (e.g., "command/pipeline/**" matches all
+	// pipeline actions).
+	//
+	// Commands without RequiredGrants are hidden from MCP (default-deny).
+	// The regular CLI dispatch path (Command.Execute) does not check
+	// this field.
+	RequiredGrants []string
+
 	// Subcommands are nested commands dispatched by the first positional arg.
 	Subcommands []*Command
 

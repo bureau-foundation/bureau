@@ -51,7 +51,8 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/template/list"},
 		Run: func(args []string) error {
 			// In CLI mode, the room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.

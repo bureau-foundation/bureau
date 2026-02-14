@@ -15,5 +15,11 @@
 // JSON objects matching the parameter struct's json tags, with
 // validation enforced by the JSON Schema.
 //
-// This package implements the 2024-11-05 MCP protocol specification.
+// Tools are filtered by the principal's authorization grants, fetched
+// from the credential proxy at startup. Commands must declare
+// [cli.Command.RequiredGrants] to be visible; commands without grants
+// are hidden (default-deny). This prevents sandboxed agents from
+// seeing or invoking tools they are not authorized to use.
+//
+// This package implements the 2025-11-25 MCP protocol specification.
 package mcp

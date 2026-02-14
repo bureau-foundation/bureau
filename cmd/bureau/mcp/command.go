@@ -36,6 +36,10 @@ The server discovers all CLI commands with typed parameter structs
 and exposes them as MCP tools. Tool names are underscore-joined
 command paths (e.g., bureau_pipeline_list).
 
+Tools are filtered by the principal's authorization grants, obtained
+from the proxy socket. Only commands whose RequiredGrants are all
+satisfied by the principal's grants appear in the tool list.
+
 This command is intended to be launched by MCP-capable clients
 (such as AI agent frameworks) as a subprocess.`,
 		Usage: "bureau mcp serve",
@@ -46,7 +50,11 @@ This command is intended to be launched by MCP-capable clients
 			},
 		},
 		Run: func(args []string) error {
-			server := NewServer(root)
+			grants, err := fetchGrants()
+			if err != nil {
+				return err
+			}
+			server := NewServer(root, grants)
 			return server.Serve()
 		},
 	}

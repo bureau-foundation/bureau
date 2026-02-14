@@ -163,6 +163,22 @@ func (h *Handler) SetGrants(grants []schema.Grant) {
 	h.logger.Info("authorization grants configured", "grants", len(grants))
 }
 
+// HandleGrants returns the principal's authorization grants. The MCP
+// server calls this on startup to determine which tools the agent is
+// permitted to invoke.
+func (h *Handler) HandleGrants(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	grants := h.grants
+	h.mu.RUnlock()
+
+	// Return empty array, not null, when there are no grants.
+	if grants == nil {
+		grants = []schema.Grant{}
+	}
+
+	h.writeJSON(w, grants)
+}
+
 // HandleHealth handles health check requests.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, map[string]string{"status": "ok"})

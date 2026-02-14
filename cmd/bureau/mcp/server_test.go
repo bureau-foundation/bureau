@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // testResponse is a JSON-RPC 2.0 response for test assertions. Result
@@ -28,6 +29,14 @@ type testResponse struct {
 type testRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// --- Test fixtures ---
+
+// wildcardGrants returns grants that authorize all command actions,
+// used by tests that exercise non-authorization behavior.
+func wildcardGrants() []schema.Grant {
+	return []schema.Grant{{Actions: []string{"command/**"}}}
 }
 
 // testCommandTree returns a command tree for MCP server tests. Each
@@ -56,31 +65,34 @@ func testCommandTree() *cli.Command {
 		Name: "test",
 		Subcommands: []*cli.Command{
 			{
-				Name:        "echo",
-				Summary:     "Echo a message",
-				Description: "Echo the provided message to stdout.",
-				Flags:       func() *pflag.FlagSet { return cli.FlagsFromParams("echo", &echoP) },
-				Params:      func() any { return &echoP },
+				Name:           "echo",
+				Summary:        "Echo a message",
+				Description:    "Echo the provided message to stdout.",
+				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("echo", &echoP) },
+				Params:         func() any { return &echoP },
+				RequiredGrants: []string{"command/test/echo"},
 				Run: func(args []string) error {
 					fmt.Println(echoP.Message)
 					return nil
 				},
 			},
 			{
-				Name:    "fail",
-				Summary: "Always fails with a reason",
-				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("fail", &failP) },
-				Params:  func() any { return &failP },
+				Name:           "fail",
+				Summary:        "Always fails with a reason",
+				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("fail", &failP) },
+				Params:         func() any { return &failP },
+				RequiredGrants: []string{"command/test/fail"},
 				Run: func(args []string) error {
 					fmt.Print("partial")
 					return fmt.Errorf("intentional failure: %s", failP.Reason)
 				},
 			},
 			{
-				Name:    "format",
-				Summary: "Conditional JSON output",
-				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("format", &formatP) },
-				Params:  func() any { return &formatP },
+				Name:           "format",
+				Summary:        "Conditional JSON output",
+				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("format", &formatP) },
+				Params:         func() any { return &formatP },
+				RequiredGrants: []string{"command/test/format"},
 				Run: func(args []string) error {
 					if formatP.OutputJSON {
 						fmt.Printf(`{"value":%q}`, formatP.Value)
@@ -91,10 +103,11 @@ func testCommandTree() *cli.Command {
 				},
 			},
 			{
-				Name:    "list",
-				Summary: "List items",
-				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("list", &listP) },
-				Params:  func() any { return &listP },
+				Name:           "list",
+				Summary:        "List items",
+				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("list", &listP) },
+				Params:         func() any { return &listP },
+				RequiredGrants: []string{"command/test/list"},
 				Run: func(args []string) error {
 					fmt.Println("items")
 					return nil
@@ -130,9 +143,15 @@ func initMessages() []map[string]any {
 	}
 }
 
+// --- Session helpers ---
+//
+// These are layered from low-level (mcpSession) to high-level
+// (callToolResult). Most tests should use the highest-level
+// helper that covers their assertions.
+
 // mcpSession sends a sequence of JSON-RPC messages to a fresh MCP
 // server and returns the responses. Notifications produce no response.
-func mcpSession(t *testing.T, root *cli.Command, messages ...map[string]any) []testResponse {
+func mcpSession(t *testing.T, root *cli.Command, grants []schema.Grant, messages ...map[string]any) []testResponse {
 	t.Helper()
 
 	var input bytes.Buffer
@@ -146,7 +165,7 @@ func mcpSession(t *testing.T, root *cli.Command, messages ...map[string]any) []t
 	}
 
 	var output bytes.Buffer
-	server := NewServer(root)
+	server := NewServer(root, grants)
 	if err := server.Run(&input, &output); err != nil {
 		t.Fatalf("server.Run: %v", err)
 	}
@@ -171,9 +190,96 @@ func mcpSession(t *testing.T, root *cli.Command, messages ...map[string]any) []t
 	return responses
 }
 
+// session runs an initialized MCP session against testCommandTree with
+// wildcard grants. Additional messages are sent after the init handshake.
+func session(t *testing.T, messages ...map[string]any) []testResponse {
+	t.Helper()
+	return sessionWithGrants(t, wildcardGrants(), messages...)
+}
+
+// sessionWithGrants runs an initialized MCP session against
+// testCommandTree with the specified grants.
+func sessionWithGrants(t *testing.T, grants []schema.Grant, messages ...map[string]any) []testResponse {
+	t.Helper()
+	root := testCommandTree()
+	all := append(initMessages(), messages...)
+	return mcpSession(t, root, grants, all...)
+}
+
+// listTools runs tools/list with wildcard grants and returns the
+// parsed result.
+func listTools(t *testing.T) toolsListResult {
+	t.Helper()
+	return listToolsWithGrants(t, wildcardGrants())
+}
+
+// listToolsWithGrants runs tools/list with the specified grants and
+// returns the parsed result. Fails the test on JSON-RPC errors.
+func listToolsWithGrants(t *testing.T, grants []schema.Grant) toolsListResult {
+	t.Helper()
+	responses := sessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	resp := responses[1]
+	if resp.Error != nil {
+		t.Fatalf("tools/list error: code=%d message=%q", resp.Error.Code, resp.Error.Message)
+	}
+	var result toolsListResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal tools/list result: %v", err)
+	}
+	return result
+}
+
+// callTool runs tools/call with wildcard grants and returns the raw
+// response, allowing callers to assert on both JSON-RPC success and
+// error conditions.
+func callTool(t *testing.T, name string, arguments map[string]any) testResponse {
+	t.Helper()
+	return callToolWithGrants(t, wildcardGrants(), name, arguments)
+}
+
+// callToolWithGrants runs tools/call with the specified grants and
+// returns the raw response.
+func callToolWithGrants(t *testing.T, grants []schema.Grant, name string, arguments map[string]any) testResponse {
+	t.Helper()
+	params := map[string]any{"name": name}
+	if arguments != nil {
+		params["arguments"] = arguments
+	}
+	responses := sessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  params,
+	})
+	return responses[1]
+}
+
+// callToolResult runs tools/call with wildcard grants and parses the
+// result into a toolsCallResult. Fails the test on JSON-RPC errors
+// (as opposed to tool-level errors indicated by isError=true).
+func callToolResult(t *testing.T, name string, arguments map[string]any) toolsCallResult {
+	t.Helper()
+	resp := callTool(t, name, arguments)
+	if resp.Error != nil {
+		t.Fatalf("tools/call %q: JSON-RPC error code=%d message=%q",
+			name, resp.Error.Code, resp.Error.Message)
+	}
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal tools/call %q result: %v", name, err)
+	}
+	return result
+}
+
+// --- Tool discovery tests ---
+
 func TestNewServer_ToolDiscovery(t *testing.T) {
 	root := testCommandTree()
-	server := NewServer(root)
+	server := NewServer(root, wildcardGrants())
 
 	// Should discover: test_echo, test_fail, test_format, test_list.
 	// Should NOT discover: test_noparams (no Params function).
@@ -188,21 +294,18 @@ func TestNewServer_ToolDiscovery(t *testing.T) {
 		}
 	}
 
-	// Verify schemas were generated.
 	for _, discovered := range server.tools {
 		if discovered.inputSchema == nil {
 			t.Errorf("tool %q has nil inputSchema", discovered.name)
 		}
 	}
 
-	// Verify titles were populated from Summary.
 	for _, discovered := range server.tools {
 		if discovered.title == "" {
 			t.Errorf("tool %q has empty title", discovered.name)
 		}
 	}
 
-	// Verify map lookup works.
 	for _, name := range expected {
 		if _, ok := server.toolsByName[name]; !ok {
 			t.Errorf("toolsByName missing %q", name)
@@ -210,11 +313,10 @@ func TestNewServer_ToolDiscovery(t *testing.T) {
 	}
 }
 
-func TestServer_Initialize(t *testing.T) {
-	root := testCommandTree()
-	responses := mcpSession(t, root, initMessages()...)
+// --- Protocol tests ---
 
-	// Only the initialize request produces a response.
+func TestServer_Initialize(t *testing.T) {
+	responses := session(t)
 	if len(responses) != 1 {
 		t.Fatalf("expected 1 response, got %d", len(responses))
 	}
@@ -242,10 +344,10 @@ func TestServer_Initialize(t *testing.T) {
 
 func TestServer_InitializeVersionNegotiation(t *testing.T) {
 	// The server accepts any client version and responds with its own
-	// version, per the MCP specification. Older clients will simply
-	// ignore fields they don't recognize.
+	// version, per the MCP specification. Older clients simply ignore
+	// fields they don't recognize.
 	root := testCommandTree()
-	responses := mcpSession(t, root, map[string]any{
+	responses := mcpSession(t, root, wildcardGrants(), map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "initialize",
@@ -276,14 +378,11 @@ func TestServer_InitializeVersionNegotiation(t *testing.T) {
 }
 
 func TestServer_Ping(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
+	responses := session(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "ping",
 	})
-
-	responses := mcpSession(t, root, messages...)
 	if len(responses) != 2 {
 		t.Fatalf("expected 2 responses (init + ping), got %d", len(responses))
 	}
@@ -297,248 +396,10 @@ func TestServer_Ping(t *testing.T) {
 	}
 }
 
-func TestServer_ToolsList(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/list",
-	})
-
-	responses := mcpSession(t, root, messages...)
-	if len(responses) != 2 {
-		t.Fatalf("expected 2 responses, got %d", len(responses))
-	}
-
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %v", resp.Error)
-	}
-
-	var result toolsListResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-
-	if len(result.Tools) != 4 {
-		t.Fatalf("expected 4 tools, got %d", len(result.Tools))
-	}
-
-	names := make(map[string]bool)
-	for _, discovered := range result.Tools {
-		names[discovered.Name] = true
-	}
-	for _, expected := range []string{"test_echo", "test_fail", "test_format", "test_list"} {
-		if !names[expected] {
-			t.Errorf("missing tool %q in tools/list", expected)
-		}
-	}
-
-	// Verify each tool has a non-nil inputSchema and a title.
-	for _, discovered := range result.Tools {
-		if discovered.InputSchema == nil {
-			t.Errorf("tool %q has nil inputSchema", discovered.Name)
-		}
-		if discovered.Title == "" {
-			t.Errorf("tool %q has empty title", discovered.Name)
-		}
-	}
-}
-
-func TestServer_ToolsCall(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "test_echo",
-			"arguments": map[string]any{"message": "hello world"},
-		},
-	})
-
-	responses := mcpSession(t, root, messages...)
-	if len(responses) != 2 {
-		t.Fatalf("expected 2 responses, got %d", len(responses))
-	}
-
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %v", resp.Error)
-	}
-
-	var result toolsCallResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-
-	if result.IsError {
-		t.Error("isError should be false")
-	}
-	if len(result.Content) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(result.Content))
-	}
-	// fmt.Println adds a trailing newline.
-	if result.Content[0].Text != "hello world\n" {
-		t.Errorf("content text = %q, want %q", result.Content[0].Text, "hello world\n")
-	}
-}
-
-func TestServer_ToolsCallDefaults(t *testing.T) {
-	root := testCommandTree()
-	// Call fail with no arguments — Reason should default to "boom"
-	// via the Flags() default registration.
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "test_fail",
-			"arguments": map[string]any{},
-		},
-	})
-
-	responses := mcpSession(t, root, messages...)
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
-	}
-
-	var result toolsCallResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-
-	if !result.IsError {
-		t.Error("expected isError=true (tool returns error)")
-	}
-
-	// Find the error content block.
-	var errorText string
-	for _, block := range result.Content {
-		if strings.Contains(block.Text, "intentional failure") {
-			errorText = block.Text
-		}
-	}
-	if errorText == "" {
-		t.Fatal("no error content block found")
-	}
-	// Default "boom" should be applied via Flags() default registration.
-	if !strings.Contains(errorText, "boom") {
-		t.Errorf("error text = %q, want it to contain 'boom' (default)", errorText)
-	}
-}
-
-func TestServer_ToolsCallJSONOutput(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "test_format",
-			"arguments": map[string]any{"value": "hello"},
-		},
-	})
-
-	responses := mcpSession(t, root, messages...)
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %v", resp.Error)
-	}
-
-	var result toolsCallResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-
-	if result.IsError {
-		t.Error("expected isError=false")
-	}
-	if len(result.Content) == 0 {
-		t.Fatal("no content blocks")
-	}
-
-	// enableJSONOutput should have set OutputJSON=true, producing
-	// JSON instead of "VALUE: hello".
-	output := result.Content[0].Text
-	if strings.Contains(output, "VALUE:") {
-		t.Errorf("got table output %q, expected JSON (enableJSONOutput should force JSON mode)", output)
-	}
-	if !strings.Contains(output, `"value"`) {
-		t.Errorf("output %q does not look like JSON", output)
-	}
-}
-
-func TestServer_ToolsCallError(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "test_fail",
-			"arguments": map[string]any{"reason": "test error"},
-		},
-	})
-
-	responses := mcpSession(t, root, messages...)
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
-	}
-
-	var result toolsCallResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-
-	if !result.IsError {
-		t.Error("expected isError=true")
-	}
-	// Should have two content blocks: partial stdout and the error.
-	if len(result.Content) < 2 {
-		t.Fatalf("expected at least 2 content blocks, got %d", len(result.Content))
-	}
-
-	// First block: partial stdout from the command.
-	if result.Content[0].Text != "partial" {
-		t.Errorf("first content = %q, want %q", result.Content[0].Text, "partial")
-	}
-	// Second block: the error message.
-	if !strings.Contains(result.Content[1].Text, "test error") {
-		t.Errorf("error content = %q, want it to contain 'test error'", result.Content[1].Text)
-	}
-}
-
-func TestServer_ToolsCallUnknownTool(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name": "nonexistent_tool",
-		},
-	})
-
-	responses := mcpSession(t, root, messages...)
-	resp := responses[1]
-	if resp.Error == nil {
-		t.Fatal("expected error for unknown tool")
-	}
-	if resp.Error.Code != codeInvalidParams {
-		t.Errorf("error code = %d, want %d", resp.Error.Code, codeInvalidParams)
-	}
-	if !strings.Contains(resp.Error.Message, "unknown tool") {
-		t.Errorf("error message = %q, want it to contain 'unknown tool'", resp.Error.Message)
-	}
-}
-
 func TestServer_NotInitialized(t *testing.T) {
 	root := testCommandTree()
 	// Send tools/call without initializing first.
-	responses := mcpSession(t, root, map[string]any{
+	responses := mcpSession(t, root, wildcardGrants(), map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/call",
@@ -561,14 +422,11 @@ func TestServer_NotInitialized(t *testing.T) {
 }
 
 func TestServer_UnknownMethod(t *testing.T) {
-	root := testCommandTree()
-	messages := append(initMessages(), map[string]any{
+	responses := session(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "resources/list",
 	})
-
-	responses := mcpSession(t, root, messages...)
 	resp := responses[1]
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown method")
@@ -579,21 +437,176 @@ func TestServer_UnknownMethod(t *testing.T) {
 }
 
 func TestServer_NotificationIgnored(t *testing.T) {
-	root := testCommandTree()
-	// Initialize, then send a notification. The notification should
-	// produce no response.
-	messages := append(initMessages(), map[string]any{
+	responses := session(t, map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "notifications/progress",
 		"params":  map[string]any{"token": "abc"},
 	})
-
-	responses := mcpSession(t, root, messages...)
 	// Only the initialize request should produce a response.
 	if len(responses) != 1 {
 		t.Fatalf("expected 1 response (init only), got %d", len(responses))
 	}
 }
+
+// --- Tool listing tests ---
+
+func TestServer_ToolsList(t *testing.T) {
+	result := listTools(t)
+
+	if len(result.Tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(result.Tools))
+	}
+
+	names := make(map[string]bool)
+	for _, discovered := range result.Tools {
+		names[discovered.Name] = true
+	}
+	for _, expected := range []string{"test_echo", "test_fail", "test_format", "test_list"} {
+		if !names[expected] {
+			t.Errorf("missing tool %q in tools/list", expected)
+		}
+	}
+
+	for _, discovered := range result.Tools {
+		if discovered.InputSchema == nil {
+			t.Errorf("tool %q has nil inputSchema", discovered.Name)
+		}
+		if discovered.Title == "" {
+			t.Errorf("tool %q has empty title", discovered.Name)
+		}
+	}
+}
+
+func TestServer_ToolsListAnnotations(t *testing.T) {
+	result := listTools(t)
+
+	// Find the list tool and verify it has annotations.
+	var listTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_list" {
+			listTool = &result.Tools[i]
+			break
+		}
+	}
+	if listTool == nil {
+		t.Fatal("test_list not found in tools/list response")
+	}
+	if listTool.Annotations == nil {
+		t.Fatal("test_list should have annotations")
+	}
+	if listTool.Annotations.ReadOnlyHint == nil || !*listTool.Annotations.ReadOnlyHint {
+		t.Error("test_list should have readOnlyHint=true")
+	}
+
+	// Find the echo tool and verify it has no annotations.
+	var echoTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_echo" {
+			echoTool = &result.Tools[i]
+			break
+		}
+	}
+	if echoTool == nil {
+		t.Fatal("test_echo not found in tools/list response")
+	}
+	if echoTool.Annotations != nil {
+		t.Errorf("test_echo should have nil annotations, got %+v", echoTool.Annotations)
+	}
+}
+
+// --- Tool call tests ---
+
+func TestServer_ToolsCall(t *testing.T) {
+	result := callToolResult(t, "test_echo", map[string]any{"message": "hello world"})
+
+	if result.IsError {
+		t.Error("isError should be false")
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(result.Content))
+	}
+	// fmt.Println adds a trailing newline.
+	if result.Content[0].Text != "hello world\n" {
+		t.Errorf("content text = %q, want %q", result.Content[0].Text, "hello world\n")
+	}
+}
+
+func TestServer_ToolsCallDefaults(t *testing.T) {
+	// Call fail with no arguments — Reason should default to "boom"
+	// via the Flags() default registration.
+	result := callToolResult(t, "test_fail", map[string]any{})
+
+	if !result.IsError {
+		t.Error("expected isError=true (tool returns error)")
+	}
+
+	var errorText string
+	for _, block := range result.Content {
+		if strings.Contains(block.Text, "intentional failure") {
+			errorText = block.Text
+		}
+	}
+	if errorText == "" {
+		t.Fatal("no error content block found")
+	}
+	if !strings.Contains(errorText, "boom") {
+		t.Errorf("error text = %q, want it to contain 'boom' (default)", errorText)
+	}
+}
+
+func TestServer_ToolsCallJSONOutput(t *testing.T) {
+	result := callToolResult(t, "test_format", map[string]any{"value": "hello"})
+
+	if result.IsError {
+		t.Error("expected isError=false")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("no content blocks")
+	}
+
+	// enableJSONOutput should have set OutputJSON=true, producing
+	// JSON instead of "VALUE: hello".
+	output := result.Content[0].Text
+	if strings.Contains(output, "VALUE:") {
+		t.Errorf("got table output %q, expected JSON (enableJSONOutput should force JSON mode)", output)
+	}
+	if !strings.Contains(output, `"value"`) {
+		t.Errorf("output %q does not look like JSON", output)
+	}
+}
+
+func TestServer_ToolsCallError(t *testing.T) {
+	result := callToolResult(t, "test_fail", map[string]any{"reason": "test error"})
+
+	if !result.IsError {
+		t.Error("expected isError=true")
+	}
+	// Should have two content blocks: partial stdout and the error.
+	if len(result.Content) < 2 {
+		t.Fatalf("expected at least 2 content blocks, got %d", len(result.Content))
+	}
+	if result.Content[0].Text != "partial" {
+		t.Errorf("first content = %q, want %q", result.Content[0].Text, "partial")
+	}
+	if !strings.Contains(result.Content[1].Text, "test error") {
+		t.Errorf("error content = %q, want it to contain 'test error'", result.Content[1].Text)
+	}
+}
+
+func TestServer_ToolsCallUnknownTool(t *testing.T) {
+	resp := callTool(t, "nonexistent_tool", nil)
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if resp.Error.Code != codeInvalidParams {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, codeInvalidParams)
+	}
+	if !strings.Contains(resp.Error.Message, "unknown tool") {
+		t.Errorf("error message = %q, want it to contain 'unknown tool'", resp.Error.Message)
+	}
+}
+
+// --- Unit tests for internal helpers ---
 
 func TestEnableJSONOutput(t *testing.T) {
 	type params struct {
@@ -676,55 +689,134 @@ func TestDeriveAnnotations(t *testing.T) {
 	}
 }
 
-func TestServer_ToolsListAnnotations(t *testing.T) {
-	root := testCommandTree()
+// --- Grant filtering tests ---
+
+func TestServer_GrantFiltering_WildcardShowsAll(t *testing.T) {
+	result := listTools(t)
+	if len(result.Tools) != 4 {
+		t.Errorf("wildcard grant should show all 4 tools, got %d", len(result.Tools))
+	}
+}
+
+func TestServer_GrantFiltering_EmptyGrantsHidesAll(t *testing.T) {
+	result := listToolsWithGrants(t, []schema.Grant{})
+	if len(result.Tools) != 0 {
+		t.Errorf("empty grants should show 0 tools, got %d", len(result.Tools))
+	}
+}
+
+func TestServer_GrantFiltering_SpecificGrant(t *testing.T) {
+	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
+	result := listToolsWithGrants(t, grants)
+
+	if len(result.Tools) != 1 {
+		t.Fatalf("expected 1 tool with echo grant, got %d", len(result.Tools))
+	}
+	if result.Tools[0].Name != "test_echo" {
+		t.Errorf("expected test_echo, got %q", result.Tools[0].Name)
+	}
+}
+
+func TestServer_GrantFiltering_GlobGrant(t *testing.T) {
+	grants := []schema.Grant{{Actions: []string{"command/test/*"}}}
+	result := listToolsWithGrants(t, grants)
+	if len(result.Tools) != 4 {
+		t.Errorf("command/test/* grant should show all 4 tools, got %d", len(result.Tools))
+	}
+}
+
+func TestServer_GrantFiltering_MultipleGrants(t *testing.T) {
+	grants := []schema.Grant{
+		{Actions: []string{"command/test/echo"}},
+		{Actions: []string{"command/test/list"}},
+	}
+	result := listToolsWithGrants(t, grants)
+
+	if len(result.Tools) != 2 {
+		t.Fatalf("expected 2 tools with echo+list grants, got %d", len(result.Tools))
+	}
+	names := make(map[string]bool)
+	for _, tool := range result.Tools {
+		names[tool.Name] = true
+	}
+	if !names["test_echo"] {
+		t.Error("expected test_echo to be visible")
+	}
+	if !names["test_list"] {
+		t.Error("expected test_list to be visible")
+	}
+}
+
+func TestServer_GrantFiltering_DefaultDenyNoRequiredGrants(t *testing.T) {
+	// A command with Params+Run but no RequiredGrants should be
+	// hidden even with a wildcard grant — default-deny.
+	type stubParams struct {
+		Value string `json:"value" flag:"value" desc:"test value"`
+	}
+	var params stubParams
+
+	root := &cli.Command{
+		Name: "test",
+		Subcommands: []*cli.Command{
+			{
+				Name:    "ungated",
+				Summary: "No required grants declared",
+				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("ungated", &params) },
+				Params:  func() any { return &params },
+				Run:     func(args []string) error { return nil },
+			},
+		},
+	}
+
 	messages := append(initMessages(), map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/list",
 	})
 
-	responses := mcpSession(t, root, messages...)
-	resp := responses[1]
+	responses := mcpSession(t, root, wildcardGrants(), messages...)
+	var result toolsListResult
+	if err := json.Unmarshal(responses[1].Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if len(result.Tools) != 0 {
+		t.Errorf("ungated command should be hidden, got %d tools: %v",
+			len(result.Tools), result.Tools)
+	}
+}
+
+func TestServer_GrantFiltering_CallBlockedWithoutGrant(t *testing.T) {
+	// Grant only list, not echo — calling echo should fail.
+	grants := []schema.Grant{{Actions: []string{"command/test/list"}}}
+	resp := callToolWithGrants(t, grants, "test_echo", map[string]any{"message": "hello"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error calling unauthorized tool")
+	}
+	if !strings.Contains(resp.Error.Message, "not authorized") {
+		t.Errorf("error message = %q, want it to contain 'not authorized'",
+			resp.Error.Message)
+	}
+}
+
+func TestServer_GrantFiltering_CallAllowedWithGrant(t *testing.T) {
+	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
+	resp := callToolWithGrants(t, grants, "test_echo", map[string]any{"message": "authorized"})
+
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %v", resp.Error)
 	}
 
-	var result toolsListResult
+	var result toolsCallResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	// Find the list tool and verify it has annotations.
-	var listTool *toolDescription
-	for i := range result.Tools {
-		if result.Tools[i].Name == "test_list" {
-			listTool = &result.Tools[i]
-			break
-		}
+	if result.IsError {
+		t.Error("expected isError=false")
 	}
-	if listTool == nil {
-		t.Fatal("test_list not found in tools/list response")
-	}
-	if listTool.Annotations == nil {
-		t.Fatal("test_list should have annotations")
-	}
-	if listTool.Annotations.ReadOnlyHint == nil || !*listTool.Annotations.ReadOnlyHint {
-		t.Error("test_list should have readOnlyHint=true")
-	}
-
-	// Find the echo tool and verify it has no annotations.
-	var echoTool *toolDescription
-	for i := range result.Tools {
-		if result.Tools[i].Name == "test_echo" {
-			echoTool = &result.Tools[i]
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("test_echo not found in tools/list response")
-	}
-	if echoTool.Annotations != nil {
-		t.Errorf("test_echo should have nil annotations, got %+v", echoTool.Annotations)
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "authorized") {
+		t.Errorf("expected output containing 'authorized', got %v", result.Content)
 	}
 }

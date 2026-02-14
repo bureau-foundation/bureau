@@ -75,7 +75,7 @@
       // in the git history before the worktree is removed.
       "name": "archive-dirty-changes",
       "when": "test \"${MODE}\" = archive && test -d /workspace/${PROJECT}/${WORKTREE_PATH} && test -n \"$(git -C /workspace/${PROJECT}/${WORKTREE_PATH} status --porcelain 2>/dev/null)\"",
-      "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nbranch=\"archive/${WORKTREE_PATH}-${timestamp}\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} checkout -b \"$branch\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} add -A\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} commit -m \"Archive uncommitted work before worktree removal\"",
+      "run": "timestamp=$(date +%Y%m%dT%H%M%S)\nbranch=\"archive/${WORKTREE_PATH}-$timestamp\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} checkout -b \"$branch\"\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} add -A\ngit -C /workspace/${PROJECT}/${WORKTREE_PATH} commit -m \"Archive uncommitted work before worktree removal\"",
       "optional": true,
       "timeout": "2m"
     },

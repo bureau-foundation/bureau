@@ -376,7 +376,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
 	// Teardown pipeline (dev-workspace-deinit) runs and publishes "archived".
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived", 120*time.Second)
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived", 30*time.Second)
 	t.Log("workspace status is 'archived' — teardown pipeline completed")
 
 	t.Log("full CLI-driven workspace lifecycle verified: create → active → destroy → archived")
@@ -442,6 +442,17 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, ex
 				var state schema.WorkspaceState
 				if json.Unmarshal(content, &state) == nil {
 					currentStatus = state.Status
+				}
+			}
+			// Read pipeline_result state events for diagnostic detail.
+			// Both init and deinit pipelines publish results; dump
+			// whichever exist to help identify which step failed.
+			diagCtx, diagCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer diagCancel()
+			for _, pipelineName := range []string{"dev-workspace-init", "dev-workspace-deinit"} {
+				resultContent, resultError := session.GetStateEvent(diagCtx, roomID, schema.EventTypePipelineResult, pipelineName)
+				if resultError == nil {
+					t.Logf("pipeline_result (%s): %s", pipelineName, string(resultContent))
 				}
 			}
 			t.Fatalf("timed out after %s waiting for workspace status %q in room %s (current: %s)",

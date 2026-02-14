@@ -135,33 +135,41 @@ pre-commit:
       priority: 3
 
     # ===================================================================
-    # Tier 4: Nix
+    # Tier 4: Integration tests (Docker required)
+    # ===================================================================
+
+    integration-test:
+      run: script/check-integration
+      priority: 4
+
+    # ===================================================================
+    # Tier 5: Nix
     # ===================================================================
 
     nixfmt:
       run: script/format-staged script/nix-hook nixfmt -- {staged_files}
       glob: "*.nix"
-      priority: 4
+      priority: 5
 
     statix:
       run: script/nix-hook statix
       glob: "*.nix"
-      priority: 4
+      priority: 5
 
     deadnix:
       run: script/nix-hook deadnix
       glob: "*.nix"
-      priority: 4
+      priority: 5
 
     nix-flake-check:
       run: script/nix-hook flake-check
       glob: "*.nix"
-      priority: 4
+      priority: 5
 
     # ===================================================================
-    # Tier 5: Side effects
+    # Tier 6: Side effects
     # ===================================================================
 
     beads-flush:
       run: bash -c 'if command -v br >/dev/null 2>&1; then br sync --flush-only; fi'
-      priority: 5
+      priority: 6

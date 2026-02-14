@@ -1,0 +1,35 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Run integration tests under sg docker to guarantee the bazel server
+# has docker group membership (the tests start a Continuwuity
+# homeserver in Docker).
+#
+# Called from lefthook.yml after unit tests pass (piped: true gating).
+#
+# The bazel server inherits groups from the process that started it.
+# Earlier hooks (bazel build //..., bazel test //...) may have started
+# the server without docker group. Rather than trying to detect this,
+# we always shut down the existing server and restart under sg docker.
+# The unit test results are cached so nothing is re-run; the only cost
+# is the ~1s server restart.
+
+set -euo pipefail
+
+# Verify the user is a member of the docker group. Check /etc/group
+# (via getent) rather than the current process's supplementary groups
+# (via id -nG), because the session may have been started before the
+# user was added to the group. sg docker handles this correctly.
+if ! getent group docker 2>/dev/null | grep -qw "$(id -un)"; then
+    echo ""
+    echo "ERROR: User $(id -un) is not in the docker group."
+    echo "Integration tests require Docker. Add yourself:"
+    echo "  sudo usermod -aG docker $(id -un)"
+    echo "Then log out and back in."
+    echo ""
+    exit 1
+fi
+
+bazel shutdown 2>/dev/null || true
+exec sg docker -c "bazel test //integration:integration_test --test_timeout=40"

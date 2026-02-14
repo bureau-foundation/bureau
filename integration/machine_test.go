@@ -130,7 +130,14 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		t.Fatalf("write registration token: %v", err)
 	}
 
-	// Resolve global rooms and invite the machine.
+	// Resolve global rooms and invite the machine. The daemon joins all
+	// three rooms at startup (system for token signing keys, machine for
+	// status/config, service for service directory). All require an
+	// admin invitation because they are private rooms.
+	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
+	if err != nil {
+		t.Fatalf("resolve system room: %v", err)
+	}
 	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
@@ -141,6 +148,9 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	}
 	machine.MachineRoomID = machineRoomID
 
+	if err := admin.InviteUser(ctx, systemRoomID, machine.UserID); err != nil {
+		t.Fatalf("invite machine to system room: %v", err)
+	}
 	if err := admin.InviteUser(ctx, machineRoomID, machine.UserID); err != nil {
 		t.Fatalf("invite machine to machine room: %v", err)
 	}

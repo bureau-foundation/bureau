@@ -562,6 +562,12 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	}
 	newSpec := resolveInstanceConfig(template, &assignment)
 
+	// Apply the same pipeline executor overlay that the create path
+	// uses (line ~286). Without this, the stored spec (which has the
+	// overlay applied) would always differ from the freshly resolved
+	// spec, causing an infinite destroy-recreate loop.
+	d.applyPipelineExecutorOverlay(newSpec)
+
 	// Compare with the previously deployed spec.
 	oldSpec := d.lastSpecs[localpart]
 	if oldSpec == nil {

@@ -249,6 +249,9 @@ var standardRooms = []standardRoom{
 		topic:         "Operational messages",
 		name:          "system room",
 		credentialKey: "MATRIX_SYSTEM_ROOM",
+		memberSettableEventTypes: []string{
+			schema.EventTypeTokenSigningKey,
+		},
 	},
 	{
 		alias:         "bureau/machine",

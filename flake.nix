@@ -277,7 +277,10 @@
             # for integration tests.
             integration-test-env = pkgs.buildEnv {
               name = "bureau-integration-test-env";
-              paths = self.lib.bureauRuntime pkgs ++ self.lib.presets.foundation-minimal pkgs;
+              paths =
+                self.lib.bureauRuntime pkgs
+                ++ self.lib.presets.foundation-minimal pkgs
+                ++ self.lib.modules.developer.vcs pkgs;
             };
 
             # Environment for coding agents working on projects. Bureau

@@ -252,6 +252,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.priorFocus = model.focusRegion
 			model.focusRegion = FocusFilter
 			model.filter.Active = true
+			model.updatePaneSizes()
 
 		case key.Matches(message, model.keys.NavigateBack):
 			model.navigateBack()
@@ -259,6 +260,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(message, model.keys.FilterClear):
 			if model.filter.Input != "" {
 				model.filter.Clear()
+				model.updatePaneSizes()
 				model.refreshFromSource()
 			}
 
@@ -293,11 +295,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 // contentStartY returns the Y coordinate where the content area begins
 // (after the combined header-separator and optional filter bar).
 func (model Model) contentStartY() int {
-	start := 1 // header-separator
-	if model.filter.Active || model.filter.Input != "" {
-		start = 2
+	start := 1 // header-separator always occupies line 0
+	if model.filterBarVisible() {
+		start++
 	}
 	return start
+}
+
+// filterBarVisible returns whether the filter bar occupies a line
+// in the layout (active filter input, or retained filter text).
+func (model Model) filterBarVisible() bool {
+	return model.filter.Active || model.filter.Input != ""
 }
 
 // handleMouse routes mouse events to the appropriate pane based on the
@@ -682,16 +690,22 @@ func (model Model) handleFilterKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Esc: if there's filter text, clear it; if already empty, exit filter mode.
 		if model.filter.Input != "" {
 			model.filter.Clear()
+			model.updatePaneSizes()
 			model.refreshFromSource()
 		} else {
 			model.filter.Active = false
+			model.updatePaneSizes()
 			model.focusRegion = model.priorFocus
 		}
 		return model, nil
 
 	case message.Type == tea.KeyEnter:
 		// Confirm filter and return focus to the list.
+		wasBarVisible := model.filterBarVisible()
 		model.filter.Active = false
+		if wasBarVisible != model.filterBarVisible() {
+			model.updatePaneSizes()
+		}
 		model.focusRegion = FocusList
 		return model, nil
 
@@ -718,7 +732,11 @@ func (model *Model) switchTab(tab Tab) {
 		return
 	}
 	model.activeTab = tab
+	hadFilter := model.filterBarVisible()
 	model.filter.Clear()
+	if hadFilter {
+		model.updatePaneSizes()
+	}
 	model.refreshFromSource()
 }
 
@@ -1345,14 +1363,10 @@ func (model Model) renderDivider() string {
 }
 
 // visibleHeight returns the number of list rows that fit between the
-// chrome elements. Layout: header-separator (1) + [filter (0 or 1)]
-// + content + separator (1) + help (1) = 3 or 4 chrome lines.
+// chrome elements. Derived from contentStartY (chrome above) plus the
+// bottom separator (1) and help bar (1).
 func (model Model) visibleHeight() int {
-	chrome := 3
-	if model.filter.Active || model.filter.Input != "" {
-		chrome = 4
-	}
-	return model.height - chrome
+	return model.height - model.contentStartY() - 2
 }
 
 // ensureCursorVisible adjusts scrollOffset so the cursor is within

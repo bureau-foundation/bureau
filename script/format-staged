@@ -13,10 +13,12 @@
 # argument list. The formatter must modify the file in place.
 #
 # Safety properties:
-#   - Working tree untouched (no stash, no checkout, no reset)
+#   - Other agents' unstaged changes are never lost
+#   - Working tree updated only when it matches the staged content
+#     (no unstaged changes to protect), keeping it in sync with the
+#     index after formatting
 #   - Interrupted at any point: worst case is a partially-formatted
 #     index entry, trivially fixable by re-running the formatter
-#   - Other agents' unstaged changes are completely invisible
 
 set -euo pipefail
 
@@ -70,10 +72,21 @@ for file in "${files[@]}"; do
     # Run the formatter. It modifies target_file in place.
     "${formatter[@]}" "$target_file"
 
-    # If the formatter changed the content, update the index.
+    # If the formatter changed the content, update the index and
+    # conditionally update the working tree.
     if ! cmp -s "$target_file" "$original_file"; then
         object_hash=$(git hash-object -w "$target_file")
         file_mode=$(git ls-files -s "$file" | awk '{print $1}')
         git update-index --cacheinfo "$file_mode,$object_hash,$file"
+
+        # Update the working tree IF it matches the pre-format staged
+        # content. This means the file has no unstaged changes (the
+        # agent staged exactly what's on disk), so replacing it with
+        # the formatted version keeps the working tree in sync with
+        # the index. If the working tree differs (another agent has
+        # unstaged changes), leave it alone.
+        if cmp -s "$original_file" "$file"; then
+            cp "$target_file" "$file"
+        fi
     fi
 done

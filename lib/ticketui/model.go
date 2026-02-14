@@ -79,6 +79,8 @@ type ListItem struct {
 	EpicDone  int
 	EpicTotal int
 	Collapsed bool
+	// For headers: health metrics (nil on non-ready tabs or ungrouped).
+	EpicHealth *ticket.EpicHealthStats
 
 	// For ticket rows: the ticket entry.
 	Entry ticket.Entry
@@ -880,15 +882,17 @@ func (model *Model) buildGroupedItems() []ListItem {
 
 	for _, group := range sortedGroups {
 		total, closed := model.source.ChildProgress(group.epicID)
+		health := model.source.EpicHealth(group.epicID)
 
 		collapsed := model.collapsedEpics[group.epicID]
 		items = append(items, ListItem{
-			IsHeader:  true,
-			EpicID:    group.epicID,
-			EpicTitle: group.epicContent.title,
-			EpicDone:  closed,
-			EpicTotal: total,
-			Collapsed: collapsed,
+			IsHeader:   true,
+			EpicID:     group.epicID,
+			EpicTitle:  group.epicContent.title,
+			EpicDone:   closed,
+			EpicTotal:  total,
+			Collapsed:  collapsed,
+			EpicHealth: &health,
 		})
 
 		if !collapsed {
@@ -1124,13 +1128,16 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 }
 
 // syncDetailPane updates the detail pane content to reflect the
-// currently selected ticket.
+// currently selected ticket. Uses the current wall clock for
+// staleness display — this is a user-triggered action (navigation),
+// not a tight loop.
 func (model *Model) syncDetailPane() {
 	if model.cursor < 0 || model.cursor >= len(model.items) {
 		model.detailPane.Clear()
 		return
 	}
 
+	now := time.Now()
 	item := model.items[model.cursor]
 	if item.IsHeader {
 		// Show the epic ticket in the detail pane if this header
@@ -1142,7 +1149,7 @@ func (model *Model) syncDetailPane() {
 				model.detailPane.SetContent(model.source, ticket.Entry{
 					ID:      item.EpicID,
 					Content: content,
-				})
+				}, now)
 				return
 			}
 		}
@@ -1151,7 +1158,7 @@ func (model *Model) syncDetailPane() {
 	}
 
 	model.selectedID = item.Entry.ID
-	model.detailPane.SetContent(model.source, item.Entry)
+	model.detailPane.SetContent(model.source, item.Entry, now)
 }
 
 // handleSourceEvent processes a live event from the source (ticket
@@ -1291,7 +1298,14 @@ func (model Model) renderListPane() string {
 		if item.IsHeader {
 			row = renderer.RenderGroupHeader(item, rowWidth, selected)
 		} else {
-			row = renderer.RenderRow(item.Entry, selected)
+			// On the Ready tab, compute and pass scoring info for
+			// leverage/urgency indicators. Other tabs pass nil.
+			var score *ticket.TicketScore
+			if model.activeTab == TabReady {
+				ticketScore := model.source.Score(item.Entry.ID, now)
+				score = &ticketScore
+			}
+			row = renderer.RenderRow(item.Entry, selected, score)
 			// Apply heat tint for recently-changed tickets (selection
 			// highlight takes priority so we skip hot styling there).
 			if !selected {

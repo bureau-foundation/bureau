@@ -6,6 +6,7 @@ package ticket
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -1320,6 +1321,590 @@ func TestGrepCaseInsensitiveWithFlag(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("case-insensitive Grep returned %d, want 1", len(entries))
+	}
+}
+
+// --- Scoring and ranking tests ---
+
+// fixedNow is a deterministic timestamp used for all scoring tests.
+// Three days after the default makeTicket creation time.
+var fixedNow = time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+
+func TestUnblockScoreNoDependents(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-a", makeTicket("A"))
+
+	if score := idx.UnblockScore("tkt-a"); score != 0 {
+		t.Errorf("UnblockScore(no dependents) = %d, want 0", score)
+	}
+}
+
+func TestUnblockScoreNonexistent(t *testing.T) {
+	idx := NewIndex()
+	if score := idx.UnblockScore("tkt-missing"); score != 0 {
+		t.Errorf("UnblockScore(nonexistent) = %d, want 0", score)
+	}
+}
+
+func TestUnblockScoreLinearChain(t *testing.T) {
+	idx := NewIndex()
+
+	// A (open) ← B (open, blocked by A) ← C (open, blocked by B).
+	// Closing A makes B ready (B's only blocker). B still blocks C.
+	idx.Put("tkt-a", makeTicket("A"))
+
+	depB := makeTicket("B")
+	depB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", depB)
+
+	depC := makeTicket("C")
+	depC.BlockedBy = []string{"tkt-b"}
+	idx.Put("tkt-c", depC)
+
+	if score := idx.UnblockScore("tkt-a"); score != 1 {
+		t.Errorf("UnblockScore(A) = %d, want 1 (only B becomes ready)", score)
+	}
+	if score := idx.UnblockScore("tkt-b"); score != 1 {
+		t.Errorf("UnblockScore(B) = %d, want 1 (C becomes ready if B closes)", score)
+	}
+}
+
+func TestUnblockScoreDiamond(t *testing.T) {
+	idx := NewIndex()
+
+	// A (closed) blocks B and C. B and C both block D.
+	// Closing B: D still blocked by C → score 0.
+	// Closing C: D still blocked by B → score 0.
+	closedA := makeTicket("A")
+	closedA.Status = "closed"
+	closedA.ClosedAt = "2026-02-13T10:00:00Z"
+	idx.Put("tkt-a", closedA)
+
+	depB := makeTicket("B")
+	depB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", depB)
+
+	depC := makeTicket("C")
+	depC.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-c", depC)
+
+	depD := makeTicket("D")
+	depD.BlockedBy = []string{"tkt-b", "tkt-c"}
+	idx.Put("tkt-d", depD)
+
+	if score := idx.UnblockScore("tkt-b"); score != 0 {
+		t.Errorf("UnblockScore(B) = %d, want 0 (D still blocked by C)", score)
+	}
+	if score := idx.UnblockScore("tkt-c"); score != 0 {
+		t.Errorf("UnblockScore(C) = %d, want 0 (D still blocked by B)", score)
+	}
+}
+
+func TestUnblockScoreLastBlocker(t *testing.T) {
+	idx := NewIndex()
+
+	// A (closed) and B (open) both block C. B is the last open blocker.
+	closedA := makeTicket("A")
+	closedA.Status = "closed"
+	closedA.ClosedAt = "2026-02-13T10:00:00Z"
+	idx.Put("tkt-a", closedA)
+
+	idx.Put("tkt-b", makeTicket("B"))
+
+	depC := makeTicket("C")
+	depC.BlockedBy = []string{"tkt-a", "tkt-b"}
+	idx.Put("tkt-c", depC)
+
+	if score := idx.UnblockScore("tkt-b"); score != 1 {
+		t.Errorf("UnblockScore(B) = %d, want 1 (B is last blocker of C)", score)
+	}
+}
+
+func TestUnblockScoreFanOut(t *testing.T) {
+	idx := NewIndex()
+
+	// A blocks B, C, D — all have A as sole blocker.
+	idx.Put("tkt-a", makeTicket("A"))
+	for _, id := range []string{"tkt-b", "tkt-c", "tkt-d"} {
+		dep := makeTicket(id)
+		dep.BlockedBy = []string{"tkt-a"}
+		idx.Put(id, dep)
+	}
+
+	if score := idx.UnblockScore("tkt-a"); score != 3 {
+		t.Errorf("UnblockScore(A) = %d, want 3", score)
+	}
+}
+
+func TestUnblockScoreIgnoresClosedDependents(t *testing.T) {
+	idx := NewIndex()
+
+	// A blocks B, but B is already closed.
+	idx.Put("tkt-a", makeTicket("A"))
+
+	closedB := makeTicket("B")
+	closedB.Status = "closed"
+	closedB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", closedB)
+
+	if score := idx.UnblockScore("tkt-a"); score != 0 {
+		t.Errorf("UnblockScore(A) = %d, want 0 (B already closed)", score)
+	}
+}
+
+func TestUnblockScoreRequiresGatesSatisfied(t *testing.T) {
+	idx := NewIndex()
+
+	// A blocks B, but B also has an unsatisfied gate.
+	idx.Put("tkt-a", makeTicket("A"))
+
+	depB := makeTicket("B")
+	depB.BlockedBy = []string{"tkt-a"}
+	depB.Gates = []schema.TicketGate{{ID: "g1", Status: "pending"}}
+	idx.Put("tkt-b", depB)
+
+	if score := idx.UnblockScore("tkt-a"); score != 0 {
+		t.Errorf("UnblockScore(A) = %d, want 0 (B has pending gate)", score)
+	}
+}
+
+func TestBorrowedPriorityNoDependents(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-a", makeTicket("A"))
+
+	if bp := idx.BorrowedPriority("tkt-a"); bp != -1 {
+		t.Errorf("BorrowedPriority(no dependents) = %d, want -1", bp)
+	}
+}
+
+func TestBorrowedPriorityNonexistent(t *testing.T) {
+	idx := NewIndex()
+	if bp := idx.BorrowedPriority("tkt-missing"); bp != -1 {
+		t.Errorf("BorrowedPriority(nonexistent) = %d, want -1", bp)
+	}
+}
+
+func TestBorrowedPriorityDirect(t *testing.T) {
+	idx := NewIndex()
+
+	// A (P3) blocks B (P0). A's borrowed priority is 0.
+	ticketA := makeTicket("A")
+	ticketA.Priority = 3
+	idx.Put("tkt-a", ticketA)
+
+	ticketB := makeTicket("B")
+	ticketB.Priority = 0
+	ticketB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", ticketB)
+
+	if bp := idx.BorrowedPriority("tkt-a"); bp != 0 {
+		t.Errorf("BorrowedPriority(A) = %d, want 0", bp)
+	}
+}
+
+func TestBorrowedPriorityTransitive(t *testing.T) {
+	idx := NewIndex()
+
+	// A (P3) ← B (P2) ← C (P0). A's borrowed priority is 0 (from C).
+	ticketA := makeTicket("A")
+	ticketA.Priority = 3
+	idx.Put("tkt-a", ticketA)
+
+	ticketB := makeTicket("B")
+	ticketB.Priority = 2
+	ticketB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", ticketB)
+
+	ticketC := makeTicket("C")
+	ticketC.Priority = 0
+	ticketC.BlockedBy = []string{"tkt-b"}
+	idx.Put("tkt-c", ticketC)
+
+	if bp := idx.BorrowedPriority("tkt-a"); bp != 0 {
+		t.Errorf("BorrowedPriority(A) = %d, want 0 (transitive from C)", bp)
+	}
+}
+
+func TestBorrowedPriorityTakesMinimum(t *testing.T) {
+	idx := NewIndex()
+
+	// A blocks B (P3) and C (P1). Borrowed priority is 1 (min).
+	ticketA := makeTicket("A")
+	ticketA.Priority = 4
+	idx.Put("tkt-a", ticketA)
+
+	ticketB := makeTicket("B")
+	ticketB.Priority = 3
+	ticketB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", ticketB)
+
+	ticketC := makeTicket("C")
+	ticketC.Priority = 1
+	ticketC.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-c", ticketC)
+
+	if bp := idx.BorrowedPriority("tkt-a"); bp != 1 {
+		t.Errorf("BorrowedPriority(A) = %d, want 1 (min of B=3, C=1)", bp)
+	}
+}
+
+func TestCriticalDepthNoChildren(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 0 {
+		t.Errorf("CriticalDepth(no children) = %d, want 0", depth)
+	}
+}
+
+func TestCriticalDepthIndependentChildren(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// Three independent children — no inter-child deps → depth 0.
+	for _, id := range []string{"tkt-a", "tkt-b", "tkt-c"} {
+		child := makeTicket(id)
+		child.Parent = "tkt-epic"
+		idx.Put(id, child)
+	}
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 0 {
+		t.Errorf("CriticalDepth(independent children) = %d, want 0", depth)
+	}
+}
+
+func TestCriticalDepthChain(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// A ← B ← C (all children of epic). Chain of depth 2.
+	childA := makeTicket("A")
+	childA.Parent = "tkt-epic"
+	idx.Put("tkt-a", childA)
+
+	childB := makeTicket("B")
+	childB.Parent = "tkt-epic"
+	childB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", childB)
+
+	childC := makeTicket("C")
+	childC.Parent = "tkt-epic"
+	childC.BlockedBy = []string{"tkt-b"}
+	idx.Put("tkt-c", childC)
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 2 {
+		t.Errorf("CriticalDepth(chain A←B←C) = %d, want 2", depth)
+	}
+}
+
+func TestCriticalDepthIgnoresClosedChildren(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// A (closed) ← B (open). Only B is open, A is closed → depth 0.
+	closedA := makeTicket("A")
+	closedA.Parent = "tkt-epic"
+	closedA.Status = "closed"
+	idx.Put("tkt-a", closedA)
+
+	childB := makeTicket("B")
+	childB.Parent = "tkt-epic"
+	childB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", childB)
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 0 {
+		t.Errorf("CriticalDepth(closed blocker) = %d, want 0", depth)
+	}
+}
+
+func TestCriticalDepthIgnoresExternalBlockers(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// External ticket (not a child of epic) blocks child B.
+	// External edges are not counted for critical depth.
+	idx.Put("tkt-external", makeTicket("External"))
+
+	childB := makeTicket("B")
+	childB.Parent = "tkt-epic"
+	childB.BlockedBy = []string{"tkt-external"}
+	idx.Put("tkt-b", childB)
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 0 {
+		t.Errorf("CriticalDepth(external blocker) = %d, want 0", depth)
+	}
+}
+
+func TestCriticalDepthDiamond(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// A ← B, A ← C, B ← D, C ← D. Diamond with depth 2.
+	childA := makeTicket("A")
+	childA.Parent = "tkt-epic"
+	idx.Put("tkt-a", childA)
+
+	childB := makeTicket("B")
+	childB.Parent = "tkt-epic"
+	childB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", childB)
+
+	childC := makeTicket("C")
+	childC.Parent = "tkt-epic"
+	childC.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-c", childC)
+
+	childD := makeTicket("D")
+	childD.Parent = "tkt-epic"
+	childD.BlockedBy = []string{"tkt-b", "tkt-c"}
+	idx.Put("tkt-d", childD)
+
+	if depth := idx.CriticalDepth("tkt-epic"); depth != 2 {
+		t.Errorf("CriticalDepth(diamond) = %d, want 2", depth)
+	}
+}
+
+func TestEpicHealthBasic(t *testing.T) {
+	idx := NewIndex()
+
+	epic := makeTicket("Epic")
+	epic.Type = "epic"
+	idx.Put("tkt-epic", epic)
+
+	// 5 children: 2 closed, 2 ready (open, no blockers), 1 blocked.
+	for _, spec := range []struct {
+		id     string
+		status string
+		blocks []string
+	}{
+		{"tkt-a", "closed", nil},
+		{"tkt-b", "closed", nil},
+		{"tkt-c", "open", nil},               // ready
+		{"tkt-d", "open", nil},               // ready
+		{"tkt-e", "open", []string{"tkt-c"}}, // blocked by C
+	} {
+		child := makeTicket(spec.id)
+		child.Parent = "tkt-epic"
+		child.Status = spec.status
+		child.BlockedBy = spec.blocks
+		if spec.status == "closed" {
+			child.ClosedAt = "2026-02-13T10:00:00Z"
+		}
+		idx.Put(spec.id, child)
+	}
+
+	health := idx.EpicHealth("tkt-epic")
+
+	if health.TotalChildren != 5 {
+		t.Errorf("TotalChildren = %d, want 5", health.TotalChildren)
+	}
+	if health.ClosedChildren != 2 {
+		t.Errorf("ClosedChildren = %d, want 2", health.ClosedChildren)
+	}
+	if health.ReadyChildren != 2 {
+		t.Errorf("ReadyChildren = %d, want 2 (C and D are ready)", health.ReadyChildren)
+	}
+	// ActiveFraction: (2 ready + 0 in_progress) / 3 open = 0.666...
+	expectedFraction := 2.0 / 3.0
+	if health.ActiveFraction < expectedFraction-0.01 || health.ActiveFraction > expectedFraction+0.01 {
+		t.Errorf("ActiveFraction = %f, want ~%f", health.ActiveFraction, expectedFraction)
+	}
+	// CriticalDepth: C ← E is depth 1.
+	if health.CriticalDepth != 1 {
+		t.Errorf("CriticalDepth = %d, want 1 (C←E chain)", health.CriticalDepth)
+	}
+}
+
+func TestEpicHealthEmpty(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	health := idx.EpicHealth("tkt-epic")
+	if health.TotalChildren != 0 {
+		t.Errorf("TotalChildren = %d, want 0", health.TotalChildren)
+	}
+	if health.ReadyChildren != 0 {
+		t.Errorf("ReadyChildren = %d, want 0", health.ReadyChildren)
+	}
+}
+
+func TestEpicHealthWithInProgress(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-epic", makeTicket("Epic"))
+
+	// 3 open children: 1 ready, 1 in_progress, 1 blocked.
+	childA := makeTicket("A")
+	childA.Parent = "tkt-epic"
+	idx.Put("tkt-a", childA) // ready
+
+	childB := makeTicket("B")
+	childB.Parent = "tkt-epic"
+	childB.Status = "in_progress"
+	childB.Assignee = "@agent:bureau.local"
+	idx.Put("tkt-b", childB) // in_progress
+
+	childC := makeTicket("C")
+	childC.Parent = "tkt-epic"
+	childC.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-c", childC) // blocked
+
+	health := idx.EpicHealth("tkt-epic")
+	if health.ReadyChildren != 1 {
+		t.Errorf("ReadyChildren = %d, want 1", health.ReadyChildren)
+	}
+	// ActiveFraction: (1 ready + 1 in_progress) / 3 open = 0.666...
+	expectedFraction := 2.0 / 3.0
+	if health.ActiveFraction < expectedFraction-0.01 || health.ActiveFraction > expectedFraction+0.01 {
+		t.Errorf("ActiveFraction = %f, want ~%f", health.ActiveFraction, expectedFraction)
+	}
+}
+
+func TestScoreBasic(t *testing.T) {
+	idx := NewIndex()
+
+	// A (P2) blocks B (P0). A is ready with no notes.
+	ticketA := makeTicket("A")
+	ticketA.Priority = 2
+	idx.Put("tkt-a", ticketA)
+
+	ticketB := makeTicket("B")
+	ticketB.Priority = 0
+	ticketB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", ticketB)
+
+	weights := DefaultRankWeights()
+	score := idx.Score("tkt-a", fixedNow, weights)
+
+	if score.UnblockCount != 1 {
+		t.Errorf("UnblockCount = %d, want 1", score.UnblockCount)
+	}
+	if score.BorrowedPriority != 0 {
+		t.Errorf("BorrowedPriority = %d, want 0", score.BorrowedPriority)
+	}
+	// Created 2026-02-12, now 2026-02-15 → 3 days.
+	if score.DaysSinceReady != 3 {
+		t.Errorf("DaysSinceReady = %d, want 3", score.DaysSinceReady)
+	}
+	if score.NoteCount != 0 {
+		t.Errorf("NoteCount = %d, want 0", score.NoteCount)
+	}
+	if score.Composite <= 0 {
+		t.Errorf("Composite = %f, want > 0", score.Composite)
+	}
+}
+
+func TestScoreNonexistent(t *testing.T) {
+	idx := NewIndex()
+	score := idx.Score("tkt-missing", fixedNow, DefaultRankWeights())
+	if score.BorrowedPriority != -1 {
+		t.Errorf("BorrowedPriority = %d, want -1 for nonexistent", score.BorrowedPriority)
+	}
+}
+
+func TestScoreDaysSinceReadyFromBlockerClosedAt(t *testing.T) {
+	idx := NewIndex()
+
+	// Blocker closed 1 day ago. Ticket became ready then.
+	closedA := makeTicket("A")
+	closedA.Status = "closed"
+	closedA.ClosedAt = "2026-02-14T10:00:00Z" // 1 day before fixedNow
+	idx.Put("tkt-a", closedA)
+
+	ticketB := makeTicket("B")
+	ticketB.BlockedBy = []string{"tkt-a"}
+	idx.Put("tkt-b", ticketB)
+
+	score := idx.Score("tkt-b", fixedNow, DefaultRankWeights())
+	if score.DaysSinceReady != 1 {
+		t.Errorf("DaysSinceReady = %d, want 1 (blocker closed 1 day ago)", score.DaysSinceReady)
+	}
+}
+
+func TestRankedSortOrder(t *testing.T) {
+	idx := NewIndex()
+
+	// Three ready tickets with different characteristics:
+	// A: P4, blocks 3 things → high leverage
+	// B: P0, blocks nothing → high urgency, no leverage
+	// C: P2, blocks 1 thing → moderate
+
+	ticketA := makeTicket("High leverage")
+	ticketA.Priority = 4
+	idx.Put("tkt-a", ticketA)
+
+	ticketB := makeTicket("High urgency")
+	ticketB.Priority = 0
+	idx.Put("tkt-b", ticketB)
+
+	ticketC := makeTicket("Moderate")
+	ticketC.Priority = 2
+	idx.Put("tkt-c", ticketC)
+
+	// A blocks three things.
+	for _, id := range []string{"tkt-d", "tkt-e", "tkt-f"} {
+		dep := makeTicket(id)
+		dep.BlockedBy = []string{"tkt-a"}
+		idx.Put(id, dep)
+	}
+
+	// C blocks one thing.
+	depG := makeTicket("G")
+	depG.BlockedBy = []string{"tkt-c"}
+	idx.Put("tkt-g", depG)
+
+	ranked := idx.Ranked(fixedNow, DefaultRankWeights())
+
+	// Extract just the IDs of the ready tickets (A, B, C).
+	var readyIDs []string
+	for _, entry := range ranked {
+		switch entry.ID {
+		case "tkt-a", "tkt-b", "tkt-c":
+			readyIDs = append(readyIDs, entry.ID)
+		}
+	}
+
+	if len(readyIDs) != 3 {
+		t.Fatalf("expected 3 ranked ready tickets among A/B/C, got %v", readyIDs)
+	}
+
+	// A has leverage 3×3=9, urgency 2×0=0 → ~10.5
+	// B has leverage 3×0=0, urgency 2×4=8 → ~9.5
+	// C has leverage 3×1=3, urgency 2×2=4 → ~8.5
+	// So order should be A, B, C.
+	if readyIDs[0] != "tkt-a" {
+		t.Errorf("first ranked = %s, want tkt-a (highest leverage)", readyIDs[0])
+	}
+	if readyIDs[1] != "tkt-b" {
+		t.Errorf("second ranked = %s, want tkt-b (highest urgency)", readyIDs[1])
+	}
+	if readyIDs[2] != "tkt-c" {
+		t.Errorf("third ranked = %s, want tkt-c (moderate)", readyIDs[2])
+	}
+}
+
+func TestRankedEmpty(t *testing.T) {
+	idx := NewIndex()
+	ranked := idx.Ranked(fixedNow, DefaultRankWeights())
+	if len(ranked) != 0 {
+		t.Errorf("Ranked on empty index = %v, want empty", ranked)
+	}
+}
+
+func TestRankedCompositeScoresDescending(t *testing.T) {
+	idx := NewIndex()
+
+	for i := range 5 {
+		tc := makeTicket(fmt.Sprintf("Ticket %d", i))
+		tc.Priority = i
+		idx.Put(fmt.Sprintf("tkt-%d", i), tc)
+	}
+
+	ranked := idx.Ranked(fixedNow, DefaultRankWeights())
+	for i := 1; i < len(ranked); i++ {
+		if ranked[i].Score.Composite > ranked[i-1].Score.Composite {
+			t.Errorf("ranked[%d].Composite (%f) > ranked[%d].Composite (%f): not descending",
+				i, ranked[i].Score.Composite, i-1, ranked[i-1].Score.Composite)
+		}
 	}
 }
 

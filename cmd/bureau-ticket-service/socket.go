@@ -38,11 +38,13 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("list", ts.handleList)
 	server.HandleAuth("ready", ts.handleReady)
 	server.HandleAuth("blocked", ts.handleBlocked)
+	server.HandleAuth("ranked", ts.handleRanked)
 	server.HandleAuth("show", ts.handleShow)
 	server.HandleAuth("children", ts.handleChildren)
 	server.HandleAuth("grep", ts.handleGrep)
 	server.HandleAuth("stats", ts.handleStats)
 	server.HandleAuth("deps", ts.handleDeps)
+	server.HandleAuth("epic-health", ts.handleEpicHealth)
 
 	// Mutation actions — all authenticated, all write to Matrix.
 	server.HandleAuth("create", ts.handleCreate)
@@ -206,7 +208,7 @@ func entriesFromIndex(entries []ticket.Entry, room string) []entryWithRoom {
 
 // showResponse is the full detail response for a single ticket.
 // It embeds the schema content directly and adds computed fields
-// from the dependency graph and child progress.
+// from the dependency graph, child progress, and scoring.
 type showResponse struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room"`
@@ -216,6 +218,10 @@ type showResponse struct {
 	Blocks      []string `json:"blocks,omitempty"`
 	ChildTotal  int      `json:"child_total,omitempty"`
 	ChildClosed int      `json:"child_closed,omitempty"`
+
+	// Score holds the ranking dimensions for an open ticket. Nil
+	// for closed tickets where scoring is not meaningful.
+	Score *ticket.TicketScore `json:"score,omitempty"`
 }
 
 // childrenResponse includes the children list and progress summary.
@@ -230,6 +236,22 @@ type childrenResponse struct {
 type depsResponse struct {
 	Ticket string   `json:"ticket"`
 	Deps   []string `json:"deps"`
+}
+
+// rankedEntryResponse pairs a ticket entry with its computed score
+// for the "ranked" action. Entries are sorted by composite score
+// descending (highest-leverage first).
+type rankedEntryResponse struct {
+	ID      string               `json:"id"`
+	Room    string               `json:"room,omitempty"`
+	Content schema.TicketContent `json:"content"`
+	Score   ticket.TicketScore   `json:"score"`
+}
+
+// epicHealthResponse holds health metrics for an epic's children.
+type epicHealthResponse struct {
+	Ticket string                 `json:"ticket"`
+	Health ticket.EpicHealthStats `json:"health"`
 }
 
 // --- Query handlers ---
@@ -301,6 +323,39 @@ func (ts *TicketService) handleBlocked(ctx context.Context, token *servicetoken.
 	return ts.roomQuery(token, raw, "ticket/blocked", (*ticket.Index).Blocked)
 }
 
+// handleRanked returns ready tickets sorted by composite score
+// descending. This is the primary query for PM agents deciding
+// what to assign next: highest-leverage, highest-urgency tickets
+// appear first. The score breakdown is included so agents can
+// explain their assignment decisions.
+func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/ranked"); err != nil {
+		return nil, err
+	}
+
+	var request roomRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	state, err := ts.requireRoom(request.Room)
+	if err != nil {
+		return nil, err
+	}
+
+	ranked := state.index.Ranked(ts.clock.Now(), ticket.DefaultRankWeights())
+	result := make([]rankedEntryResponse, len(ranked))
+	for i, entry := range ranked {
+		result[i] = rankedEntryResponse{
+			ID:      entry.ID,
+			Content: entry.Content,
+			Score:   entry.Score,
+		}
+	}
+
+	return result, nil
+}
+
 // handleShow returns the full detail of a single ticket, looked up
 // across all rooms. The response includes computed fields from the
 // dependency graph (blocks, child progress) alongside the schema
@@ -327,6 +382,15 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 	blocks := state.index.Blocks(request.Ticket)
 	childTotal, childClosed := state.index.ChildProgress(request.Ticket)
 
+	// Compute score for non-closed tickets. Scoring a closed ticket
+	// is meaningless (it cannot be assigned) and would produce
+	// confusing results.
+	var score *ticket.TicketScore
+	if content.Status != "closed" {
+		ticketScore := state.index.Score(request.Ticket, ts.clock.Now(), ticket.DefaultRankWeights())
+		score = &ticketScore
+	}
+
 	return showResponse{
 		ID:          request.Ticket,
 		Room:        roomID,
@@ -334,6 +398,7 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 		Blocks:      blocks,
 		ChildTotal:  childTotal,
 		ChildClosed: childClosed,
+		Score:       score,
 	}, nil
 }
 
@@ -471,6 +536,37 @@ func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Tok
 	return depsResponse{
 		Ticket: request.Ticket,
 		Deps:   deps,
+	}, nil
+}
+
+// handleEpicHealth returns health metrics for an epic's children:
+// parallelism width (ready children), completion progress, active
+// fraction, and critical dependency depth. This helps PM agents
+// understand whether an epic is stalling and where to focus.
+func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/epic-health"); err != nil {
+		return nil, err
+	}
+
+	var request showRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+
+	_, state, _, found := ts.findTicket(request.Ticket)
+	if !found {
+		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	}
+
+	health := state.index.EpicHealth(request.Ticket)
+
+	return epicHealthResponse{
+		Ticket: request.Ticket,
+		Health: health,
 	}, nil
 }
 

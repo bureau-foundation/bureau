@@ -62,23 +62,35 @@ func NewListRenderer(theme Theme, width int) ListRenderer {
 	return ListRenderer{theme: theme, width: width}
 }
 
+// unblockIndicatorWidth is the fixed width reserved for the unblock
+// count suffix when a ticket has UnblockCount > 0. Format: " ↑NN".
+const unblockIndicatorWidth = 4
+
 // RenderRow renders a single ticket entry as a formatted table row.
 // The selected flag controls whether the row gets highlight styling.
+// The optional score parameter adds leverage and urgency indicators
+// when non-nil (used on the Ready tab; nil on Blocked/All tabs).
 //
-// Row layout: indent + emoji + priority [+ " " + status icon] + " " + ID + title
+// Row layout: indent + emoji + priority [+ " " + status icon] + " " + ID + title [+ " ↑N"]
 //
 // When the ticket has an active status (in_progress, blocked, closed),
 // the icon appears between the priority and ID with surrounding spaces.
 // Open tickets omit the icon entirely, keeping the gap tight:
 //
 //	🐛P0 ● tkt-3vk5  Fix connection pooling leak [infra]
-//	📋P2 tkt-2ccg    Implement retry backoff [transport]
-func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool) string {
+//	📋P2 tkt-2ccg    Implement retry backoff [transport] ↑3
+func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool, score *ticket.TicketScore) string {
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.
 	titleWidth := renderer.width - maxLeftWidth - columnWidthID
 	if titleWidth < 10 {
 		titleWidth = 10
+	}
+
+	// Reserve space for the unblock indicator when present.
+	hasUnblock := score != nil && score.UnblockCount > 0
+	if hasUnblock {
+		titleWidth -= unblockIndicatorWidth
 	}
 
 	// Build the title portion with optional labels suffix.
@@ -99,21 +111,56 @@ func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool) string
 		}
 	}
 
+	// Append unblock indicator after the title+labels.
+	if hasUnblock {
+		combined += renderer.renderUnblockIndicator(score.UnblockCount, selected)
+	}
+
+	// Determine the display priority color. When the ticket has a
+	// borrowed priority more urgent (lower number) than its own,
+	// use the borrowed priority's color to visually escalate it.
+	displayPriorityColor := entry.Content.Priority
+	if score != nil && score.BorrowedPriority >= 0 && score.BorrowedPriority < entry.Content.Priority {
+		displayPriorityColor = score.BorrowedPriority
+	}
+
 	if selected {
 		return renderer.renderSelectedRow(entry, combined)
 	}
-	return renderer.renderNormalRow(entry, combined)
+	return renderer.renderNormalRow(entry, combined, displayPriorityColor)
+}
+
+// renderUnblockIndicator returns a styled " ↑N" suffix for the title
+// showing how many tickets this one unblocks. The color varies by
+// count to draw attention proportionally: 1-2 subtle, 3-5 warm, 6+ hot.
+func (renderer ListRenderer) renderUnblockIndicator(count int, selected bool) string {
+	if selected {
+		// Selected rows use uniform foreground; indicator rendered
+		// in the same style as the rest of the row.
+		return fmt.Sprintf(" ↑%d", count)
+	}
+	color := renderer.theme.FaintText
+	switch {
+	case count >= 6:
+		color = renderer.theme.PriorityColor(0) // critical color
+	case count >= 3:
+		color = renderer.theme.PriorityColor(1) // high color
+	}
+	return " " + lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("↑%d", count))
 }
 
 // renderNormalRow renders a row with per-component foreground colors.
 // No background color (default terminal background).
-func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels string) string {
+// displayPriorityColor controls the color of the priority badge; it
+// may differ from the ticket's own priority when borrowed priority
+// escalates the visual urgency.
+func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels string, displayPriorityColor int) string {
 	priority := entry.Content.Priority
 	status := entry.Content.Status
 
 	typePriorityStyle := lipgloss.NewStyle().
-		Foreground(renderer.theme.PriorityColor(priority)).
-		Bold(priority <= 1)
+		Foreground(renderer.theme.PriorityColor(displayPriorityColor)).
+		Bold(displayPriorityColor <= 1)
 
 	idStyle := lipgloss.NewStyle().
 		Width(columnWidthID).
@@ -201,6 +248,16 @@ func (renderer ListRenderer) RenderGroupHeader(item ListItem, width int, selecte
 	progress := ""
 	if item.EpicTotal > 0 {
 		progress = fmt.Sprintf("  (%d/%d)", item.EpicDone, item.EpicTotal)
+		// Append parallelism width and critical depth from epic health
+		// when available and non-trivial.
+		if item.EpicHealth != nil {
+			if item.EpicHealth.ReadyChildren > 0 {
+				progress += fmt.Sprintf(" rdy:%d", item.EpicHealth.ReadyChildren)
+			}
+			if item.EpicHealth.CriticalDepth > 0 {
+				progress += fmt.Sprintf(" dep:%d", item.EpicHealth.CriticalDepth)
+			}
+		}
 	}
 
 	// Truncate the title so the row never wraps. Reserve space for

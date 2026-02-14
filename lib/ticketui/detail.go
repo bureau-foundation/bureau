@@ -6,6 +6,7 @@ package ticketui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/glamour"
@@ -22,11 +23,15 @@ import (
 //
 // Layout:
 //
-//	Line 1: STATUS  P1  type  ticket-id  [labels]
+//	Line 1: STATUS  P1  type  ticket-id  [labels]      ↑3  →P0  5d
 //	Line 2: timestamps / assignee (condensed)
 //	Line 3: title line 1
 //	Line 4: title line 2 (or blank)
 //	Line 5: separator
+//
+// Line 1 includes right-aligned signal indicators (unblock count,
+// borrowed priority, staleness) when a score is provided and when
+// there is enough horizontal space after the metadata and labels.
 const detailHeaderLines = 5
 
 // BodyClickTarget maps a line in the rendered body to a navigable
@@ -53,12 +58,14 @@ func NewDetailRenderer(theme Theme, width int) DetailRenderer {
 }
 
 // RenderHeader produces the fixed header lines for a ticket. Always
-// exactly [detailHeaderLines] lines tall regardless of content.
-func (renderer DetailRenderer) RenderHeader(entry ticket.Entry) string {
+// exactly [detailHeaderLines] lines tall regardless of content. When
+// a score is provided, signal indicators (↑N, →P0, Nd) are
+// right-aligned on Line 1.
+func (renderer DetailRenderer) RenderHeader(entry ticket.Entry, score *ticket.TicketScore) string {
 	content := entry.Content
 
-	// Line 1: STATUS  P1  type  id  [labels]
-	line1 := renderer.renderMetaLine(entry.ID, content)
+	// Line 1: STATUS  P1  type  id  [labels]  ...signals
+	line1 := renderer.renderMetaLine(entry.ID, content, score)
 
 	// Line 2: timestamps + assignee, condensed onto one line.
 	line2 := renderer.renderTimestampLine(content)
@@ -77,10 +84,9 @@ func (renderer DetailRenderer) RenderHeader(entry ticket.Entry) string {
 
 // RenderBody produces the scrollable body content for a ticket and a
 // set of click targets mapping body line numbers to navigable ticket
-// IDs. Layout order: dependency graph (blocked-by + blocks, tightly
-// packed), children, parent context, close reason, description, notes.
-// Dependencies and children come first so they're visible immediately
-// under the fixed header when scrolling through the list.
+// IDs. Layout order: dependency graph, children, parent context,
+// close reason, description, notes. Scoring signals are shown in
+// the header (Line 1) rather than the body.
 func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry) (string, []BodyClickTarget) {
 	var allTargets []BodyClickTarget
 	var sections []string
@@ -190,8 +196,9 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry) (st
 }
 
 // renderMetaLine builds the first header line: status, priority, type,
-// ID, and labels all on one line.
-func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.TicketContent) string {
+// ID, labels, and right-aligned signal indicators. The score parameter
+// is optional; when nil no indicators are shown.
+func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.TicketContent, score *ticket.TicketScore) string {
 	statusStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.StatusColor(content.Status)).
 		Bold(true)
@@ -206,7 +213,7 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.Ti
 	idStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.FaintText)
 
-	parts := statusStyle.Render(strings.ToUpper(content.Status)) + "  " +
+	leftPortion := statusStyle.Render(strings.ToUpper(content.Status)) + "  " +
 		priorityStyle.Render(fmt.Sprintf("P%d", content.Priority)) + "  " +
 		typeStyle.Render(content.Type) + "  " +
 		idStyle.Render(ticketID)
@@ -214,10 +221,69 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.Ti
 	// Append labels inline if they fit.
 	if len(content.Labels) > 0 {
 		labelText := renderer.renderLabels(content.Labels)
-		parts += "  " + labelText
+		leftPortion += "  " + labelText
 	}
 
-	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(parts)
+	// Right-align signal indicators if there is enough space.
+	signals := renderer.renderSignalIndicators(score, content.Priority)
+	if signals != "" {
+		leftWidth := lipgloss.Width(leftPortion)
+		signalsWidth := lipgloss.Width(signals)
+		gap := renderer.width - leftWidth - signalsWidth
+		if gap >= 2 {
+			leftPortion += strings.Repeat(" ", gap) + signals
+		}
+	}
+
+	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(leftPortion)
+}
+
+// renderSignalIndicators builds compact right-aligned signal
+// indicators for the header meta line. Format: "↑3  →P0  5d".
+// Returns empty string when score is nil or no signals are
+// worth showing.
+//
+// Indicator styling matches the list view for visual consistency:
+//   - ↑N: unblock count. Faint for 1-2, P1 color for 3-5, P0 color for 6+.
+//   - →P0: borrowed priority, only when more urgent than own. Uses
+//     the borrowed priority's color.
+//   - Nd: days since ready, only when > 0. Faint text.
+func (renderer DetailRenderer) renderSignalIndicators(score *ticket.TicketScore, ownPriority int) string {
+	if score == nil {
+		return ""
+	}
+
+	var indicators []string
+
+	if score.UnblockCount > 0 {
+		color := renderer.theme.FaintText
+		switch {
+		case score.UnblockCount >= 6:
+			color = renderer.theme.PriorityColor(0)
+		case score.UnblockCount >= 3:
+			color = renderer.theme.PriorityColor(1)
+		}
+		style := lipgloss.NewStyle().Foreground(color)
+		indicators = append(indicators, style.Render(fmt.Sprintf("↑%d", score.UnblockCount)))
+	}
+
+	if score.BorrowedPriority >= 0 && score.BorrowedPriority < ownPriority {
+		style := lipgloss.NewStyle().
+			Foreground(renderer.theme.PriorityColor(score.BorrowedPriority)).
+			Bold(true)
+		indicators = append(indicators, style.Render(fmt.Sprintf("→P%d", score.BorrowedPriority)))
+	}
+
+	if score.DaysSinceReady > 0 {
+		style := lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
+		indicators = append(indicators, style.Render(fmt.Sprintf("%dd", score.DaysSinceReady)))
+	}
+
+	if len(indicators) == 0 {
+		return ""
+	}
+
+	return strings.Join(indicators, "  ")
 }
 
 // renderTimestampLine builds the second header line: timestamps and
@@ -580,6 +646,11 @@ type DetailPane struct {
 	// Pre-rendered header string, set by SetContent and rerender.
 	header string
 
+	// renderTime is the time snapshot used for scoring computation
+	// in the header. Set by SetContent, reused by rerender so resize
+	// doesn't change the displayed signal indicators.
+	renderTime time.Time
+
 	// clickTargets maps body line numbers to navigable ticket IDs.
 	// Set by SetContent and rerender; used by the model to handle
 	// mouse clicks on dependency, child, and parent entries.
@@ -625,14 +696,18 @@ func (pane *DetailPane) SetSize(width, height int) {
 }
 
 // SetContent updates the detail pane with rendered content for a ticket.
-func (pane *DetailPane) SetContent(source Source, entry ticket.Entry) {
+// The now parameter drives scoring computation for the header signal
+// indicators and is stored for consistent re-rendering on resize.
+func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.Time) {
 	pane.hasEntry = true
 	pane.source = source
 	pane.entry = entry
+	pane.renderTime = now
 
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
-	pane.header = renderer.RenderHeader(entry)
+	score := pane.computeScore(source, entry, now)
+	pane.header = renderer.RenderHeader(entry, score)
 	body, clickTargets := renderer.RenderBody(source, entry)
 	pane.clickTargets = clickTargets
 
@@ -665,7 +740,8 @@ func (pane *DetailPane) rerender() {
 
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
-	pane.header = renderer.RenderHeader(pane.entry)
+	score := pane.computeScore(pane.source, pane.entry, pane.renderTime)
+	pane.header = renderer.RenderHeader(pane.entry, score)
 	body, clickTargets := renderer.RenderBody(pane.source, pane.entry)
 	pane.clickTargets = clickTargets
 
@@ -684,6 +760,16 @@ func (pane *DetailPane) rerender() {
 		previousOffset = maxOffset
 	}
 	pane.viewport.SetYOffset(previousOffset)
+}
+
+// computeScore returns a TicketScore pointer for the given ticket, or
+// nil for closed tickets where scoring is not meaningful.
+func (pane *DetailPane) computeScore(source Source, entry ticket.Entry, now time.Time) *ticket.TicketScore {
+	if entry.Content.Status == "closed" {
+		return nil
+	}
+	score := source.Score(entry.ID, now)
+	return &score
 }
 
 // View renders the detail pane as a docked panel with a fixed header,

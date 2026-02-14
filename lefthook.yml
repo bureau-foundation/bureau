@@ -16,7 +16,7 @@
 
 pre-commit:
   piped: true
-  exclude: '\.local\.'
+  exclude: '\.local\.|^lefthook\.yml$'
 
   commands:
     # ===================================================================
@@ -45,7 +45,7 @@ pre-commit:
 
     license-shell:
       run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
-      files: '^script/'
+      glob: "script/*"
       exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
       priority: 1
 
@@ -83,7 +83,7 @@ pre-commit:
 
     shellcheck:
       run: shellcheck --severity=warning {staged_files}
-      files: '^script/'
+      glob: "script/*"
       exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
       priority: 2
 
@@ -93,7 +93,7 @@ pre-commit:
       priority: 2
 
     check-merge-conflict:
-      run: "! grep -rlE '<<<<<<< |=======$|>>>>>>> ' {staged_files}"
+      run: "! grep -rlE '^<<<<<<< |^=======$|^>>>>>>> ' {staged_files}"
       priority: 2
 
     check-large-files:
@@ -101,7 +101,7 @@ pre-commit:
       priority: 2
 
     detect-private-key:
-      run: "! grep -l 'BEGIN.*PRIVATE KEY' {staged_files}"
+      run: "! grep -l -- '-----[B]EGIN.*PRIVATE KEY' {staged_files}"
       priority: 2
 
     check-case-conflict:
@@ -123,7 +123,7 @@ pre-commit:
 
     gazelle:
       run: script/check-gazelle
-      files: '\.(go|bazel|bzl)$|^go\.(mod|sum)$'
+      glob: "*.{go,bazel,bzl,mod,sum}"
       priority: 3
 
     bazel-build:

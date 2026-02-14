@@ -6,12 +6,17 @@ package ticketui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
+
+// testNow is a fixed time used across dependency graph tests. The
+// exact value doesn't matter — it just needs to be consistent.
+var testNow = time.Date(2026, 2, 14, 0, 0, 0, 0, time.UTC)
 
 // testDependencySource creates a ticket index with dependency
 // relationships for testing the dependency graph renderer. The center
@@ -139,7 +144,7 @@ func TestDependencyGraphNoDeps(t *testing.T) {
 	source := NewIndexSource(ticket.NewIndex())
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
-	rendered, targets := graph.Render("center", nil, nil, source)
+	rendered, targets := graph.Render("center", nil, nil, source, testNow)
 	if rendered != "" {
 		t.Errorf("no deps: expected empty string, got %q", rendered)
 	}
@@ -152,7 +157,7 @@ func TestDependencyGraphLeftOnly(t *testing.T) {
 	source := testDependencySource()
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
-	rendered, targets := graph.Render("center", []string{"left-1", "left-2"}, nil, source)
+	rendered, targets := graph.Render("center", []string{"left-1", "left-2"}, nil, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph with left nodes")
 	}
@@ -192,7 +197,7 @@ func TestDependencyGraphRightOnly(t *testing.T) {
 	source := testDependencySource()
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
-	rendered, targets := graph.Render("center", nil, []string{"right-1"}, source)
+	rendered, targets := graph.Render("center", nil, []string{"right-1"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph with right nodes")
 	}
@@ -222,7 +227,7 @@ func TestDependencyGraphBothSides(t *testing.T) {
 	source := testDependencySource()
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
-	rendered, targets := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source)
+	rendered, targets := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph")
 	}
@@ -280,7 +285,7 @@ func TestDependencyGraphClickTargetDisambiguation(t *testing.T) {
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
 	// 1 left, 1 right → both on the same row (row 0).
-	rendered, targets := graph.Render("center", []string{"left-1"}, []string{"right-1"}, source)
+	rendered, targets := graph.Render("center", []string{"left-1"}, []string{"right-1"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph")
 	}
@@ -329,7 +334,7 @@ func TestDependencyGraphMissingNode(t *testing.T) {
 	source := testDependencySource()
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
-	rendered, targets := graph.Render("center", []string{"left-1", "nonexistent"}, nil, source)
+	rendered, targets := graph.Render("center", []string{"left-1", "nonexistent"}, nil, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph even with missing nodes")
 	}
@@ -353,7 +358,7 @@ func TestDependencyGraphNarrowWidth(t *testing.T) {
 	source := testDependencySource()
 	graph := NewDependencyGraph(DefaultTheme, 30)
 
-	rendered, targets := graph.Render("center", []string{"left-1"}, []string{"right-1"}, source)
+	rendered, targets := graph.Render("center", []string{"left-1"}, []string{"right-1"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph even at narrow width")
 	}
@@ -418,7 +423,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 	source := NewIndexSource(index)
 	graph := NewDependencyGraph(DefaultTheme, 100)
 
-	rendered, targets := graph.Render("center", []string{"a", "b", "c"}, []string{"x", "y", "z"}, source)
+	rendered, targets := graph.Render("center", []string{"a", "b", "c"}, []string{"x", "y", "z"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph")
 	}
@@ -441,10 +446,43 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 
 func TestMergeCharSingleNode(t *testing.T) {
 	graph := DependencyGraph{}
-	// Single node at row 0, fan [0,0], center at 0 → straight horizontal.
+	// Single node at row 0, fan [0,0], center at 0 → both left and
+	// right (node + center on same row) with no vertical → horizontal.
 	got := graph.mergeChar(0, 0, 0, 0)
 	if got != '─' {
-		t.Errorf("single node merge char: expected '─', got %c", got)
+		t.Errorf("single node aligned with center: expected '─', got %c", got)
+	}
+}
+
+func TestMergeCharSingleNodeOffsetBelow(t *testing.T) {
+	graph := DependencyGraph{}
+	// Single left node at row 0, center at row 1. The merge column
+	// must connect the node downward to the center row.
+	// Row 0: left + down → ┐
+	got := graph.mergeChar(0, 0, 0, 1)
+	if got != '┐' {
+		t.Errorf("row 0 (node above center): expected '┐', got %c", got)
+	}
+	// Row 1: right + up → └
+	got = graph.mergeChar(1, 0, 0, 1)
+	if got != '└' {
+		t.Errorf("row 1 (center below node): expected '└', got %c", got)
+	}
+}
+
+func TestSplitCharSingleNodeOffsetBelow(t *testing.T) {
+	graph := DependencyGraph{}
+	// Single right node at row 0, center at row 1. The split column
+	// must connect the center upward to the node row.
+	// Row 0: right + down → ┌
+	got := graph.splitChar(0, 0, 0, 1)
+	if got != '┌' {
+		t.Errorf("row 0 (node above center): expected '┌', got %c", got)
+	}
+	// Row 1: left + up → ┘
+	got = graph.splitChar(1, 0, 0, 1)
+	if got != '┘' {
+		t.Errorf("row 1 (center below node): expected '┘', got %c", got)
 	}
 }
 
@@ -514,17 +552,12 @@ func TestSplitCharOutsideFan(t *testing.T) {
 func TestDependencyGraphLabelTruncation(t *testing.T) {
 	// With a narrow width and both sides populated, existing node
 	// labels should be truncated to fit. Previously only non-existent
-	// nodes were truncated.
+	// nodes were truncated. Priority indicators are included in the
+	// label width, so truncation must account for them.
 	source := testDependencySource()
 
-	// Width of 40 is tight enough to force label truncation when
-	// center ("center", 6 chars) plus connectors plus both side
-	// labels exceed the budget. The fixed connector overhead for
-	// 1 left + 1 right is: " ─" + merge + "─ " + " ─" + split + "─ " = 10.
-	// Center is 6. That leaves 24 for both labels, which is less than
-	// the natural width of two "✓ left-1" / "◐ right-1" labels.
 	graph := NewDependencyGraph(DefaultTheme, 40)
-	rendered, _ := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source)
+	rendered, _ := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source, testNow)
 	if rendered == "" {
 		t.Fatal("expected non-empty graph")
 	}
@@ -536,5 +569,140 @@ func TestDependencyGraphLabelTruncation(t *testing.T) {
 			t.Errorf("line %d visual width %d exceeds graph width 40: %q",
 				lineNumber, visualWidth, line)
 		}
+	}
+}
+
+func TestDependencyGraphAsymmetricOffset(t *testing.T) {
+	// Regression: 1 left node + 2 right nodes. The left node sits on
+	// row 0 while center is on row 1. The merge column must connect
+	// the left node downward to the center — previously it produced a
+	// straight '─' with no vertical continuation.
+	source := testDependencySource()
+	graph := NewDependencyGraph(DefaultTheme, 80)
+
+	rendered, _ := graph.Render("center", []string{"left-1"}, []string{"right-1", "left-2"}, source, testNow)
+	if rendered == "" {
+		t.Fatal("expected non-empty graph")
+	}
+
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(lines))
+	}
+
+	// Row 0: left node, no center text. Row 1: center with connectors.
+	if strings.Contains(lines[0], "center") {
+		t.Error("center should be on row 1 (center row), not row 0")
+	}
+	if !strings.Contains(lines[1], "center") {
+		t.Error("center should appear on row 1")
+	}
+
+	// The merge column on row 0 must contain a downward connector (┐),
+	// and row 1 must contain an upward-right connector (└). Verify by
+	// checking that the box-drawing chars appear in the rendered output.
+	if !strings.ContainsRune(rendered, '┐') {
+		t.Error("expected ┐ in merge column on row 0 (left node connecting down)")
+	}
+	if !strings.ContainsRune(rendered, '└') {
+		t.Error("expected └ in merge column on row 1 (center connecting up)")
+	}
+}
+
+func TestDependencyGraphAsymmetricOffsetInverse(t *testing.T) {
+	// Mirror of the above: 2 left nodes + 1 right node. The right
+	// node sits on row 0 while center is on row 1. The split column
+	// must connect the right node downward to the center.
+	source := testDependencySource()
+	graph := NewDependencyGraph(DefaultTheme, 80)
+
+	rendered, _ := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source, testNow)
+	if rendered == "" {
+		t.Fatal("expected non-empty graph")
+	}
+
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(lines))
+	}
+
+	// The split column on row 0 must contain a downward connector (┌),
+	// and row 1 must contain an upward-left connector (┘).
+	if !strings.ContainsRune(rendered, '┌') {
+		t.Error("expected ┌ in split column on row 0 (right node connecting down)")
+	}
+	if !strings.ContainsRune(rendered, '┘') {
+		t.Error("expected ┘ in split column on row 1 (center connecting up)")
+	}
+}
+
+func TestDependencyGraphPriorityIndicators(t *testing.T) {
+	// Verify that priority indicators appear in node labels.
+	source := testDependencySource()
+	graph := NewDependencyGraph(DefaultTheme, 100)
+
+	rendered, _ := graph.Render("center", []string{"left-1", "left-2"}, []string{"right-1"}, source, testNow)
+	if rendered == "" {
+		t.Fatal("expected non-empty graph")
+	}
+
+	// left-1 is P0, left-2 is P1, right-1 is P2. All should show
+	// their priority in the rendered output.
+	if !strings.Contains(rendered, "P0") {
+		t.Error("expected P0 indicator for left-1 (priority 0)")
+	}
+	if !strings.Contains(rendered, "P1") {
+		t.Error("expected P1 indicator for left-2 (priority 1)")
+	}
+	if !strings.Contains(rendered, "P2") {
+		t.Error("expected P2 indicator for right-1 (priority 2)")
+	}
+}
+
+func TestDependencyGraphBorrowedPriority(t *testing.T) {
+	// When a ticket has a borrowed priority more urgent than its own,
+	// the label should include the escalation indicator →P{n}.
+	index := ticket.NewIndex()
+	index.Put("center", schema.TicketContent{
+		Version:   1,
+		Title:     "Center",
+		Status:    "open",
+		Priority:  2,
+		Type:      "task",
+		BlockedBy: []string{"blocker"},
+	})
+	// blocker is P3 but blocks center (P2) which blocks downstream-p0.
+	// So blocker's borrowed priority should be P0 (from downstream-p0
+	// depending transitively through center).
+	index.Put("blocker", schema.TicketContent{
+		Version:  1,
+		Title:    "Blocker",
+		Status:   "open",
+		Priority: 3,
+		Type:     "task",
+	})
+	index.Put("downstream-p0", schema.TicketContent{
+		Version:   1,
+		Title:     "Urgent downstream",
+		Status:    "open",
+		Priority:  0,
+		Type:      "task",
+		BlockedBy: []string{"center"},
+	})
+	source := NewIndexSource(index)
+	graph := NewDependencyGraph(DefaultTheme, 100)
+
+	rendered, _ := graph.Render("center", []string{"blocker"}, []string{"downstream-p0"}, source, testNow)
+	if rendered == "" {
+		t.Fatal("expected non-empty graph")
+	}
+
+	// blocker is P3 with borrowed priority P0 → should show →P0.
+	if !strings.Contains(rendered, "→P0") {
+		t.Errorf("expected borrowed priority indicator →P0 for blocker, got:\n%s", rendered)
+	}
+	// blocker should also show its own priority P3.
+	if !strings.Contains(rendered, "P3") {
+		t.Errorf("expected own priority P3 for blocker, got:\n%s", rendered)
 	}
 }

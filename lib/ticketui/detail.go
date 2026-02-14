@@ -85,9 +85,9 @@ func (renderer DetailRenderer) RenderHeader(entry ticket.Entry, score *ticket.Ti
 // RenderBody produces the scrollable body content for a ticket and a
 // set of click targets mapping body line numbers to navigable ticket
 // IDs. Layout order: dependency graph, children, parent context,
-// close reason, description, notes. Scoring signals are shown in
-// the header (Line 1) rather than the body.
-func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry) (string, []BodyClickTarget) {
+// close reason, description, notes. The now parameter drives
+// borrowed-priority computation for graph node indicators.
+func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry, now time.Time) (string, []BodyClickTarget) {
 	var allTargets []BodyClickTarget
 	var sections []string
 	totalLines := 0 // Running count of lines produced so far.
@@ -120,7 +120,7 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry) (st
 	blockers := source.Blocks(entry.ID)
 	if len(entry.Content.BlockedBy) > 0 || len(blockers) > 0 {
 		depGraph := NewDependencyGraph(renderer.theme, renderer.width)
-		graphString, graphTargets := depGraph.Render(entry.ID, entry.Content.BlockedBy, blockers, source)
+		graphString, graphTargets := depGraph.Render(entry.ID, entry.Content.BlockedBy, blockers, source, now)
 		if graphString != "" {
 			addSection(graphString, graphTargets)
 		}
@@ -708,7 +708,7 @@ func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.T
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(source, entry, now)
 	pane.header = renderer.RenderHeader(entry, score)
-	body, clickTargets := renderer.RenderBody(source, entry)
+	body, clickTargets := renderer.RenderBody(source, entry, now)
 	pane.clickTargets = clickTargets
 
 	// Wrap body to contentWidth so no line exceeds the viewport width.
@@ -742,7 +742,7 @@ func (pane *DetailPane) rerender() {
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(pane.source, pane.entry, pane.renderTime)
 	pane.header = renderer.RenderHeader(pane.entry, score)
-	body, clickTargets := renderer.RenderBody(pane.source, pane.entry)
+	body, clickTargets := renderer.RenderBody(pane.source, pane.entry, pane.renderTime)
 	pane.clickTargets = clickTargets
 
 	// Same width constraint as SetContent: ensure no line exceeds the

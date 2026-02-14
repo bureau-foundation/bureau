@@ -4,7 +4,9 @@
 package ticketui
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -15,21 +17,24 @@ import (
 // node is either a left (blocked-by) or right (blocks) neighbor of
 // the center ticket, or the center ticket itself.
 type depNode struct {
-	ticketID string
-	content  schema.TicketContent
-	exists   bool // False when the ticket is not in the index.
+	ticketID         string
+	content          schema.TicketContent
+	exists           bool // False when the ticket is not in the index.
+	borrowedPriority int  // Most urgent transitive dependent; -1 if none.
 }
 
 // DependencyGraph renders a compact horizontal ASCII DAG showing the
 // immediate dependency neighborhood of a ticket. The center ticket
 // has its blocked-by nodes fanning in from the left and its blocks
 // nodes fanning out to the right, connected with box-drawing chars.
+// Each node shows a status icon (colored by status), own priority,
+// optional borrowed-priority escalation, and ticket ID.
 //
 // Layout for 3 left, 2 right:
 //
-//	● tkt-abc ─┐               ┌─ ● tkt-ghi
-//	● tkt-def ─┼── tkt-center ─┤
-//	● tkt-xyz ─┘               └─ ● tkt-jkl
+//	● P2 tkt-abc ─┐               ┌─ ● P2 tkt-ghi
+//	● P1 tkt-def ─┼── tkt-center ─┤
+//	● P3→P0 xyz  ─┘               └─ ● P1 tkt-jkl
 //
 // All neighbor nodes are clickable. Returns the rendered graph and
 // click targets with line offsets relative to the graph (no header).
@@ -46,14 +51,16 @@ func NewDependencyGraph(theme Theme, width int) DependencyGraph {
 // Render produces the dependency graph for the given ticket. Returns
 // the rendered string and click targets for neighbor nodes. Returns
 // empty string and nil targets if the ticket has no dependencies.
-func (graph DependencyGraph) Render(centerID string, blockedBy []string, blocks []string, source Source) (string, []BodyClickTarget) {
+// The now parameter drives borrowed-priority computation for the
+// priority indicators shown beside each node.
+func (graph DependencyGraph) Render(centerID string, blockedBy []string, blocks []string, source Source, now time.Time) (string, []BodyClickTarget) {
 	if len(blockedBy) == 0 && len(blocks) == 0 {
 		return "", nil
 	}
 
 	// Resolve nodes.
-	leftNodes := graph.resolveNodes(blockedBy, source)
-	rightNodes := graph.resolveNodes(blocks, source)
+	leftNodes := graph.resolveNodes(blockedBy, source, now)
+	rightNodes := graph.resolveNodes(blocks, source, now)
 
 	totalRows := max(len(leftNodes), len(rightNodes))
 	if totalRows < 1 {
@@ -228,15 +235,21 @@ func (graph DependencyGraph) Render(centerID string, blockedBy []string, blocks 
 }
 
 // resolveNodes looks up each ticket ID in the source and returns
-// depNode values with resolved content.
-func (graph DependencyGraph) resolveNodes(ticketIDs []string, source Source) []depNode {
+// depNode values with resolved content and borrowed priority.
+func (graph DependencyGraph) resolveNodes(ticketIDs []string, source Source, now time.Time) []depNode {
 	nodes := make([]depNode, len(ticketIDs))
 	for index, ticketID := range ticketIDs {
 		content, exists := source.Get(ticketID)
+		borrowedPriority := -1
+		if exists {
+			score := source.Score(ticketID, now)
+			borrowedPriority = score.BorrowedPriority
+		}
 		nodes[index] = depNode{
-			ticketID: ticketID,
-			content:  content,
-			exists:   exists,
+			ticketID:         ticketID,
+			content:          content,
+			exists:           exists,
+			borrowedPriority: borrowedPriority,
 		}
 	}
 	return nodes
@@ -255,7 +268,8 @@ func (graph DependencyGraph) maxLabelWidth(nodes []depNode) int {
 	return maxWidth
 }
 
-// labelWidth returns the visual width of a node's label (icon + ID).
+// labelWidth returns the visual width of a node's label
+// (icon + priority + ID + optional borrowed indicator).
 func (graph DependencyGraph) labelWidth(node depNode) int {
 	if !node.exists {
 		return lipgloss.Width(node.ticketID + "?")
@@ -264,11 +278,20 @@ func (graph DependencyGraph) labelWidth(node depNode) int {
 	if icon == "" {
 		icon = " "
 	}
-	return lipgloss.Width(icon + " " + node.ticketID)
+	priority := fmt.Sprintf("P%d", node.content.Priority)
+	width := lipgloss.Width(icon + " " + priority + " " + node.ticketID)
+	if node.borrowedPriority >= 0 && node.borrowedPriority < node.content.Priority {
+		borrowed := fmt.Sprintf("→P%d", node.borrowedPriority)
+		width += lipgloss.Width(borrowed)
+	}
+	return width
 }
 
-// renderLabel renders a node's label (status icon + ticket ID),
-// padded or truncated to the given width.
+// renderLabel renders a node's label: status icon, priority indicator,
+// optional borrowed-priority escalation, and ticket ID. The priority
+// is colored by own priority; when borrowed priority is more urgent,
+// an →P{b} suffix is appended in the borrowed priority's color.
+// Labels are padded or truncated to targetWidth.
 func (graph DependencyGraph) renderLabel(node depNode, targetWidth int) string {
 	if !node.exists {
 		text := node.ticketID + "?"
@@ -288,23 +311,39 @@ func (graph DependencyGraph) renderLabel(node depNode, targetWidth int) string {
 
 	statusStyle := lipgloss.NewStyle().
 		Foreground(graph.theme.StatusColor(node.content.Status))
+	priorityStyle := lipgloss.NewStyle().
+		Foreground(graph.theme.PriorityColor(node.content.Priority))
 	idStyle := lipgloss.NewStyle().
 		Foreground(graph.theme.StatusColor(node.content.Status))
 
-	// When the target width is too narrow for icon + ID, truncate the
-	// ID so the label fits. This happens when the graph must shrink
-	// side labels to fit the terminal width.
-	visibleID := node.ticketID
+	priorityText := fmt.Sprintf("P%d", node.content.Priority)
+	borrowedText := ""
+	if node.borrowedPriority >= 0 && node.borrowedPriority < node.content.Priority {
+		borrowedStyle := lipgloss.NewStyle().
+			Foreground(graph.theme.PriorityColor(node.borrowedPriority)).
+			Bold(true)
+		borrowedText = borrowedStyle.Render(fmt.Sprintf("→P%d", node.borrowedPriority))
+	}
+
+	// Build the full label: icon priority[→borrowed] id
+	// The priority block (own + borrowed) is treated as a unit before the ID.
+	priorityBlock := priorityStyle.Render(priorityText) + borrowedText
+	priorityBlockWidth := lipgloss.Width(priorityBlock)
+
+	// When the target width is too narrow, truncate the ID so the
+	// label fits. Priority indicators are preserved over the ID since
+	// they convey urgency at a glance.
 	iconWidth := lipgloss.Width(icon)
-	separatorWidth := 1 // Space between icon and ID.
-	availableForID := targetWidth - iconWidth - separatorWidth
+	fixedWidth := iconWidth + 1 + priorityBlockWidth + 1 // icon + " " + priority + " "
+	availableForID := targetWidth - fixedWidth
+	visibleID := node.ticketID
 	if availableForID > 0 && lipgloss.Width(visibleID) > availableForID {
 		visibleID = truncateString(visibleID, availableForID-1) + "…"
 	} else if availableForID <= 0 {
 		visibleID = ""
 	}
 
-	label := statusStyle.Render(icon) + " " + idStyle.Render(visibleID)
+	label := statusStyle.Render(icon) + " " + priorityBlock + " " + idStyle.Render(visibleID)
 	labelVisualWidth := lipgloss.Width(label)
 
 	if labelVisualWidth < targetWidth {
@@ -314,41 +353,41 @@ func (graph DependencyGraph) renderLabel(node depNode, targetWidth int) string {
 }
 
 // mergeChar returns the box-drawing character for the left merge
-// column at the given row. The merge bar spans from fanStart to
-// fanEnd, and the horizontal line exits rightward on centerRow.
+// column at the given row. The vertical bar must span from the
+// topmost relevant row (fan or center) to the bottommost, so that
+// a single node offset from the center still connects visually.
 func (graph DependencyGraph) mergeChar(row, fanStart, fanEnd, centerRow int) rune {
-	if row < fanStart || row > fanEnd {
+	spanTop := min(fanStart, centerRow)
+	spanBottom := max(fanEnd, centerRow)
+
+	if row < spanTop || row > spanBottom {
 		return ' '
 	}
-	// Single node — straight horizontal line.
-	if fanStart == fanEnd {
-		return '─'
-	}
 
-	hasUp := row > fanStart
-	hasDown := row < fanEnd
 	hasLeft := row >= fanStart && row <= fanEnd // Node connects from left.
 	hasRight := row == centerRow                // Center line exits right.
+	hasUp := row > spanTop
+	hasDown := row < spanBottom
 
 	return boxDrawing(hasLeft, hasRight, hasUp, hasDown)
 }
 
 // splitChar returns the box-drawing character for the right split
-// column at the given row. The split bar spans from fanStart to
-// fanEnd, and the horizontal line enters from the left on centerRow.
+// column at the given row. The vertical bar must span from the
+// topmost relevant row (fan or center) to the bottommost, mirroring
+// the mergeChar logic for the left side.
 func (graph DependencyGraph) splitChar(row, fanStart, fanEnd, centerRow int) rune {
-	if row < fanStart || row > fanEnd {
+	spanTop := min(fanStart, centerRow)
+	spanBottom := max(fanEnd, centerRow)
+
+	if row < spanTop || row > spanBottom {
 		return ' '
 	}
-	// Single node — straight horizontal line.
-	if fanStart == fanEnd {
-		return '─'
-	}
 
-	hasUp := row > fanStart
-	hasDown := row < fanEnd
 	hasRight := row >= fanStart && row <= fanEnd // Node connects to right.
 	hasLeft := row == centerRow                  // Center line enters from left.
+	hasUp := row > spanTop
+	hasDown := row < spanBottom
 
 	return boxDrawing(hasLeft, hasRight, hasUp, hasDown)
 }

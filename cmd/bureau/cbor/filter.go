@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
 // filterCBOR decodes CBOR data, converts to JSON, and pipes it through
@@ -52,7 +54,7 @@ func runJQ(jsonData []byte, jqArgs []string) error {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Propagate jq's exit code so piped commands behave
 			// correctly (e.g., jq -e returns 1 for false/null).
-			os.Exit(exitErr.ExitCode())
+			return &cli.ExitError{Code: exitErr.ExitCode()}
 		}
 		return fmt.Errorf("run jq: %w", err)
 	}

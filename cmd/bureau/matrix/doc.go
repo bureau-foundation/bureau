@@ -20,7 +20,7 @@
 //   - state: get and set arbitrary room state events.
 //   - doctor: health-check the deployment (rooms, templates, power
 //     levels, membership), with --fix for auto-remediation and
-//     --dry-run for preview. Returns an exitError with a nonzero
+//     --dry-run for preview. Returns a [cli.ExitError] with a nonzero
 //     exit code when problems are found.
 //
 // All subcommands except setup use [cli.SessionConfig] for admin-level

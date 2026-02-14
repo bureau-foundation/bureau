@@ -20,6 +20,7 @@ go_library(
         "//lib/principal",
         "//lib/schema",
         "//lib/service",
+        "//lib/servicetoken",
         "//lib/version",
         "//messaging",
     ],
@@ -38,5 +39,7 @@ go_test(
     deps = [
         "//lib/artifact",
         "//lib/clock",
+        "//lib/service",
+        "//lib/servicetoken",
     ],
 )

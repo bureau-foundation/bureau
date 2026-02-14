@@ -459,6 +459,163 @@ func ReadFetchResponse(r io.Reader) (*FetchResponse, error) {
 	return &response, nil
 }
 
+// --- List protocol types ---
+
+// ListRequest is the CBOR request for the "list" action (filtered
+// artifact query).
+type ListRequest struct {
+	Action      string `cbor:"action"                  json:"action"`
+	ContentType string `cbor:"content_type,omitempty"   json:"content_type,omitempty"`
+	Label       string `cbor:"label,omitempty"          json:"label,omitempty"`
+	CachePolicy string `cbor:"cache_policy,omitempty"   json:"cache_policy,omitempty"`
+	Visibility  string `cbor:"visibility,omitempty"     json:"visibility,omitempty"`
+	MinSize     int64  `cbor:"min_size,omitempty"       json:"min_size,omitempty"`
+	MaxSize     int64  `cbor:"max_size,omitempty"       json:"max_size,omitempty"`
+	Limit       int    `cbor:"limit,omitempty"          json:"limit,omitempty"`
+	Offset      int    `cbor:"offset,omitempty"         json:"offset,omitempty"`
+}
+
+// ListResponse is the CBOR response for the "list" action.
+type ListResponse struct {
+	Artifacts []ArtifactSummary `cbor:"artifacts" json:"artifacts"`
+	Total     int               `cbor:"total"     json:"total"`
+}
+
+// ArtifactSummary is a single artifact in a ListResponse. Contains
+// enough metadata for display without a separate "show" call.
+type ArtifactSummary struct {
+	Hash        string   `cbor:"hash"                    json:"hash"`
+	Ref         string   `cbor:"ref"                     json:"ref"`
+	ContentType string   `cbor:"content_type"            json:"content_type"`
+	Filename    string   `cbor:"filename,omitempty"      json:"filename,omitempty"`
+	Size        int64    `cbor:"size"                    json:"size"`
+	Labels      []string `cbor:"labels,omitempty"        json:"labels,omitempty"`
+	CachePolicy string   `cbor:"cache_policy,omitempty"  json:"cache_policy,omitempty"`
+	StoredAt    string   `cbor:"stored_at"               json:"stored_at"`
+}
+
+// --- Tag protocol types ---
+
+// TagRequest is the CBOR request for the "tag" action (create or
+// update a mutable tag pointing to an artifact).
+type TagRequest struct {
+	Action           string `cbor:"action"                       json:"action"`
+	Name             string `cbor:"name"                         json:"name"`
+	Ref              string `cbor:"ref"                          json:"ref"`
+	Optimistic       bool   `cbor:"optimistic,omitempty"         json:"optimistic,omitempty"`
+	ExpectedPrevious string `cbor:"expected_previous,omitempty"  json:"expected_previous,omitempty"`
+}
+
+// TagResponse is the CBOR response for the "tag" action.
+type TagResponse struct {
+	Name     string `cbor:"name"               json:"name"`
+	Hash     string `cbor:"hash"               json:"hash"`
+	Ref      string `cbor:"ref"                json:"ref"`
+	Previous string `cbor:"previous,omitempty" json:"previous,omitempty"`
+}
+
+// DeleteTagRequest is the CBOR request for the "delete-tag" action.
+type DeleteTagRequest struct {
+	Action string `cbor:"action" json:"action"`
+	Name   string `cbor:"name"   json:"name"`
+}
+
+// ResolveRequest is the CBOR request for the "resolve" action. The
+// ref can be a full hash, short ref (art-<hex>), or tag name.
+type ResolveRequest struct {
+	Action string `cbor:"action" json:"action"`
+	Ref    string `cbor:"ref"    json:"ref"`
+}
+
+// ResolveResponse is the CBOR response for the "resolve" action.
+type ResolveResponse struct {
+	Hash string `cbor:"hash"          json:"hash"`
+	Ref  string `cbor:"ref"           json:"ref"`
+	Tag  string `cbor:"tag,omitempty" json:"tag,omitempty"`
+}
+
+// TagsRequest is the CBOR request for the "tags" action (list tags).
+type TagsRequest struct {
+	Action string `cbor:"action"           json:"action"`
+	Prefix string `cbor:"prefix,omitempty" json:"prefix,omitempty"`
+}
+
+// TagsResponse is the CBOR response for the "tags" action.
+type TagsResponse struct {
+	Tags []TagEntry `cbor:"tags" json:"tags"`
+}
+
+// TagEntry is a single tag in a TagsResponse.
+type TagEntry struct {
+	Name string `cbor:"name" json:"name"`
+	Hash string `cbor:"hash" json:"hash"`
+	Ref  string `cbor:"ref"  json:"ref"`
+}
+
+// --- Pin/Unpin protocol types ---
+
+// PinRequest is the CBOR request for the "pin" action (mark an
+// artifact as protected from GC and pin containers in the cache).
+type PinRequest struct {
+	Action string `cbor:"action" json:"action"`
+	Ref    string `cbor:"ref"    json:"ref"`
+}
+
+// PinResponse is the CBOR response for the "pin" action.
+type PinResponse struct {
+	Hash        string `cbor:"hash"         json:"hash"`
+	Ref         string `cbor:"ref"          json:"ref"`
+	CachePolicy string `cbor:"cache_policy" json:"cache_policy"`
+}
+
+// UnpinRequest is the CBOR request for the "unpin" action.
+type UnpinRequest struct {
+	Action string `cbor:"action" json:"action"`
+	Ref    string `cbor:"ref"    json:"ref"`
+}
+
+// UnpinResponse is the CBOR response for the "unpin" action.
+type UnpinResponse struct {
+	Hash        string `cbor:"hash"         json:"hash"`
+	Ref         string `cbor:"ref"          json:"ref"`
+	CachePolicy string `cbor:"cache_policy" json:"cache_policy"`
+}
+
+// --- GC protocol types ---
+
+// GCRequest is the CBOR request for the "gc" action (mark-and-sweep
+// garbage collection of expired, unprotected artifacts).
+type GCRequest struct {
+	Action string `cbor:"action"            json:"action"`
+	DryRun bool   `cbor:"dry_run,omitempty" json:"dry_run,omitempty"`
+}
+
+// GCResponse is the CBOR response for the "gc" action.
+type GCResponse struct {
+	ArtifactsRemoved  int   `cbor:"artifacts_removed"  json:"artifacts_removed"`
+	ContainersRemoved int   `cbor:"containers_removed" json:"containers_removed"`
+	BytesFreed        int64 `cbor:"bytes_freed"        json:"bytes_freed"`
+	DryRun            bool  `cbor:"dry_run"            json:"dry_run"`
+}
+
+// --- Cache status protocol types ---
+
+// CacheStatusResponse is the CBOR response for the "cache-status"
+// action. Includes store-level stats and, if a cache is configured,
+// cache ring stats.
+type CacheStatusResponse struct {
+	StoreArtifacts int   `cbor:"store_artifacts"          json:"store_artifacts"`
+	StoreSizeBytes int64 `cbor:"store_size_bytes"         json:"store_size_bytes"`
+	TagCount       int   `cbor:"tag_count"                json:"tag_count"`
+
+	// Cache fields are present only when a cache is configured.
+	CacheDeviceSize       int64 `cbor:"cache_device_size,omitempty"       json:"cache_device_size,omitempty"`
+	CacheBlockSize        int64 `cbor:"cache_block_size,omitempty"        json:"cache_block_size,omitempty"`
+	CacheBlockCount       int   `cbor:"cache_block_count,omitempty"       json:"cache_block_count,omitempty"`
+	CacheLiveContainers   int   `cbor:"cache_live_containers,omitempty"   json:"cache_live_containers,omitempty"`
+	CachePinnedContainers int   `cbor:"cache_pinned_containers,omitempty" json:"cache_pinned_containers,omitempty"`
+}
+
 // DataReader returns the appropriate io.Reader for the binary data
 // stream based on the transfer header's Size field. If size >= 0,
 // returns a SizedReader that reads exactly that many bytes. If

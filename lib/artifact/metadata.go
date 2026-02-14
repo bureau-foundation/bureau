@@ -124,6 +124,16 @@ func (m *MetadataStore) Read(fileHash Hash) (*ArtifactMetadata, error) {
 	return &meta, nil
 }
 
+// Delete removes the metadata file for the given file hash. Returns
+// nil if the file was removed or did not exist.
+func (m *MetadataStore) Delete(fileHash Hash) error {
+	path := m.path(fileHash)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing metadata for %s: %w", FormatHash(fileHash), err)
+	}
+	return nil
+}
+
 // ScanRefs walks the metadata directory and returns a mapping from
 // short artifact references to their full file hashes. This reads
 // only filenames — it does NOT open or parse any CBOR files. The
@@ -171,6 +181,53 @@ func (m *MetadataStore) ScanRefs() (map[string][]Hash, error) {
 	}
 
 	return result, nil
+}
+
+// ScanAll walks the metadata directory, reads every CBOR metadata file,
+// and returns all records. Unlike ScanRefs (which only reads filenames),
+// this decodes every file. At 100K artifacts this is ~20-50MB of I/O
+// — acceptable at startup, where it runs once to populate the in-memory
+// artifact index.
+func (m *MetadataStore) ScanAll() ([]ArtifactMetadata, error) {
+	var results []ArtifactMetadata
+
+	err := filepath.WalkDir(m.root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".cbor") {
+			return nil
+		}
+
+		// Verify this is a proper hash-named file (skip temp files).
+		hexString := strings.TrimSuffix(name, ".cbor")
+		if _, err := ParseHash(hexString); err != nil {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading metadata %s: %w", path, err)
+		}
+
+		var meta ArtifactMetadata
+		if err := codec.Unmarshal(data, &meta); err != nil {
+			return fmt.Errorf("decoding metadata %s: %w", path, err)
+		}
+
+		results = append(results, meta)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scanning metadata directory: %w", err)
+	}
+
+	return results, nil
 }
 
 // path returns the sharded filesystem path for a metadata file.

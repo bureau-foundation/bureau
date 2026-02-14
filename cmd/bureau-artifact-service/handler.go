@@ -15,6 +15,8 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // Connection timeout constants. These match the values used by
@@ -120,20 +122,110 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 
 	switch header.Action {
 	case "store":
+		if as.authenticate(conn, raw, "store", "artifact/store") == nil {
+			return
+		}
 		as.handleStore(ctx, conn, raw)
 	case "fetch":
+		if as.authenticate(conn, raw, "fetch", "artifact/fetch") == nil {
+			return
+		}
 		as.handleFetch(ctx, conn, raw)
 	case "exists":
+		if as.authenticate(conn, raw, "exists", "artifact/fetch") == nil {
+			return
+		}
 		as.handleExists(ctx, conn, raw)
 	case "show":
+		if as.authenticate(conn, raw, "show", "artifact/fetch") == nil {
+			return
+		}
 		as.handleShow(ctx, conn, raw)
 	case "reconstruction":
+		if as.authenticate(conn, raw, "reconstruction", "artifact/fetch") == nil {
+			return
+		}
 		as.handleReconstruction(ctx, conn, raw)
+	case "list":
+		if as.authenticate(conn, raw, "list", "artifact/list") == nil {
+			return
+		}
+		as.handleList(ctx, conn, raw)
+	case "tag":
+		if as.authenticate(conn, raw, "tag", "artifact/tag") == nil {
+			return
+		}
+		as.handleTag(ctx, conn, raw)
+	case "resolve":
+		if as.authenticate(conn, raw, "resolve", "artifact/fetch") == nil {
+			return
+		}
+		as.handleResolve(ctx, conn, raw)
+	case "tags":
+		if as.authenticate(conn, raw, "tags", "artifact/fetch") == nil {
+			return
+		}
+		as.handleTags(ctx, conn, raw)
+	case "delete-tag":
+		if as.authenticate(conn, raw, "delete-tag", "artifact/tag") == nil {
+			return
+		}
+		as.handleDeleteTag(ctx, conn, raw)
+	case "pin":
+		if as.authenticate(conn, raw, "pin", "artifact/pin") == nil {
+			return
+		}
+		as.handlePin(ctx, conn, raw)
+	case "unpin":
+		if as.authenticate(conn, raw, "unpin", "artifact/pin") == nil {
+			return
+		}
+		as.handleUnpin(ctx, conn, raw)
+	case "gc":
+		if as.authenticate(conn, raw, "gc", "artifact/gc") == nil {
+			return
+		}
+		as.handleGC(ctx, conn, raw)
+	case "cache-status":
+		if as.authenticate(conn, raw, "cache-status", "artifact/list") == nil {
+			return
+		}
+		as.handleCacheStatus(ctx, conn, raw)
 	case "status":
+		// Status is unauthenticated — pure liveness check that
+		// reveals only uptime and artifact count.
 		as.handleStatus(ctx, conn, raw)
 	default:
 		as.writeError(conn, fmt.Sprintf("unknown action %q", header.Action))
 	}
+}
+
+// --- Authentication ---
+
+// authenticate verifies the service token in the request and checks
+// that it carries the required grant. Returns the verified token on
+// success. On failure, writes an error response to conn and returns
+// nil.
+//
+// When authConfig is nil (unit tests that don't exercise auth),
+// returns a zero token to allow the handler to proceed.
+func (as *ArtifactService) authenticate(conn net.Conn, raw []byte, action, grant string) *servicetoken.Token {
+	if as.authConfig == nil {
+		return &servicetoken.Token{}
+	}
+
+	token, err := service.VerifyRequestToken(as.authConfig, raw, action, as.logger)
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return nil
+	}
+
+	if !servicetoken.GrantsAllow(token.Grants, grant, "") {
+		as.writeError(conn, fmt.Sprintf("access denied: missing grant for %s", grant))
+		return nil
+	}
+
+	return token
 }
 
 // --- Store action ---
@@ -189,8 +281,24 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 		return
 	}
 
-	// Update the ref index.
+	// Update the ref index and artifact index.
 	as.refIndex.Add(storeResult.FileHash)
+	as.artifactIndex.Put(*meta)
+
+	// If the store request included a tag, create it now.
+	// Store-with-tag uses optimistic mode (last writer wins) because
+	// the caller explicitly asked to overwrite the tag with a fresh
+	// artifact.
+	if header.Tag != "" {
+		if err := as.tagStore.Set(header.Tag, storeResult.FileHash, nil, true, as.clock.Now()); err != nil {
+			as.writeError(conn, fmt.Sprintf("creating tag %q: %v", header.Tag, err))
+			return
+		}
+		as.logger.Info("tag created via store",
+			"tag", header.Tag,
+			"ref", storeResult.Ref,
+		)
+	}
 
 	as.logger.Info("artifact stored",
 		"ref", storeResult.Ref,
@@ -420,7 +528,7 @@ func (as *ArtifactService) handleStatus(ctx context.Context, conn net.Conn, raw 
 // hash. Accepts three formats:
 //   - 64-character hex string (full hash)
 //   - "art-" prefix + 12 hex characters (short ref)
-//   - tag names (not yet implemented — deferred to tag storage bead)
+//   - tag name (looked up in the tag store)
 func (as *ArtifactService) resolveRef(ref string) (artifact.Hash, error) {
 	// Try full hash first (64 hex chars).
 	if len(ref) == 64 {
@@ -438,10 +546,536 @@ func (as *ArtifactService) resolveRef(ref string) (artifact.Hash, error) {
 		return as.refIndex.Resolve(ref)
 	}
 
+	// Try tag name.
+	if tag, exists := as.tagStore.Get(ref); exists {
+		return tag.Target, nil
+	}
+
 	return artifact.Hash{}, fmt.Errorf(
-		"invalid artifact reference %q: expected 64-char hex hash or art-<12 hex> ref",
+		"unknown artifact reference %q: not a hash, short ref (art-<hex>), or tag name",
 		ref,
 	)
+}
+
+// --- List action ---
+
+func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.ListRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid list request: %v", err))
+		return
+	}
+
+	filter := artifact.ArtifactFilter{
+		ContentType: request.ContentType,
+		Label:       request.Label,
+		CachePolicy: request.CachePolicy,
+		Visibility:  request.Visibility,
+		MinSize:     request.MinSize,
+		MaxSize:     request.MaxSize,
+		Limit:       request.Limit,
+		Offset:      request.Offset,
+	}
+
+	entries, total := as.artifactIndex.List(filter)
+
+	summaries := make([]artifact.ArtifactSummary, len(entries))
+	for i, entry := range entries {
+		summaries[i] = artifact.ArtifactSummary{
+			Hash:        artifact.FormatHash(entry.FileHash),
+			Ref:         artifact.FormatRef(entry.FileHash),
+			ContentType: entry.Metadata.ContentType,
+			Filename:    entry.Metadata.Filename,
+			Size:        entry.Metadata.Size,
+			Labels:      entry.Metadata.Labels,
+			CachePolicy: entry.Metadata.CachePolicy,
+			StoredAt:    entry.Metadata.StoredAt.UTC().Format(time.RFC3339),
+		}
+	}
+
+	as.writeResult(conn, artifact.ListResponse{
+		Artifacts: summaries,
+		Total:     total,
+	})
+}
+
+// --- Tag actions ---
+
+func (as *ArtifactService) handleTag(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.TagRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid tag request: %v", err))
+		return
+	}
+
+	if request.Name == "" {
+		as.writeError(conn, "missing required field: name")
+		return
+	}
+	if request.Ref == "" {
+		as.writeError(conn, "missing required field: ref")
+		return
+	}
+
+	// Resolve the ref to a full hash (verifies the artifact exists).
+	fileHash, err := as.resolveRef(request.Ref)
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	// Parse expected_previous if provided (for compare-and-swap).
+	var expectedPrevious *artifact.Hash
+	if request.ExpectedPrevious != "" {
+		parsed, err := artifact.ParseHash(request.ExpectedPrevious)
+		if err != nil {
+			as.writeError(conn, fmt.Sprintf("invalid expected_previous hash: %v", err))
+			return
+		}
+		expectedPrevious = &parsed
+	}
+
+	// Record the previous target before the update (for the response).
+	var previousRef string
+	if existing, exists := as.tagStore.Get(request.Name); exists {
+		previousRef = artifact.FormatRef(existing.Target)
+	}
+
+	as.writeMu.Lock()
+	err = as.tagStore.Set(request.Name, fileHash, expectedPrevious, request.Optimistic, as.clock.Now())
+	as.writeMu.Unlock()
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	as.logger.Info("tag set",
+		"tag", request.Name,
+		"ref", artifact.FormatRef(fileHash),
+	)
+
+	as.writeResult(conn, artifact.TagResponse{
+		Name:     request.Name,
+		Hash:     artifact.FormatHash(fileHash),
+		Ref:      artifact.FormatRef(fileHash),
+		Previous: previousRef,
+	})
+}
+
+func (as *ArtifactService) handleDeleteTag(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.DeleteTagRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid delete-tag request: %v", err))
+		return
+	}
+
+	if request.Name == "" {
+		as.writeError(conn, "missing required field: name")
+		return
+	}
+
+	as.writeMu.Lock()
+	err := as.tagStore.Delete(request.Name)
+	as.writeMu.Unlock()
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	as.logger.Info("tag deleted", "tag", request.Name)
+
+	as.writeResult(conn, struct {
+		Deleted string `cbor:"deleted" json:"deleted"`
+	}{Deleted: request.Name})
+}
+
+func (as *ArtifactService) handleResolve(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.ResolveRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid resolve request: %v", err))
+		return
+	}
+
+	if request.Ref == "" {
+		as.writeError(conn, "missing required field: ref")
+		return
+	}
+
+	fileHash, err := as.resolveRef(request.Ref)
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	// Check if the ref was a tag name.
+	response := artifact.ResolveResponse{
+		Hash: artifact.FormatHash(fileHash),
+		Ref:  artifact.FormatRef(fileHash),
+	}
+	if _, exists := as.tagStore.Get(request.Ref); exists {
+		response.Tag = request.Ref
+	}
+
+	as.writeResult(conn, response)
+}
+
+func (as *ArtifactService) handleTags(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.TagsRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid tags request: %v", err))
+		return
+	}
+
+	records := as.tagStore.List(request.Prefix)
+
+	tags := make([]artifact.TagEntry, len(records))
+	for i, record := range records {
+		tags[i] = artifact.TagEntry{
+			Name: record.Name,
+			Hash: artifact.FormatHash(record.Target),
+			Ref:  artifact.FormatRef(record.Target),
+		}
+	}
+
+	as.writeResult(conn, artifact.TagsResponse{Tags: tags})
+}
+
+// --- Pin/Unpin actions ---
+
+func (as *ArtifactService) handlePin(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.PinRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid pin request: %v", err))
+		return
+	}
+
+	if request.Ref == "" {
+		as.writeError(conn, "missing required field: ref")
+		return
+	}
+
+	fileHash, err := as.resolveRef(request.Ref)
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	as.writeMu.Lock()
+	defer as.writeMu.Unlock()
+
+	// Update metadata to set cache_policy = "pin".
+	meta, err := as.metadataStore.Read(fileHash)
+	if err != nil {
+		as.writeError(conn, fmt.Sprintf("reading metadata: %v", err))
+		return
+	}
+
+	meta.CachePolicy = "pin"
+	if err := as.metadataStore.Write(meta); err != nil {
+		as.writeError(conn, fmt.Sprintf("updating metadata: %v", err))
+		return
+	}
+	as.artifactIndex.Put(*meta)
+
+	// If cache is configured, pin all containers.
+	if as.cache != nil {
+		record, err := as.store.Stat(fileHash)
+		if err != nil {
+			as.writeError(conn, fmt.Sprintf("reading reconstruction record: %v", err))
+			return
+		}
+
+		for _, segment := range record.Segments {
+			containerData, err := as.readContainerBytes(segment.Container)
+			if err != nil {
+				as.writeError(conn, fmt.Sprintf("reading container %s: %v",
+					artifact.FormatHash(segment.Container), err))
+				return
+			}
+			if err := as.cache.Pin(segment.Container, containerData); err != nil {
+				as.writeError(conn, fmt.Sprintf("pinning container %s: %v",
+					artifact.FormatHash(segment.Container), err))
+				return
+			}
+		}
+	}
+
+	as.logger.Info("artifact pinned",
+		"ref", artifact.FormatRef(fileHash),
+	)
+
+	as.writeResult(conn, artifact.PinResponse{
+		Hash:        artifact.FormatHash(fileHash),
+		Ref:         artifact.FormatRef(fileHash),
+		CachePolicy: "pin",
+	})
+}
+
+func (as *ArtifactService) handleUnpin(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.UnpinRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid unpin request: %v", err))
+		return
+	}
+
+	if request.Ref == "" {
+		as.writeError(conn, "missing required field: ref")
+		return
+	}
+
+	fileHash, err := as.resolveRef(request.Ref)
+	if err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
+	as.writeMu.Lock()
+	defer as.writeMu.Unlock()
+
+	meta, err := as.metadataStore.Read(fileHash)
+	if err != nil {
+		as.writeError(conn, fmt.Sprintf("reading metadata: %v", err))
+		return
+	}
+
+	if meta.CachePolicy != "pin" {
+		as.writeError(conn, fmt.Sprintf("artifact %s is not pinned (cache_policy=%q)",
+			artifact.FormatRef(fileHash), meta.CachePolicy))
+		return
+	}
+
+	meta.CachePolicy = ""
+	if err := as.metadataStore.Write(meta); err != nil {
+		as.writeError(conn, fmt.Sprintf("updating metadata: %v", err))
+		return
+	}
+	as.artifactIndex.Put(*meta)
+
+	// If cache is configured, unpin containers.
+	if as.cache != nil {
+		record, err := as.store.Stat(fileHash)
+		if err != nil {
+			as.writeError(conn, fmt.Sprintf("reading reconstruction record: %v", err))
+			return
+		}
+
+		for _, segment := range record.Segments {
+			// Unpin is best-effort per container — the container
+			// might not have been pinned in the cache (e.g. if it
+			// was pinned before cache was configured).
+			as.cache.Unpin(segment.Container)
+		}
+	}
+
+	as.logger.Info("artifact unpinned",
+		"ref", artifact.FormatRef(fileHash),
+	)
+
+	as.writeResult(conn, artifact.UnpinResponse{
+		Hash:        artifact.FormatHash(fileHash),
+		Ref:         artifact.FormatRef(fileHash),
+		CachePolicy: "",
+	})
+}
+
+// readContainerBytes reads raw container bytes from disk.
+func (as *ArtifactService) readContainerBytes(containerHash artifact.Hash) ([]byte, error) {
+	hex := artifact.FormatHash(containerHash)
+	containerPath := as.store.ContainerPath(containerHash)
+	data, err := os.ReadFile(containerPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading container %s: %w", hex, err)
+	}
+	return data, nil
+}
+
+// --- GC action ---
+
+func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []byte) {
+	var request artifact.GCRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		as.writeError(conn, fmt.Sprintf("invalid gc request: %v", err))
+		return
+	}
+
+	as.writeMu.Lock()
+	defer as.writeMu.Unlock()
+
+	now := as.clock.Now()
+
+	// Build the set of hashes protected by tags.
+	taggedHashes := as.tagStore.Names()
+
+	// Walk all artifacts in the index. Partition into protected and
+	// candidates for removal. Page through in MaxListLimit-sized batches
+	// to handle stores larger than the default list limit.
+	var allArtifacts []artifact.ArtifactEntry
+	offset := 0
+	for {
+		entries, total := as.artifactIndex.List(artifact.ArtifactFilter{
+			Limit:  artifact.MaxListLimit,
+			Offset: offset,
+		})
+		allArtifacts = append(allArtifacts, entries...)
+		offset += len(entries)
+		if offset >= total || len(entries) == 0 {
+			break
+		}
+	}
+
+	var removable []artifact.ArtifactEntry
+	protected := make(map[artifact.Hash]struct{})
+
+	for _, entry := range allArtifacts {
+		// Protected: pinned artifacts.
+		if entry.Metadata.CachePolicy == "pin" {
+			protected[entry.FileHash] = struct{}{}
+			continue
+		}
+
+		// Protected: artifacts referenced by a tag.
+		if _, isTagged := taggedHashes[entry.FileHash]; isTagged {
+			protected[entry.FileHash] = struct{}{}
+			continue
+		}
+
+		// Protected: artifacts whose TTL has not expired.
+		if entry.Metadata.TTL != "" {
+			ttlDuration, err := parseTTL(entry.Metadata.TTL)
+			if err != nil {
+				// Unparseable TTL: protect the artifact rather than
+				// silently deleting it.
+				as.logger.Warn("unparseable TTL, protecting artifact",
+					"ref", entry.Metadata.Ref,
+					"ttl", entry.Metadata.TTL,
+					"error", err,
+				)
+				protected[entry.FileHash] = struct{}{}
+				continue
+			}
+			if entry.Metadata.StoredAt.Add(ttlDuration).After(now) {
+				protected[entry.FileHash] = struct{}{}
+				continue
+			}
+		} else {
+			// No TTL: artifact lives forever (protected from GC).
+			protected[entry.FileHash] = struct{}{}
+			continue
+		}
+
+		// Not protected and TTL expired: candidate for removal.
+		removable = append(removable, entry)
+	}
+
+	if request.DryRun {
+		var bytesFreed int64
+		for _, entry := range removable {
+			bytesFreed += entry.Metadata.Size
+		}
+
+		as.writeResult(conn, artifact.GCResponse{
+			ArtifactsRemoved:  len(removable),
+			ContainersRemoved: 0,
+			BytesFreed:        bytesFreed,
+			DryRun:            true,
+		})
+		return
+	}
+
+	// Build the live container set from all remaining (non-removable)
+	// artifacts' reconstruction records.
+	liveContainers := make(map[artifact.Hash]struct{})
+	for hash := range protected {
+		record, err := as.store.Stat(hash)
+		if err != nil {
+			continue
+		}
+		for _, segment := range record.Segments {
+			liveContainers[segment.Container] = struct{}{}
+		}
+	}
+
+	// Delete each removable artifact.
+	totalContainersRemoved := 0
+	var totalBytesFreed int64
+	var artifactsRemoved int
+
+	for _, entry := range removable {
+		deletedContainers, err := as.store.Delete(entry.FileHash, liveContainers)
+		if err != nil {
+			as.logger.Error("gc: failed to delete artifact",
+				"ref", entry.Metadata.Ref,
+				"error", err,
+			)
+			continue
+		}
+
+		if err := as.metadataStore.Delete(entry.FileHash); err != nil {
+			as.logger.Error("gc: failed to delete metadata",
+				"ref", entry.Metadata.Ref,
+				"error", err,
+			)
+		}
+
+		as.refIndex.Remove(entry.FileHash)
+		as.artifactIndex.Remove(entry.FileHash)
+
+		totalContainersRemoved += len(deletedContainers)
+		totalBytesFreed += entry.Metadata.Size
+		artifactsRemoved++
+	}
+
+	as.logger.Info("gc completed",
+		"artifacts_removed", artifactsRemoved,
+		"containers_removed", totalContainersRemoved,
+		"bytes_freed", totalBytesFreed,
+	)
+
+	as.writeResult(conn, artifact.GCResponse{
+		ArtifactsRemoved:  artifactsRemoved,
+		ContainersRemoved: totalContainersRemoved,
+		BytesFreed:        totalBytesFreed,
+		DryRun:            false,
+	})
+}
+
+// parseTTL parses a TTL string into a duration. Supports Go duration
+// strings (e.g. "168h", "30m") and a "Nd" shorthand for days (e.g.
+// "30d" = 30 * 24 hours).
+func parseTTL(ttl string) (time.Duration, error) {
+	// Try "Nd" day format first.
+	if len(ttl) >= 2 && ttl[len(ttl)-1] == 'd' {
+		dayStr := ttl[:len(ttl)-1]
+		var days int
+		if _, err := fmt.Sscanf(dayStr, "%d", &days); err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour, nil
+		}
+	}
+
+	return time.ParseDuration(ttl)
+}
+
+// --- Cache status action ---
+
+func (as *ArtifactService) handleCacheStatus(ctx context.Context, conn net.Conn, raw []byte) {
+	stats := as.artifactIndex.Stats()
+
+	response := artifact.CacheStatusResponse{
+		StoreArtifacts: stats.Total,
+		StoreSizeBytes: stats.TotalSize,
+		TagCount:       as.tagStore.Len(),
+	}
+
+	if as.cache != nil {
+		cacheStats := as.cache.Stats()
+		response.CacheDeviceSize = cacheStats.DeviceSize
+		response.CacheBlockSize = cacheStats.BlockSize
+		response.CacheBlockCount = cacheStats.BlockCount
+		response.CacheLiveContainers = cacheStats.LiveContainers
+		response.CachePinnedContainers = cacheStats.PinnedContainers
+	}
+
+	as.writeResult(conn, response)
 }
 
 // --- Wire helpers ---

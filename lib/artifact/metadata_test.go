@@ -220,6 +220,56 @@ func TestMetadataStoreScanRefsIgnoresNonHashFiles(t *testing.T) {
 	}
 }
 
+func TestMetadataStoreDelete(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewMetadataStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunkHash := HashChunk([]byte("deletable metadata"))
+	fileHash := HashFile(chunkHash)
+
+	meta := &ArtifactMetadata{
+		FileHash:    fileHash,
+		Ref:         FormatRef(fileHash),
+		ContentType: "text/plain",
+		Size:        18,
+		ChunkCount:  1,
+		StoredAt:    time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+	}
+	if err := store.Write(meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the metadata.
+	if err := store.Delete(fileHash); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Read should fail.
+	_, err = store.Read(fileHash)
+	if err == nil {
+		t.Error("expected error reading deleted metadata")
+	}
+}
+
+func TestMetadataStoreDeleteNonExistent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewMetadataStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var unknownHash Hash
+	unknownHash[0] = 0xFF
+
+	// Deleting a non-existent file should not error.
+	if err := store.Delete(unknownHash); err != nil {
+		t.Errorf("Delete non-existent should succeed, got: %v", err)
+	}
+}
+
 func TestMetadataStoreOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewMetadataStore(dir)

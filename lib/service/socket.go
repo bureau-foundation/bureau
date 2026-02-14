@@ -284,41 +284,45 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 	s.writeSuccess(conn, result)
 }
 
-// verifyRequestToken extracts the "token" field from a CBOR request,
+// VerifyRequestToken extracts the "token" field from a CBOR request,
 // verifies signature, expiry, audience, and blacklist status. Returns
 // the decoded token on success. On failure, logs the detailed reason
 // server-side and returns an error with a client-safe message.
-func (s *SocketServer) verifyRequestToken(raw codec.RawMessage, action string) (*servicetoken.Token, error) {
+//
+// This is the shared implementation used by both SocketServer (via its
+// verifyRequestToken method) and services that manage their own
+// connection handling (e.g., the artifact service's binary streaming).
+func VerifyRequestToken(config *AuthConfig, raw []byte, action string, logger *slog.Logger) (*servicetoken.Token, error) {
 	var tokenField struct {
 		Token []byte `cbor:"token"`
 	}
 	if err := codec.Unmarshal(raw, &tokenField); err != nil {
-		s.logger.Warn("auth: failed to decode token field",
+		logger.Warn("auth: failed to decode token field",
 			"action", action,
 			"error", err,
 		)
 		return nil, errors.New("authentication failed")
 	}
 	if tokenField.Token == nil {
-		s.logger.Debug("auth: missing token field", "action", action)
+		logger.Debug("auth: missing token field", "action", action)
 		return nil, errors.New("authentication required: missing token field")
 	}
 
 	// Verify signature, decode payload, check expiry and audience.
 	token, err := servicetoken.VerifyForService(
-		s.authConfig.PublicKey,
+		config.PublicKey,
 		tokenField.Token,
-		s.authConfig.Audience,
+		config.Audience,
 	)
 	if err != nil {
 		if errors.Is(err, servicetoken.ErrTokenExpired) {
-			s.logger.Info("auth: token expired",
+			logger.Info("auth: token expired",
 				"action", action,
 				"error", err,
 			)
 			return nil, errors.New("authentication failed: token expired")
 		}
-		s.logger.Warn("auth: token verification failed",
+		logger.Warn("auth: token verification failed",
 			"action", action,
 			"error", err,
 		)
@@ -326,8 +330,8 @@ func (s *SocketServer) verifyRequestToken(raw codec.RawMessage, action string) (
 	}
 
 	// Check blacklist (emergency revocation).
-	if s.authConfig.Blacklist.IsRevoked(token.ID) {
-		s.logger.Info("auth: token revoked",
+	if config.Blacklist.IsRevoked(token.ID) {
+		logger.Info("auth: token revoked",
 			"action", action,
 			"subject", token.Subject,
 			"token_id", token.ID,
@@ -336,6 +340,12 @@ func (s *SocketServer) verifyRequestToken(raw codec.RawMessage, action string) (
 	}
 
 	return token, nil
+}
+
+// verifyRequestToken delegates to the standalone VerifyRequestToken
+// function using the server's configured auth material and logger.
+func (s *SocketServer) verifyRequestToken(raw codec.RawMessage, action string) (*servicetoken.Token, error) {
+	return VerifyRequestToken(s.authConfig, []byte(raw), action, s.logger)
 }
 
 // writeError sends a failure response: {ok: false, error: "..."}.

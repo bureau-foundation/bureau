@@ -66,6 +66,35 @@ func (idx *RefIndex) Add(fileHash Hash) {
 	idx.entries[ref] = append(idx.entries[ref], fileHash)
 }
 
+// Remove removes a file hash from the index. If the hash was the only
+// one under its ref, the ref entry is deleted entirely. If other
+// hashes share the same ref (collision), only this hash is removed.
+func (idx *RefIndex) Remove(fileHash Hash) {
+	ref := FormatRef(fileHash)
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	hashes, exists := idx.entries[ref]
+	if !exists {
+		return
+	}
+
+	// Filter out the target hash.
+	filtered := hashes[:0]
+	for _, hash := range hashes {
+		if hash != fileHash {
+			filtered = append(filtered, hash)
+		}
+	}
+
+	if len(filtered) == 0 {
+		delete(idx.entries, ref)
+	} else {
+		idx.entries[ref] = filtered
+	}
+}
+
 // Resolve looks up a short ref and returns the full file hash.
 // Returns an error if the ref is not found or if it is ambiguous
 // (multiple distinct hashes share the same 12-hex-char prefix). The

@@ -289,7 +289,7 @@ func (s *Store) Read(fileHash Hash, w io.Writer) (int64, error) {
 	var allChunkHashes []Hash
 
 	for segmentIndex, segment := range record.Segments {
-		containerPath := s.containerPath(segment.Container)
+		containerPath := s.ContainerPath(segment.Container)
 		file, err := os.Open(containerPath)
 		if err != nil {
 			return totalWritten, fmt.Errorf("opening container %s: %w",
@@ -402,7 +402,7 @@ func (s *Store) flushContainer(builder *ContainerBuilder) (Hash, int64, error) {
 	}
 
 	// Atomic rename to final location.
-	finalPath := s.containerPath(containerHash)
+	finalPath := s.ContainerPath(containerHash)
 
 	// Create the shard directory if needed.
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
@@ -481,10 +481,10 @@ func (s *Store) readReconstruction(fileHash Hash) (*ReconstructionRecord, error)
 	return UnmarshalReconstruction(data)
 }
 
-// containerPath returns the sharded filesystem path for a container.
+// ContainerPath returns the sharded filesystem path for a container.
 // Containers are sharded by the first two bytes of the hash hex:
 // containers/a3/f9/a3f9b2c1e7d4...
-func (s *Store) containerPath(hash Hash) string {
+func (s *Store) ContainerPath(hash Hash) string {
 	hex := FormatHash(hash)
 	return filepath.Join(s.root, containerDir, hex[:2], hex[2:4], hex)
 }
@@ -494,6 +494,47 @@ func (s *Store) containerPath(hash Hash) string {
 func (s *Store) reconstructionPath(fileHash Hash) string {
 	hex := FormatHash(fileHash)
 	return filepath.Join(s.root, reconstructionDir, hex[:2], hex[2:4], hex+".cbor")
+}
+
+// Delete removes an artifact's reconstruction record and any
+// containers that are not in the liveContainers set. Containers
+// shared by other artifacts (whose hashes appear in liveContainers)
+// are preserved. Returns the list of container hashes that were
+// actually deleted from disk.
+//
+// The caller must hold the write mutex. The caller is responsible
+// for building the live set from all remaining artifacts' reconstruction
+// records before calling Delete.
+func (s *Store) Delete(fileHash Hash, liveContainers map[Hash]struct{}) ([]Hash, error) {
+	record, err := s.readReconstruction(fileHash)
+	if err != nil {
+		return nil, fmt.Errorf("reading reconstruction record for deletion: %w", err)
+	}
+
+	// Remove the reconstruction record first.
+	reconPath := s.reconstructionPath(fileHash)
+	if err := os.Remove(reconPath); err != nil {
+		return nil, fmt.Errorf("removing reconstruction record %s: %w", FormatHash(fileHash), err)
+	}
+
+	// Remove containers not in the live set.
+	var deletedContainers []Hash
+	for _, segment := range record.Segments {
+		if _, live := liveContainers[segment.Container]; live {
+			continue
+		}
+		containerPath := s.ContainerPath(segment.Container)
+		if err := os.Remove(containerPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return deletedContainers, fmt.Errorf("removing container %s: %w",
+				FormatHash(segment.Container), err)
+		}
+		deletedContainers = append(deletedContainers, segment.Container)
+	}
+
+	return deletedContainers, nil
 }
 
 // compressWithFallback attempts to compress data with the given

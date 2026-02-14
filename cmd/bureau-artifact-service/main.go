@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -39,6 +40,8 @@ func run() error {
 		runDir        string
 		stateDir      string
 		storeDir      string
+		cacheDir      string
+		cacheSize     int64
 		showVersion   bool
 	)
 
@@ -49,6 +52,8 @@ func run() error {
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets")
 	flag.StringVar(&stateDir, "state-dir", "", "directory containing session.json (required)")
 	flag.StringVar(&storeDir, "store-dir", "", "artifact store root directory (required)")
+	flag.StringVar(&cacheDir, "cache-dir", "", "local cache directory (optional, enables ring cache)")
+	flag.Int64Var(&cacheSize, "cache-size", 0, "cache device size in bytes (required if --cache-dir is set)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -105,12 +110,35 @@ func run() error {
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
-	// Resolve and join the service directory room.
+	// Resolve and join global rooms the service needs.
 	serviceRoomID, err := service.ResolveServiceRoom(ctx, session, serverName)
 	if err != nil {
 		return fmt.Errorf("resolving service room: %w", err)
 	}
-	logger.Info("service room ready", "room_id", serviceRoomID)
+
+	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)
+	if err != nil {
+		return fmt.Errorf("resolving system room: %w", err)
+	}
+	logger.Info("global rooms ready",
+		"service_room", serviceRoomID,
+		"system_room", systemRoomID,
+	)
+
+	// Load the daemon's token signing public key for authenticating
+	// incoming service requests. The daemon publishes this key as a
+	// state event in #bureau/system at startup.
+	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineName)
+	if err != nil {
+		return fmt.Errorf("loading token signing key: %w", err)
+	}
+	logger.Info("token signing key loaded", "machine", machineName)
+
+	authConfig := &service.AuthConfig{
+		PublicKey: signingKey,
+		Audience:  "artifact",
+		Blacklist: servicetoken.NewBlacklist(),
+	}
 
 	// Initialize the artifact store.
 	store, err := artifact.NewStore(storeDir)
@@ -133,12 +161,53 @@ func run() error {
 	refIndex.Build(refMap)
 	logger.Info("ref index built", "artifacts", refIndex.Len())
 
+	// Initialize persistent tag storage.
+	tagStore, err := artifact.NewTagStore(filepath.Join(storeDir, "tags"))
+	if err != nil {
+		return fmt.Errorf("creating tag store: %w", err)
+	}
+	logger.Info("tag store loaded", "tags", tagStore.Len())
+
+	// Build the in-memory artifact index for filtered queries.
+	artifactIndex := artifact.NewArtifactIndex()
+	allMetadata, err := metadataStore.ScanAll()
+	if err != nil {
+		return fmt.Errorf("scanning metadata for artifact index: %w", err)
+	}
+	artifactIndex.Build(allMetadata)
+	logger.Info("artifact index built", "artifacts", artifactIndex.Len())
+
+	// Optionally initialize the ring cache for container-level caching.
+	var cache *artifact.Cache
+	if cacheDir != "" {
+		if cacheSize <= 0 {
+			return fmt.Errorf("--cache-size is required when --cache-dir is set")
+		}
+		var err error
+		cache, err = artifact.NewCache(artifact.CacheConfig{
+			Path:       cacheDir,
+			DeviceSize: cacheSize,
+		})
+		if err != nil {
+			return fmt.Errorf("creating cache: %w", err)
+		}
+		defer cache.Close()
+		logger.Info("cache initialized",
+			"path", cacheDir,
+			"device_size", cacheSize,
+		)
+	}
+
 	clk := clock.Real()
 
 	artifactService := &ArtifactService{
 		store:         store,
 		metadataStore: metadataStore,
 		refIndex:      refIndex,
+		tagStore:      tagStore,
+		artifactIndex: artifactIndex,
+		cache:         cache,
+		authConfig:    authConfig,
 		session:       session,
 		clock:         clk,
 		principalName: principalName,
@@ -220,6 +289,10 @@ type ArtifactService struct {
 	store         *artifact.Store
 	metadataStore *artifact.MetadataStore
 	refIndex      *artifact.RefIndex
+	tagStore      *artifact.TagStore
+	artifactIndex *artifact.ArtifactIndex
+	cache         *artifact.Cache     // nil if no cache directory configured
+	authConfig    *service.AuthConfig // nil in tests that don't exercise auth
 	session       *messaging.Session
 	clock         clock.Clock
 

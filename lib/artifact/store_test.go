@@ -398,7 +398,7 @@ func TestStoreShardedPaths(t *testing.T) {
 	}
 
 	for _, segment := range record.Segments {
-		containerPath := store.containerPath(segment.Container)
+		containerPath := store.ContainerPath(segment.Container)
 		if _, err := os.Stat(containerPath); err != nil {
 			t.Errorf("container file does not exist at %s: %v", containerPath, err)
 		}
@@ -415,6 +415,96 @@ func TestStoreShardedPaths(t *testing.T) {
 	reconPath := store.reconstructionPath(result.FileHash)
 	if _, err := os.Stat(reconPath); err != nil {
 		t.Errorf("reconstruction file does not exist at %s: %v", reconPath, err)
+	}
+}
+
+func TestStoreDelete(t *testing.T) {
+	store := newTestStore(t)
+
+	content := []byte("deletable artifact")
+	result, err := store.WriteContent(content, "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the artifact exists before deletion.
+	if !store.Exists(result.FileHash) {
+		t.Fatal("artifact should exist before delete")
+	}
+
+	// Delete with an empty live set (no shared containers to protect).
+	deletedContainers, err := store.Delete(result.FileHash, nil)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if len(deletedContainers) != result.ContainerCount {
+		t.Errorf("deleted %d containers, want %d", len(deletedContainers), result.ContainerCount)
+	}
+
+	// The artifact should no longer exist.
+	if store.Exists(result.FileHash) {
+		t.Error("artifact should not exist after delete")
+	}
+
+	// ReadContent should fail.
+	if _, err := store.ReadContent(result.FileHash); err == nil {
+		t.Error("ReadContent should fail after delete")
+	}
+}
+
+func TestStoreDeleteSharedContainers(t *testing.T) {
+	store := newTestStore(t)
+
+	// Store two identical artifacts. They share containers because
+	// same content produces the same container hashes.
+	content := []byte("shared container content for dedup")
+	result1, err := store.WriteContent(content, "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the container hashes from the first artifact.
+	record, err := store.Stat(result1.FileHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a live set that includes all containers (simulating
+	// another artifact sharing the same containers).
+	liveContainers := make(map[Hash]struct{})
+	for _, segment := range record.Segments {
+		liveContainers[segment.Container] = struct{}{}
+	}
+
+	// Delete with the live set. Containers should be preserved.
+	deletedContainers, err := store.Delete(result1.FileHash, liveContainers)
+	if err != nil {
+		t.Fatalf("Delete with live set: %v", err)
+	}
+
+	if len(deletedContainers) != 0 {
+		t.Errorf("deleted %d containers, want 0 (all in live set)", len(deletedContainers))
+	}
+
+	// Container files should still exist on disk.
+	for _, segment := range record.Segments {
+		containerPath := store.ContainerPath(segment.Container)
+		if _, err := os.Stat(containerPath); err != nil {
+			t.Errorf("shared container should survive delete: %v", err)
+		}
+	}
+}
+
+func TestStoreDeleteNotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	var unknownHash Hash
+	unknownHash[0] = 0xFF
+
+	_, err := store.Delete(unknownHash, nil)
+	if err == nil {
+		t.Error("Delete should fail for unknown artifact")
 	}
 }
 

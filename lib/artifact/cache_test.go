@@ -810,6 +810,155 @@ func TestCacheMultipleContainers(t *testing.T) {
 	}
 }
 
+// --- Pin regression tests ---
+//
+// These tests verify the fix for the Cache.Pin bug where containers
+// were stored through Store.WriteContent (computing a file-domain
+// hash) but looked up by container-domain hash — the hashes never
+// matched, making Pin completely broken.
+
+func TestCachePinAndGet(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	containerHash, containerData := buildTestContainer(t, []byte("pinnable data"))
+
+	// Pin the container.
+	if err := cache.Pin(containerHash, containerData); err != nil {
+		t.Fatalf("Pin: %v", err)
+	}
+
+	// Get should find it via the pin directory.
+	got, err := cache.Get(containerHash)
+	if err != nil {
+		t.Fatalf("Get after Pin: %v", err)
+	}
+	if !bytes.Equal(got, containerData) {
+		t.Error("Pin+Get round-trip: data mismatch")
+	}
+}
+
+func TestCachePinSurvivesEviction(t *testing.T) {
+	// Small cache: 512-byte blocks, 4 blocks.
+	cache := newTestCache(t, 512, 4)
+
+	containerHash, containerData := buildTestContainer(t, []byte("pinned survivor"))
+
+	// Pin the container.
+	if err := cache.Pin(containerHash, containerData); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill the ring to trigger eviction of all blocks.
+	for i := 0; i < 30; i++ {
+		data := []byte(fmt.Sprintf("eviction-filler-%03d-padding-to-bulk-up", i))
+		hash, cd := buildTestContainer(t, data)
+		cache.Put(hash, cd)
+	}
+
+	// The pinned container should still be accessible.
+	got, err := cache.Get(containerHash)
+	if err != nil {
+		t.Fatalf("Get after eviction: %v", err)
+	}
+	if !bytes.Equal(got, containerData) {
+		t.Error("pinned data corrupted after eviction")
+	}
+}
+
+func TestCacheUnpin(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	containerHash, containerData := buildTestContainer(t, []byte("unpin me"))
+
+	cache.Pin(containerHash, containerData)
+
+	// Unpin should succeed.
+	if err := cache.Unpin(containerHash); err != nil {
+		t.Fatalf("Unpin: %v", err)
+	}
+
+	// Get should now fail (container is not in the ring either).
+	if _, err := cache.Get(containerHash); err == nil {
+		t.Error("expected error after Unpin (container not in ring)")
+	}
+}
+
+func TestCacheUnpinNotPinned(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	var unknownHash Hash
+	unknownHash[0] = 0xAA
+
+	err := cache.Unpin(unknownHash)
+	if err == nil {
+		t.Error("expected error unpinning non-pinned container")
+	}
+}
+
+func TestCacheIsPinned(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	containerHash, containerData := buildTestContainer(t, []byte("is it pinned?"))
+
+	if cache.IsPinned(containerHash) {
+		t.Error("should not be pinned before Pin")
+	}
+
+	cache.Pin(containerHash, containerData)
+
+	if !cache.IsPinned(containerHash) {
+		t.Error("should be pinned after Pin")
+	}
+
+	cache.Unpin(containerHash)
+
+	if cache.IsPinned(containerHash) {
+		t.Error("should not be pinned after Unpin")
+	}
+}
+
+func TestCacheStatsPinnedContainers(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	if cache.Stats().PinnedContainers != 0 {
+		t.Errorf("PinnedContainers = %d, want 0", cache.Stats().PinnedContainers)
+	}
+
+	hash1, data1 := buildTestContainer(t, []byte("pin1"))
+	hash2, data2 := buildTestContainer(t, []byte("pin2"))
+	cache.Pin(hash1, data1)
+	cache.Pin(hash2, data2)
+
+	if cache.Stats().PinnedContainers != 2 {
+		t.Errorf("PinnedContainers = %d, want 2", cache.Stats().PinnedContainers)
+	}
+
+	cache.Unpin(hash1)
+
+	if cache.Stats().PinnedContainers != 1 {
+		t.Errorf("PinnedContainers after unpin = %d, want 1", cache.Stats().PinnedContainers)
+	}
+}
+
+func TestCacheContainsIncludesPinned(t *testing.T) {
+	cache := newTestCache(t, 4096, 4)
+
+	containerHash, containerData := buildTestContainer(t, []byte("contains+pin"))
+
+	// Not in cache at all.
+	if cache.Contains(containerHash) {
+		t.Error("Contains should be false before Pin/Put")
+	}
+
+	// Pin it (not Put).
+	cache.Pin(containerHash, containerData)
+
+	// Contains should find pinned containers.
+	if !cache.Contains(containerHash) {
+		t.Error("Contains should be true for pinned container")
+	}
+}
+
 // --- ContainerReader.TotalSize test ---
 
 func TestContainerReaderTotalSize(t *testing.T) {

@@ -172,6 +172,80 @@ func TestRefIndexLen(t *testing.T) {
 	}
 }
 
+func TestRefIndexRemove(t *testing.T) {
+	idx := NewRefIndex()
+
+	hash := HashFile(HashChunk([]byte("removable")))
+	idx.Add(hash)
+
+	if idx.Len() != 1 {
+		t.Fatalf("Len() = %d before remove, want 1", idx.Len())
+	}
+
+	idx.Remove(hash)
+
+	if idx.Len() != 0 {
+		t.Errorf("Len() = %d after remove, want 0", idx.Len())
+	}
+
+	// Resolve should fail.
+	_, err := idx.Resolve(FormatRef(hash))
+	if err == nil {
+		t.Error("expected error resolving removed hash")
+	}
+}
+
+func TestRefIndexRemoveFromCollision(t *testing.T) {
+	idx := NewRefIndex()
+
+	// Create two hashes that share the same ref (collision).
+	baseHash := HashFile(HashChunk([]byte("collision-base")))
+	hash1 := baseHash
+	hash2 := baseHash
+	hash2[6] = hash2[6] ^ 0xFF
+
+	if FormatRef(hash1) != FormatRef(hash2) {
+		t.Fatal("test setup: hashes should share the same ref")
+	}
+
+	idx.Add(hash1)
+	idx.Add(hash2)
+
+	if idx.Len() != 2 {
+		t.Fatalf("Len() = %d, want 2", idx.Len())
+	}
+
+	// Remove one of the colliding hashes.
+	idx.Remove(hash1)
+
+	if idx.Len() != 1 {
+		t.Errorf("Len() = %d after removing one collision, want 1", idx.Len())
+	}
+
+	// The remaining hash should resolve without ambiguity.
+	resolved, err := idx.Resolve(FormatRef(hash2))
+	if err != nil {
+		t.Fatalf("resolve after removing collision partner: %v", err)
+	}
+	if resolved != hash2 {
+		t.Error("resolved wrong hash after removing collision partner")
+	}
+}
+
+func TestRefIndexRemoveNonExistent(t *testing.T) {
+	idx := NewRefIndex()
+
+	var unknownHash Hash
+	unknownHash[0] = 0xFF
+
+	// Should not panic.
+	idx.Remove(unknownHash)
+
+	if idx.Len() != 0 {
+		t.Error("Len should be 0 after removing from empty index")
+	}
+}
+
 func TestRefIndexConcurrentReadWrite(t *testing.T) {
 	idx := NewRefIndex()
 

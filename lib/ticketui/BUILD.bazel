@@ -1,0 +1,51 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ticketui",
+    srcs = [
+        "animation.go",
+        "beads.go",
+        "dependency.go",
+        "detail.go",
+        "doc.go",
+        "filter.go",
+        "keys.go",
+        "list.go",
+        "model.go",
+        "scrollbar.go",
+        "source.go",
+        "theme.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/ticketui",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/schema",
+        "//lib/ticket",
+        "@com_github_charmbracelet_bubbles//key",
+        "@com_github_charmbracelet_bubbles//viewport",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_charmbracelet_glamour//:glamour",
+        "@com_github_charmbracelet_glamour//styles",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
+    ],
+)
+
+go_test(
+    name = "ticketui_test",
+    srcs = [
+        "beads_test.go",
+        "dependency_test.go",
+        "filter_test.go",
+        "model_test.go",
+    ],
+    embed = [":ticketui"],
+    deps = [
+        "//lib/schema",
+        "//lib/ticket",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
+    ],
+)

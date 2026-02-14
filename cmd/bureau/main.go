@@ -16,6 +16,7 @@ import (
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	quickstartcmd "github.com/bureau-foundation/bureau/cmd/bureau/quickstart"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
+	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
@@ -53,6 +54,7 @@ observation, and structured messaging via Matrix.`,
 			pipelinecmd.Command(),
 			environmentcmd.Command(),
 			workspacecmd.Command(),
+			ticketcmd.Command(),
 			cborcmd.Command(),
 			{
 				Name:    "version",

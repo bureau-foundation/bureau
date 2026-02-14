@@ -1,0 +1,95 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package ticketui
+
+import "github.com/charmbracelet/lipgloss"
+
+// Theme defines the color palette and visual properties for the TUI.
+// All colors use lipgloss ANSI 256-color codes for broad terminal
+// compatibility.
+type Theme struct {
+	// Text colors
+	NormalText lipgloss.Color
+	FaintText  lipgloss.Color
+
+	// Selected row
+	SelectedBackground lipgloss.Color
+	SelectedForeground lipgloss.Color
+
+	// Priority colors (indexed 0-4: critical, high, medium, low, backlog)
+	PriorityColors [5]lipgloss.Color
+
+	// Status colors
+	StatusOpen       lipgloss.Color
+	StatusInProgress lipgloss.Color
+	StatusBlocked    lipgloss.Color
+	StatusClosed     lipgloss.Color
+
+	// UI chrome
+	HeaderForeground lipgloss.Color
+	BorderColor      lipgloss.Color
+	HelpText         lipgloss.Color
+
+	// Animation accents: background tint for recently-changed tickets.
+	// HotAccentPut is used for created/updated tickets; HotAccentRemove
+	// for tickets that left the view.
+	HotAccentPut    lipgloss.Color
+	HotAccentRemove lipgloss.Color
+}
+
+// PriorityColor returns the color for a priority level (0-4).
+// Out-of-range values return NormalText.
+func (theme Theme) PriorityColor(priority int) lipgloss.Color {
+	if priority < 0 || priority >= len(theme.PriorityColors) {
+		return theme.NormalText
+	}
+	return theme.PriorityColors[priority]
+}
+
+// StatusColor returns the color for a ticket status string.
+func (theme Theme) StatusColor(status string) lipgloss.Color {
+	switch status {
+	case "open":
+		return theme.StatusOpen
+	case "in_progress":
+		return theme.StatusInProgress
+	case "blocked":
+		return theme.StatusBlocked
+	case "closed":
+		return theme.StatusClosed
+	default:
+		return theme.FaintText
+	}
+}
+
+// DefaultTheme is the built-in dark-terminal color scheme. Designed for
+// 256-color terminals with a dark background (the common case for
+// development environments and tmux sessions).
+var DefaultTheme = Theme{
+	NormalText: lipgloss.Color("252"),
+	FaintText:  lipgloss.Color("245"),
+
+	SelectedBackground: lipgloss.Color("236"),
+	SelectedForeground: lipgloss.Color("255"),
+
+	PriorityColors: [5]lipgloss.Color{
+		lipgloss.Color("196"), // P0 critical: bright red
+		lipgloss.Color("208"), // P1 high: orange
+		lipgloss.Color("75"),  // P2 medium: blue
+		lipgloss.Color("245"), // P3 low: gray
+		lipgloss.Color("240"), // P4 backlog: dim gray
+	},
+
+	StatusOpen:       lipgloss.Color("114"), // green
+	StatusInProgress: lipgloss.Color("220"), // yellow/amber
+	StatusBlocked:    lipgloss.Color("196"), // red
+	StatusClosed:     lipgloss.Color("245"), // gray
+
+	HeaderForeground: lipgloss.Color("255"),
+	BorderColor:      lipgloss.Color("240"),
+	HelpText:         lipgloss.Color("241"),
+
+	HotAccentPut:    lipgloss.Color("58"), // dark amber background tint
+	HotAccentRemove: lipgloss.Color("52"), // dark red background tint
+}

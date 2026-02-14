@@ -21,6 +21,7 @@ go_library(
         "//cmd/bureau/pipeline",
         "//cmd/bureau/quickstart",
         "//cmd/bureau/template",
+        "//cmd/bureau/ticket",
         "//cmd/bureau/workspace",
         "//lib/version",
     ],

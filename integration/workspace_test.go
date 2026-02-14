@@ -209,292 +209,177 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	t.Log("workspace start condition lifecycle verified: pending → active → teardown drives principal lifecycle")
 }
 
-// TestWorkspacePipelineExecution exercises the full workspace lifecycle
-// through actual pipeline execution. Unlike TestWorkspaceStartConditionLifecycle
-// (which uses proxy-only principals and admin-published state changes), this
-// test uses real sandbox templates and pipeline executors:
+// TestWorkspaceCLILifecycle exercises the full workspace lifecycle through
+// the CLI commands: "bureau workspace create" and "bureau workspace destroy".
+// Unlike TestWorkspaceStartConditionLifecycle (which uses proxy-only
+// principals and admin-published state changes), this test proves the
+// end-to-end path that a Bureau developer uses:
 //
-//   - Setup principal runs an inline pipeline that publishes workspace status "active"
+//   - "bureau workspace create" creates the workspace room, publishes config,
+//     and assigns setup/agent/teardown principals on the machine
+//   - The daemon's pipeline executor overlay wires the setup principal's
+//     sandbox (base template + pipeline_ref → executor binary overlay)
+//   - Setup pipeline (dev-workspace-init) clones a git repo and publishes
+//     workspace status "active"
 //   - Agent principal starts when workspace becomes active (StartCondition)
-//   - Admin publishes "teardown" status to trigger workspace destruction
-//   - Teardown principal runs an inline pipeline that publishes "archived"
-//
-// This proves the end-to-end workspace lifecycle: template resolution,
-// sandbox creation, pipeline executor invocation, variable propagation
-// (payload WORKSPACE_ROOM_ID → ${WORKSPACE_ROOM_ID} in publish step),
-// proxy state event publishing, and StartCondition-driven transitions.
-func TestWorkspacePipelineExecution(t *testing.T) {
+//   - "bureau workspace destroy" transitions the workspace to "teardown"
+//   - Agent stops (condition "active" no longer matches)
+//   - Teardown pipeline (dev-workspace-deinit) archives the workspace and
+//     publishes status "archived"
+func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Parallel()
 
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machine := newTestMachine(t, "machine/ws-pipeline")
+	machine := newTestMachine(t, "machine/ws-cli")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
 
-	pipelineExecutorBinary := resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY")
 	runnerEnv := findRunnerEnv(t)
 
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary:         resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:           resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
-		PipelineExecutorBinary: pipelineExecutorBinary,
+		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    runnerEnv,
 	})
 
 	ctx := t.Context()
 
-	// --- Publish a test template to the template room ---
-	// The daemon resolves templates via the machine's Matrix session.
-	// The machine must be a member of the template room to read it.
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
+	// --- Resolve global rooms and grant access ---
+	// The daemon resolves the "base" template during reconciliation (needs
+	// template room membership). The pipeline executor resolves pipeline
+	// refs (dev-workspace-init, dev-workspace-deinit) via the proxy's
+	// Matrix session (needs pipeline room membership for the principal).
+	templateRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
 	if err != nil {
 		t.Fatalf("resolve template room: %v", err)
 	}
+	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
 
-	// Invite the machine to the template room so the daemon can
-	// resolve template state events during reconciliation.
+	// Invite the machine to the template room (daemon resolves base template).
 	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			t.Fatalf("invite machine to template room: %v", err)
 		}
 	}
 
-	// Publish a test template that runs the pipeline executor binary.
-	// This is the equivalent of the "base" template but with the
-	// pipeline executor as the command, suitable for workspace setup
-	// and teardown principals.
+	// --- Publish agent template ---
+	// The agent principal needs a sandbox command that stays alive. The
+	// runner environment provides coreutils (including sleep).
 	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "test-pipeline-runner", schema.TemplateContent{
-			Description: "Pipeline executor for workspace integration tests",
-			Command:     []string{pipelineExecutorBinary},
+		schema.EventTypeTemplate, "test-ws-agent", schema.TemplateContent{
+			Description: "Long-running agent for workspace CLI integration tests",
+			Command:     []string{"sleep", "infinity"},
 			Environment: runnerEnv,
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
+			Namespaces:  &schema.TemplateNamespaces{PID: true},
 			Security: &schema.TemplateSecurity{
 				NewSession:    true,
 				DieWithParent: true,
 				NoNewPrivs:    true,
 			},
 			Filesystem: []schema.TemplateMount{
-				// Pipeline executor binary — needed when the binary is outside /nix/store.
-				{Source: pipelineExecutorBinary, Dest: pipelineExecutorBinary, Mode: "ro"},
-				// Workspace root for git operations in pipeline steps.
-				{Source: machine.WorkspaceRoot, Dest: machine.WorkspaceRoot, Mode: "rw"},
 				{Dest: "/tmp", Type: "tmpfs"},
 			},
 			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
 			EnvironmentVariables: map[string]string{
-				"HOME":           "/workspace",
-				"TERM":           "xterm-256color",
-				"BUREAU_SANDBOX": "1",
+				"HOME": "/workspace",
+				"TERM": "xterm-256color",
 			},
 		})
 	if err != nil {
-		t.Fatalf("publish test template: %v", err)
+		t.Fatalf("publish agent template: %v", err)
 	}
 
-	// --- Create the workspace room ---
-	workspaceAlias := "wsp/pipeline"
-	workspaceRoomAlias := "#wsp/pipeline:" + testServerName
-	adminUserID := "@bureau-admin:" + testServerName
+	// --- Create seed git repo ---
+	// The dev-workspace-init pipeline clones from ${REPOSITORY}. Inside
+	// the sandbox, /workspace is mounted from machine.WorkspaceRoot. The
+	// seed repo at WorkspaceRoot/seed.git becomes /workspace/seed.git.
+	seedRepoPath := machine.WorkspaceRoot + "/seed.git"
+	initTestGitRepo(t, ctx, seedRepoPath)
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
-	if err != nil {
-		t.Fatalf("resolve bureau space: %v", err)
-	}
-
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
-
-	// Publish initial workspace state (pending).
-	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
-			Status:    "pending",
-			Project:   "wsp",
-			Machine:   machine.Name,
-			UpdatedAt: "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("publish initial workspace state: %v", err)
-	}
-
-	// --- Register principals and set up workspace room membership ---
-	setupAccount := registerPrincipal(t, "wsp/pipeline/setup", "test-password")
-	agentAccount := registerPrincipal(t, "wsp/pipeline/agent/0", "test-password")
-	teardownAccount := registerPrincipal(t, "wsp/pipeline/teardown", "test-password")
+	// --- Register principals ---
+	// workspace create generates localparts: <alias>/setup, <alias>/agent/0,
+	// <alias>/teardown. The CLI doesn't register accounts — in production,
+	// credential provisioning handles this. The test pre-creates them.
+	setupAccount := registerPrincipal(t, "wscli/main/setup", "test-password")
+	agentAccount := registerPrincipal(t, "wscli/main/agent/0", "test-password")
+	teardownAccount := registerPrincipal(t, "wscli/main/teardown", "test-password")
 
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
 	pushCredentials(t, admin, machine, agentAccount)
 	pushCredentials(t, admin, machine, teardownAccount)
 
-	// --- Push MachineConfig ---
-	// Setup pipeline: publishes workspace status "active" (inline).
-	// Teardown pipeline: publishes workspace status "archived" (inline).
-	// Agent: proxy-only, gated on "active".
-	templateRef := "bureau/template:test-pipeline-runner"
-	machineConfig := schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
-			{
-				Localpart: setupAccount.Localpart,
-				Template:  templateRef,
-				AutoStart: true,
-				Labels:    map[string]string{"role": "setup"},
-				StartCondition: &schema.StartCondition{
-					EventType:    schema.EventTypeWorkspace,
-					StateKey:     "",
-					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: schema.ContentMatch{"status": schema.Eq("pending")},
-				},
-				Payload: map[string]any{
-					"pipeline_inline": map[string]any{
-						"description": "Test workspace setup",
-						"variables": map[string]any{
-							"WORKSPACE_ROOM_ID": map[string]any{
-								"description": "Matrix room ID",
-								"required":    true,
-							},
-							"PROJECT": map[string]any{
-								"description": "Project name",
-								"required":    true,
-							},
-							"MACHINE": map[string]any{
-								"description": "Machine localpart",
-								"required":    true,
-							},
-						},
-						"steps": []map[string]any{
-							{
-								"name": "publish-active",
-								"publish": map[string]any{
-									"event_type": schema.EventTypeWorkspace,
-									"room":       "${WORKSPACE_ROOM_ID}",
-									"content": map[string]any{
-										"status":     "active",
-										"project":    "${PROJECT}",
-										"machine":    "${MACHINE}",
-										"updated_at": "2026-01-01T00:00:00Z",
-									},
-								},
-							},
-						},
-					},
-					"WORKSPACE_ROOM_ID": workspaceRoomID,
-					"PROJECT":           "wsp",
-					"MACHINE":           machine.Name,
-				},
-			},
-			{
-				Localpart: agentAccount.Localpart,
-				Template:  "",
-				AutoStart: true,
-				Labels:    map[string]string{"role": "agent"},
-				StartCondition: &schema.StartCondition{
-					EventType:    schema.EventTypeWorkspace,
-					StateKey:     "",
-					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
-				},
-			},
-			{
-				Localpart: teardownAccount.Localpart,
-				Template:  templateRef,
-				AutoStart: true,
-				Labels:    map[string]string{"role": "teardown"},
-				Payload: map[string]any{
-					"pipeline_inline": map[string]any{
-						"description": "Test workspace teardown",
-						"variables": map[string]any{
-							"WORKSPACE_ROOM_ID": map[string]any{
-								"description": "Matrix room ID",
-								"required":    true,
-							},
-							"PROJECT": map[string]any{
-								"description": "Project name",
-								"required":    true,
-							},
-							"MACHINE": map[string]any{
-								"description": "Machine localpart",
-								"required":    true,
-							},
-						},
-						"steps": []map[string]any{
-							{
-								"name": "publish-archived",
-								"publish": map[string]any{
-									"event_type": schema.EventTypeWorkspace,
-									"room":       "${WORKSPACE_ROOM_ID}",
-									"content": map[string]any{
-										"status":     "archived",
-										"project":    "${PROJECT}",
-										"machine":    "${MACHINE}",
-										"updated_at": "2026-01-01T00:00:00Z",
-									},
-								},
-							},
-						},
-					},
-					"WORKSPACE_ROOM_ID": workspaceRoomID,
-					"PROJECT":           "wsp",
-					"MACHINE":           machine.Name,
-				},
-				StartCondition: &schema.StartCondition{
-					EventType:    schema.EventTypeWorkspace,
-					StateKey:     "",
-					RoomAlias:    workspaceRoomAlias,
-					ContentMatch: schema.ContentMatch{"status": schema.Eq("teardown")},
-				},
-			},
-		},
-	}
-	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, machineConfig)
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
+	// --- Invite pipeline principals to the pipeline room ---
+	// The pipeline executor resolves pipeline refs (bureau/pipeline:dev-workspace-init,
+	// bureau/pipeline:dev-workspace-deinit) via the proxy, which authenticates
+	// as the principal. The principal needs pipeline room membership to read
+	// state events in the private room.
+	for _, account := range []principalAccount{setupAccount, teardownAccount} {
+		if err := admin.InviteUser(ctx, pipelineRoomID, account.UserID); err != nil {
+			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+				t.Fatalf("invite %s to pipeline room: %v", account.Localpart, err)
+			}
+		}
 	}
 
-	// --- Phase 1: Setup runs pipeline, workspace becomes "active" ---
-	// The daemon creates a sandbox for the setup principal (no
-	// StartCondition). The pipeline executor reads the inline pipeline
-	// from the payload, runs the publish-active step, and publishes
-	// m.bureau.workspace with status "active" to the workspace room.
-	t.Log("phase 1: waiting for setup pipeline to publish 'active' status")
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active", 90*time.Second)
+	// --- Phase 1: Create workspace via CLI ---
+	t.Log("phase 1: running 'bureau workspace create'")
+	runBureauOrFail(t, "workspace", "create", "wscli/main",
+		"--machine", machine.Name,
+		"--template", "bureau/template:test-ws-agent",
+		"--param", "repository=/workspace/seed.git",
+		"--credential-file", credentialFile,
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+	)
+
+	// Resolve the workspace room created by the CLI so we can poll its
+	// status and pass it to waitForWorkspaceStatus.
+	workspaceRoomID, err := admin.ResolveAlias(ctx, "#wscli/main:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve workspace room created by CLI: %v", err)
+	}
+
+	// --- Phase 2: Wait for setup pipeline to complete ---
+	// The daemon picks up the MachineConfig, resolves bureau/template:base
+	// for the setup principal, applies the pipeline executor overlay (since
+	// the payload has pipeline_ref and base has no command), and creates the
+	// sandbox. The executor runs dev-workspace-init: clones the seed repo,
+	// publishes workspace status "active".
+	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active", 120*time.Second)
 	t.Log("workspace status is 'active' — setup pipeline completed")
 
-	// --- Phase 2: Agent starts (gated on "active") ---
+	// --- Phase 3: Verify agent started ---
 	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
-	waitForFile(t, agentSocket, 30*time.Second)
+	waitForFile(t, agentSocket, 60*time.Second)
 	t.Log("agent proxy socket appeared after workspace became active")
 
-	// --- Phase 3: Trigger teardown ---
-	t.Log("phase 3: publishing 'teardown' status, expecting agent to stop and teardown to run")
-	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
-			Status:       "teardown",
-			TeardownMode: "archive",
-			Project:      "wsp",
-			Machine:      machine.Name,
-			UpdatedAt:    "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("publish teardown workspace state: %v", err)
-	}
+	// --- Phase 4: Destroy workspace via CLI ---
+	t.Log("phase 4: running 'bureau workspace destroy'")
+	runBureauOrFail(t, "workspace", "destroy", "wscli/main",
+		"--credential-file", credentialFile,
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+	)
 
 	// Agent stops (condition "active" no longer matches "teardown").
 	waitForFileGone(t, agentSocket, 30*time.Second)
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
-	// Teardown pipeline runs and publishes "archived".
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived", 90*time.Second)
+	// Teardown pipeline (dev-workspace-deinit) runs and publishes "archived".
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived", 120*time.Second)
 	t.Log("workspace status is 'archived' — teardown pipeline completed")
 
-	t.Log("full workspace pipeline lifecycle verified: pending → active → teardown → archived")
+	t.Log("full CLI-driven workspace lifecycle verified: create → active → destroy → archived")
 }
 
 // --- Workspace test helpers ---

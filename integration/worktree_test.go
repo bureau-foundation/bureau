@@ -4,7 +4,6 @@
 package integration_test
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -573,46 +572,3 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 }
 
 // --- Test helpers ---
-
-// initTestGitRepo creates a regular git repo with one commit on a "main"
-// branch. Used as the seed for git clone --bare to create Bureau's .bare/
-// directory layout. A regular repo is needed because git init --bare
-// creates an empty repo with no HEAD, and most git operations (worktree
-// add, fetch) require at least one commit.
-func initTestGitRepo(t *testing.T, ctx context.Context, directory string) {
-	t.Helper()
-
-	for _, step := range []struct {
-		args []string
-		desc string
-	}{
-		{[]string{"init", "-b", "main", directory}, "git init"},
-		{[]string{"-C", directory, "config", "user.name", "Test"}, "git config user.name"},
-		{[]string{"-C", directory, "config", "user.email", "test@test"}, "git config user.email"},
-	} {
-		cmd := exec.CommandContext(ctx, "git", step.args...)
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("%s: %v", step.desc, err)
-		}
-	}
-
-	readmeFile := filepath.Join(directory, "README.md")
-	if err := os.WriteFile(readmeFile, []byte("# Test Project\n"), 0644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-
-	for _, step := range []struct {
-		args []string
-		desc string
-	}{
-		{[]string{"-C", directory, "add", "README.md"}, "git add"},
-		{[]string{"-C", directory, "commit", "-m", "Initial commit"}, "git commit"},
-	} {
-		cmd := exec.CommandContext(ctx, "git", step.args...)
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("%s: %v", step.desc, err)
-		}
-	}
-}

@@ -283,6 +283,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				"command", sandboxSpec.Command,
 			)
 
+			if d.applyPipelineExecutorOverlay(sandboxSpec) {
+				d.logger.Info("applied pipeline executor overlay",
+					"principal", localpart,
+					"template", assignment.Template,
+					"command", sandboxSpec.Command,
+				)
+			}
+
 			// Ensure the Nix environment's store path (and its full
 			// transitive closure) exists locally before handing the
 			// spec to the launcher. On failure, skip this principal
@@ -857,6 +865,58 @@ func (d *Daemon) readMachineConfig(ctx context.Context) (*schema.MachineConfig, 
 		return nil, fmt.Errorf("parsing machine config: %w", err)
 	}
 	return &config, nil
+}
+
+// applyPipelineExecutorOverlay detects when a template-resolved SandboxSpec
+// has no command but the payload references a pipeline, and overlays the
+// pipeline executor binary as the entrypoint. This bridges the gap between
+// generic templates (like "base") and pipeline-driven principals (workspace
+// setup/teardown) created by "bureau workspace create".
+//
+// The overlay is additive: it sets the command, appends filesystem mounts
+// for the executor binary and workspace root, sets BUREAU_SANDBOX=1, and
+// applies the pipeline environment if the spec doesn't already have one.
+// Existing spec fields (namespaces, security, other mounts) are preserved.
+func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
+	if len(spec.Command) > 0 || d.pipelineExecutorBinary == "" {
+		return false
+	}
+
+	// Check whether the payload references a pipeline. The executor
+	// resolves pipeline_ref (Tier 2) and pipeline_inline (Tier 3) from
+	// the payload file at /run/bureau/payload.json.
+	_, hasRef := spec.Payload["pipeline_ref"].(string)
+	_, hasInline := spec.Payload["pipeline_inline"]
+	if !hasRef && !hasInline {
+		return false
+	}
+
+	spec.Command = []string{d.pipelineExecutorBinary}
+
+	spec.Filesystem = append(spec.Filesystem,
+		// Executor binary: bind-mounted at its host path so bwrap can
+		// find it. Needed when the binary is outside /nix/store (Bazel
+		// outputs, go install paths). Harmless when it is under
+		// /nix/store since the more-specific mount coexists with the
+		// /nix/store mount from the environment.
+		schema.TemplateMount{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: "ro"},
+		// Workspace root: pipeline steps reference /workspace/${PROJECT}
+		// for git operations, file creation, etc.
+		schema.TemplateMount{Source: d.workspaceRoot, Dest: "/workspace", Mode: "rw"},
+	)
+
+	if spec.EnvironmentVariables == nil {
+		spec.EnvironmentVariables = make(map[string]string)
+	}
+	spec.EnvironmentVariables["BUREAU_SANDBOX"] = "1"
+
+	// Apply the pipeline environment (Nix store path providing git, sh,
+	// etc.) only when the template didn't already specify one.
+	if d.pipelineEnvironment != "" && spec.EnvironmentPath == "" {
+		spec.EnvironmentPath = d.pipelineEnvironment
+	}
+
+	return true
 }
 
 // readCredentials reads the Credentials state event for a specific principal.

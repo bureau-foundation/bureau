@@ -1746,3 +1746,213 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 		t.Errorf("lastGrants has %d entries, want 3", len(stored))
 	}
 }
+
+func TestApplyPipelineExecutorOverlay(t *testing.T) {
+	t.Parallel()
+
+	const (
+		executorBinary  = "/nix/store/abc-executor/bin/bureau-pipeline-executor"
+		workspaceRoot   = "/var/bureau/workspace"
+		pipelineEnvPath = "/nix/store/xyz-env"
+	)
+
+	tests := []struct {
+		name                   string
+		pipelineExecutorBinary string
+		pipelineEnvironment    string
+		workspaceRoot          string
+		spec                   *schema.SandboxSpec
+		wantApplied            bool
+		wantCommand            []string
+		wantFilesystemLength   int
+		wantBureauSandbox      string
+		wantEnvironmentPath    string
+	}{
+		{
+			name:                   "pipeline_ref with empty command",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Filesystem: []schema.TemplateMount{
+					{Dest: "/tmp", Type: "tmpfs"},
+				},
+				EnvironmentVariables: map[string]string{
+					"HOME": "/workspace",
+					"TERM": "xterm-256color",
+				},
+				Payload: map[string]any{
+					"pipeline_ref":      "bureau/pipeline:dev-workspace-init",
+					"WORKSPACE_ROOM_ID": "!room:test",
+					"PROJECT":           "test",
+				},
+			},
+			wantApplied:          true,
+			wantCommand:          []string{executorBinary},
+			wantFilesystemLength: 3, // original /tmp + executor binary + workspace root
+			wantBureauSandbox:    "1",
+			wantEnvironmentPath:  pipelineEnvPath,
+		},
+		{
+			name:                   "pipeline_inline with empty command",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Payload: map[string]any{
+					"pipeline_inline": map[string]any{
+						"description": "inline pipeline",
+						"steps":       []map[string]any{{"name": "test"}},
+					},
+				},
+			},
+			wantApplied:          true,
+			wantCommand:          []string{executorBinary},
+			wantFilesystemLength: 2, // executor binary + workspace root (no original mounts)
+			wantBureauSandbox:    "1",
+			wantEnvironmentPath:  pipelineEnvPath,
+		},
+		{
+			name:                   "existing command not overwritten",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Command: []string{"/bin/my-agent"},
+				Payload: map[string]any{
+					"pipeline_ref": "bureau/pipeline:dev-workspace-init",
+				},
+			},
+			wantApplied: false,
+		},
+		{
+			name:                   "no pipeline keys in payload",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Payload: map[string]any{
+					"some_other_key": "value",
+				},
+			},
+			wantApplied: false,
+		},
+		{
+			name:                   "nil payload",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec:                   &schema.SandboxSpec{},
+			wantApplied:            false,
+		},
+		{
+			name:                   "no pipeline executor binary configured",
+			pipelineExecutorBinary: "",
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Payload: map[string]any{
+					"pipeline_ref": "bureau/pipeline:dev-workspace-init",
+				},
+			},
+			wantApplied: false,
+		},
+		{
+			name:                   "existing environment path preserved",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    pipelineEnvPath,
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				EnvironmentPath: "/nix/store/existing-env",
+				Payload: map[string]any{
+					"pipeline_ref": "bureau/pipeline:dev-workspace-init",
+				},
+			},
+			wantApplied:          true,
+			wantCommand:          []string{executorBinary},
+			wantFilesystemLength: 2,
+			wantBureauSandbox:    "1",
+			wantEnvironmentPath:  "/nix/store/existing-env",
+		},
+		{
+			name:                   "nil environment variables initialized",
+			pipelineExecutorBinary: executorBinary,
+			pipelineEnvironment:    "",
+			workspaceRoot:          workspaceRoot,
+			spec: &schema.SandboxSpec{
+				Payload: map[string]any{
+					"pipeline_ref": "bureau/pipeline:dev-workspace-init",
+				},
+			},
+			wantApplied:          true,
+			wantCommand:          []string{executorBinary},
+			wantFilesystemLength: 2,
+			wantBureauSandbox:    "1",
+			wantEnvironmentPath:  "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			daemon, _ := newTestDaemon(t)
+			daemon.pipelineExecutorBinary = test.pipelineExecutorBinary
+			daemon.pipelineEnvironment = test.pipelineEnvironment
+			daemon.workspaceRoot = test.workspaceRoot
+
+			applied := daemon.applyPipelineExecutorOverlay(test.spec)
+
+			if applied != test.wantApplied {
+				t.Fatalf("applyPipelineExecutorOverlay() = %v, want %v", applied, test.wantApplied)
+			}
+
+			if !test.wantApplied {
+				return
+			}
+
+			// Verify command.
+			if len(test.spec.Command) != len(test.wantCommand) {
+				t.Errorf("Command = %v, want %v", test.spec.Command, test.wantCommand)
+			} else {
+				for index, value := range test.wantCommand {
+					if test.spec.Command[index] != value {
+						t.Errorf("Command[%d] = %q, want %q", index, test.spec.Command[index], value)
+					}
+				}
+			}
+
+			// Verify filesystem mounts.
+			if len(test.spec.Filesystem) != test.wantFilesystemLength {
+				t.Errorf("Filesystem length = %d, want %d", len(test.spec.Filesystem), test.wantFilesystemLength)
+			}
+
+			// The last two mounts should be the executor binary and workspace root.
+			mounts := test.spec.Filesystem
+			if len(mounts) >= 2 {
+				executorMount := mounts[len(mounts)-2]
+				if executorMount.Source != executorBinary || executorMount.Dest != executorBinary || executorMount.Mode != "ro" {
+					t.Errorf("executor mount = {Source:%q Dest:%q Mode:%q}, want {Source:%q Dest:%q Mode:ro}",
+						executorMount.Source, executorMount.Dest, executorMount.Mode, executorBinary, executorBinary)
+				}
+				workspaceMount := mounts[len(mounts)-1]
+				if workspaceMount.Source != workspaceRoot || workspaceMount.Dest != "/workspace" || workspaceMount.Mode != "rw" {
+					t.Errorf("workspace mount = {Source:%q Dest:%q Mode:%q}, want {Source:%q Dest:/workspace Mode:rw}",
+						workspaceMount.Source, workspaceMount.Dest, workspaceMount.Mode, workspaceRoot)
+				}
+			}
+
+			// Verify BUREAU_SANDBOX env var.
+			if test.spec.EnvironmentVariables["BUREAU_SANDBOX"] != test.wantBureauSandbox {
+				t.Errorf("BUREAU_SANDBOX = %q, want %q",
+					test.spec.EnvironmentVariables["BUREAU_SANDBOX"], test.wantBureauSandbox)
+			}
+
+			// Verify environment path.
+			if test.spec.EnvironmentPath != test.wantEnvironmentPath {
+				t.Errorf("EnvironmentPath = %q, want %q",
+					test.spec.EnvironmentPath, test.wantEnvironmentPath)
+			}
+		})
+	}
+}

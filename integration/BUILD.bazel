@@ -24,6 +24,7 @@ go_test(
         "inotify_test.go",
         "lifecycle_test.go",
         "machine_test.go",
+        "mcp_test.go",
         "messaging_test.go",
         "payload_test.go",
         "pipeline_test.go",

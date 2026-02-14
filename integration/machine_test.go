@@ -71,10 +71,11 @@ type principalAccount struct {
 // principalSpec describes a principal to deploy on a machine.
 type principalSpec struct {
 	Account           principalAccount
-	Template          string               // optional: template ref (e.g., "bureau/template:name")
-	Payload           map[string]any       // optional: per-instance payload merged over template defaults
-	MatrixPolicy      *schema.MatrixPolicy // optional per-principal policy
-	ServiceVisibility []string             // optional: glob patterns for service discovery
+	Template          string                      // optional: template ref (e.g., "bureau/template:name")
+	Payload           map[string]any              // optional: per-instance payload merged over template defaults
+	MatrixPolicy      *schema.MatrixPolicy        // optional per-principal policy
+	ServiceVisibility []string                    // optional: glob patterns for service discovery
+	Authorization     *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
@@ -388,6 +389,7 @@ func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMach
 			Payload:           spec.Payload,
 			MatrixPolicy:      spec.MatrixPolicy,
 			ServiceVisibility: spec.ServiceVisibility,
+			Authorization:     spec.Authorization,
 		}
 	}
 

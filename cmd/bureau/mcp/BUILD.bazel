@@ -24,11 +24,15 @@ go_library(
 
 go_test(
     name = "mcp_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "grants_test.go",
+        "server_test.go",
+    ],
     embed = [":mcp"],
     deps = [
         "//cmd/bureau/cli",
         "//lib/schema",
+        "//lib/testutil",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

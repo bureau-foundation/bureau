@@ -145,8 +145,15 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 
 	var candidates []tokenRefreshCandidate
 	for localpart := range d.running {
-		spec := d.lastSpecs[localpart]
-		if spec == nil || len(spec.RequiredServices) == 0 {
+		// Combine template-required services with daemon-managed
+		// services (credential provisioning for principals with
+		// credential/* grants) to refresh all tokens together.
+		var allRoles []string
+		if spec := d.lastSpecs[localpart]; spec != nil {
+			allRoles = append(allRoles, spec.RequiredServices...)
+		}
+		allRoles = append(allRoles, d.credentialServiceRoles(localpart)...)
+		if len(allRoles) == 0 {
 			continue
 		}
 
@@ -154,7 +161,7 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 		if lastMint.IsZero() || now.Sub(lastMint) >= tokenRefreshThreshold {
 			candidates = append(candidates, tokenRefreshCandidate{
 				localpart:        localpart,
-				requiredServices: spec.RequiredServices,
+				requiredServices: allRoles,
 				lastMint:         lastMint,
 			})
 		}

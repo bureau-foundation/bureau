@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -769,6 +770,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	case "update-proxy-binary":
 		response = l.handleUpdateProxyBinary(ctx, &request)
 
+	case "provision-credential":
+		response = l.handleProvisionCredential(&request)
+
 	case "exec-update":
 		response = l.handleExecUpdate(ctx, &request)
 		// Send the response before a potential exec() — the daemon
@@ -1201,6 +1205,73 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 	)
 
 	return IPCResponse{OK: true}
+}
+
+// handleProvisionCredential decrypts an existing credential bundle, merges
+// a new key-value pair into it, and re-encrypts to the specified recipients.
+// This enables connector services to inject per-principal credentials (e.g.,
+// Forgejo tokens, GitHub PATs) without ever seeing the full plaintext bundle.
+//
+// The daemon is responsible for authorization and recipient key resolution
+// before sending this IPC request. The launcher only does cryptography.
+func (l *Launcher) handleProvisionCredential(request *IPCRequest) IPCResponse {
+	if request.KeyName == "" {
+		return IPCResponse{OK: false, Error: "key_name is required for provision-credential"}
+	}
+	if request.KeyValue == "" {
+		return IPCResponse{OK: false, Error: "key_value is required for provision-credential"}
+	}
+	if len(request.RecipientKeys) == 0 {
+		return IPCResponse{OK: false, Error: "recipient_keys is required for provision-credential"}
+	}
+
+	// Start from existing credentials or an empty bundle.
+	credentials := make(map[string]string)
+	if request.EncryptedCredentials != "" {
+		decrypted, err := sealed.Decrypt(request.EncryptedCredentials, l.keypair.PrivateKey)
+		if err != nil {
+			return IPCResponse{OK: false, Error: fmt.Sprintf("decrypting credentials: %v", err)}
+		}
+		defer decrypted.Close()
+
+		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+			return IPCResponse{OK: false, Error: fmt.Sprintf("parsing decrypted credentials: %v", err)}
+		}
+	}
+
+	// Upsert the new credential.
+	credentials[request.KeyName] = request.KeyValue
+
+	// Marshal back to JSON for re-encryption.
+	updatedJSON, err := json.Marshal(credentials)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("marshaling updated credentials: %v", err)}
+	}
+	defer secret.Zero(updatedJSON)
+
+	// Re-encrypt to the daemon-provided recipient list.
+	updatedCiphertext, err := sealed.Encrypt(updatedJSON, request.RecipientKeys)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("encrypting updated credentials: %v", err)}
+	}
+
+	// Build sorted key list for the Credentials event's Keys field.
+	updatedKeys := make([]string, 0, len(credentials))
+	for key := range credentials {
+		updatedKeys = append(updatedKeys, key)
+	}
+	sort.Strings(updatedKeys)
+
+	l.logger.Info("provisioned credential",
+		"key", request.KeyName,
+		"total_keys", len(updatedKeys),
+	)
+
+	return IPCResponse{
+		OK:                true,
+		UpdatedCiphertext: updatedCiphertext,
+		UpdatedKeys:       updatedKeys,
+	}
 }
 
 // buildSandboxCommand converts a SandboxSpec into a shell script that exec's

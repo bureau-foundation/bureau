@@ -10,7 +10,7 @@ import "github.com/bureau-foundation/bureau/lib/schema"
 type Request struct {
 	// Action is the request type: "create-sandbox", "destroy-sandbox",
 	// "update-payload", "update-proxy-binary", "list-sandboxes",
-	// "wait-sandbox", "wait-proxy", or "status".
+	// "wait-sandbox", "wait-proxy", "provision-credential", or "status".
 	Action string `cbor:"action"`
 
 	// Principal is the localpart of the principal to operate on.
@@ -86,6 +86,22 @@ type Request struct {
 	// then switches to it for future sandbox creation. Existing proxy
 	// processes continue running their current binary.
 	BinaryPath string `cbor:"binary_path,omitempty"`
+
+	// KeyName is the credential key to upsert (for "provision-credential").
+	// Combined with KeyValue, this defines the key-value pair to merge
+	// into the principal's credential bundle.
+	KeyName string `cbor:"key_name,omitempty"`
+
+	// KeyValue is the plaintext credential value (for "provision-credential").
+	// Safe over local IPC — same trust boundary as DirectCredentials.
+	// The launcher zeros this after use.
+	KeyValue string `cbor:"key_value,omitempty"`
+
+	// RecipientKeys lists age public key strings (age1... format) to
+	// encrypt the updated credential bundle to (for "provision-credential").
+	// The daemon resolves these from the machine's public key file and
+	// any configured escrow keys before sending the IPC request.
+	RecipientKeys []string `cbor:"recipient_keys,omitempty"`
 }
 
 // ServiceMount describes a service socket to bind-mount into a sandbox.
@@ -134,6 +150,17 @@ type Response struct {
 	// so the daemon can discover principals that survived a daemon
 	// restart while the launcher continued running.
 	Sandboxes []SandboxListEntry `cbor:"sandboxes,omitempty"`
+
+	// UpdatedCiphertext is the re-encrypted credential bundle returned
+	// by "provision-credential". The daemon publishes this as the new
+	// Ciphertext field on the m.bureau.credentials state event.
+	UpdatedCiphertext string `cbor:"updated_ciphertext,omitempty"`
+
+	// UpdatedKeys lists all credential key names present in the updated
+	// bundle (for "provision-credential"). The daemon publishes this as
+	// the Keys field on the m.bureau.credentials state event, allowing
+	// credential auditing without decryption.
+	UpdatedKeys []string `cbor:"updated_keys,omitempty"`
 }
 
 // SandboxListEntry describes a running sandbox returned by "list-sandboxes".

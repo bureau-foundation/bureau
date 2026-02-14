@@ -340,14 +340,29 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			serviceMounts = mounts
 		}
 
-		// Mint service tokens for each required service. The tokens carry
-		// pre-resolved grants scoped to the service namespace. Written to
-		// disk and bind-mounted read-only at /run/bureau/tokens/ so the
-		// agent can authenticate to services without a daemon round-trip.
+		// If the principal has credential/* grants, mount the daemon's
+		// credential provisioning socket into the sandbox so the agent
+		// can inject per-principal credentials via the provisioning API.
+		serviceMounts = d.appendCredentialServiceMount(localpart, serviceMounts)
+
+		// Compute the full set of service roles that need tokens: the
+		// template's RequiredServices plus any daemon-managed services
+		// the principal qualifies for (currently: credential provisioning
+		// for principals with credential/* grants).
+		var allServiceRoles []string
+		if sandboxSpec != nil {
+			allServiceRoles = append(allServiceRoles, sandboxSpec.RequiredServices...)
+		}
+		allServiceRoles = append(allServiceRoles, d.credentialServiceRoles(localpart)...)
+
+		// Mint service tokens for each role. The tokens carry pre-resolved
+		// grants scoped to the service namespace. Written to disk and
+		// bind-mounted read-only at /run/bureau/tokens/ so the agent can
+		// authenticate to services without a daemon round-trip.
 		var tokenDirectory string
 		var mintedTokens []activeToken
-		if sandboxSpec != nil && len(sandboxSpec.RequiredServices) > 0 {
-			tokenDir, minted, err := d.mintServiceTokens(localpart, sandboxSpec.RequiredServices)
+		if len(allServiceRoles) > 0 {
+			tokenDir, minted, err := d.mintServiceTokens(localpart, allServiceRoles)
 			if err != nil {
 				d.logger.Error("minting service tokens",
 					"principal", localpart,

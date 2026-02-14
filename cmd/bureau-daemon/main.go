@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -144,6 +146,27 @@ func run() error {
 		"generated", keyWasGenerated,
 	)
 
+	// Load the machine's age public key. Written by the launcher at first
+	// boot, shared via the state directory. The daemon uses this to encrypt
+	// credential bundles that the launcher can decrypt. If the key is not
+	// yet available (launcher hasn't run first-boot yet), credential
+	// provisioning will return clear errors when attempted.
+	var machinePublicKey string
+	machinePublicKeyPath := filepath.Join(stateDir, "machine-key.pub")
+	machinePublicKeyData, err := os.ReadFile(machinePublicKeyPath)
+	if err != nil {
+		logger.Warn("machine age public key not available (credential provisioning disabled)",
+			"path", machinePublicKeyPath,
+			"error", err,
+		)
+	} else {
+		machinePublicKey = strings.TrimSpace(string(machinePublicKeyData))
+		if err := sealed.ParsePublicKey(machinePublicKey); err != nil {
+			return fmt.Errorf("invalid machine age public key in %s: %w", machinePublicKeyPath, err)
+		}
+		logger.Info("machine age public key loaded")
+	}
+
 	// Ensure the per-machine config room exists.
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
 	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, adminUser, logger)
@@ -218,6 +241,7 @@ func run() error {
 		tokenSigningPublicKey:  tokenSigningPublicKey,
 		tokenSigningPrivateKey: tokenSigningPrivateKey,
 		authorizationIndex:     authorization.NewIndex(),
+		machinePublicKey:       machinePublicKey,
 		machineName:            machineName,
 		machineUserID:          machineUserID,
 		serverName:             serverName,
@@ -279,6 +303,14 @@ func run() error {
 			return fmt.Errorf("starting observe listener: %w", err)
 		}
 		defer daemon.stopObserveListener()
+	}
+
+	// Start the credential provisioning service socket. Connector
+	// principals with credential/* grants get this socket mounted into
+	// their sandbox and use it to inject per-principal credentials
+	// (API tokens, service keys, etc.) into age-encrypted bundles.
+	if _, err := daemon.startCredentialService(ctx); err != nil {
+		return fmt.Errorf("starting credential service: %w", err)
 	}
 
 	// Initialize GPU metric collectors. Each vendor collector opens
@@ -374,6 +406,15 @@ type Daemon struct {
 	// tokenSigningPrivateKey is the Ed25519 private key used to sign
 	// service identity tokens issued to sandboxed principals.
 	tokenSigningPrivateKey ed25519.PrivateKey
+
+	// machinePublicKey is the age x25519 public key for this machine's
+	// keypair. The launcher holds the private key; the daemon uses the
+	// public key to encrypt credential bundles via the provisioning
+	// service. Loaded from <stateDir>/machine-key.pub at startup. Empty
+	// if the key file is not yet available (launcher hasn't completed
+	// first-boot), which disables credential provisioning with a clear
+	// error message.
+	machinePublicKey string
 
 	machineName    string
 	machineUserID  string

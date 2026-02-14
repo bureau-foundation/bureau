@@ -2170,3 +2170,260 @@ func TestListSandboxes(t *testing.T) {
 		t.Errorf("surviving sandbox = %q, want test/list-b", afterDestroyResponse.Sandboxes[0].Localpart)
 	}
 }
+
+func TestHandleProvisionCredential(t *testing.T) {
+	keypair, err := sealed.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("generating keypair: %v", err)
+	}
+	t.Cleanup(func() { keypair.Close() })
+
+	launcher := &Launcher{
+		keypair: keypair,
+		logger:  slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+
+	recipientKeys := []string{keypair.PublicKey}
+
+	t.Run("provision into empty bundle", func(t *testing.T) {
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:        "provision-credential",
+			KeyName:       "FORGEJO_TOKEN",
+			KeyValue:      "token_abc123",
+			RecipientKeys: recipientKeys,
+		})
+		if !response.OK {
+			t.Fatalf("provision failed: %s", response.Error)
+		}
+
+		// Verify the ciphertext decrypts to the expected credential.
+		decrypted, err := sealed.Decrypt(response.UpdatedCiphertext, keypair.PrivateKey)
+		if err != nil {
+			t.Fatalf("decrypting updated bundle: %v", err)
+		}
+		defer decrypted.Close()
+
+		var credentials map[string]string
+		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+			t.Fatalf("parsing decrypted bundle: %v", err)
+		}
+
+		if credentials["FORGEJO_TOKEN"] != "token_abc123" {
+			t.Errorf("FORGEJO_TOKEN = %q, want %q", credentials["FORGEJO_TOKEN"], "token_abc123")
+		}
+		if len(credentials) != 1 {
+			t.Errorf("expected 1 credential, got %d: %v", len(credentials), credentials)
+		}
+
+		// Verify updated key list.
+		if len(response.UpdatedKeys) != 1 || response.UpdatedKeys[0] != "FORGEJO_TOKEN" {
+			t.Errorf("UpdatedKeys = %v, want [FORGEJO_TOKEN]", response.UpdatedKeys)
+		}
+	})
+
+	t.Run("merge into existing bundle", func(t *testing.T) {
+		// Create an existing bundle with a Matrix token.
+		existingBundle := map[string]string{
+			"MATRIX_TOKEN":          "syt_existing",
+			"MATRIX_USER_ID":        "@test/agent:bureau.local",
+			"MATRIX_HOMESERVER_URL": "http://localhost:8008",
+		}
+		existingJSON, err := json.Marshal(existingBundle)
+		if err != nil {
+			t.Fatalf("marshaling existing bundle: %v", err)
+		}
+		existingCiphertext, err := sealed.Encrypt(existingJSON, recipientKeys)
+		if err != nil {
+			t.Fatalf("encrypting existing bundle: %v", err)
+		}
+
+		// Provision a new key into the existing bundle.
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:               "provision-credential",
+			KeyName:              "GITHUB_TOKEN",
+			KeyValue:             "ghp_newtoken",
+			EncryptedCredentials: existingCiphertext,
+			RecipientKeys:        recipientKeys,
+		})
+		if !response.OK {
+			t.Fatalf("provision failed: %s", response.Error)
+		}
+
+		// Decrypt and verify all keys are present.
+		decrypted, err := sealed.Decrypt(response.UpdatedCiphertext, keypair.PrivateKey)
+		if err != nil {
+			t.Fatalf("decrypting updated bundle: %v", err)
+		}
+		defer decrypted.Close()
+
+		var credentials map[string]string
+		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+			t.Fatalf("parsing decrypted bundle: %v", err)
+		}
+
+		// Existing credentials should be preserved.
+		if credentials["MATRIX_TOKEN"] != "syt_existing" {
+			t.Errorf("MATRIX_TOKEN = %q, want %q", credentials["MATRIX_TOKEN"], "syt_existing")
+		}
+		// New credential should be present.
+		if credentials["GITHUB_TOKEN"] != "ghp_newtoken" {
+			t.Errorf("GITHUB_TOKEN = %q, want %q", credentials["GITHUB_TOKEN"], "ghp_newtoken")
+		}
+
+		if len(credentials) != 4 {
+			t.Errorf("expected 4 credentials, got %d: %v", len(credentials), credentials)
+		}
+
+		// Verify key list is sorted.
+		expectedKeys := []string{"GITHUB_TOKEN", "MATRIX_HOMESERVER_URL", "MATRIX_TOKEN", "MATRIX_USER_ID"}
+		if !sort.StringsAreSorted(response.UpdatedKeys) {
+			t.Errorf("UpdatedKeys not sorted: %v", response.UpdatedKeys)
+		}
+		for i, key := range expectedKeys {
+			if i >= len(response.UpdatedKeys) || response.UpdatedKeys[i] != key {
+				t.Errorf("UpdatedKeys = %v, want %v", response.UpdatedKeys, expectedKeys)
+				break
+			}
+		}
+	})
+
+	t.Run("upsert existing key", func(t *testing.T) {
+		// Create a bundle with an existing FORGEJO_TOKEN.
+		existingBundle := map[string]string{
+			"FORGEJO_TOKEN": "old_token",
+		}
+		existingJSON, err := json.Marshal(existingBundle)
+		if err != nil {
+			t.Fatalf("marshaling: %v", err)
+		}
+		existingCiphertext, err := sealed.Encrypt(existingJSON, recipientKeys)
+		if err != nil {
+			t.Fatalf("encrypting: %v", err)
+		}
+
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:               "provision-credential",
+			KeyName:              "FORGEJO_TOKEN",
+			KeyValue:             "new_token",
+			EncryptedCredentials: existingCiphertext,
+			RecipientKeys:        recipientKeys,
+		})
+		if !response.OK {
+			t.Fatalf("provision failed: %s", response.Error)
+		}
+
+		decrypted, err := sealed.Decrypt(response.UpdatedCiphertext, keypair.PrivateKey)
+		if err != nil {
+			t.Fatalf("decrypting: %v", err)
+		}
+		defer decrypted.Close()
+
+		var credentials map[string]string
+		if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+			t.Fatalf("parsing: %v", err)
+		}
+
+		if credentials["FORGEJO_TOKEN"] != "new_token" {
+			t.Errorf("FORGEJO_TOKEN = %q, want %q", credentials["FORGEJO_TOKEN"], "new_token")
+		}
+		if len(credentials) != 1 {
+			t.Errorf("expected 1 credential after upsert, got %d", len(credentials))
+		}
+	})
+
+	t.Run("bad ciphertext", func(t *testing.T) {
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:               "provision-credential",
+			KeyName:              "KEY",
+			KeyValue:             "value",
+			EncryptedCredentials: "not-valid-base64-ciphertext!!!",
+			RecipientKeys:        recipientKeys,
+		})
+		if response.OK {
+			t.Fatal("expected error for bad ciphertext, got OK")
+		}
+		if !strings.Contains(response.Error, "decrypt") {
+			t.Errorf("error = %q, expected to mention decryption", response.Error)
+		}
+	})
+
+	t.Run("missing key name", func(t *testing.T) {
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:        "provision-credential",
+			KeyValue:      "value",
+			RecipientKeys: recipientKeys,
+		})
+		if response.OK {
+			t.Fatal("expected error for missing key name")
+		}
+		if !strings.Contains(response.Error, "key_name") {
+			t.Errorf("error = %q, expected to mention key_name", response.Error)
+		}
+	})
+
+	t.Run("missing key value", func(t *testing.T) {
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:        "provision-credential",
+			KeyName:       "KEY",
+			RecipientKeys: recipientKeys,
+		})
+		if response.OK {
+			t.Fatal("expected error for missing key value")
+		}
+		if !strings.Contains(response.Error, "key_value") {
+			t.Errorf("error = %q, expected to mention key_value", response.Error)
+		}
+	})
+
+	t.Run("missing recipient keys", func(t *testing.T) {
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:   "provision-credential",
+			KeyName:  "KEY",
+			KeyValue: "value",
+		})
+		if response.OK {
+			t.Fatal("expected error for missing recipient keys")
+		}
+		if !strings.Contains(response.Error, "recipient_keys") {
+			t.Errorf("error = %q, expected to mention recipient_keys", response.Error)
+		}
+	})
+
+	t.Run("multi-recipient encryption", func(t *testing.T) {
+		// Generate a second keypair to verify multi-recipient works.
+		escrowKeypair, err := sealed.GenerateKeypair()
+		if err != nil {
+			t.Fatalf("generating escrow keypair: %v", err)
+		}
+		t.Cleanup(func() { escrowKeypair.Close() })
+
+		multiRecipientKeys := []string{keypair.PublicKey, escrowKeypair.PublicKey}
+
+		response := launcher.handleProvisionCredential(&IPCRequest{
+			Action:        "provision-credential",
+			KeyName:       "SECRET",
+			KeyValue:      "multi-recipient-value",
+			RecipientKeys: multiRecipientKeys,
+		})
+		if !response.OK {
+			t.Fatalf("provision failed: %s", response.Error)
+		}
+
+		// Both recipients should be able to decrypt.
+		for _, kp := range []*sealed.Keypair{keypair, escrowKeypair} {
+			decrypted, err := sealed.Decrypt(response.UpdatedCiphertext, kp.PrivateKey)
+			if err != nil {
+				t.Fatalf("decrypting with key %s: %v", kp.PublicKey[:20], err)
+			}
+			defer decrypted.Close()
+
+			var credentials map[string]string
+			if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+				t.Fatalf("parsing: %v", err)
+			}
+			if credentials["SECRET"] != "multi-recipient-value" {
+				t.Errorf("SECRET = %q, want %q", credentials["SECRET"], "multi-recipient-value")
+			}
+		}
+	})
+}

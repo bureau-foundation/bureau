@@ -70,6 +70,9 @@ const unblockIndicatorWidth = 4
 // The selected flag controls whether the row gets highlight styling.
 // The optional score parameter adds leverage and urgency indicators
 // when non-nil (used on the Ready tab; nil on Blocked/All tabs).
+// The matchPositions parameter contains rune indices in the title
+// that matched the current fuzzy filter query; when non-nil, those
+// characters are highlighted with the search highlight background.
 //
 // Row layout: indent + emoji + priority [+ " " + status icon] + " " + ID + title [+ " ↑N"]
 //
@@ -79,7 +82,7 @@ const unblockIndicatorWidth = 4
 //
 //	🐛P0 ● tkt-3vk5  Fix connection pooling leak [infra]
 //	📋P2 tkt-2ccg    Implement retry backoff [transport] ↑3
-func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool, score *ticket.TicketScore) string {
+func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool, score *ticket.TicketScore, matchPositions []int) string {
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.
 	titleWidth := renderer.width - maxLeftWidth - columnWidthID
@@ -125,9 +128,9 @@ func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool, score 
 	}
 
 	if selected {
-		return renderer.renderSelectedRow(entry, combined)
+		return renderer.renderSelectedRow(entry, combined, matchPositions)
 	}
-	return renderer.renderNormalRow(entry, combined, displayPriorityColor)
+	return renderer.renderNormalRow(entry, combined, displayPriorityColor, matchPositions)
 }
 
 // renderUnblockIndicator returns a styled " ↑N" suffix for the title
@@ -153,8 +156,9 @@ func (renderer ListRenderer) renderUnblockIndicator(count int, selected bool) st
 // No background color (default terminal background).
 // displayPriorityColor controls the color of the priority badge; it
 // may differ from the ticket's own priority when borrowed priority
-// escalates the visual urgency.
-func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels string, displayPriorityColor int) string {
+// escalates the visual urgency. matchPositions contains rune indices
+// in the original title that should be highlighted.
+func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels string, displayPriorityColor int, matchPositions []int) string {
 	priority := entry.Content.Priority
 	status := entry.Content.Status
 
@@ -185,19 +189,31 @@ func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels str
 		statusPart = "  "
 	}
 
+	var titleRendered string
+	if len(matchPositions) > 0 {
+		highlightStyle := lipgloss.NewStyle().
+			Foreground(renderer.theme.NormalText).
+			Background(renderer.theme.SearchHighlightBackground)
+		titleRendered = highlightTitle(titleLabels, entry.Content.Title, matchPositions, titleStyle, highlightStyle)
+	} else {
+		titleRendered = titleStyle.Render(titleLabels)
+	}
+
 	row := " " +
 		typePriorityStyle.Render(typePriorityText) +
 		statusPart +
 		" " +
 		idStyle.Render(entry.ID) +
-		titleStyle.Render(titleLabels)
+		titleRendered
 
 	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(row)
 }
 
 // renderSelectedRow renders the selected row with a highlight
 // background. All text uses the selected foreground color.
-func (renderer ListRenderer) renderSelectedRow(entry ticket.Entry, titleLabels string) string {
+// matchPositions contains rune indices in the original title that
+// should be highlighted (with bold+underline on the selection bg).
+func (renderer ListRenderer) renderSelectedRow(entry ticket.Entry, titleLabels string, matchPositions []int) string {
 	baseStyle := lipgloss.NewStyle().
 		Background(renderer.theme.SelectedBackground).
 		Foreground(renderer.theme.SelectedForeground)
@@ -212,12 +228,24 @@ func (renderer ListRenderer) renderSelectedRow(entry ticket.Entry, titleLabels s
 		statusPart = "  "
 	}
 
+	var titleRendered string
+	if len(matchPositions) > 0 {
+		// On a selected row the background is already the selection
+		// color, so a different background tint would be subtle.
+		// Use bold+underline to make matches pop against the
+		// selection highlight.
+		highlightStyle := baseStyle.Bold(true).Underline(true)
+		titleRendered = highlightTitle(titleLabels, entry.Content.Title, matchPositions, baseStyle, highlightStyle)
+	} else {
+		titleRendered = baseStyle.Render(titleLabels)
+	}
+
 	row := " " +
 		baseStyle.Bold(true).Render(typePriorityText) +
 		statusPart +
 		" " +
 		baseStyle.Width(columnWidthID).Bold(false).Render(entry.ID) +
-		baseStyle.Render(titleLabels)
+		titleRendered
 
 	return baseStyle.Width(renderer.width).MaxWidth(renderer.width).Render(row)
 }
@@ -272,6 +300,50 @@ func (renderer ListRenderer) RenderGroupHeader(item ListItem, width int, selecte
 	}
 
 	return headerStyle.Render(prefix + title + progress)
+}
+
+// highlightTitle renders a title+labels string with character-level
+// highlighting at the given rune positions. Positions index into the
+// original title text (before labels were appended). Characters at
+// matched positions use highlightStyle; all others use baseStyle.
+// Consecutive runs of same-style characters are batched into a single
+// Render call to keep ANSI output compact.
+func highlightTitle(titleLabels string, originalTitle string, positions []int, baseStyle, highlightStyle lipgloss.Style) string {
+	if len(positions) == 0 {
+		return baseStyle.Render(titleLabels)
+	}
+
+	// Build a set of matched rune indices for O(1) lookup.
+	positionSet := make(map[int]bool, len(positions))
+	for _, position := range positions {
+		positionSet[position] = true
+	}
+
+	titleRunes := []rune(originalTitle)
+	titleLabelsRunes := []rune(titleLabels)
+	titleLength := len(titleRunes)
+
+	var result strings.Builder
+	runStart := 0
+	isHighlighted := runStart < titleLength && positionSet[0]
+
+	for index := 1; index <= len(titleLabelsRunes); index++ {
+		// Characters past the title length (i.e., the labels suffix)
+		// are never highlighted.
+		currentHighlighted := index < titleLength && positionSet[index]
+		if currentHighlighted != isHighlighted || index == len(titleLabelsRunes) {
+			chunk := string(titleLabelsRunes[runStart:index])
+			if isHighlighted {
+				result.WriteString(highlightStyle.Render(chunk))
+			} else {
+				result.WriteString(baseStyle.Render(chunk))
+			}
+			runStart = index
+			isHighlighted = currentHighlighted
+		}
+	}
+
+	return result.String()
 }
 
 // truncateString truncates a string to maxWidth visual characters.

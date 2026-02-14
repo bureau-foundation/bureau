@@ -36,6 +36,10 @@ type Theme struct {
 	// for tickets that left the view.
 	HotAccentPut    lipgloss.Color
 	HotAccentRemove lipgloss.Color
+
+	// Search and filter match highlighting.
+	SearchHighlightBackground lipgloss.Color // Background tint for matched characters.
+	SearchCurrentBackground   lipgloss.Color // Background for the current search match.
 }
 
 // PriorityColor returns the color for a priority level (0-4).
@@ -92,4 +96,7 @@ var DefaultTheme = Theme{
 
 	HotAccentPut:    lipgloss.Color("58"), // dark amber background tint
 	HotAccentRemove: lipgloss.Color("52"), // dark red background tint
+
+	SearchHighlightBackground: lipgloss.Color("58"),  // dark amber (matches HotAccentPut)
+	SearchCurrentBackground:   lipgloss.Color("100"), // brighter amber for current match
 }

@@ -12,10 +12,12 @@ go_library(
         "detail.go",
         "doc.go",
         "filter.go",
+        "fuzzy.go",
         "keys.go",
         "list.go",
         "model.go",
         "scrollbar.go",
+        "search.go",
         "source.go",
         "theme.go",
     ],
@@ -30,6 +32,9 @@ go_library(
         "@com_github_charmbracelet_glamour//:glamour",
         "@com_github_charmbracelet_glamour//styles",
         "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@com_github_charmbracelet_x_ansi//:ansi",
+        "@com_github_junegunn_fzf//src/algo",
+        "@com_github_junegunn_fzf//src/util",
     ],
 )
 
@@ -39,7 +44,9 @@ go_test(
         "beads_test.go",
         "dependency_test.go",
         "filter_test.go",
+        "fuzzy_test.go",
         "model_test.go",
+        "search_test.go",
     ],
     embed = [":ticketui"],
     deps = [

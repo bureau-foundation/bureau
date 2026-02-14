@@ -4,15 +4,26 @@
 package ticketui
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/junegunn/fzf/src/util"
 
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
 
-// FilterModel implements fzf-style substring matching across multiple
-// ticket fields: ID, title, labels, assignee, type, and parent epic
+// FilterResult holds a matched entry with its fuzzy match metadata.
+// Produced by [FilterModel.ApplyFuzzy] and consumed by the list
+// renderer for character-level match highlighting.
+type FilterResult struct {
+	Entry          ticket.Entry
+	Score          int   // Best fuzzy score across all searchable fields.
+	TitlePositions []int // Matched rune positions in the title (for highlighting).
+}
+
+// FilterModel implements fzf fuzzy matching across multiple ticket
+// fields: ID, title, labels, assignee, type, status, and parent epic
 // title. The filter composes with tabs: the tab chooses the base set
 // (Ready/Blocked/All), and the filter narrows it client-side without
 // round-tripping to the source.
@@ -94,6 +105,88 @@ func (filter *FilterModel) Apply(entries []ticket.Entry, source Source) []ticket
 		}
 	}
 	return result
+}
+
+// ApplyFuzzy filters entries using fzf fuzzy matching and returns
+// results sorted by match quality (best first). Each result includes
+// the fuzzy score and the character positions of matches within the
+// title (for highlighting in the list view). When the filter input
+// is empty, returns all entries with zero scores and no positions.
+func (filter *FilterModel) ApplyFuzzy(entries []ticket.Entry, source Source) []FilterResult {
+	if filter.Input == "" {
+		results := make([]FilterResult, len(entries))
+		for index, entry := range entries {
+			results[index] = FilterResult{Entry: entry}
+		}
+		return results
+	}
+
+	pattern := []rune(strings.ToLower(filter.Input))
+	slab := util.MakeSlab(256, 256)
+	var results []FilterResult
+
+	for _, entry := range entries {
+		bestScore := 0
+
+		// Match against each searchable field, keep the best score.
+		for _, field := range searchableFields(entry, source) {
+			match := fuzzyMatch(field, pattern, slab)
+			if match.Score > bestScore {
+				bestScore = match.Score
+			}
+		}
+
+		if bestScore <= 0 {
+			continue
+		}
+
+		// Match against title separately to get character positions
+		// for highlighting. The title match may have a different
+		// (lower) score than the best field, but we want the
+		// positions specific to what appears in the list row.
+		var titlePositions []int
+		titleMatch := fuzzyMatch(entry.Content.Title, pattern, slab)
+		if titleMatch.Score > 0 {
+			titlePositions = titleMatch.Positions
+		}
+
+		results = append(results, FilterResult{
+			Entry:          entry,
+			Score:          bestScore,
+			TitlePositions: titlePositions,
+		})
+	}
+
+	// Sort by score descending so the best matches appear first.
+	slices.SortFunc(results, func(a, b FilterResult) int {
+		return b.Score - a.Score
+	})
+
+	return results
+}
+
+// searchableFields returns the strings that should be searched for a
+// ticket entry. These are the same fields that MatchesEntry checks:
+// ticket ID, title, labels (joined), assignee, type, status, and
+// parent epic title.
+func searchableFields(entry ticket.Entry, source Source) []string {
+	fields := []string{
+		entry.ID,
+		entry.Content.Title,
+		strings.Join(entry.Content.Labels, " "),
+		entry.Content.Assignee,
+		entry.Content.Type,
+		entry.Content.Status,
+	}
+
+	if entry.Content.Parent != "" {
+		parentContent, exists := source.Get(entry.Content.Parent)
+		if exists {
+			fields = append(fields, parentContent.Title)
+		}
+	}
+
+	return fields
 }
 
 // HandleRune processes a character typed while the filter is active.

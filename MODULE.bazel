@@ -1,3 +1,6 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
 module(
     name = "bureau",
     version = "0.0.0",
@@ -23,7 +26,9 @@ use_repo(
     "com_github_charmbracelet_bubbletea",
     "com_github_charmbracelet_glamour",
     "com_github_charmbracelet_lipgloss",
+    "com_github_charmbracelet_x_ansi",
     "com_github_fxamacker_cbor_v2",
+    "com_github_junegunn_fzf",
     "com_github_klauspost_compress",
     "com_github_pierrec_lz4_v4",
     "com_github_pion_webrtc_v4",

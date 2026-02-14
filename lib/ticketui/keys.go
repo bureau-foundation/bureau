@@ -37,6 +37,10 @@ type KeyMap struct {
 	FilterActivate key.Binding // Enter filter mode.
 	FilterClear    key.Binding // Clear filter and exit filter mode.
 
+	// Detail search (active when the detail pane has a search query).
+	SearchNext     key.Binding // Jump to next match in detail search.
+	SearchPrevious key.Binding // Jump to previous match in detail search.
+
 	Quit key.Binding
 }
 
@@ -110,6 +114,14 @@ var DefaultKeyMap = KeyMap{
 	FilterClear: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("Esc", "clear filter"),
+	),
+	SearchNext: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "next match"),
+	),
+	SearchPrevious: key.NewBinding(
+		key.WithKeys("N"),
+		key.WithHelp("N", "prev match"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),

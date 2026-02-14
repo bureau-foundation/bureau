@@ -655,6 +655,14 @@ type DetailPane struct {
 	// Set by SetContent and rerender; used by the model to handle
 	// mouse clicks on dependency, child, and parent entries.
 	clickTargets []BodyClickTarget
+
+	// Search state for in-body text search.
+	search SearchModel
+
+	// rawBody holds the rendered body before search highlighting,
+	// so highlighting can be reapplied when the query changes
+	// without re-rendering the entire body from markdown.
+	rawBody string
 }
 
 // NewDetailPane creates an empty detail pane.
@@ -665,9 +673,13 @@ func NewDetailPane(theme Theme) DetailPane {
 }
 
 // bodyHeight returns the number of lines available for the scrollable
-// viewport body (total height minus the fixed header).
+// viewport body (total height minus the fixed header, and minus the
+// search bar when visible).
 func (pane DetailPane) bodyHeight() int {
 	result := pane.height - detailHeaderLines
+	if pane.searchBarVisible() {
+		result--
+	}
 	if result < 1 {
 		result = 1
 	}
@@ -698,7 +710,17 @@ func (pane *DetailPane) SetSize(width, height int) {
 // SetContent updates the detail pane with rendered content for a ticket.
 // The now parameter drives scoring computation for the header signal
 // indicators and is stored for consistent re-rendering on resize.
+//
+// When the displayed ticket changes (different entry ID), any active
+// search is cleared because the search was against the previous
+// ticket's body content.
 func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.Time) {
+	if entry.ID != pane.entry.ID {
+		pane.search.Clear()
+		// Viewport height may change when the search bar disappears.
+		pane.viewport.Height = pane.bodyHeight()
+	}
+
 	pane.hasEntry = true
 	pane.source = source
 	pane.entry = entry
@@ -719,7 +741,8 @@ func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.T
 	// sections in the body, so their line numbers remain stable.
 	body = lipgloss.NewStyle().Width(contentWidth).Render(body)
 
-	pane.viewport.SetContent(body)
+	pane.rawBody = body
+	pane.applySearchHighlighting()
 	pane.viewport.GotoTop()
 }
 
@@ -730,6 +753,8 @@ func (pane *DetailPane) Clear() {
 	pane.entry = ticket.Entry{}
 	pane.header = ""
 	pane.clickTargets = nil
+	pane.rawBody = ""
+	pane.search.Clear()
 	pane.viewport.SetContent("")
 }
 
@@ -749,7 +774,8 @@ func (pane *DetailPane) rerender() {
 	// viewport width after re-rendering at the new width.
 	body = lipgloss.NewStyle().Width(contentWidth).Render(body)
 
-	pane.viewport.SetContent(body)
+	pane.rawBody = body
+	pane.applySearchHighlighting()
 
 	// Restore scroll position, clamped to the new content height.
 	maxOffset := pane.viewport.TotalLineCount() - pane.viewport.Height
@@ -772,8 +798,14 @@ func (pane *DetailPane) computeScore(source Source, entry ticket.Entry, now time
 	return &score
 }
 
+// searchBarVisible returns whether the search bar should be displayed.
+func (pane DetailPane) searchBarVisible() bool {
+	return pane.search.Active || pane.search.Input != ""
+}
+
 // View renders the detail pane as a docked panel with a fixed header,
-// scrollable body, left padding, and a right scrollbar.
+// scrollable body, optional search bar, left padding, and a right
+// scrollbar.
 func (pane DetailPane) View(focused bool) string {
 	contentWidth := pane.contentWidth()
 
@@ -803,16 +835,23 @@ func (pane DetailPane) View(focused bool) string {
 	}
 
 	// Build the content column as exactly pane.height lines.
-	// Fixed header (detailHeaderLines) + scrollable body (remainder).
-	// We avoid JoinVertical to guarantee no extra newlines.
+	// Fixed header (detailHeaderLines) + scrollable body (remainder)
+	// + optional search bar (1 line when visible).
 	paddingStyle := lipgloss.NewStyle().
 		PaddingLeft(1).
 		Width(pane.width - 1)
 
 	headerView := paddingStyle.Height(detailHeaderLines).Render(pane.header)
+
 	bodyHeight := pane.bodyHeight()
+	searchBarView := ""
+	if pane.searchBarVisible() {
+		searchBarView = "\n" + paddingStyle.Height(1).Render(
+			pane.search.View(pane.theme, contentWidth))
+	}
+
 	bodyView := paddingStyle.Height(bodyHeight).Render(pane.viewport.View())
-	content := headerView + "\n" + bodyView
+	content := headerView + "\n" + bodyView + searchBarView
 
 	// Scrollbar: blank column for the header rows, actual scrollbar
 	// for the body rows. This way the scrollbar only covers the
@@ -822,8 +861,12 @@ func (pane DetailPane) View(focused bool) string {
 		Height(detailHeaderLines).
 		Render("")
 	totalLines := pane.viewport.TotalLineCount()
+	scrollbarHeight := bodyHeight
+	if pane.searchBarVisible() {
+		scrollbarHeight++
+	}
 	bodyScrollbar := renderScrollbar(
-		pane.theme, bodyHeight,
+		pane.theme, scrollbarHeight,
 		totalLines, pane.viewport.Height, pane.viewport.YOffset,
 		focused,
 	)
@@ -846,6 +889,50 @@ func (pane DetailPane) ClickTarget(viewportY, relativeX int) string {
 		}
 	}
 	return ""
+}
+
+// applySearchHighlighting sets the viewport content to the rawBody
+// with search matches highlighted (or the raw body unchanged when
+// there's no active search query). Called after any change to the
+// rawBody or search query.
+func (pane *DetailPane) applySearchHighlighting() {
+	if pane.search.Input == "" {
+		pane.viewport.SetContent(pane.rawBody)
+		pane.search.SetMatches(nil)
+		return
+	}
+
+	currentIndex := -1
+	if pane.search.MatchCount() > 0 {
+		currentIndex = pane.search.CurrentIndex()
+	}
+	highlighted, matches := highlightSearchMatches(
+		pane.rawBody, pane.search.Input, currentIndex, pane.theme)
+	pane.search.SetMatches(matches)
+	pane.viewport.SetContent(highlighted)
+}
+
+// ScrollToCurrentMatch scrolls the viewport so the current search
+// match is visible, centered vertically when possible.
+func (pane *DetailPane) ScrollToCurrentMatch() {
+	match := pane.search.CurrentMatch()
+	if match == nil {
+		return
+	}
+
+	// Center the match line in the viewport.
+	targetOffset := match.Line - pane.viewport.Height/2
+	if targetOffset < 0 {
+		targetOffset = 0
+	}
+	maxOffset := pane.viewport.TotalLineCount() - pane.viewport.Height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if targetOffset > maxOffset {
+		targetOffset = maxOffset
+	}
+	pane.viewport.SetYOffset(targetOffset)
 }
 
 // ScrollUp scrolls the detail pane up by half a page.

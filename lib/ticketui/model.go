@@ -38,6 +38,9 @@ const (
 	FocusDetail
 	// FocusFilter means keystrokes go to the filter input.
 	FocusFilter
+	// FocusDetailSearch means keystrokes go to the detail pane
+	// search input (activated by / when the detail pane has focus).
+	FocusDetailSearch
 )
 
 // Split ratio bounds and step size.
@@ -139,6 +142,11 @@ type Model struct {
 	navHistory []navPosition // Back stack.
 	navForward []navPosition // Forward stack (cleared on new navigation).
 
+	// Filter match highlighting: maps ticket ID to matched rune
+	// positions in the title. Populated by applyFilter when the
+	// filter uses fuzzy matching; nil when no filter is active.
+	filterHighlights map[string][]int
+
 	// Live update animation.
 	heatTracker  *HeatTracker // Tracks recently-changed tickets for glow animation.
 	eventChannel <-chan Event // Source event subscription; nil if no live updates.
@@ -215,6 +223,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.focusRegion == FocusFilter {
 			return model.handleFilterKeys(message)
 		}
+		// When detail search is active, route all input to the search.
+		if model.focusRegion == FocusDetailSearch {
+			return model.handleDetailSearchKeys(message)
+		}
 
 		switch {
 		case key.Matches(message, model.keys.Quit):
@@ -251,18 +263,33 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.switchTab(TabAll)
 
 		case key.Matches(message, model.keys.FilterActivate):
-			model.priorFocus = model.focusRegion
-			model.focusRegion = FocusFilter
-			model.filter.Active = true
-			model.updatePaneSizes()
+			if model.focusRegion == FocusDetail {
+				// In detail pane: activate detail search.
+				model.focusRegion = FocusDetailSearch
+				model.detailPane.search.Active = true
+				model.updatePaneSizes()
+			} else {
+				// In list pane (or anywhere else): activate list filter.
+				model.priorFocus = model.focusRegion
+				model.focusRegion = FocusFilter
+				model.filter.Active = true
+				// Reset list position to the top so the user sees
+				// results from the beginning as they type.
+				model.cursor = 0
+				model.scrollOffset = 0
+				model.updatePaneSizes()
+			}
 
 		case key.Matches(message, model.keys.NavigateBack):
 			model.navigateBack()
 
 		case key.Matches(message, model.keys.FilterClear):
-			if model.filter.Input != "" {
-				model.filter.Clear()
+			if model.focusRegion == FocusDetail && model.detailPane.search.Input != "" {
+				model.detailPane.search.Clear()
+				model.detailPane.applySearchHighlighting()
 				model.updatePaneSizes()
+			} else if model.filter.Input != "" {
+				model.filter.Clear()
 				model.refreshFromSource()
 			}
 
@@ -294,20 +321,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-// contentStartY returns the Y coordinate where the content area begins
-// (after the combined header-separator and optional filter bar).
+// contentStartY returns the Y coordinate where the content area
+// begins. The top chrome line is always exactly 1 row: either the
+// tab bar (normal) or the filter bar (when filter is active). The
+// filter bar replaces the tab bar rather than pushing content down.
 func (model Model) contentStartY() int {
-	start := 1 // header-separator always occupies line 0
-	if model.filterBarVisible() {
-		start++
-	}
-	return start
-}
-
-// filterBarVisible returns whether the filter bar occupies a line
-// in the layout (active filter input, or retained filter text).
-func (model Model) filterBarVisible() bool {
-	return model.filter.Active || model.filter.Input != ""
+	return 1
 }
 
 // handleMouse routes mouse events to the appropriate pane based on the
@@ -703,11 +722,7 @@ func (model Model) handleFilterKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case message.Type == tea.KeyEnter:
 		// Confirm filter and return focus to the list.
-		wasBarVisible := model.filterBarVisible()
 		model.filter.Active = false
-		if wasBarVisible != model.filterBarVisible() {
-			model.updatePaneSizes()
-		}
 		model.focusRegion = FocusList
 		return model, nil
 
@@ -717,11 +732,68 @@ func (model Model) handleFilterKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 
-	case message.Type == tea.KeyRunes:
+	case message.Type == tea.KeyRunes || message.Type == tea.KeySpace:
 		for _, r := range message.Runes {
 			model.filter.HandleRune(r)
 		}
 		model.applyFilter()
+		return model, nil
+	}
+
+	return model, nil
+}
+
+// handleDetailSearchKeys processes keystrokes when the detail search
+// input has focus. Follows the same pattern as handleFilterKeys:
+// regular characters go to the input, Esc clears/exits, Enter
+// confirms and returns to detail navigation.
+func (model Model) handleDetailSearchKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(message, model.keys.Quit):
+		if message.Type == tea.KeyCtrlC {
+			return model, tea.Quit
+		}
+		// 'q' is a regular character in search mode.
+		model.detailPane.search.HandleRune('q')
+		model.detailPane.applySearchHighlighting()
+		return model, nil
+
+	case key.Matches(message, model.keys.FilterClear):
+		// Esc: if there's search text, clear it and remove highlights;
+		// if already empty, exit search mode.
+		if model.detailPane.search.Input != "" {
+			model.detailPane.search.Clear()
+			model.detailPane.applySearchHighlighting()
+			model.updatePaneSizes()
+		} else {
+			model.detailPane.search.Active = false
+			model.updatePaneSizes()
+		}
+		model.focusRegion = FocusDetail
+		return model, nil
+
+	case message.Type == tea.KeyEnter:
+		// Confirm search and return to detail navigation.
+		model.detailPane.search.Active = false
+		model.updatePaneSizes()
+		model.focusRegion = FocusDetail
+		// Jump to the first match if the user just typed a query.
+		if model.detailPane.search.MatchCount() > 0 {
+			model.detailPane.ScrollToCurrentMatch()
+		}
+		return model, nil
+
+	case message.Type == tea.KeyBackspace:
+		if model.detailPane.search.HandleBackspace() {
+			model.detailPane.applySearchHighlighting()
+		}
+		return model, nil
+
+	case message.Type == tea.KeyRunes || message.Type == tea.KeySpace:
+		for _, character := range message.Runes {
+			model.detailPane.search.HandleRune(character)
+		}
+		model.detailPane.applySearchHighlighting()
 		return model, nil
 	}
 
@@ -734,11 +806,7 @@ func (model *Model) switchTab(tab Tab) {
 		return
 	}
 	model.activeTab = tab
-	hadFilter := model.filterBarVisible()
 	model.filter.Clear()
-	if hadFilter {
-		model.updatePaneSizes()
-	}
 	model.refreshFromSource()
 }
 
@@ -755,12 +823,22 @@ func (model *Model) refreshFromSource() {
 		snapshot = model.source.All()
 	}
 
-	model.entries = snapshot.Entries
 	model.stats = snapshot.Stats
 
 	// Apply filter if there's active filter text.
 	if model.filter.Input != "" {
-		model.entries = model.filter.Apply(model.entries, model.source)
+		results := model.filter.ApplyFuzzy(snapshot.Entries, model.source)
+		model.entries = make([]ticket.Entry, len(results))
+		model.filterHighlights = make(map[string][]int, len(results))
+		for index, result := range results {
+			model.entries[index] = result.Entry
+			if len(result.TitlePositions) > 0 {
+				model.filterHighlights[result.Entry.ID] = result.TitlePositions
+			}
+		}
+	} else {
+		model.entries = snapshot.Entries
+		model.filterHighlights = nil
 	}
 
 	model.rebuildItems()
@@ -781,11 +859,38 @@ func (model *Model) applyFilter() {
 		snapshot = model.source.All()
 	}
 
-	model.entries = model.filter.Apply(snapshot.Entries, model.source)
 	model.stats = snapshot.Stats
 
+	if model.filter.Input != "" {
+		results := model.filter.ApplyFuzzy(snapshot.Entries, model.source)
+		model.entries = make([]ticket.Entry, len(results))
+		model.filterHighlights = make(map[string][]int, len(results))
+		for index, result := range results {
+			model.entries[index] = result.Entry
+			if len(result.TitlePositions) > 0 {
+				model.filterHighlights[result.Entry.ID] = result.TitlePositions
+			}
+		}
+	} else {
+		model.entries = snapshot.Entries
+		model.filterHighlights = nil
+	}
+
 	model.rebuildItems()
-	model.restoreSelection()
+
+	// When actively filtering, snap to the top of the list so the
+	// highest-scored matches are visible as the user types. Without
+	// this, the scroll offset from the pre-filter list persists and
+	// the user sees an arbitrary slice of filtered results.
+	if model.filter.Input != "" {
+		model.cursor = 0
+		model.scrollOffset = 0
+		if len(model.items) > 0 && !model.items[0].IsHeader {
+			model.selectedID = model.items[0].Entry.ID
+		}
+	} else {
+		model.restoreSelection()
+	}
 	model.ensureCursorVisible()
 	model.syncDetailPane()
 }
@@ -1124,6 +1229,20 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 		model.detailPane.viewport.GotoTop()
 	case key.Matches(message, model.keys.End):
 		model.detailPane.viewport.GotoBottom()
+
+	// Search match navigation: only active when there's a search query.
+	case key.Matches(message, model.keys.SearchNext):
+		if model.detailPane.search.Input != "" {
+			model.detailPane.search.NextMatch()
+			model.detailPane.applySearchHighlighting()
+			model.detailPane.ScrollToCurrentMatch()
+		}
+	case key.Matches(message, model.keys.SearchPrevious):
+		if model.detailPane.search.Input != "" {
+			model.detailPane.search.PreviousMatch()
+			model.detailPane.applySearchHighlighting()
+			model.detailPane.ScrollToCurrentMatch()
+		}
 	}
 }
 
@@ -1244,13 +1363,13 @@ func (model Model) View() string {
 
 	var sections []string
 
-	// Combined tab bar + separator (single line).
-	sections = append(sections, model.renderHeader())
-
-	// Filter bar (if active or has text).
+	// Top chrome line: either the tab bar or the filter bar. The
+	// filter bar replaces the tab bar so the layout doesn't shift.
 	filterView := model.filter.View(model.theme, model.width)
 	if filterView != "" {
 		sections = append(sections, filterView)
+	} else {
+		sections = append(sections, model.renderHeader())
 	}
 
 	// Two-pane content area with vertical divider.
@@ -1305,7 +1424,7 @@ func (model Model) renderListPane() string {
 				ticketScore := model.source.Score(item.Entry.ID, now)
 				score = &ticketScore
 			}
-			row = renderer.RenderRow(item.Entry, selected, score)
+			row = renderer.RenderRow(item.Entry, selected, score, model.filterHighlights[item.Entry.ID])
 			// Apply heat tint for recently-changed tickets (selection
 			// highlight takes priority so we skip hot styling there).
 			if !selected {
@@ -1564,10 +1683,23 @@ func (model Model) renderHelp() string {
 		focusIndicator = "DETAIL"
 	case FocusFilter:
 		focusIndicator = "FILTER"
+	case FocusDetailSearch:
+		focusIndicator = "SEARCH"
 	}
 
 	help := fmt.Sprintf(" [%s] q quit  ↑↓ navigate  ←→ collapse/expand  BS back  Tab focus  ]/[ resize  1/2/3 tabs  / filter",
 		focusIndicator)
+
+	// Show search match hint when detail has an active search.
+	if model.focusRegion == FocusDetail && model.detailPane.search.Input != "" {
+		matchCount := model.detailPane.search.MatchCount()
+		if matchCount > 0 {
+			help += fmt.Sprintf("  n/N search (%d/%d)",
+				model.detailPane.search.CurrentIndex()+1, matchCount)
+		} else {
+			help += "  (no matches)"
+		}
+	}
 
 	totalItems := 0
 	for _, item := range model.items {

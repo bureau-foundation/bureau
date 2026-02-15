@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/transport"
@@ -67,6 +69,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 	inboundMux := http.NewServeMux()
 	inboundMux.HandleFunc("/http/", d.handleTransportInbound)
 	inboundMux.HandleFunc("/observe/", d.handleTransportObserve)
+	inboundMux.HandleFunc("/tunnel/", d.handleTransportTunnel)
 
 	go func() {
 		if err := webrtcTransport.Serve(ctx, inboundMux); err != nil {
@@ -122,8 +125,10 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 	return nil
 }
 
-// stopTransport shuts down the transport listener and relay socket.
+// stopTransport shuts down the transport listener, relay socket, and
+// any active tunnel socket.
 func (d *Daemon) stopTransport() {
+	d.stopTunnelSocket()
 	if d.transportListener != nil {
 		d.transportListener.Close()
 	}
@@ -461,6 +466,264 @@ func parseServiceFromPath(path string) (string, error) {
 		return "", fmt.Errorf("empty service name in path")
 	}
 	return parts[0], nil
+}
+
+// handleTransportTunnel handles tunnel requests arriving from peer daemons
+// over the transport listener. A peer daemon sends an HTTP POST to
+// /tunnel/<localpart> to establish a raw byte bridge to a service's Unix
+// socket on this machine. This is used for non-HTTP protocols (e.g., the
+// artifact service's length-prefixed CBOR wire protocol) that cannot be
+// reverse-proxied through the standard /http/ path.
+//
+// The handler:
+//   - Extracts the service localpart from the URL path
+//   - Connects to the service's Unix socket via principal.RunDirSocketPath
+//   - Hijacks the HTTP connection and clears deadlines
+//   - Writes a manual HTTP 200 response on the hijacked connection
+//   - Bridges bytes between the hijacked transport connection and the
+//     local service socket using netutil.BridgeConnections
+//
+// Authentication relies on the transport layer's mutual Ed25519 handshake
+// — only authenticated peer daemons can reach the inbound mux. The handler
+// does not perform additional authorization because it provides raw socket
+// access to a service already running on this machine; the service itself
+// handles authorization for its wire protocol.
+func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract localpart from path: /tunnel/<localpart>
+	serviceLocalpart := strings.TrimPrefix(r.URL.Path, "/tunnel/")
+	if serviceLocalpart == "" {
+		http.Error(w, "empty service localpart in path", http.StatusBadRequest)
+		return
+	}
+
+	// Connect to the local service's Unix socket.
+	socketPath := principal.RunDirSocketPath(d.runDir, serviceLocalpart)
+	serviceConnection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		d.logger.Error("tunnel: cannot connect to local service socket",
+			"localpart", serviceLocalpart,
+			"socket", socketPath,
+			"error", err,
+		)
+		http.Error(w, fmt.Sprintf("cannot connect to service %s: %v", serviceLocalpart, err), http.StatusBadGateway)
+		return
+	}
+
+	// Hijack the HTTP connection to switch to raw byte bridging.
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		serviceConnection.Close()
+		d.logger.Error("tunnel: response writer does not support hijacking")
+		http.Error(w, "server does not support connection hijacking", http.StatusInternalServerError)
+		return
+	}
+
+	transportConnection, transportBuffer, err := hijacker.Hijack()
+	if err != nil {
+		serviceConnection.Close()
+		d.logger.Error("tunnel: hijack failed", "error", err)
+		return
+	}
+
+	// Clear any read/write deadlines set by http.Server during Hijack.
+	// The server sets SetReadDeadline(aLongTimeAgo) to abort its internal
+	// background reader before returning the raw connection. Without
+	// clearing this, subsequent reads return os.ErrDeadlineExceeded
+	// immediately and the bridge dies in microseconds.
+	transportConnection.SetDeadline(time.Time{})
+
+	// Write the HTTP response manually on the hijacked connection.
+	fmt.Fprintf(transportBuffer, "HTTP/1.1 200 OK\r\n")
+	fmt.Fprintf(transportBuffer, "\r\n")
+	transportBuffer.Flush()
+
+	d.logger.Info("tunnel: bridging to local service",
+		"localpart", serviceLocalpart,
+		"socket", socketPath,
+	)
+
+	if err := netutil.BridgeConnections(transportConnection, serviceConnection); err != nil {
+		d.logger.Warn("tunnel: bridge error",
+			"localpart", serviceLocalpart,
+			"error", err,
+		)
+	}
+
+	d.logger.Debug("tunnel: connection closed",
+		"localpart", serviceLocalpart,
+	)
+}
+
+// startTunnelSocket creates a local Unix socket that bridges each accepted
+// connection to a remote service via the daemon-to-daemon transport. The
+// local artifact service connects to this socket as its "upstream"; each
+// connection is dialed through the transport to the remote peer's
+// /tunnel/<localpart> handler and bytes are bridged bidirectionally.
+//
+// Each artifact client connection (one per action: exists, fetch, etc.)
+// becomes one transport data channel. This maps naturally to the
+// transport's one-data-channel-per-dial model. No persistent tunnel, no
+// multiplexing.
+//
+// Stops any previously running tunnel socket before creating a new one.
+func (d *Daemon) startTunnelSocket(serviceLocalpart, peerAddress, tunnelSocketPath string) error {
+	// Stop any existing tunnel socket (idempotent).
+	d.stopTunnelSocket()
+
+	if err := os.MkdirAll(filepath.Dir(tunnelSocketPath), 0755); err != nil {
+		return fmt.Errorf("creating tunnel socket directory: %w", err)
+	}
+	if err := os.Remove(tunnelSocketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing existing tunnel socket: %w", err)
+	}
+
+	listener, err := net.Listen("unix", tunnelSocketPath)
+	if err != nil {
+		return fmt.Errorf("creating tunnel socket at %s: %w", tunnelSocketPath, err)
+	}
+
+	if err := os.Chmod(tunnelSocketPath, 0660); err != nil {
+		listener.Close()
+		os.Remove(tunnelSocketPath)
+		return fmt.Errorf("setting tunnel socket permissions: %w", err)
+	}
+
+	tunnelContext, tunnelCancel := context.WithCancel(context.Background())
+	d.tunnelListener = listener
+	d.tunnelSocketPath = tunnelSocketPath
+	d.tunnelCancel = tunnelCancel
+
+	go d.tunnelAcceptLoop(tunnelContext, listener, serviceLocalpart, peerAddress)
+
+	d.logger.Info("tunnel socket started",
+		"socket", tunnelSocketPath,
+		"remote_localpart", serviceLocalpart,
+		"peer_address", peerAddress,
+	)
+	return nil
+}
+
+// tunnelAcceptLoop accepts connections on the tunnel socket and bridges each
+// to the remote service. Each connection is handled in its own goroutine:
+// dial the peer via transport, send HTTP POST to /tunnel/<localpart>, read
+// the 200 OK response, then bridge bytes.
+func (d *Daemon) tunnelAcceptLoop(ctx context.Context, listener net.Listener, serviceLocalpart, peerAddress string) {
+	for {
+		localConnection, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return // Shutdown requested.
+			}
+			d.logger.Error("tunnel: accept error", "error", err)
+			return
+		}
+		go d.handleTunnelConnection(ctx, localConnection, serviceLocalpart, peerAddress)
+	}
+}
+
+// handleTunnelConnection bridges a single connection from the local artifact
+// service to the remote shared cache service. It dials the peer daemon via
+// the transport, performs an HTTP POST handshake on /tunnel/<localpart>,
+// reads the 200 OK, and bridges bytes until either side closes.
+func (d *Daemon) handleTunnelConnection(ctx context.Context, localConnection net.Conn, serviceLocalpart, peerAddress string) {
+	// Dial the remote daemon via the transport layer.
+	dialContext, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer dialCancel()
+
+	if d.transportDialer == nil {
+		d.logger.Error("tunnel: no transport dialer available")
+		localConnection.Close()
+		return
+	}
+
+	transportConnection, err := d.transportDialer.DialContext(dialContext, peerAddress)
+	if err != nil {
+		d.logger.Error("tunnel: failed to dial peer",
+			"peer_address", peerAddress,
+			"error", err,
+		)
+		localConnection.Close()
+		return
+	}
+
+	// Send HTTP POST to /tunnel/<localpart> on the remote daemon.
+	httpRequest, err := http.NewRequest("POST",
+		"http://transport/tunnel/"+serviceLocalpart, nil)
+	if err != nil {
+		transportConnection.Close()
+		localConnection.Close()
+		d.logger.Error("tunnel: failed to build request", "error", err)
+		return
+	}
+	if err := httpRequest.Write(transportConnection); err != nil {
+		transportConnection.Close()
+		localConnection.Close()
+		d.logger.Error("tunnel: failed to send request to peer",
+			"peer_address", peerAddress,
+			"error", err,
+		)
+		return
+	}
+
+	// Read the HTTP response. The bufio.Reader may read ahead past the
+	// HTTP headers — we preserve those bytes via bufferedConn for the
+	// bridge.
+	bufferedReader := bufio.NewReader(transportConnection)
+	httpResponse, err := http.ReadResponse(bufferedReader, httpRequest)
+	if err != nil {
+		transportConnection.Close()
+		localConnection.Close()
+		d.logger.Error("tunnel: failed to read peer response",
+			"peer_address", peerAddress,
+			"error", err,
+		)
+		return
+	}
+	httpResponse.Body.Close()
+
+	if httpResponse.StatusCode != http.StatusOK {
+		transportConnection.Close()
+		localConnection.Close()
+		d.logger.Error("tunnel: peer returned error",
+			"peer_address", peerAddress,
+			"status", httpResponse.StatusCode,
+		)
+		return
+	}
+
+	// Bridge bytes between the local artifact service and the remote
+	// shared cache. Use bufferedConn to include any bytes the
+	// bufio.Reader read ahead beyond the HTTP response headers.
+	peerConnection := &bufferedConn{reader: bufferedReader, Conn: transportConnection}
+	if err := netutil.BridgeConnections(localConnection, peerConnection); err != nil {
+		d.logger.Warn("tunnel: bridge error",
+			"remote_localpart", serviceLocalpart,
+			"peer_address", peerAddress,
+			"error", err,
+		)
+	}
+}
+
+// stopTunnelSocket shuts down the tunnel accept loop and removes the
+// tunnel Unix socket. Safe to call when no tunnel is active.
+func (d *Daemon) stopTunnelSocket() {
+	if d.tunnelCancel != nil {
+		d.tunnelCancel()
+		d.tunnelCancel = nil
+	}
+	if d.tunnelListener != nil {
+		d.tunnelListener.Close()
+		d.tunnelListener = nil
+	}
+	if d.tunnelSocketPath != "" {
+		os.Remove(d.tunnelSocketPath)
+		d.tunnelSocketPath = ""
+	}
 }
 
 // peerAuthenticator implements transport.PeerAuthenticator using the

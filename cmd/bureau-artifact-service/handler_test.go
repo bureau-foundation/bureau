@@ -5,11 +5,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // testClockEpoch is the fixed time used by the fake clock in artifact
@@ -1794,6 +1798,242 @@ func TestAuthRevokedToken(t *testing.T) {
 	}
 	if !strings.Contains(errResp.Error, "revoked") {
 		t.Errorf("error = %q, want contains 'revoked'", errResp.Error)
+	}
+}
+
+// --- Upstream fallthrough tests ---
+
+// startUpstreamService creates a second ArtifactService and starts it
+// listening on a Unix socket. Returns the service instance (for
+// storing artifacts directly) and the socket path. The listener is
+// shut down via t.Cleanup.
+func startUpstreamService(t *testing.T, socketPath string) *ArtifactService {
+	t.Helper()
+
+	upstream := testService(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Remove any stale socket before listening.
+	os.Remove(socketPath)
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("upstream listen: %v", err)
+	}
+	t.Cleanup(func() {
+		listener.Close()
+		os.Remove(socketPath)
+	})
+
+	// Unblock Accept when the context is cancelled.
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go upstream.handleConnection(ctx, conn)
+		}
+	}()
+
+	return upstream
+}
+
+func TestFetchFallthroughToUpstream(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	// Start the upstream artifact service.
+	upstream := startUpstreamService(t, upstreamSocketPath)
+
+	// Store an artifact in the upstream.
+	content := []byte("content only in upstream")
+	upstreamRef := storeTestArtifact(t, upstream, content, "text/plain")
+
+	// Create the local service with the upstream configured.
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	// Fetch from the local service. It should miss locally, fall
+	// through to the upstream, fetch the content, re-store locally,
+	// and return the content.
+	conn, wait := startHandler(t, local)
+
+	request := &artifact.FetchRequest{
+		Action: "fetch",
+		Ref:    upstreamRef,
+	}
+	if err := artifact.WriteMessage(conn, request); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.FetchResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if !bytes.Equal(response.Data, content) {
+		t.Errorf("fetched content = %q, want %q", string(response.Data), string(content))
+	}
+	if response.ContentType != "text/plain" {
+		t.Errorf("content_type = %q, want 'text/plain'", response.ContentType)
+	}
+
+	// Verify the content was stored locally (second fetch should
+	// not require upstream).
+	local.upstreamSocket = "" // remove upstream
+	conn2, wait2 := startHandler(t, local)
+
+	if err := artifact.WriteMessage(conn2, request); err != nil {
+		t.Fatal(err)
+	}
+
+	var response2 artifact.FetchResponse
+	if err := artifact.ReadMessage(conn2, &response2); err != nil {
+		t.Fatal(err)
+	}
+	wait2()
+
+	if !bytes.Equal(response2.Data, content) {
+		t.Error("second fetch (from local store) returned different content")
+	}
+}
+
+func TestFetchFallthroughByFullHash(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	upstream := startUpstreamService(t, upstreamSocketPath)
+
+	content := []byte("upstream fetch by hash")
+	storeTestArtifact(t, upstream, content, "text/plain")
+
+	// Get the full hash.
+	hash := getStoredHash(t, upstream, content)
+	fullHash := artifact.FormatHash(hash)
+
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	conn, wait := startHandler(t, local)
+
+	request := &artifact.FetchRequest{
+		Action: "fetch",
+		Ref:    fullHash,
+	}
+	if err := artifact.WriteMessage(conn, request); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.FetchResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if !bytes.Equal(response.Data, content) {
+		t.Error("fetched content via full hash does not match")
+	}
+}
+
+func TestFetchFallthroughTagsNeverForwarded(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	upstream := startUpstreamService(t, upstreamSocketPath)
+
+	content := []byte("upstream tagged content")
+	storeTestArtifact(t, upstream, content, "text/plain")
+	hash := getStoredHash(t, upstream, content)
+	upstream.tagStore.Set("upstream/tag", hash, nil, true, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	conn, wait := startHandler(t, local)
+
+	// Fetch by tag name — should NOT fall through to upstream because
+	// tags are local to each service instance.
+	request := &artifact.FetchRequest{
+		Action: "fetch",
+		Ref:    "upstream/tag",
+	}
+	if err := artifact.WriteMessage(conn, request); err != nil {
+		t.Fatal(err)
+	}
+
+	var errResp artifact.ErrorResponse
+	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if errResp.Error == "" {
+		t.Error("expected error when fetching by tag name (tags should not be forwarded)")
+	}
+}
+
+func TestExistsFallthroughToUpstream(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	upstream := startUpstreamService(t, upstreamSocketPath)
+
+	content := []byte("exists in upstream only")
+	upstreamRef := storeTestArtifact(t, upstream, content, "text/plain")
+
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	conn, wait := startHandler(t, local)
+
+	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: upstreamRef}); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.ExistsResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if !response.Exists {
+		t.Error("expected exists = true from upstream fallthrough")
+	}
+}
+
+func TestExistsFallthroughMiss(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	startUpstreamService(t, upstreamSocketPath)
+
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	conn, wait := startHandler(t, local)
+
+	// Check a ref that doesn't exist anywhere.
+	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: "art-000000000000"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.ExistsResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if response.Exists {
+		t.Error("expected exists = false when ref doesn't exist in either local or upstream")
 	}
 }
 

@@ -6,15 +6,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // syncServiceDirectory fetches all m.bureau.service state events from the
@@ -552,6 +557,237 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, se
 	// the proxy restarted and lost its in-memory state).
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	return nil
+}
+
+// discoverSharedCache looks for an "artifact-cache" room service
+// binding in #bureau/service. If found, resolves the shared cache
+// service principal to a socket path and pushes the upstream
+// configuration to the local artifact service.
+//
+// For local shared caches (same machine): derives the socket path
+// from the principal's localpart. For remote shared caches (different
+// machine): creates a transport tunnel socket that bridges connections
+// to the remote service.
+func (d *Daemon) discoverSharedCache(ctx context.Context) {
+	content, err := d.session.GetStateEvent(ctx, d.serviceRoomID, schema.EventTypeRoomService, "artifact-cache")
+	if err != nil {
+		// No artifact-cache binding is normal — not all fleets have
+		// a shared cache. Only log at debug level.
+		d.logger.Debug("no artifact-cache binding in service room",
+			"error", err,
+		)
+		return
+	}
+
+	var binding schema.RoomServiceContent
+	if err := json.Unmarshal(content, &binding); err != nil {
+		d.logger.Error("failed to parse artifact-cache binding",
+			"error", err,
+		)
+		return
+	}
+
+	if binding.Principal == "" {
+		d.logger.Debug("artifact-cache binding has empty principal, clearing upstream")
+		d.stopTunnelSocket()
+		d.pushUpstreamConfig(ctx, "")
+		return
+	}
+
+	// Look up the service in the directory to find which machine
+	// runs it.
+	cacheLocalpart, err := principal.LocalpartFromMatrixID(binding.Principal)
+	if err != nil {
+		d.logger.Error("invalid shared cache principal",
+			"principal", binding.Principal,
+			"error", err,
+		)
+		return
+	}
+
+	cacheService, exists := d.services[cacheLocalpart]
+	if !exists {
+		d.logger.Warn("artifact-cache binding references unknown service",
+			"principal", binding.Principal,
+			"localpart", cacheLocalpart,
+		)
+		return
+	}
+
+	if cacheService.Machine == d.machineUserID {
+		// Local shared cache: derive socket path directly. Stop any
+		// existing tunnel socket from a previous remote cache.
+		d.stopTunnelSocket()
+		socketPath := principal.RunDirSocketPath(d.runDir, cacheLocalpart)
+		d.logger.Info("discovered local shared cache",
+			"principal", binding.Principal,
+			"socket", socketPath,
+		)
+		d.pushUpstreamConfig(ctx, socketPath)
+	} else {
+		// Remote shared cache: create a transport tunnel socket that
+		// bridges connections to the remote service via the transport.
+		if d.transportDialer == nil {
+			d.logger.Warn("discovered remote shared cache but transport is not configured",
+				"principal", binding.Principal,
+				"machine", cacheService.Machine,
+			)
+			return
+		}
+
+		peerAddress, ok := d.peerAddresses[cacheService.Machine]
+		if !ok || peerAddress == "" {
+			d.logger.Warn("discovered remote shared cache but no transport address for its machine",
+				"principal", binding.Principal,
+				"machine", cacheService.Machine,
+			)
+			return
+		}
+
+		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "artifact-cache.sock")
+		if err := d.startTunnelSocket(cacheLocalpart, peerAddress, tunnelSocketPath); err != nil {
+			d.logger.Error("failed to start tunnel socket for shared cache",
+				"principal", binding.Principal,
+				"peer_address", peerAddress,
+				"error", err,
+			)
+			return
+		}
+
+		d.logger.Info("discovered remote shared cache, tunnel started",
+			"principal", binding.Principal,
+			"machine", cacheService.Machine,
+			"peer_address", peerAddress,
+			"tunnel_socket", tunnelSocketPath,
+		)
+		d.pushUpstreamConfig(ctx, tunnelSocketPath)
+	}
+}
+
+// pushUpstreamConfig signs an upstream configuration message and
+// pushes it to the local artifact service. The artifact service
+// verifies the signature against the daemon's public key.
+//
+// An empty socketPath means "clear the upstream" — the artifact
+// service will stop forwarding cache misses.
+func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
+	// Find the local artifact service socket. Search the service
+	// directory for a local service with the "artifact" capability.
+	var artifactSocketPath string
+	for localpart, svc := range d.services {
+		if svc.Machine != d.machineUserID {
+			continue
+		}
+		for _, cap := range svc.Capabilities {
+			if cap == "content-addressed-store" {
+				artifactSocketPath = principal.RunDirSocketPath(d.runDir, localpart)
+				break
+			}
+		}
+		if artifactSocketPath != "" {
+			break
+		}
+	}
+	if artifactSocketPath == "" {
+		d.logger.Debug("no local artifact service found to push upstream config to")
+		return
+	}
+
+	config := &servicetoken.UpstreamConfig{
+		UpstreamSocket: socketPath,
+		IssuedAt:       d.clock.Now().Unix(),
+	}
+
+	signed, err := servicetoken.SignUpstreamConfig(d.tokenSigningPrivateKey, config)
+	if err != nil {
+		d.logger.Error("failed to sign upstream config",
+			"upstream_socket", socketPath,
+			"error", err,
+		)
+		return
+	}
+
+	if err := artifactServiceCall(artifactSocketPath, map[string]any{
+		"action":        "set-upstream",
+		"signed_config": signed,
+	}, nil); err != nil {
+		d.logger.Warn("failed to push upstream config to artifact service",
+			"artifact_socket", artifactSocketPath,
+			"upstream_socket", socketPath,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("pushed upstream config to artifact service",
+		"artifact_socket", artifactSocketPath,
+		"upstream_socket", socketPath,
+	)
+}
+
+// artifactServiceCall sends a CBOR message to the artifact service
+// over its Unix socket using the artifact wire protocol (4-byte
+// uint32 big-endian length prefix + CBOR bytes). This is separate
+// from the standard lib/service.ServiceClient which uses bare CBOR
+// with a Response{OK, Error, Data} envelope — the artifact service
+// uses a different protocol because artifact transfers interleave
+// CBOR messages with raw binary streams.
+//
+// The request is a map of fields that will be CBOR-encoded. The
+// response is decoded into result (if non-nil). Returns an error if
+// the response contains an "error" field (artifact ErrorResponse).
+func artifactServiceCall(socketPath string, request map[string]any, result any) error {
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("connecting to artifact service at %s: %w", socketPath, err)
+	}
+	defer conn.Close()
+
+	// Encode and write the length-prefixed CBOR request.
+	requestBytes, err := codec.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("encoding request: %w", err)
+	}
+	var lengthPrefix [4]byte
+	binary.BigEndian.PutUint32(lengthPrefix[:], uint32(len(requestBytes)))
+	if _, err := conn.Write(lengthPrefix[:]); err != nil {
+		return fmt.Errorf("writing request length: %w", err)
+	}
+	if _, err := conn.Write(requestBytes); err != nil {
+		return fmt.Errorf("writing request body: %w", err)
+	}
+
+	// Read the length-prefixed CBOR response.
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	var responseLength [4]byte
+	if _, err := io.ReadFull(conn, responseLength[:]); err != nil {
+		return fmt.Errorf("reading response length: %w", err)
+	}
+	length := binary.BigEndian.Uint32(responseLength[:])
+	if length > 64*1024 {
+		return fmt.Errorf("response size %d exceeds maximum", length)
+	}
+	responseBytes := make([]byte, length)
+	if _, err := io.ReadFull(conn, responseBytes); err != nil {
+		return fmt.Errorf("reading response body: %w", err)
+	}
+
+	// Check for error response.
+	var errorResponse struct {
+		Error string `json:"error"`
+	}
+	if err := codec.Unmarshal(responseBytes, &errorResponse); err == nil && errorResponse.Error != "" {
+		return fmt.Errorf("artifact service error: %s", errorResponse.Error)
+	}
+
+	// Decode into result if provided.
+	if result != nil {
+		if err := codec.Unmarshal(responseBytes, result); err != nil {
+			return fmt.Errorf("decoding response: %w", err)
+		}
 	}
 
 	return nil

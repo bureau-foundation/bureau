@@ -610,6 +610,21 @@ type Daemon struct {
 	// relayServer serves HTTP on the relay socket.
 	relayServer *http.Server
 
+	// tunnelSocketPath is the Unix socket where the tunnel listener
+	// accepts connections from the local artifact service and bridges
+	// them to a remote shared cache via the transport. Created by
+	// startTunnelSocket when a remote shared cache is discovered,
+	// removed by stopTunnelSocket on shutdown or cache change.
+	tunnelSocketPath string
+
+	// tunnelListener accepts connections on tunnelSocketPath. Each
+	// accepted connection is dialed through the transport to the
+	// remote peer's /tunnel/<localpart> handler and bridged.
+	tunnelListener net.Listener
+
+	// tunnelCancel stops the tunnel accept loop goroutine.
+	tunnelCancel context.CancelFunc
+
 	// peerAddresses maps machine user IDs to their transport addresses,
 	// populated from MachineStatus state events in #bureau/machine.
 	// Used by the relay handler to find where to forward requests.

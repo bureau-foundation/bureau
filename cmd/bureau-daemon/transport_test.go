@@ -515,3 +515,234 @@ func TestCrossTransportRouting(t *testing.T) {
 		t.Errorf("response body = %q, expected backend to receive /v1/transcribe", string(body))
 	}
 }
+
+func TestTransportTunnel(t *testing.T) {
+	// Integration test: a raw byte connection travels through the
+	// tunnel mechanism:
+	//
+	//   local client -> tunnel socket -> transport -> /tunnel/ handler -> service socket -> echo server
+	//
+	// The "service" is an echo server on a Unix socket. The tunnel
+	// handler on the inbound side connects to it and bridges. The
+	// tunnel socket on the outbound side accepts local connections,
+	// dials the peer, and bridges.
+	//
+	// This tests the full tunnel roundtrip with actual network
+	// connections (TCP transport, Unix sockets).
+
+	socketDir := testutil.SocketDir(t)
+
+	// 1. Start an echo server on a Unix socket. This simulates the
+	// artifact service or any non-HTTP service.
+	serviceLocalpart := "service/artifact/shared-cache"
+	serviceSocketPath := filepath.Join(socketDir, "service.sock")
+	serviceListener, err := net.Listen("unix", serviceSocketPath)
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	defer serviceListener.Close()
+
+	go func() {
+		for {
+			conn, err := serviceListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(connection net.Conn) {
+				defer connection.Close()
+				io.Copy(connection, connection) // echo
+			}(conn)
+		}
+	}()
+
+	// 2. Set up the "provider daemon" (machine hosting the shared cache)
+	// with a /tunnel/ handler on a TCP listener.
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.machineUserID = "@machine/cache-server:bureau.local"
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// The tunnel handler uses principal.RunDirSocketPath to derive
+	// the service socket from localpart. Override runDir so it finds
+	// our test socket. RunDirSocketPath returns runDir + "/principal/" +
+	// localpart + ".sock". We need to make sure our echo server is at
+	// that path.
+	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+
+	// Create the directory structure and symlink (or just re-listen).
+	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Close the original listener and re-listen at the RunDir path.
+	serviceListener.Close()
+	serviceListener, err = net.Listen("unix", serviceSocketViaRunDir)
+	if err != nil {
+		t.Fatalf("re-listen: %v", err)
+	}
+	defer serviceListener.Close()
+
+	go func() {
+		for {
+			conn, err := serviceListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(connection net.Conn) {
+				defer connection.Close()
+				io.Copy(connection, connection) // echo
+			}(conn)
+		}
+	}()
+
+	inboundMux := http.NewServeMux()
+	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
+
+	transportListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("transport Listen() error: %v", err)
+	}
+	defer transportListener.Close()
+
+	transportServer := &http.Server{Handler: inboundMux}
+	go transportServer.Serve(transportListener)
+	defer transportServer.Close()
+
+	peerAddress := transportListener.Addr().String()
+
+	// 3. Set up the "consumer daemon" (machine that wants the shared cache).
+	consumerDaemon, _ := newTestDaemon(t)
+	consumerDaemon.runDir = socketDir
+	consumerDaemon.machineUserID = "@machine/workstation:bureau.local"
+	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	consumerDaemon.transportDialer = &testTCPDialer{}
+
+	// 4. Start the tunnel socket.
+	tunnelSocketPath := filepath.Join(socketDir, "tunnel.sock")
+	if err := consumerDaemon.startTunnelSocket(serviceLocalpart, peerAddress, tunnelSocketPath); err != nil {
+		t.Fatalf("startTunnelSocket: %v", err)
+	}
+	defer consumerDaemon.stopTunnelSocket()
+
+	// 5. Connect to the tunnel socket and verify echo.
+	tunnelConnection, err := net.DialTimeout("unix", tunnelSocketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel socket: %v", err)
+	}
+	defer tunnelConnection.Close()
+
+	message := []byte("hello through the tunnel")
+	if _, err := tunnelConnection.Write(message); err != nil {
+		t.Fatalf("write to tunnel: %v", err)
+	}
+
+	// Read the echoed response. SetReadDeadline is a net.Conn I/O
+	// deadline — wall clock is correct here.
+	response := make([]byte, len(message))
+	tunnelConnection.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+	if _, err := io.ReadFull(tunnelConnection, response); err != nil {
+		t.Fatalf("read from tunnel: %v", err)
+	}
+
+	if string(response) != string(message) {
+		t.Errorf("echoed response = %q, want %q", string(response), string(message))
+	}
+}
+
+func TestTransportTunnel_InvalidMethod(t *testing.T) {
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tunnel/", daemon.handleTransportTunnel)
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener)
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get("http://" + listener.Addr().String() + "/tunnel/some-service")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", response.StatusCode)
+	}
+}
+
+func TestTransportTunnel_EmptyLocalpart(t *testing.T) {
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tunnel/", daemon.handleTransportTunnel)
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener)
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	request, _ := http.NewRequest("POST", "http://"+listener.Addr().String()+"/tunnel/", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", response.StatusCode)
+	}
+}
+
+func TestTransportTunnel_ServiceNotFound(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = socketDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tunnel/", daemon.handleTransportTunnel)
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener)
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	request, _ := http.NewRequest("POST", "http://"+listener.Addr().String()+"/tunnel/nonexistent-service", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer response.Body.Close()
+
+	// Should get 502 because the service socket doesn't exist.
+	if response.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", response.StatusCode)
+	}
+}
+
+func TestStopTunnelSocket_Idempotent(t *testing.T) {
+	daemon, _ := newTestDaemon(t)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Calling stopTunnelSocket when no tunnel is active should not panic.
+	daemon.stopTunnelSocket()
+	daemon.stopTunnelSocket()
+}

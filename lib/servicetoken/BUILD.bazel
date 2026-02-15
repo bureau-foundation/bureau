@@ -11,6 +11,7 @@ go_library(
         "keypair.go",
         "revocation.go",
         "token.go",
+        "upstream.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/servicetoken",
     visibility = ["//visibility:public"],
@@ -27,6 +28,7 @@ go_test(
         "keypair_test.go",
         "revocation_test.go",
         "token_test.go",
+        "upstream_test.go",
     ],
     embed = [":servicetoken"],
 )

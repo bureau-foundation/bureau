@@ -42,5 +42,6 @@ go_test(
         "//lib/clock",
         "//lib/service",
         "//lib/servicetoken",
+        "//lib/testutil",
     ],
 )

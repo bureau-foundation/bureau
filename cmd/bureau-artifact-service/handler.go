@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -191,6 +192,8 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 			return
 		}
 		as.handleCacheStatus(ctx, conn, raw)
+	case "set-upstream":
+		as.handleSetUpstream(conn, raw)
 	case "revoke-tokens":
 		as.handleRevokeTokens(conn, raw)
 	case "status":
@@ -339,8 +342,21 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 	// Resolve the reference to a full hash.
 	fileHash, err := as.resolveRef(request.Ref)
 	if err != nil {
-		as.writeError(conn, err.Error())
-		return
+		// Local miss. If an upstream is configured and the ref is
+		// eligible for forwarding, fetch from the upstream, store
+		// locally, then serve from the local store.
+		if as.isUpstreamRef(request.Ref) {
+			if upstreamHash, ok := as.fetchFromUpstream(ctx, conn, request.Ref); ok {
+				fileHash = upstreamHash
+			} else {
+				// fetchFromUpstream already wrote an error or
+				// response to conn.
+				return
+			}
+		} else {
+			as.writeError(conn, err.Error())
+			return
+		}
 	}
 
 	// Load metadata for content_type, filename.
@@ -452,7 +468,18 @@ func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw 
 
 	fileHash, err := as.resolveRef(request.Ref)
 	if err != nil {
-		// Not found is a valid "false" result for exists, not an error.
+		// Local miss. Check upstream if configured and ref is eligible.
+		if as.isUpstreamRef(request.Ref) {
+			upstreamSocket := as.getUpstreamSocket()
+			if upstreamSocket != "" {
+				upstream := artifact.NewClientFromToken(upstreamSocket, nil)
+				upstreamResult, upstreamErr := upstream.Exists(ctx, request.Ref)
+				if upstreamErr == nil && upstreamResult.Exists {
+					as.writeResult(conn, *upstreamResult)
+					return
+				}
+			}
+		}
 		as.writeResult(conn, artifact.ExistsResponse{Exists: false})
 		return
 	}
@@ -1106,6 +1133,163 @@ func (as *ArtifactService) handleRevokeTokens(conn net.Conn, raw []byte) {
 	)
 
 	as.writeResult(conn, map[string]bool{"ok": true})
+}
+
+// --- Upstream (shared cache) ---
+
+// handleSetUpstream processes a signed upstream configuration update
+// from the daemon. Verifies the signature using the daemon's public
+// key (from authConfig) and updates the upstream socket path.
+// This is an unauthenticated action — the signed configuration blob
+// itself is the authentication.
+func (as *ArtifactService) handleSetUpstream(conn net.Conn, raw []byte) {
+	if as.authConfig == nil {
+		as.writeError(conn, "set-upstream requires auth config")
+		return
+	}
+
+	var envelope struct {
+		SignedConfig []byte `cbor:"signed_config"`
+	}
+	if err := codec.Unmarshal(raw, &envelope); err != nil {
+		as.writeError(conn, fmt.Sprintf("decoding set-upstream envelope: %v", err))
+		return
+	}
+	if envelope.SignedConfig == nil {
+		as.writeError(conn, "missing required field: signed_config")
+		return
+	}
+
+	config, err := servicetoken.VerifyUpstreamConfig(as.authConfig.PublicKey, envelope.SignedConfig)
+	if err != nil {
+		as.logger.Warn("upstream config verification failed", "error", err)
+		as.writeError(conn, "upstream config verification failed")
+		return
+	}
+
+	as.upstreamMu.Lock()
+	previousSocket := as.upstreamSocket
+	as.upstreamSocket = config.UpstreamSocket
+	as.upstreamMu.Unlock()
+
+	if config.UpstreamSocket == "" {
+		as.logger.Info("upstream cleared",
+			"previous", previousSocket,
+		)
+	} else {
+		as.logger.Info("upstream configured",
+			"socket", config.UpstreamSocket,
+			"previous", previousSocket,
+			"issued_at", config.IssuedAt,
+		)
+	}
+
+	as.writeResult(conn, map[string]bool{"ok": true})
+}
+
+// getUpstreamSocket returns the current upstream socket path, or empty
+// string if no upstream is configured. Thread-safe.
+func (as *ArtifactService) getUpstreamSocket() string {
+	as.upstreamMu.RLock()
+	defer as.upstreamMu.RUnlock()
+	return as.upstreamSocket
+}
+
+// isUpstreamRef returns true if the ref format is eligible for upstream
+// forwarding. Only hash-format (64 hex chars) and short-ref-format
+// (art-<hex>) refs are forwarded. Tags are local to each service
+// instance — forwarding tag resolution would cause confusing
+// cross-instance name collisions.
+func (as *ArtifactService) isUpstreamRef(ref string) bool {
+	if as.getUpstreamSocket() == "" {
+		return false
+	}
+	// Full 64-char hex hash.
+	if len(ref) == 64 {
+		return true
+	}
+	// Short ref: art-<12 hex>.
+	if strings.HasPrefix(ref, "art-") {
+		return true
+	}
+	return false
+}
+
+// fetchFromUpstream fetches an artifact from the upstream shared cache,
+// stores it locally, and returns the local file hash. On success,
+// returns the hash and true. On failure, writes an error to conn and
+// returns false.
+//
+// The re-store approach fetches the full content and writes it through
+// the local store's normal CDC+compression pipeline. CDC is
+// deterministic, so identical containers are produced and deduplicated.
+func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn, ref string) (artifact.Hash, bool) {
+	upstreamSocket := as.getUpstreamSocket()
+	if upstreamSocket == "" {
+		as.writeError(conn, fmt.Sprintf("artifact %s not found", ref))
+		return artifact.Hash{}, false
+	}
+
+	upstream := artifact.NewClientFromToken(upstreamSocket, nil)
+	result, err := upstream.Fetch(ctx, ref)
+	if err != nil {
+		as.writeError(conn, fmt.Sprintf("artifact %s not found locally; upstream fetch failed: %v", ref, err))
+		return artifact.Hash{}, false
+	}
+	defer result.Content.Close()
+
+	// Read the full content from the upstream.
+	content, err := io.ReadAll(result.Content)
+	if err != nil {
+		as.writeError(conn, fmt.Sprintf("reading upstream content for %s: %v", ref, err))
+		return artifact.Hash{}, false
+	}
+
+	// Store locally through the standard write pipeline.
+	as.writeMu.Lock()
+	storeResult, err := as.store.WriteContent(content, result.Response.ContentType)
+	if err != nil {
+		as.writeMu.Unlock()
+		as.writeError(conn, fmt.Sprintf("storing upstream artifact %s locally: %v", ref, err))
+		return artifact.Hash{}, false
+	}
+
+	// Persist metadata. We carry forward the content type and filename
+	// from the upstream response. Other fields (labels, description,
+	// cache policy) are not available from the fetch response — they
+	// belong to the upstream's metadata and are not part of the wire
+	// protocol. The local copy gets minimal metadata reflecting its
+	// origin as a cache fill.
+	meta := &artifact.ArtifactMetadata{
+		FileHash:       storeResult.FileHash,
+		Ref:            storeResult.Ref,
+		ContentType:    result.Response.ContentType,
+		Filename:       result.Response.Filename,
+		Size:           storeResult.Size,
+		ChunkCount:     storeResult.ChunkCount,
+		ContainerCount: storeResult.ContainerCount,
+		Compression:    storeResult.Compression.String(),
+		StoredAt:       as.clock.Now(),
+	}
+	if err := as.metadataStore.Write(meta); err != nil {
+		as.writeMu.Unlock()
+		as.writeError(conn, fmt.Sprintf("persisting metadata for upstream artifact %s: %v", ref, err))
+		return artifact.Hash{}, false
+	}
+
+	as.refIndex.Add(storeResult.FileHash)
+	as.artifactIndex.Put(*meta)
+	as.writeMu.Unlock()
+
+	as.logger.Info("artifact fetched from upstream and stored locally",
+		"ref", storeResult.Ref,
+		"upstream", upstreamSocket,
+		"size", storeResult.Size,
+		"chunks", storeResult.ChunkCount,
+		"containers", storeResult.ContainerCount,
+	)
+
+	return storeResult.FileHash, true
 }
 
 // writeError sends an ErrorResponse to the client.

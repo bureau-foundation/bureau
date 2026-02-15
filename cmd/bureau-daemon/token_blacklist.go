@@ -126,15 +126,30 @@ func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens [
 		// Send as an unauthenticated client — the signed blob itself
 		// is the authentication (verified against the daemon's public
 		// key on the service side).
-		client := service.NewServiceClientFromToken(socketPath, nil)
-		if err := client.Call(ctx, "revoke-tokens", map[string]any{
+		//
+		// The artifact service uses a different wire protocol
+		// (length-prefixed CBOR) from the standard service socket
+		// protocol (bare CBOR with Response envelope). Use the
+		// correct caller for each.
+		revocationPayload := map[string]any{
+			"action":     "revoke-tokens",
 			"revocation": signed,
-		}, nil); err != nil {
+		}
+		var pushErr error
+		if role == "artifact" {
+			pushErr = artifactServiceCall(socketPath, revocationPayload, nil)
+		} else {
+			client := service.NewServiceClientFromToken(socketPath, nil)
+			pushErr = client.Call(ctx, "revoke-tokens", map[string]any{
+				"revocation": signed,
+			}, nil)
+		}
+		if pushErr != nil {
 			d.logger.Warn("revocation push failed (tokens will expire via TTL)",
 				"role", role,
 				"principal", localpart,
 				"token_count", len(roleTokens),
-				"error", err,
+				"error", pushErr,
 			)
 			continue
 		}

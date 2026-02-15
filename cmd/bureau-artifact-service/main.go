@@ -34,17 +34,18 @@ func main() {
 
 func run() error {
 	var (
-		homeserverURL string
-		machineName   string
-		principalName string
-		serverName    string
-		runDir        string
-		stateDir      string
-		storeDir      string
-		cacheDir      string
-		cacheSize     int64
-		mountpoint    string
-		showVersion   bool
+		homeserverURL  string
+		machineName    string
+		principalName  string
+		serverName     string
+		runDir         string
+		stateDir       string
+		storeDir       string
+		cacheDir       string
+		cacheSize      int64
+		mountpoint     string
+		upstreamSocket string
+		showVersion    bool
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
@@ -57,6 +58,7 @@ func run() error {
 	flag.StringVar(&cacheDir, "cache-dir", "", "local cache directory (optional, enables ring cache)")
 	flag.Int64Var(&cacheSize, "cache-size", 0, "cache device size in bytes (required if --cache-dir is set)")
 	flag.StringVar(&mountpoint, "mountpoint", "", "FUSE mount directory for read-only artifact access (optional)")
+	flag.StringVar(&upstreamSocket, "upstream-socket", "", "Unix socket path for upstream shared cache (optional)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -205,23 +207,24 @@ func run() error {
 	clk := clock.Real()
 
 	artifactService := &ArtifactService{
-		store:         store,
-		metadataStore: metadataStore,
-		refIndex:      refIndex,
-		tagStore:      tagStore,
-		artifactIndex: artifactIndex,
-		cache:         cache,
-		authConfig:    authConfig,
-		session:       session,
-		clock:         clk,
-		principalName: principalName,
-		machineName:   machineName,
-		serverName:    serverName,
-		runDir:        runDir,
-		serviceRoomID: serviceRoomID,
-		startedAt:     clk.Now(),
-		rooms:         make(map[string]*artifactRoomState),
-		logger:        logger,
+		store:          store,
+		metadataStore:  metadataStore,
+		refIndex:       refIndex,
+		tagStore:       tagStore,
+		artifactIndex:  artifactIndex,
+		cache:          cache,
+		authConfig:     authConfig,
+		session:        session,
+		clock:          clk,
+		principalName:  principalName,
+		machineName:    machineName,
+		serverName:     serverName,
+		runDir:         runDir,
+		serviceRoomID:  serviceRoomID,
+		upstreamSocket: upstreamSocket,
+		startedAt:      clk.Now(),
+		rooms:          make(map[string]*artifactRoomState),
+		logger:         logger,
 	}
 
 	// Optionally mount the FUSE filesystem for artifact access. Mounted
@@ -302,6 +305,7 @@ func run() error {
 		"socket", socketPath,
 		"artifacts", refIndex.Len(),
 		"rooms", len(artifactService.rooms),
+		"upstream", upstreamSocket,
 	)
 
 	// Wait for shutdown signal.
@@ -334,6 +338,17 @@ type ArtifactService struct {
 	runDir        string
 	serviceRoomID string
 	startedAt     time.Time
+
+	// upstreamSocket is the Unix socket path for the shared cache
+	// service. Empty means no upstream — all fetches are local only.
+	// Set at startup via --upstream-socket or at runtime via the
+	// set-upstream action (daemon-signed reconfiguration).
+	upstreamSocket string
+
+	// upstreamMu protects reads and writes to upstreamSocket.
+	// Handlers read-lock when checking the upstream; the
+	// set-upstream action write-locks when changing it.
+	upstreamMu sync.RWMutex
 
 	// writeMu serializes all write operations (Store.Write +
 	// MetadataStore.Write + RefIndex.Add as an atomic unit). The

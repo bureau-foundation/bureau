@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -222,13 +224,9 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 
 	socketDir := testutil.SocketDir(t)
 
-	// Start two service sockets with separate blacklists.
+	// Start a ticket service socket using the standard protocol.
 	ticketPath := filepath.Join(socketDir, "ticket.sock")
-	artifactPath := filepath.Join(socketDir, "artifact.sock")
-
 	ticketBlacklist := servicetoken.NewBlacklist()
-	artifactBlacklist := servicetoken.NewBlacklist()
-
 	ticketServer := service.NewSocketServer(ticketPath, daemon.logger, &service.AuthConfig{
 		PublicKey: publicKey,
 		Audience:  "ticket",
@@ -237,13 +235,12 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 	})
 	ticketServer.RegisterRevocationHandler()
 
-	artifactServer := service.NewSocketServer(artifactPath, daemon.logger, &service.AuthConfig{
-		PublicKey: publicKey,
-		Audience:  "artifact",
-		Blacklist: artifactBlacklist,
-		Clock:     clock.Fake(testDaemonEpoch),
-	})
-	artifactServer.RegisterRevocationHandler()
+	// Start an artifact service mock using the artifact wire protocol
+	// (length-prefixed CBOR). The daemon sends revocations to artifact
+	// services via artifactServiceCall, which speaks a different
+	// protocol from the standard service socket.
+	artifactPath := filepath.Join(socketDir, "artifact.sock")
+	artifactBlacklist := servicetoken.NewBlacklist()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -251,7 +248,10 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); ticketServer.Serve(ctx) }()
-	go func() { defer wg.Done(); artifactServer.Serve(ctx) }()
+	go func() {
+		defer wg.Done()
+		startMockArtifactService(t, ctx, artifactPath, publicKey, artifactBlacklist)
+	}()
 
 	waitForSocket(t, ticketPath)
 	waitForSocket(t, artifactPath)
@@ -502,4 +502,114 @@ func mockLauncherServer(t *testing.T) (string, chan string) {
 	})
 
 	return socketPath, destroyed
+}
+
+// startMockArtifactService starts a mock artifact service that speaks
+// the artifact wire protocol (length-prefixed CBOR). It handles the
+// "revoke-tokens" and "set-upstream" actions.
+func startMockArtifactService(t *testing.T, ctx context.Context, socketPath string, publicKey ed25519.PublicKey, blacklist *servicetoken.Blacklist) {
+	t.Helper()
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen on %s: %v", socketPath, err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
+	t.Cleanup(func() {
+		listener.Close()
+	})
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go handleMockArtifactConnection(conn, publicKey, blacklist)
+	}
+}
+
+// handleMockArtifactConnection processes one connection on the mock
+// artifact service. Reads a length-prefixed CBOR message, dispatches
+// based on the "action" field, and writes a length-prefixed CBOR
+// response.
+func handleMockArtifactConnection(conn net.Conn, publicKey ed25519.PublicKey, blacklist *servicetoken.Blacklist) {
+	defer conn.Close()
+
+	// Read 4-byte length prefix.
+	var lengthPrefix [4]byte
+	if _, err := io.ReadFull(conn, lengthPrefix[:]); err != nil {
+		return
+	}
+	length := binary.BigEndian.Uint32(lengthPrefix[:])
+	if length > 64*1024 {
+		return
+	}
+	raw := make([]byte, length)
+	if _, err := io.ReadFull(conn, raw); err != nil {
+		return
+	}
+
+	// Extract action.
+	var header struct {
+		Action string `json:"action"`
+	}
+	if err := codec.Unmarshal(raw, &header); err != nil {
+		writeMockArtifactResponse(conn, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	switch header.Action {
+	case "revoke-tokens":
+		var envelope struct {
+			Revocation []byte `cbor:"revocation"`
+		}
+		if err := codec.Unmarshal(raw, &envelope); err != nil {
+			writeMockArtifactResponse(conn, map[string]string{"error": "decode failed"})
+			return
+		}
+		request, err := servicetoken.VerifyRevocation(publicKey, envelope.Revocation)
+		if err != nil {
+			writeMockArtifactResponse(conn, map[string]string{"error": "verification failed"})
+			return
+		}
+		for _, entry := range request.Entries {
+			blacklist.Revoke(entry.TokenID, time.Unix(entry.ExpiresAt, 0))
+		}
+		writeMockArtifactResponse(conn, map[string]bool{"ok": true})
+
+	case "set-upstream":
+		var envelope struct {
+			SignedConfig []byte `cbor:"signed_config"`
+		}
+		if err := codec.Unmarshal(raw, &envelope); err != nil {
+			writeMockArtifactResponse(conn, map[string]string{"error": "decode failed"})
+			return
+		}
+		_, err := servicetoken.VerifyUpstreamConfig(publicKey, envelope.SignedConfig)
+		if err != nil {
+			writeMockArtifactResponse(conn, map[string]string{"error": "verification failed"})
+			return
+		}
+		writeMockArtifactResponse(conn, map[string]bool{"ok": true})
+
+	default:
+		writeMockArtifactResponse(conn, map[string]string{"error": "unknown action"})
+	}
+}
+
+// writeMockArtifactResponse writes a length-prefixed CBOR response.
+func writeMockArtifactResponse(conn net.Conn, response any) {
+	data, err := codec.Marshal(response)
+	if err != nil {
+		return
+	}
+	var lengthPrefix [4]byte
+	binary.BigEndian.PutUint32(lengthPrefix[:], uint32(len(data)))
+	conn.Write(lengthPrefix[:])
+	conn.Write(data)
 }

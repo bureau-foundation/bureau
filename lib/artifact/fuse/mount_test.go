@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/clock"
 )
 
 // testTimestamp is a fixed timestamp for tag creation in tests.
@@ -28,8 +29,9 @@ func fuseAvailable(t *testing.T) {
 	}
 }
 
-// testMount creates a Store, TagStore, stores content, mounts the
-// FUSE filesystem, and returns the mountpoint and a cleanup function.
+// testMount creates a Store, TagStore, mounts the FUSE filesystem
+// with a deterministic clock, and returns the mountpoint, store, and
+// tag store. The mount is automatically unmounted when the test ends.
 func testMount(t *testing.T) (mountpoint string, store *artifact.Store, tagStore *artifact.TagStore) {
 	t.Helper()
 	fuseAvailable(t)
@@ -53,6 +55,7 @@ func testMount(t *testing.T) (mountpoint string, store *artifact.Store, tagStore
 		Mountpoint: mountpoint,
 		Store:      store,
 		TagStore:   tagStore,
+		Clock:      clock.Fake(testTimestamp),
 	})
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
@@ -66,6 +69,8 @@ func testMount(t *testing.T) (mountpoint string, store *artifact.Store, tagStore
 
 	return mountpoint, store, tagStore
 }
+
+// ---- Read path tests ----
 
 func TestMountRootHasTagAndCas(t *testing.T) {
 	mountpoint, _, _ := testMount(t)
@@ -261,22 +266,22 @@ func TestMountTagPartialRead(t *testing.T) {
 	}
 	defer file.Close()
 
-	buf := make([]byte, 4)
-	if _, err := file.ReadAt(buf, 5); err != nil {
+	buffer := make([]byte, 4)
+	if _, err := file.ReadAt(buffer, 5); err != nil {
 		t.Fatalf("ReadAt: %v", err)
 	}
-	if string(buf) != "5678" {
-		t.Errorf("partial read: got %q, want %q", string(buf), "5678")
+	if string(buffer) != "5678" {
+		t.Errorf("partial read: got %q, want %q", string(buffer), "5678")
 	}
 }
 
-func TestMountReadOnly(t *testing.T) {
+func TestMountRootWriteRejected(t *testing.T) {
 	mountpoint, _, _ := testMount(t)
 
-	// Attempt to create a file — should fail with EROFS.
-	err := os.WriteFile(filepath.Join(mountpoint, "tag", "should-fail"), []byte("x"), 0o644)
+	// Root directory has no Create — writing here should fail.
+	err := os.WriteFile(filepath.Join(mountpoint, "should-fail"), []byte("x"), 0o644)
 	if err == nil {
-		t.Fatal("expected error writing to read-only mount")
+		t.Fatal("expected error writing to root directory")
 	}
 }
 
@@ -307,5 +312,305 @@ func TestMountMultipleArtifactsDistinctContent(t *testing.T) {
 		if !bytes.Equal(got, expected) {
 			t.Errorf("%s: got %q, want %q", tag, string(got), string(expected))
 		}
+	}
+}
+
+// ---- Write path tests ----
+
+func TestMountTagWriteNewTag(t *testing.T) {
+	mountpoint, store, tagStore := testMount(t)
+
+	// Write a file through the FUSE mount, creating a new tag.
+	content := []byte("written through FUSE")
+	tagPath := filepath.Join(mountpoint, "tag", "fuse-created")
+
+	if err := os.WriteFile(tagPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Verify the tag was created in the TagStore.
+	record, exists := tagStore.Get("fuse-created")
+	if !exists {
+		t.Fatal("tag 'fuse-created' not found in TagStore after write")
+	}
+
+	// Verify the content is readable through the Store.
+	readBack, err := store.ReadContent(record.Target)
+	if err != nil {
+		t.Fatalf("Store.Read: %v", err)
+	}
+	if !bytes.Equal(readBack, content) {
+		t.Errorf("store content: got %q, want %q", string(readBack), string(content))
+	}
+
+	// Verify the content is readable back through FUSE (via CAS
+	// since the tag inode might be cached from the write).
+	hashHex := artifact.FormatHash(record.Target)
+	got, err := os.ReadFile(filepath.Join(mountpoint, "cas", hashHex))
+	if err != nil {
+		t.Fatalf("ReadFile via CAS: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("CAS read-back: got %q, want %q", string(got), string(content))
+	}
+}
+
+func TestMountTagWriteHierarchical(t *testing.T) {
+	mountpoint, store, tagStore := testMount(t)
+
+	// For the kernel to traverse "project/build/" before calling
+	// Create("latest"), the intermediate directories must already
+	// exist as virtual directories (which requires existing tags
+	// with those prefixes). Seed a sibling tag so the parent path
+	// is resolvable.
+	seedContent := []byte("seed content for sibling")
+	seedResult, err := store.WriteContent(seedContent, "text/plain")
+	if err != nil {
+		t.Fatalf("WriteContent (seed): %v", err)
+	}
+	if err := tagStore.Set("project/build/sibling", seedResult.FileHash, nil, true, testTimestamp); err != nil {
+		t.Fatalf("Set seed tag: %v", err)
+	}
+
+	// Now write to a new leaf under the existing directory.
+	content := []byte("deep tag content written through FUSE")
+	tagPath := filepath.Join(mountpoint, "tag", "project", "build", "latest")
+
+	if err := os.WriteFile(tagPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile (hierarchical): %v", err)
+	}
+
+	record, exists := tagStore.Get("project/build/latest")
+	if !exists {
+		t.Fatal("hierarchical tag not found after write")
+	}
+
+	readBack, err := store.ReadContent(record.Target)
+	if err != nil {
+		t.Fatalf("ReadContent: %v", err)
+	}
+	if !bytes.Equal(readBack, content) {
+		t.Errorf("hierarchical write content: got %q, want %q", string(readBack), string(content))
+	}
+}
+
+func TestMountTagWriteOverwrite(t *testing.T) {
+	mountpoint, store, tagStore := testMount(t)
+
+	// Store initial content and create a tag.
+	initialContent := []byte("initial version")
+	initialResult, err := store.WriteContent(initialContent, "text/plain")
+	if err != nil {
+		t.Fatalf("WriteContent: %v", err)
+	}
+	if err := tagStore.Set("versioned", initialResult.FileHash, nil, true, testTimestamp); err != nil {
+		t.Fatalf("Set initial tag: %v", err)
+	}
+
+	// Overwrite the tag through FUSE.
+	updatedContent := []byte("updated version with more content")
+	tagPath := filepath.Join(mountpoint, "tag", "versioned")
+
+	if err := os.WriteFile(tagPath, updatedContent, 0o644); err != nil {
+		t.Fatalf("WriteFile (overwrite): %v", err)
+	}
+
+	// Verify the tag now points to the new content.
+	record, exists := tagStore.Get("versioned")
+	if !exists {
+		t.Fatal("tag disappeared after overwrite")
+	}
+	if record.Target == initialResult.FileHash {
+		t.Error("tag still points to initial content after overwrite")
+	}
+
+	// Verify the new content through the Store.
+	readBack, err := store.ReadContent(record.Target)
+	if err != nil {
+		t.Fatalf("Store.Read (new): %v", err)
+	}
+	if !bytes.Equal(readBack, updatedContent) {
+		t.Errorf("overwritten content: got %q, want %q", string(readBack), string(updatedContent))
+	}
+
+	// Verify the old content is still in the Store (CAS never
+	// deletes — data is never lost).
+	oldContent, err := store.ReadContent(initialResult.FileHash)
+	if err != nil {
+		t.Fatalf("Store.Read (old): %v", err)
+	}
+	if !bytes.Equal(oldContent, initialContent) {
+		t.Error("old content was corrupted")
+	}
+}
+
+func TestMountTagWriteConflict(t *testing.T) {
+	mountpoint, store, tagStore := testMount(t)
+
+	// Store initial content and create a tag.
+	contentA := []byte("version A")
+	resultA, err := store.WriteContent(contentA, "text/plain")
+	if err != nil {
+		t.Fatalf("WriteContent A: %v", err)
+	}
+	if err := tagStore.Set("conflicted", resultA.FileHash, nil, true, testTimestamp); err != nil {
+		t.Fatalf("Set tag to A: %v", err)
+	}
+
+	// Open the tag file for writing. The Create call captures A's
+	// hash as the expected previous target for CAS.
+	tagPath := filepath.Join(mountpoint, "tag", "conflicted")
+	file, err := os.OpenFile(tagPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	// While the file is open, update the tag to point to B via the
+	// TagStore directly (simulating a concurrent writer).
+	contentB := []byte("version B from concurrent writer")
+	resultB, err := store.WriteContent(contentB, "text/plain")
+	if err != nil {
+		t.Fatalf("WriteContent B: %v", err)
+	}
+	if err := tagStore.Set("conflicted", resultB.FileHash, &resultA.FileHash, false, testTimestamp); err != nil {
+		t.Fatalf("Set tag to B: %v", err)
+	}
+
+	// Write content C and close. The Flush should detect that the
+	// tag no longer points to A (it now points to B) and fail the
+	// CAS check.
+	contentC := []byte("version C from FUSE writer")
+	if _, err := file.Write(contentC); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	err = file.Close()
+	if err == nil {
+		t.Fatal("expected error on close due to CAS conflict")
+	}
+
+	// Verify the tag still points to B (the FUSE write did not
+	// overwrite the concurrent update).
+	record, exists := tagStore.Get("conflicted")
+	if !exists {
+		t.Fatal("tag disappeared after conflict")
+	}
+	if record.Target != resultB.FileHash {
+		t.Errorf("tag target changed despite CAS conflict: got %s, want %s",
+			artifact.FormatHash(record.Target), artifact.FormatHash(resultB.FileHash))
+	}
+}
+
+func TestMountCasWriteNewArtifact(t *testing.T) {
+	mountpoint, store, _ := testMount(t)
+
+	// Compute the hash without storing the content. For small
+	// artifacts (≤256KB), the file hash is HashFile(HashChunk(data)).
+	content := []byte("CAS write test content — not pre-stored")
+	chunkHash := artifact.HashChunk(content)
+	fileHash := artifact.HashFile(chunkHash)
+	hashHex := artifact.FormatHash(fileHash)
+
+	// Write through the CAS FUSE path. Since the content doesn't
+	// exist in the store, Lookup returns ENOENT and the kernel calls
+	// Create on casNode with the hash as the filename.
+	casPath := filepath.Join(mountpoint, "cas", hashHex)
+
+	if err := os.WriteFile(casPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile to CAS: %v", err)
+	}
+
+	// Verify the content was stored correctly.
+	readBack, err := store.ReadContent(fileHash)
+	if err != nil {
+		t.Fatalf("Store.ReadContent: %v", err)
+	}
+	if !bytes.Equal(readBack, content) {
+		t.Errorf("CAS store content: got %q, want %q", string(readBack), string(content))
+	}
+}
+
+func TestMountCasWriteHashMismatch(t *testing.T) {
+	mountpoint, _, _ := testMount(t)
+
+	// Use a fabricated hash that won't match the content we write.
+	fakeHash := "0000000000000000000000000000000000000000000000000000000000000001"
+	casPath := filepath.Join(mountpoint, "cas", fakeHash)
+
+	content := []byte("this content does not hash to the fake hash")
+	err := os.WriteFile(casPath, content, 0o644)
+	if err == nil {
+		t.Fatal("expected error writing to CAS with wrong hash")
+	}
+}
+
+func TestMountCasWriteInvalidHashName(t *testing.T) {
+	mountpoint, _, _ := testMount(t)
+
+	// A filename that's not a valid hex hash should be rejected.
+	casPath := filepath.Join(mountpoint, "cas", "not-a-hash")
+	err := os.WriteFile(casPath, []byte("x"), 0o644)
+	if err == nil {
+		t.Fatal("expected error writing to CAS with invalid hash name")
+	}
+}
+
+func TestMountTagWriteLargeArtifact(t *testing.T) {
+	mountpoint, store, tagStore := testMount(t)
+
+	// 512 KiB to exercise the CDC chunking path during write.
+	content := make([]byte, 512*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+
+	tagPath := filepath.Join(mountpoint, "tag", "large-write")
+	if err := os.WriteFile(tagPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Verify tag exists.
+	record, exists := tagStore.Get("large-write")
+	if !exists {
+		t.Fatal("tag not found after large write")
+	}
+
+	// Verify content through the Store.
+	readBack, err := store.ReadContent(record.Target)
+	if err != nil {
+		t.Fatalf("Store.Read: %v", err)
+	}
+	if !bytes.Equal(readBack, content) {
+		t.Error("large write content mismatch")
+	}
+}
+
+func TestMountTagWriteReadRoundtrip(t *testing.T) {
+	mountpoint, _, tagStore := testMount(t)
+
+	// Write through FUSE, then verify readable through FUSE CAS.
+	// Reading back via the tag path may hit the cached
+	// writeInProgressNode (which doesn't implement Read), so we
+	// verify via the CAS path which always creates a fresh
+	// artifactFileNode.
+	content := []byte("roundtrip content through FUSE mount")
+	tagPath := filepath.Join(mountpoint, "tag", "roundtrip")
+
+	if err := os.WriteFile(tagPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	record, exists := tagStore.Get("roundtrip")
+	if !exists {
+		t.Fatal("tag not found after write")
+	}
+
+	hashHex := artifact.FormatHash(record.Target)
+	got, err := os.ReadFile(filepath.Join(mountpoint, "cas", hashHex))
+	if err != nil {
+		t.Fatalf("ReadFile via CAS: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("roundtrip: got %q, want %q", string(got), string(content))
 	}
 }

@@ -202,28 +202,6 @@ func run() error {
 		)
 	}
 
-	// Optionally mount the FUSE filesystem for read-only artifact access.
-	if mountpoint != "" {
-		fuseServer, err := artifactfuse.Mount(artifactfuse.Options{
-			Mountpoint: mountpoint,
-			Store:      store,
-			Cache:      cache,
-			TagStore:   tagStore,
-			AllowOther: true,
-			Logger:     logger,
-		})
-		if err != nil {
-			return fmt.Errorf("mounting FUSE filesystem: %w", err)
-		}
-		defer func() {
-			if err := fuseServer.Unmount(); err != nil {
-				logger.Error("failed to unmount FUSE filesystem", "error", err)
-			} else {
-				logger.Info("FUSE filesystem unmounted", "mountpoint", mountpoint)
-			}
-		}()
-	}
-
 	clk := clock.Real()
 
 	artifactService := &ArtifactService{
@@ -244,6 +222,34 @@ func run() error {
 		startedAt:     clk.Now(),
 		rooms:         make(map[string]*artifactRoomState),
 		logger:        logger,
+	}
+
+	// Optionally mount the FUSE filesystem for artifact access. Mounted
+	// after ArtifactService creation so the FUSE write path can share
+	// the service's write mutex (the Store is not safe for concurrent
+	// writes). LIFO defer order ensures FUSE is unmounted before the
+	// service deregisters, preventing writes to a half-torn-down store.
+	if mountpoint != "" {
+		fuseServer, err := artifactfuse.Mount(artifactfuse.Options{
+			Mountpoint: mountpoint,
+			Store:      store,
+			Cache:      cache,
+			TagStore:   tagStore,
+			Clock:      clk,
+			WriteMu:    &artifactService.writeMu,
+			AllowOther: true,
+			Logger:     logger,
+		})
+		if err != nil {
+			return fmt.Errorf("mounting FUSE filesystem: %w", err)
+		}
+		defer func() {
+			if err := fuseServer.Unmount(); err != nil {
+				logger.Error("failed to unmount FUSE filesystem", "error", err)
+			} else {
+				logger.Info("FUSE filesystem unmounted", "mountpoint", mountpoint)
+			}
+		}()
 	}
 
 	// Register in #bureau/service so daemons can discover us.

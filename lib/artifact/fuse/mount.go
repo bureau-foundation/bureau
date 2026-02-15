@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	gofuse "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -44,6 +45,18 @@ type Options struct {
 	// DefaultPrefetchContainers.
 	PrefetchContainers int
 
+	// Clock provides time for tag update timestamps. If nil,
+	// defaults to clock.Real().
+	Clock clock.Clock
+
+	// WriteMu serializes write operations. The artifact service
+	// passes its own write mutex so that FUSE writes and socket
+	// API writes are serialized (the Store is not safe for
+	// concurrent writes). If nil, an internal mutex is created.
+	// Standalone mounts (no concurrent socket API) can leave this
+	// nil; production mounts sharing a Store must provide one.
+	WriteMu *sync.Mutex
+
 	// AllowOther permits other users (including root) to access
 	// the mount. Requires user_allow_other in /etc/fuse.conf.
 	// Set this for production use where sandboxed agents running
@@ -71,6 +84,12 @@ func Mount(options Options) (*fuse.Server, error) {
 
 	if options.PrefetchContainers == 0 {
 		options.PrefetchContainers = DefaultPrefetchContainers
+	}
+	if options.Clock == nil {
+		options.Clock = clock.Real()
+	}
+	if options.WriteMu == nil {
+		options.WriteMu = &sync.Mutex{}
 	}
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -135,6 +154,7 @@ type tagRootNode struct {
 var _ gofuse.InodeEmbedder = (*tagRootNode)(nil)
 var _ gofuse.NodeLookuper = (*tagRootNode)(nil)
 var _ gofuse.NodeReaddirer = (*tagRootNode)(nil)
+var _ gofuse.NodeCreater = (*tagRootNode)(nil)
 
 func (t *tagRootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofuse.Inode, syscall.Errno) {
 	fullName := t.prefix + name
@@ -158,7 +178,7 @@ func (t *tagRootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	}
 
 	if isTag {
-		return t.makeArtifactInode(ctx, tagRecord.Target, out)
+		return t.makeArtifactInode(ctx, tagRecord.Target, fullName, out)
 	}
 
 	return nil, syscall.ENOENT
@@ -205,7 +225,43 @@ func (t *tagRootNode) Readdir(ctx context.Context) (gofuse.DirStream, syscall.Er
 	return &sliceDirStream{entries: entries}, 0
 }
 
-func (t *tagRootNode) makeArtifactInode(ctx context.Context, fileHash artifact.Hash, out *fuse.EntryOut) (*gofuse.Inode, syscall.Errno) {
+// Create handles file creation under the tag directory. When a program
+// writes to a tag path (cp, shell redirection, curl), the kernel calls
+// Create on the parent directory. The write handle captures the current
+// tag target (if any) for compare-and-swap on close.
+func (t *tagRootNode) Create(ctx context.Context, name string, _ uint32, _ uint32, out *fuse.EntryOut) (*gofuse.Inode, gofuse.FileHandle, uint32, syscall.Errno) {
+	fullName := t.prefix + name
+
+	// Reject creation of files that conflict with existing directory
+	// prefixes. Writing to "foo" when "foo/bar" exists would be
+	// ambiguous in the tag namespace.
+	childPrefix := fullName + "/"
+	children := t.options.TagStore.List(childPrefix)
+	if len(children) > 0 {
+		return nil, nil, 0, syscall.EISDIR
+	}
+
+	// Capture current tag target for compare-and-swap on close.
+	var previousTarget *artifact.Hash
+	if existing, exists := t.options.TagStore.Get(fullName); exists {
+		target := existing.Target
+		previousTarget = &target
+	}
+
+	handle := &writeHandle{
+		options:        t.options,
+		tagName:        fullName,
+		previousTarget: previousTarget,
+	}
+
+	node := &writeInProgressNode{handle: handle}
+	child := t.NewPersistentInode(ctx, node, gofuse.StableAttr{Mode: syscall.S_IFREG})
+	out.Mode = syscall.S_IFREG | 0o644
+
+	return child, handle, 0, 0
+}
+
+func (t *tagRootNode) makeArtifactInode(ctx context.Context, fileHash artifact.Hash, tagName string, out *fuse.EntryOut) (*gofuse.Inode, syscall.Errno) {
 	record, err := t.options.Store.Stat(fileHash)
 	if err != nil {
 		t.options.Logger.Error("stat failed for artifact",
@@ -219,6 +275,7 @@ func (t *tagRootNode) makeArtifactInode(ctx context.Context, fileHash artifact.H
 		options:  t.options,
 		fileHash: fileHash,
 		record:   record,
+		tagName:  tagName,
 	}
 
 	child := t.NewPersistentInode(ctx, node, gofuse.StableAttr{Mode: syscall.S_IFREG})
@@ -236,6 +293,7 @@ type casNode struct {
 
 var _ gofuse.InodeEmbedder = (*casNode)(nil)
 var _ gofuse.NodeLookuper = (*casNode)(nil)
+var _ gofuse.NodeCreater = (*casNode)(nil)
 
 func (c *casNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofuse.Inode, syscall.Errno) {
 	fileHash, err := artifact.ParseHash(name)
@@ -267,14 +325,44 @@ func (c *casNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	return child, 0
 }
 
+// Create handles file creation under the CAS directory. The filename
+// must be a valid hex hash. After the write completes, the content
+// hash is verified against the filename — a mismatch returns EIO.
+// The artifact is still stored (data is never lost) but the caller
+// is notified of the mismatch.
+func (c *casNode) Create(ctx context.Context, name string, _ uint32, _ uint32, out *fuse.EntryOut) (*gofuse.Inode, gofuse.FileHandle, uint32, syscall.Errno) {
+	expectedHash, err := artifact.ParseHash(name)
+	if err != nil {
+		return nil, nil, 0, syscall.EINVAL
+	}
+
+	handle := &writeHandle{
+		options:      c.options,
+		expectedHash: &expectedHash,
+	}
+
+	node := &writeInProgressNode{handle: handle}
+	child := c.NewPersistentInode(ctx, node, gofuse.StableAttr{Mode: syscall.S_IFREG})
+	out.Mode = syscall.S_IFREG | 0o644
+
+	return child, handle, 0, 0
+}
+
 // artifactFileNode represents a single artifact as a regular file.
 // It loads the chunk table lazily on first Open and serves reads by
-// resolving byte offsets to container chunks.
+// resolving byte offsets to container chunks. For tagged artifacts,
+// tagName is set so that Open-for-write can create a writeHandle
+// that updates the tag on close.
 type artifactFileNode struct {
 	gofuse.Inode
 	options  *Options
 	fileHash artifact.Hash
 	record   *artifact.ReconstructionRecord
+
+	// tagName is the tag name if this node was created via tag
+	// lookup. Empty for CAS-created nodes. Used by Open to
+	// determine whether write mode is supported.
+	tagName string
 
 	// mu protects chunks (lazy initialization).
 	mu     sync.Mutex
@@ -287,6 +375,7 @@ type artifactFileNode struct {
 
 var _ gofuse.InodeEmbedder = (*artifactFileNode)(nil)
 var _ gofuse.NodeGetattrer = (*artifactFileNode)(nil)
+var _ gofuse.NodeSetattrer = (*artifactFileNode)(nil)
 var _ gofuse.NodeOpener = (*artifactFileNode)(nil)
 var _ gofuse.NodeReader = (*artifactFileNode)(nil)
 
@@ -298,13 +387,47 @@ func (a *artifactFileNode) Getattr(ctx context.Context, f gofuse.FileHandle, out
 	return 0
 }
 
+// Setattr handles truncation requests. When the kernel opens an
+// existing file with O_TRUNC, it sends SETATTR(size=0) before or
+// after Open. For tagged artifacts opened for writing, truncation
+// is a no-op (the write handle starts empty). For read-only access,
+// truncation is rejected.
+func (a *artifactFileNode) Setattr(_ context.Context, _ gofuse.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if _, ok := in.GetSize(); ok {
+		// Truncation is only meaningful for tagged artifacts that
+		// support writes. Truncating a CAS entry makes no sense.
+		if a.tagName == "" {
+			return syscall.EROFS
+		}
+		// For tagged artifacts, truncation during open-for-write is
+		// a no-op: the write handle maintains its own buffer.
+	}
+	out.Mode = syscall.S_IFREG | 0o444
+	out.Size = uint64(a.record.Size)
+	out.Blocks = (out.Size + 511) / 512
+	out.Blksize = 65536
+	return 0
+}
+
 func (a *artifactFileNode) Open(ctx context.Context, flags uint32) (gofuse.FileHandle, uint32, syscall.Errno) {
-	// Reject anything that isn't a read.
 	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-		return nil, 0, syscall.EROFS
+		// Write mode: only supported for tagged artifacts. CAS
+		// entries are immutable — overwriting them makes no sense.
+		if a.tagName == "" {
+			return nil, 0, syscall.EROFS
+		}
+
+		// Capture the current target for compare-and-swap on close.
+		previousTarget := a.fileHash
+		handle := &writeHandle{
+			options:        a.options,
+			tagName:        a.tagName,
+			previousTarget: &previousTarget,
+		}
+		return handle, 0, 0
 	}
 
-	// Build the chunk table if not already built.
+	// Read mode: build the chunk table if not already built.
 	if err := a.ensureChunkTable(); err != nil {
 		a.options.Logger.Error("failed to build chunk table",
 			"hash", artifact.FormatHash(a.fileHash),

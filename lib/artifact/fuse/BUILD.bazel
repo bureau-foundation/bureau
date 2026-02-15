@@ -9,11 +9,13 @@ go_library(
         "doc.go",
         "mount.go",
         "reader.go",
+        "writer.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/artifact/fuse",
     visibility = ["//visibility:public"],
     deps = [
         "//lib/artifact",
+        "//lib/clock",
         "@com_github_hanwen_go_fuse_v2//fs",
         "@com_github_hanwen_go_fuse_v2//fuse",
     ],
@@ -26,5 +28,8 @@ go_test(
         "reader_test.go",
     ],
     embed = [":fuse"],
-    deps = ["//lib/artifact"],
+    deps = [
+        "//lib/artifact",
+        "//lib/clock",
+    ],
 )

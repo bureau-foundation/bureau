@@ -8,14 +8,29 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/pflag"
 	"github.com/tidwall/jsonc"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
+// templateValidateParams holds the parameters for the template validate command.
+type templateValidateParams struct {
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// templateValidationResult is the JSON output for template validate.
+type templateValidationResult struct {
+	File   string   `json:"file"`
+	Valid  bool     `json:"valid"`
+	Issues []string `json:"issues,omitempty"`
+}
+
 // validateCommand returns the "validate" subcommand for validating template files.
 func validateCommand() *cli.Command {
+	var params templateValidateParams
+
 	return &cli.Command{
 		Name:    "validate",
 		Summary: "Validate a local template JSON file",
@@ -33,6 +48,10 @@ Use "bureau template show --raw" to export a template for editing.`,
 				Command:     "bureau template validate my-agent.json",
 			},
 		},
+		Flags: func() *pflag.FlagSet {
+			return cli.FlagsFromParams("validate", &params)
+		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau template validate <file>")
@@ -45,6 +64,15 @@ Use "bureau template show --raw" to export a template for editing.`,
 			}
 
 			issues := validateTemplateContent(content)
+
+			if params.OutputJSON {
+				return cli.WriteJSON(templateValidationResult{
+					File:   path,
+					Valid:  len(issues) == 0,
+					Issues: issues,
+				})
+			}
+
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)

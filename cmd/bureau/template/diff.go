@@ -16,10 +16,24 @@ import (
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 )
 
+// templateDiffParams holds the parameters for the template diff command.
+type templateDiffParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
+}
+
+// diffResult is the JSON output for template diff.
+type diffResult struct {
+	TemplateRef string   `json:"template_ref"`
+	File        string   `json:"file"`
+	Identical   bool     `json:"identical"`
+	Differences []string `json:"differences,omitempty"`
+}
+
 // diffCommand returns the "diff" subcommand for comparing a Matrix template
 // against a local file.
 func diffCommand() *cli.Command {
-	var serverName string
+	var params templateDiffParams
 
 	return &cli.Command{
 		Name:    "diff",
@@ -39,10 +53,9 @@ content, not the resolved inheritance chain — use "bureau template show
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("diff", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			return flagSet
+			return cli.FlagsFromParams("diff", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template diff [flags] <template-ref> <file>")
@@ -70,7 +83,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			}
 			defer cancel()
 
-			remoteContent, err := libtmpl.Fetch(ctx, session, ref, serverName)
+			remoteContent, err := libtmpl.Fetch(ctx, session, ref, params.ServerName)
 			if err != nil {
 				return err
 			}
@@ -91,6 +104,15 @@ content, not the resolved inheritance chain — use "bureau template show
 			// Simple line-by-line diff. For templates (which are typically
 			// small JSON objects), this is sufficient to highlight changes.
 			differences := lineDiff(remoteLines, localLines)
+
+			if params.OutputJSON {
+				return cli.WriteJSON(diffResult{
+					TemplateRef: templateRefString,
+					File:        filePath,
+					Identical:   len(differences) == 0,
+					Differences: differences,
+				})
+			}
 
 			if len(differences) == 0 {
 				fmt.Fprintf(os.Stdout, "no differences (Matrix and %s are identical)\n", filePath)

@@ -15,12 +15,27 @@ import (
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 )
 
+// templatePushParams holds the parameters for the template push command.
+type templatePushParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
+	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
+}
+
+// templatePushResult is the JSON output for template push.
+type templatePushResult struct {
+	Ref          string `json:"ref"`
+	File         string `json:"file"`
+	RoomAlias    string `json:"room_alias"`
+	RoomID       string `json:"room_id,omitempty"`
+	TemplateName string `json:"template_name"`
+	EventID      string `json:"event_id,omitempty"`
+	DryRun       bool   `json:"dry_run"`
+}
+
 // pushCommand returns the "push" subcommand for publishing a template to Matrix.
 func pushCommand() *cli.Command {
-	var (
-		serverName string
-		dryRun     bool
-	)
+	var params templatePushParams
 
 	return &cli.Command{
 		Name:    "push",
@@ -48,11 +63,9 @@ exist without actually publishing.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("push", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			flagSet.BoolVar(&dryRun, "dry-run", false, "validate only, do not publish to Matrix")
-			return flagSet
+			return cli.FlagsFromParams("push", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template push [flags] <template-ref> <file>")
@@ -89,7 +102,7 @@ exist without actually publishing.`,
 			defer cancel()
 
 			// Verify the target room exists.
-			roomAlias := principal.RoomAlias(ref.Room, serverName)
+			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return fmt.Errorf("resolving target room %q: %w", roomAlias, err)
@@ -101,13 +114,23 @@ exist without actually publishing.`,
 				if err != nil {
 					return fmt.Errorf("invalid inherits reference %q: %w", content.Inherits, err)
 				}
-				if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
+				if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
 					return fmt.Errorf("parent template %q not found in Matrix: %w", content.Inherits, err)
 				}
 				fmt.Fprintf(os.Stderr, "parent template %q: found\n", content.Inherits)
 			}
 
-			if dryRun {
+			if params.DryRun {
+				if params.OutputJSON {
+					return cli.WriteJSON(templatePushResult{
+						Ref:          ref.String(),
+						File:         filePath,
+						RoomAlias:    roomAlias,
+						RoomID:       roomID,
+						TemplateName: ref.Template,
+						DryRun:       true,
+					})
+				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
 				fmt.Fprintf(os.Stdout, "  template name: %s\n", ref.Template)
@@ -118,6 +141,18 @@ exist without actually publishing.`,
 			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTemplate, ref.Template, content)
 			if err != nil {
 				return fmt.Errorf("publishing template: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(templatePushResult{
+					Ref:          ref.String(),
+					File:         filePath,
+					RoomAlias:    roomAlias,
+					RoomID:       roomID,
+					TemplateName: ref.Template,
+					EventID:      eventID,
+					DryRun:       false,
+				})
 			}
 
 			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)

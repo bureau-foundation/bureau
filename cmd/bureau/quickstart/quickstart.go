@@ -22,8 +22,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -32,16 +30,22 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// quickstartParams holds the parameters for the "bureau quickstart" command.
+// Infrastructure flags (credential file, homeserver URL, run directory) are
+// hidden from MCP via json:"-" since they reference local file paths and
+// deployment specifics.
+type quickstartParams struct {
+	Agent          string `json:"agent"        flag:"agent"           desc:"agent type to deploy (test, claude)" default:"test"`
+	HomeserverURL  string `json:"-"            flag:"homeserver"      desc:"Continuwuity homeserver URL" default:"http://localhost:6167"`
+	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file (required)"`
+	RunDir         string `json:"-"            flag:"run-dir"         desc:"Bureau runtime directory (launcher/daemon must match)" default:"/run/bureau"`
+	MachineName    string `json:"machine_name" flag:"machine-name"    desc:"machine localpart (auto-detected from launcher if not set)"`
+}
+
 // Command returns the "quickstart" CLI command.
 func Command() *cli.Command {
-	var (
-		agent          string
-		homeserverURL  string
-		serverName     string
-		credentialFile string
-		runDir         string
-		machineName    string
-	)
+	var params quickstartParams
 
 	return &cli.Command{
 		Name:    "quickstart",
@@ -71,31 +75,22 @@ Supported agents:
 				Command:     "bureau quickstart --agent=claude --credential-file ./bureau-creds",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("quickstart", pflag.ContinueOnError)
-			flagSet.StringVar(&agent, "agent", "test", "agent type to deploy (test, claude)")
-			flagSet.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Continuwuity homeserver URL")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-			flagSet.StringVar(&credentialFile, "credential-file", "", "path to Bureau credential file (required)")
-			flagSet.StringVar(&runDir, "run-dir", "/run/bureau", "Bureau runtime directory (launcher/daemon must match)")
-			flagSet.StringVar(&machineName, "machine-name", "", "machine localpart (auto-detected from launcher if not set)")
-			return flagSet
-		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
-			if credentialFile == "" {
+			if params.CredentialFile == "" {
 				return fmt.Errorf("--credential-file is required\n\nUsage: bureau quickstart [flags]")
 			}
 
 			return run(Config{
-				Agent:          agent,
-				HomeserverURL:  homeserverURL,
-				ServerName:     serverName,
-				CredentialFile: credentialFile,
-				RunDir:         runDir,
-				MachineName:    machineName,
+				Agent:          params.Agent,
+				HomeserverURL:  params.HomeserverURL,
+				ServerName:     params.ServerName,
+				CredentialFile: params.CredentialFile,
+				RunDir:         params.RunDir,
+				MachineName:    params.MachineName,
 			})
 		},
 	}

@@ -38,15 +38,26 @@ aliases that mirror the principal naming convention:
 	}
 }
 
+// roomCreateParams holds the parameters for the matrix room create command.
+type roomCreateParams struct {
+	cli.SessionConfig
+	Space             string   `json:"space"              flag:"space"              desc:"parent space alias or room ID (required)"`
+	Name              string   `json:"name"               flag:"name"               desc:"room display name (defaults to alias)"`
+	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
+	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field" default:"bureau.local"`
+	MemberStateEvents []string `json:"member_state_events" flag:"member-state-event" desc:"state event type that members can set (repeatable)"`
+	OutputJSON        bool     `json:"-"                  flag:"json"               desc:"output as JSON"`
+}
+
+// roomCreateResult is the JSON output for matrix room create.
+type roomCreateResult struct {
+	RoomID  string `json:"room_id"`
+	Alias   string `json:"alias"`
+	SpaceID string `json:"space_id"`
+}
+
 func roomCreateCommand() *cli.Command {
-	var (
-		session           cli.SessionConfig
-		space             string
-		name              string
-		topic             string
-		serverName        string
-		memberStateEvents []string
-	)
+	var params roomCreateParams
 
 	return &cli.Command{
 		Name:    "create",
@@ -72,15 +83,9 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("room create", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&space, "space", "", "parent space alias or room ID (required)")
-			flagSet.StringVar(&name, "name", "", "room display name (defaults to alias)")
-			flagSet.StringVar(&topic, "topic", "", "room topic")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for m.space.child via field")
-			flagSet.StringArrayVar(&memberStateEvents, "member-state-event", nil, "state event type that members can set (repeatable)")
-			return flagSet
+			return cli.FlagsFromParams("room create", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
@@ -90,10 +95,11 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			}
 			alias := args[0]
 
-			if space == "" {
+			if params.Space == "" {
 				return fmt.Errorf("--space is required (rooms must belong to a space)")
 			}
 
+			name := params.Name
 			if name == "" {
 				name = alias
 			}
@@ -101,26 +107,26 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
 
 			// Resolve the parent space.
-			spaceRoomID, err := resolveRoom(ctx, sess, space)
+			spaceRoomID, err := resolveRoom(ctx, sess, params.Space)
 			if err != nil {
 				return fmt.Errorf("resolve space: %w", err)
 			}
 
 			// Build power levels. Admin-only by default, with optional
 			// member-settable Bureau event types.
-			powerLevels := adminOnlyPowerLevels(sess.UserID(), memberStateEvents)
+			powerLevels := adminOnlyPowerLevels(sess.UserID(), params.MemberStateEvents)
 
 			// Create the room.
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{
 				Name:                      name,
 				Alias:                     alias,
-				Topic:                     topic,
+				Topic:                     params.Topic,
 				Preset:                    "private_chat",
 				Visibility:                "private",
 				PowerLevelContentOverride: powerLevels,
@@ -132,10 +138,18 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			// Add as child of the parent space.
 			_, err = sess.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
 				map[string]any{
-					"via": []string{serverName},
+					"via": []string{params.ServerName},
 				})
 			if err != nil {
 				return fmt.Errorf("add room as child of space %s: %w", spaceRoomID, err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(roomCreateResult{
+					RoomID:  response.RoomID,
+					Alias:   alias,
+					SpaceID: spaceRoomID,
+				})
 			}
 
 			fmt.Fprintln(os.Stdout, response.RoomID)
@@ -313,8 +327,19 @@ func inspectRoomState(ctx context.Context, session *messaging.Session, roomID st
 	return name, alias, topic
 }
 
+// roomDeleteParams holds the parameters for the matrix room delete command.
+type roomDeleteParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// roomDeleteResult is the JSON output for matrix room delete.
+type roomDeleteResult struct {
+	RoomID string `json:"room_id"`
+}
+
 func roomDeleteCommand() *cli.Command {
-	var session cli.SessionConfig
+	var params roomDeleteParams
 
 	return &cli.Command{
 		Name:    "delete",
@@ -335,10 +360,9 @@ to clear the m.space.child event in the space.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("room delete", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("room delete", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
@@ -351,7 +375,7 @@ to clear the m.space.child event in the space.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -363,6 +387,10 @@ to clear the m.space.child event in the space.`,
 
 			if err := sess.LeaveRoom(ctx, roomID); err != nil {
 				return fmt.Errorf("leave room: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(roomDeleteResult{RoomID: roomID})
 			}
 
 			fmt.Fprintf(os.Stdout, "Left room %s\n", roomID)

@@ -15,12 +15,27 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
+// pipelinePushParams holds the parameters for the pipeline push command.
+type pipelinePushParams struct {
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
+	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
+}
+
+// pushResult is the JSON output for pipeline push.
+type pushResult struct {
+	Ref          string `json:"ref"`
+	File         string `json:"file"`
+	RoomAlias    string `json:"room_alias"`
+	RoomID       string `json:"room_id,omitempty"`
+	PipelineName string `json:"pipeline_name"`
+	EventID      string `json:"event_id,omitempty"`
+	DryRun       bool   `json:"dry_run"`
+}
+
 // pushCommand returns the "push" subcommand for publishing a pipeline to Matrix.
 func pushCommand() *cli.Command {
-	var (
-		serverName string
-		dryRun     bool
-	)
+	var params pipelinePushParams
 
 	return &cli.Command{
 		Name:    "push",
@@ -44,11 +59,9 @@ without actually publishing.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("push", pflag.ContinueOnError)
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			flagSet.BoolVar(&dryRun, "dry-run", false, "validate only, do not publish to Matrix")
-			return flagSet
+			return cli.FlagsFromParams("push", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau pipeline push [flags] <pipeline-ref> <file>")
@@ -85,13 +98,23 @@ without actually publishing.`,
 			defer cancel()
 
 			// Verify the target room exists.
-			roomAlias := principal.RoomAlias(ref.Room, serverName)
+			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return fmt.Errorf("resolving target room %q: %w", roomAlias, err)
 			}
 
-			if dryRun {
+			if params.DryRun {
+				if params.OutputJSON {
+					return cli.WriteJSON(pushResult{
+						Ref:          ref.String(),
+						File:         filePath,
+						RoomAlias:    roomAlias,
+						RoomID:       roomID,
+						PipelineName: ref.Pipeline,
+						DryRun:       true,
+					})
+				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
 				fmt.Fprintf(os.Stdout, "  pipeline name: %s\n", ref.Pipeline)
@@ -102,6 +125,18 @@ without actually publishing.`,
 			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipeline, ref.Pipeline, content)
 			if err != nil {
 				return fmt.Errorf("publishing pipeline: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(pushResult{
+					Ref:          ref.String(),
+					File:         filePath,
+					RoomAlias:    roomAlias,
+					RoomID:       roomID,
+					PipelineName: ref.Pipeline,
+					EventID:      eventID,
+					DryRun:       false,
+				})
 			}
 
 			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)

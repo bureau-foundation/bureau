@@ -15,14 +15,28 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
+// pipelineExecuteParams holds the parameters for the pipeline execute command.
+type pipelineExecuteParams struct {
+	Machine    string   `json:"machine"     flag:"machine"     desc:"target machine localpart (required)"`
+	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
+	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	OutputJSON bool     `json:"-"           flag:"json"         desc:"output as JSON"`
+}
+
+// executeResult is the JSON output for pipeline execute.
+type executeResult struct {
+	Machine      string `json:"machine"`
+	PipelineRef  string `json:"pipeline_ref"`
+	ConfigRoom   string `json:"config_room"`
+	ConfigRoomID string `json:"config_room_id"`
+	EventID      string `json:"event_id"`
+	RequestID    string `json:"request_id"`
+}
+
 // executeCommand returns the "execute" subcommand for running a pipeline
 // on a remote machine.
 func executeCommand() *cli.Command {
-	var (
-		machine    string
-		params     []string
-		serverName string
-	)
+	var params pipelineExecuteParams
 
 	return &cli.Command{
 		Name:    "execute",
@@ -50,17 +64,14 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("execute", pflag.ContinueOnError)
-			flagSet.StringVar(&machine, "machine", "", "target machine localpart (required)")
-			flagSet.StringArrayVar(&params, "param", nil, "key=value parameter passed to the pipeline (repeatable)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for resolving room aliases")
-			return flagSet
+			return cli.FlagsFromParams("execute", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")
 			}
-			if machine == "" {
+			if params.Machine == "" {
 				return fmt.Errorf("--machine is required")
 			}
 
@@ -72,7 +83,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			}
 
 			// Validate the machine localpart.
-			if err := principal.ValidateLocalpart(machine); err != nil {
+			if err := principal.ValidateLocalpart(params.Machine); err != nil {
 				return fmt.Errorf("invalid machine name: %w", err)
 			}
 
@@ -81,7 +92,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			// params from --param are merged alongside it.
 			parameters := make(map[string]any)
 			parameters["pipeline"] = pipelineRefString
-			for _, param := range params {
+			for _, param := range params.Param {
 				key, value, found := strings.Cut(param, "=")
 				if !found {
 					return fmt.Errorf("invalid --param %q: expected key=value", param)
@@ -108,7 +119,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Resolve the config room for the target machine. The daemon
 			// monitors this room for m.bureau.command messages.
-			configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
+			configRoomAlias := principal.RoomAlias("bureau/config/"+params.Machine, params.ServerName)
 			configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 			if err != nil {
 				return fmt.Errorf("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)
@@ -117,7 +128,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			// Build the command message.
 			command := schema.CommandMessage{
 				MsgType:    schema.MsgTypeCommand,
-				Body:       fmt.Sprintf("pipeline.execute %s on %s", pipelineRefString, machine),
+				Body:       fmt.Sprintf("pipeline.execute %s on %s", pipelineRefString, params.Machine),
 				Command:    "pipeline.execute",
 				RequestID:  requestID,
 				Parameters: parameters,
@@ -129,7 +140,18 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return fmt.Errorf("sending pipeline.execute command: %w", err)
 			}
 
-			fmt.Fprintf(os.Stdout, "pipeline.execute sent to %s\n", machine)
+			if params.OutputJSON {
+				return cli.WriteJSON(executeResult{
+					Machine:      params.Machine,
+					PipelineRef:  pipelineRefString,
+					ConfigRoom:   configRoomAlias,
+					ConfigRoomID: configRoomID,
+					EventID:      eventID,
+					RequestID:    requestID,
+				})
+			}
+
+			fmt.Fprintf(os.Stdout, "pipeline.execute sent to %s\n", params.Machine)
 			fmt.Fprintf(os.Stdout, "  pipeline:    %s\n", pipelineRefString)
 			fmt.Fprintf(os.Stdout, "  config room: %s (%s)\n", configRoomAlias, configRoomID)
 			fmt.Fprintf(os.Stdout, "  event:       %s\n", eventID)

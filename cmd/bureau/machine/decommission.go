@@ -18,11 +18,16 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// decommissionParams holds the parameters for the machine decommission command.
+// Credential file paths are excluded from MCP schema since they involve reading
+// secrets from files.
+type decommissionParams struct {
+	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
+	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+}
+
 func decommissionCommand() *cli.Command {
-	var (
-		credentialFile string
-		serverName     string
-	)
+	var params decommissionParams
 
 	return &cli.Command{
 		Name:    "decommission",
@@ -44,11 +49,9 @@ homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("decommission", pflag.ContinueOnError)
-			flagSet.StringVar(&credentialFile, "credential-file", "", "path to Bureau credential file from 'bureau matrix setup' (required)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-			return flagSet
+			return cli.FlagsFromParams("decommission", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine decommission <machine-name> [flags]")
@@ -57,14 +60,14 @@ homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			if credentialFile == "" {
+			if params.CredentialFile == "" {
 				return fmt.Errorf("--credential-file is required")
 			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
 				return fmt.Errorf("invalid machine name: %w", err)
 			}
 
-			return runDecommission(machineName, credentialFile, serverName)
+			return runDecommission(machineName, params.CredentialFile, params.ServerName)
 		},
 	}
 }

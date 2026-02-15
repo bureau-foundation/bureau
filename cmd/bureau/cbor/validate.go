@@ -14,11 +14,14 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
+// validateParams holds the parameters for the "bureau cbor validate" command.
+type validateParams struct {
+	Slurp    bool `json:"slurp"     flag:"slurp,s" desc:"validate each item in a CBOR sequence independently"`
+	HexInput bool `json:"hex_input" flag:"hex,x"   desc:"treat input as hex-encoded CBOR"`
+}
+
 func validateCommand() *cli.Command {
-	var (
-		slurp    bool
-		hexInput bool
-	)
+	var params validateParams
 
 	return &cli.Command{
 		Name:    "validate",
@@ -48,16 +51,16 @@ With -s, validates each item in a CBOR sequence independently.`,
 				Command:     "echo 'a1636b657963766174' | bureau cbor validate --hex",
 			},
 		},
-		Flags: cborFlags(nil, &slurp, nil, &hexInput),
+		Params: func() any { return &params },
 		Run: func(args []string) error {
-			data, remainingArgs, err := readInput(args, hexInput)
+			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err
 			}
 			if len(remainingArgs) > 0 {
 				return fmt.Errorf("validate takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
-			return validateCBOR(data, os.Stdout, slurp)
+			return validateCBOR(data, os.Stdout, params.Slurp)
 		},
 	}
 }

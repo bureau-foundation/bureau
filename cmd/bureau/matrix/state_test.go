@@ -6,6 +6,8 @@ package matrix
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
 func TestStateGetCommand_MissingRoom(t *testing.T) {
@@ -86,18 +88,17 @@ func TestStateSetCommand_StdinConflictsWithPositionalBody(t *testing.T) {
 	}
 }
 
-func TestPrintJSON_ValidStruct(t *testing.T) {
-	// printJSON should not return an error for a valid value.
+func TestWriteJSON_ValidStruct(t *testing.T) {
 	value := map[string]string{"key": "value"}
-	err := printJSON(value)
+	err := cli.WriteJSON(value)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestPrintJSON_RawMessage(t *testing.T) {
+func TestWriteJSON_RawMessage(t *testing.T) {
 	raw := json.RawMessage(`{"nested": true}`)
-	err := printJSON(raw)
+	err := cli.WriteJSON(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

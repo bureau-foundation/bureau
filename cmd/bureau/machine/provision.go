@@ -21,12 +21,17 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// provisionParams holds the parameters for the machine provision command.
+// Credential file paths are excluded from MCP schema since they involve reading
+// secrets from files.
+type provisionParams struct {
+	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
+	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
+	OutputPath     string `json:"-"            flag:"output"          desc:"path to write bootstrap config (default: stdout)"`
+}
+
 func provisionCommand() *cli.Command {
-	var (
-		credentialFile string
-		serverName     string
-		outputPath     string
-	)
+	var params provisionParams
 
 	return &cli.Command{
 		Name:    "provision",
@@ -60,12 +65,9 @@ is immediately rotated.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("provision", pflag.ContinueOnError)
-			flagSet.StringVar(&credentialFile, "credential-file", "", "path to Bureau credential file from 'bureau matrix setup' (required)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user IDs")
-			flagSet.StringVar(&outputPath, "output", "", "path to write bootstrap config (default: stdout)")
-			return flagSet
+			return cli.FlagsFromParams("provision", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")
@@ -74,14 +76,14 @@ is immediately rotated.`,
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			if credentialFile == "" {
+			if params.CredentialFile == "" {
 				return fmt.Errorf("--credential-file is required")
 			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
 				return fmt.Errorf("invalid machine name: %w", err)
 			}
 
-			return runProvision(machineName, credentialFile, serverName, outputPath)
+			return runProvision(machineName, params.CredentialFile, params.ServerName, params.OutputPath)
 		},
 	}
 }

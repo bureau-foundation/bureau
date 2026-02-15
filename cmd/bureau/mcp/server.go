@@ -254,13 +254,12 @@ func (s *Server) executeTool(t *tool, arguments json.RawMessage) (string, error)
 	params := t.command.Params()
 	reflect.ValueOf(params).Elem().SetZero()
 
-	// Apply defaults from struct tags. Calling Flags() triggers flag
-	// registration, and pflag sets *target = defaultValue during
-	// registration. This reuses the existing default-parsing logic
-	// rather than duplicating it.
-	if t.command.Flags != nil {
-		t.command.Flags()
-	}
+	// Apply defaults from struct tags. FlagSet() triggers flag
+	// registration (either from the explicit Flags function or
+	// auto-derived from Params), and pflag sets *target = defaultValue
+	// during registration. This reuses the existing default-parsing
+	// logic rather than duplicating it.
+	t.command.FlagSet()
 
 	// Overlay with the JSON arguments from the MCP client.
 	if len(arguments) > 0 && string(arguments) != "null" {

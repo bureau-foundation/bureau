@@ -33,12 +33,18 @@ type Command struct {
 	Examples []Example
 
 	// Flags returns a configured *pflag.FlagSet for this command. Called
-	// lazily on first use. If nil, the command accepts no flags.
+	// lazily on first use. When nil, the framework derives the flag set
+	// automatically from Params via [FlagsFromParams]. Set Flags
+	// explicitly only when you need non-standard flag behavior that
+	// struct tags cannot express.
 	Flags func() *pflag.FlagSet
 
 	// Params returns a pointer to the command's parameter struct. Used
 	// by the MCP server to generate JSON Schema for tool descriptions
 	// and to populate parameters from JSON input before calling Run.
+	// Also used by the framework to auto-derive the flag set when
+	// Flags is nil: [FlagSet] calls [FlagsFromParams] with the
+	// returned struct.
 	//
 	// The returned pointer must be the same value that Run reads from,
 	// so that populating the struct via json.Unmarshal before calling
@@ -50,7 +56,8 @@ type Command struct {
 	//         Run: func(args []string) error { /* reads params */ },
 	//     }
 	//
-	// If nil, the command is not exposed as an MCP tool.
+	// If nil, the command is not exposed as an MCP tool and no flags
+	// are auto-derived.
 	Params func() any
 
 	// RequiredGrants lists the authorization action strings needed to
@@ -94,6 +101,26 @@ type Example struct {
 // consistent wording and makes it easy to grep for unfinished commands.
 func ErrNotImplemented(command string) error {
 	return fmt.Errorf("%s: not yet implemented", command)
+}
+
+// FlagSet returns the command's flag set, resolving it from the first
+// available source:
+//
+//  1. The explicit Flags function, if set.
+//  2. Auto-derivation from Params via [FlagsFromParams], if Params is set.
+//  3. nil, if neither is set (the command accepts no flags).
+//
+// Each call produces a fresh [pflag.FlagSet] whose flag targets point
+// at the closure-captured params struct. Callers that need to parse
+// flags should call FlagSet once, parse, then discard the FlagSet.
+func (c *Command) FlagSet() *pflag.FlagSet {
+	if c.Flags != nil {
+		return c.Flags()
+	}
+	if c.Params != nil {
+		return FlagsFromParams(c.Name, c.Params())
+	}
+	return nil
 }
 
 // Execute parses args and dispatches to the appropriate subcommand or Run
@@ -146,10 +173,8 @@ func (c *Command) Execute(args []string) error {
 		return fmt.Errorf("subcommand required (got flag %q)", args[0])
 	}
 
-	// Parse flags if defined.
-	if c.Flags != nil {
-		flagSet := c.Flags()
-
+	// Parse flags if defined (explicitly or derived from Params).
+	if flagSet := c.FlagSet(); flagSet != nil {
 		// Suppress the stdlib flag package's default error output and
 		// usage dump. We format our own error messages with suggestions.
 		flagSet.SetOutput(io.Discard)
@@ -160,9 +185,9 @@ func (c *Command) Execute(args []string) error {
 			errMsg := err.Error()
 
 			if strings.Contains(errMsg, "unknown flag") {
-				// Recreate the flagSet to get a clean copy for suggestion
-				// lookup (the failed parse may have consumed state).
-				suggestion := suggestFlag(args, c.Flags())
+				// Get a fresh FlagSet for suggestion lookup (the failed
+				// parse may have consumed state).
+				suggestion := suggestFlag(args, c.FlagSet())
 				if suggestion != "" {
 					return fmt.Errorf("%s (did you mean %s?)\n\nRun '%s --help' for usage.",
 						errMsg, suggestion, c.fullName())
@@ -214,9 +239,8 @@ func (c *Command) PrintHelp(w io.Writer) {
 		tw.Flush()
 	}
 
-	// Flags.
-	if c.Flags != nil {
-		flagSet := c.Flags()
+	// Flags (explicit or derived from Params).
+	if flagSet := c.FlagSet(); flagSet != nil {
 		var flagHelp strings.Builder
 		flagSet.SetOutput(&flagHelp)
 		flagSet.PrintDefaults()

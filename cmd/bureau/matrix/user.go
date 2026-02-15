@@ -38,6 +38,26 @@ via --credential-file or --homeserver/--token/--user-id.`,
 	}
 }
 
+// userCreateParams holds the parameters for the matrix user create command.
+// Credential-related flags are excluded from MCP schema via json:"-" since they
+// involve reading secrets from files/stdin, which is not appropriate for MCP.
+type userCreateParams struct {
+	CredentialFile        string `json:"-"           flag:"credential-file"         desc:"path to Bureau credential file from 'bureau matrix setup' (provides homeserver URL and registration token)"`
+	HomeserverURL         string `json:"-"           flag:"homeserver"              desc:"Matrix homeserver URL (overrides credential file; default http://localhost:6167)"`
+	RegistrationTokenFile string `json:"-"           flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin (overrides credential file)"`
+	PasswordFile          string `json:"-"           flag:"password-file"           desc:"path to file containing password, or - to prompt interactively (default: derive from registration token)"`
+	ServerName            string `json:"server_name" flag:"server-name"             desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
+	Operator              bool   `json:"operator"    flag:"operator"                desc:"invite the user to all Bureau infrastructure rooms (requires --credential-file)"`
+	OutputJSON            bool   `json:"-"           flag:"json"                    desc:"output as JSON"`
+}
+
+// userCreateResult is the JSON output for matrix user create.
+type userCreateResult struct {
+	UserID        string `json:"user_id"`
+	AccessToken   string `json:"access_token,omitempty"`
+	AlreadyExists bool   `json:"already_exists"`
+}
+
 // userCreateCommand returns the "user create" subcommand for registering a new
 // Matrix account. This uses Client.Register directly (no existing session
 // needed), similar to how setup bootstraps the admin account.
@@ -46,14 +66,7 @@ via --credential-file or --homeserver/--token/--user-id.`,
 // (space, system, machines, services). This is the primary onboarding path
 // for human operators after running "bureau matrix setup".
 func userCreateCommand() *cli.Command {
-	var (
-		credentialFile        string
-		homeserverURL         string
-		registrationTokenFile string
-		passwordFile          string
-		serverName            string
-		operator              bool
-	)
+	var params userCreateParams
 
 	return &cli.Command{
 		Name:    "create",
@@ -90,15 +103,9 @@ and proceeds directly to ensuring room membership.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("create", pflag.ContinueOnError)
-			flagSet.StringVar(&credentialFile, "credential-file", "", "path to Bureau credential file from 'bureau matrix setup' (provides homeserver URL and registration token)")
-			flagSet.StringVar(&homeserverURL, "homeserver", "", "Matrix homeserver URL (overrides credential file; default http://localhost:6167)")
-			flagSet.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (overrides credential file)")
-			flagSet.StringVar(&passwordFile, "password-file", "", "path to file containing password, or - to prompt interactively (default: derive from registration token)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user IDs")
-			flagSet.BoolVar(&operator, "operator", false, "invite the user to all Bureau infrastructure rooms (requires --credential-file)")
-			return flagSet
+			return cli.FlagsFromParams("user create", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("username is required\n\nUsage: bureau matrix user create <username> [flags]")
@@ -107,16 +114,16 @@ and proceeds directly to ensuring room membership.`,
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			if operator && credentialFile == "" {
+			if params.Operator && params.CredentialFile == "" {
 				return fmt.Errorf("--operator requires --credential-file (needed for admin session and Bureau room discovery)")
 			}
 
 			// Parse the credential file once. Both the registration flow
 			// and the operator invite flow read from it.
 			var credentials map[string]string
-			if credentialFile != "" {
+			if params.CredentialFile != "" {
 				var err error
-				credentials, err = cli.ReadCredentialFile(credentialFile)
+				credentials, err = cli.ReadCredentialFile(params.CredentialFile)
 				if err != nil {
 					return fmt.Errorf("read credential file: %w", err)
 				}
@@ -126,6 +133,7 @@ and proceeds directly to ensuring room membership.`,
 			// file from "bureau matrix setup" contains both, so after initial
 			// bootstrap --credential-file is all you need. Explicit flags
 			// override the credential file values.
+			homeserverURL := params.HomeserverURL
 			var registrationToken string
 			if credentials != nil {
 				registrationToken = credentials["MATRIX_REGISTRATION_TOKEN"]
@@ -133,11 +141,11 @@ and proceeds directly to ensuring room membership.`,
 					homeserverURL = credentials["MATRIX_HOMESERVER_URL"]
 				}
 			}
-			if registrationTokenFile != "" {
-				if registrationTokenFile == "-" && passwordFile == "-" {
+			if params.RegistrationTokenFile != "" {
+				if params.RegistrationTokenFile == "-" && params.PasswordFile == "-" {
 					return fmt.Errorf("--registration-token-file and --password-file cannot both be - (stdin)")
 				}
-				tokenBuffer, err := secret.ReadFromPath(registrationTokenFile)
+				tokenBuffer, err := secret.ReadFromPath(params.RegistrationTokenFile)
 				if err != nil {
 					return fmt.Errorf("read registration token: %w", err)
 				}
@@ -155,8 +163,8 @@ and proceeds directly to ensuring room membership.`,
 				passwordBuffer *secret.Buffer
 				err            error
 			)
-			if passwordFile != "" {
-				passwordBuffer, err = readPassword(passwordFile)
+			if params.PasswordFile != "" {
+				passwordBuffer, err = readPassword(params.PasswordFile)
 				if err != nil {
 					return fmt.Errorf("read password: %w", err)
 				}
@@ -190,27 +198,29 @@ and proceeds directly to ensuring room membership.`,
 			// Register the account. In operator mode, M_USER_IN_USE means
 			// the account already exists — verify the password matches
 			// (if one was explicitly provided) and proceed to room invites.
-			userID := fmt.Sprintf("@%s:%s", username, serverName)
+			userID := fmt.Sprintf("@%s:%s", username, params.ServerName)
 			registrationTokenBuffer, tokenErr := secret.NewFromString(registrationToken)
 			if tokenErr != nil {
 				return fmt.Errorf("protecting registration token: %w", tokenErr)
 			}
 			defer registrationTokenBuffer.Close()
 
+			alreadyExists := false
 			session, registerErr := client.Register(ctx, messaging.RegisterRequest{
 				Username:          username,
 				Password:          passwordBuffer,
 				RegistrationToken: registrationTokenBuffer,
 			})
 			if registerErr != nil {
-				if operator && messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
+				if params.Operator && messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
 					// Account exists. Log in to get a session for joining
 					// rooms (invite alone leaves the user in limbo —
 					// they must also join to become a full member).
+					alreadyExists = true
 					var loginErr error
 					session, loginErr = client.Login(ctx, username, passwordBuffer)
 					if loginErr != nil {
-						if passwordFile != "" {
+						if params.PasswordFile != "" {
 							return fmt.Errorf("account %s already exists but the provided password does not match (the existing password was not changed)", userID)
 						}
 						return fmt.Errorf("account %s already exists and login with derived password failed: %w", userID, loginErr)
@@ -220,18 +230,31 @@ and proceeds directly to ensuring room membership.`,
 				} else {
 					return fmt.Errorf("register user %q: %w", username, registerErr)
 				}
-			} else {
+			} else if !params.OutputJSON {
 				fmt.Fprintf(os.Stdout, "User ID:       %s\n", session.UserID())
 				fmt.Fprintf(os.Stdout, "Access Token:  %s\n", session.AccessToken())
 			}
 
-			if !operator {
-				return nil
+			if params.Operator {
+				// Operator mode: admin invites, then the user's own session
+				// joins each room. Invite-only rooms require both steps.
+				if err := onboardOperator(ctx, client, credentials, userID, session); err != nil {
+					return err
+				}
 			}
 
-			// Operator mode: admin invites, then the user's own session
-			// joins each room. Invite-only rooms require both steps.
-			return onboardOperator(ctx, client, credentials, userID, session)
+			if params.OutputJSON {
+				result := userCreateResult{
+					UserID:        session.UserID(),
+					AlreadyExists: alreadyExists,
+				}
+				if !alreadyExists {
+					result.AccessToken = session.AccessToken()
+				}
+				return cli.WriteJSON(result)
+			}
+
+			return nil
 		},
 	}
 }
@@ -359,14 +382,25 @@ func readPassword(path string) (*secret.Buffer, error) {
 	return buffer, nil
 }
 
+// userListParams holds the parameters for the matrix user list command.
+type userListParams struct {
+	cli.SessionConfig
+	Room       string `json:"room" flag:"room" desc:"room alias or ID to list members of"`
+	OutputJSON bool   `json:"-"    flag:"json" desc:"output as JSON"`
+}
+
+// userListEntry holds the JSON-serializable data for a single user listing.
+type userListEntry struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Membership  string `json:"membership,omitempty"`
+}
+
 // userListCommand returns the "user list" subcommand for listing Matrix users.
 // With --room, lists members of a specific room. Without --room, aggregates
 // unique members across all joined rooms.
 func userListCommand() *cli.Command {
-	var (
-		session  cli.SessionConfig
-		roomFlag string
-	)
+	var params userListParams
 
 	return &cli.Command{
 		Name:    "list",
@@ -388,11 +422,9 @@ authenticated user has joined.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("list", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID to list members of (optional)")
-			return flagSet
+			return cli.FlagsFromParams("user list", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -401,21 +433,21 @@ authenticated user has joined.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
 
-			if roomFlag != "" {
-				return listRoomMembers(ctx, sess, roomFlag)
+			if params.Room != "" {
+				return listRoomMembers(ctx, sess, params.Room, params.OutputJSON)
 			}
-			return listAllMembers(ctx, sess)
+			return listAllMembers(ctx, sess, params.OutputJSON)
 		},
 	}
 }
 
 // listRoomMembers lists members of a single room, resolving aliases as needed.
-func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAlias string) error {
+func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAlias string, outputJSON bool) error {
 	roomID, err := resolveRoom(ctx, session, roomIDOrAlias)
 	if err != nil {
 		return err
@@ -424,6 +456,18 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 	members, err := session.GetRoomMembers(ctx, roomID)
 	if err != nil {
 		return fmt.Errorf("get room members: %w", err)
+	}
+
+	if outputJSON {
+		var entries []userListEntry
+		for _, member := range members {
+			entries = append(entries, userListEntry{
+				UserID:      member.UserID,
+				DisplayName: member.DisplayName,
+				Membership:  member.Membership,
+			})
+		}
+		return cli.WriteJSON(entries)
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -436,7 +480,7 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 
 // listAllMembers aggregates unique members across all joined rooms, fetching
 // display names for each unique user.
-func listAllMembers(ctx context.Context, session *messaging.Session) error {
+func listAllMembers(ctx context.Context, session *messaging.Session, outputJSON bool) error {
 	rooms, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return fmt.Errorf("get joined rooms: %w", err)
@@ -457,6 +501,24 @@ func listAllMembers(ctx context.Context, session *messaging.Session) error {
 				uniqueMembers[member.UserID] = member
 			}
 		}
+	}
+
+	if outputJSON {
+		var entries []userListEntry
+		for _, member := range uniqueMembers {
+			displayName := member.DisplayName
+			if displayName == "" {
+				fetched, err := session.GetDisplayName(ctx, member.UserID)
+				if err == nil {
+					displayName = fetched
+				}
+			}
+			entries = append(entries, userListEntry{
+				UserID:      member.UserID,
+				DisplayName: displayName,
+			})
+		}
+		return cli.WriteJSON(entries)
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -480,12 +542,22 @@ func listAllMembers(ctx context.Context, session *messaging.Session) error {
 	return writer.Flush()
 }
 
+// userInviteParams holds the parameters for the matrix user invite command.
+type userInviteParams struct {
+	cli.SessionConfig
+	Room       string `json:"room" flag:"room" desc:"room alias or ID to invite the user to (required)"`
+	OutputJSON bool   `json:"-"    flag:"json" desc:"output as JSON"`
+}
+
+// userInviteResult is the JSON output for matrix user invite.
+type userInviteResult struct {
+	UserID string `json:"user_id"`
+	RoomID string `json:"room_id"`
+}
+
 // userInviteCommand returns the "user invite" subcommand.
 func userInviteCommand() *cli.Command {
-	var (
-		session  cli.SessionConfig
-		roomFlag string
-	)
+	var params userInviteParams
 
 	return &cli.Command{
 		Name:    "invite",
@@ -500,11 +572,9 @@ func userInviteCommand() *cli.Command {
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("invite", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID to invite the user to (required)")
-			return flagSet
+			return cli.FlagsFromParams("invite", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix user invite <user-id> --room <room>")
@@ -514,19 +584,19 @@ func userInviteCommand() *cli.Command {
 			}
 			targetUserID := args[0]
 
-			if roomFlag == "" {
+			if params.Room == "" {
 				return fmt.Errorf("--room is required")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
 
-			roomID, err := resolveRoom(ctx, sess, roomFlag)
+			roomID, err := resolveRoom(ctx, sess, params.Room)
 			if err != nil {
 				return err
 			}
@@ -535,19 +605,36 @@ func userInviteCommand() *cli.Command {
 				return fmt.Errorf("invite user: %w", err)
 			}
 
-			fmt.Fprintf(os.Stdout, "Invited %s to %s\n", targetUserID, roomFlag)
+			if params.OutputJSON {
+				return cli.WriteJSON(userInviteResult{
+					UserID: targetUserID,
+					RoomID: roomID,
+				})
+			}
+
+			fmt.Fprintf(os.Stdout, "Invited %s to %s\n", targetUserID, params.Room)
 			return nil
 		},
 	}
 }
 
+// userKickParams holds the parameters for the matrix user kick command.
+type userKickParams struct {
+	cli.SessionConfig
+	Room       string `json:"room"   flag:"room"   desc:"room alias or ID to kick the user from (required)"`
+	Reason     string `json:"reason" flag:"reason" desc:"reason for the kick"`
+	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+}
+
+// userKickResult is the JSON output for matrix user kick.
+type userKickResult struct {
+	UserID string `json:"user_id"`
+	RoomID string `json:"room_id"`
+}
+
 // userKickCommand returns the "user kick" subcommand.
 func userKickCommand() *cli.Command {
-	var (
-		session  cli.SessionConfig
-		roomFlag string
-		reason   string
-	)
+	var params userKickParams
 
 	return &cli.Command{
 		Name:    "kick",
@@ -566,12 +653,9 @@ alias or room ID. An optional --reason provides context for the kick.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("kick", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID to kick the user from (required)")
-			flagSet.StringVar(&reason, "reason", "", "reason for the kick (optional)")
-			return flagSet
+			return cli.FlagsFromParams("kick", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix user kick <user-id> --room <room>")
@@ -581,36 +665,54 @@ alias or room ID. An optional --reason provides context for the kick.`,
 			}
 			targetUserID := args[0]
 
-			if roomFlag == "" {
+			if params.Room == "" {
 				return fmt.Errorf("--room is required")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
 
-			roomID, err := resolveRoom(ctx, sess, roomFlag)
+			roomID, err := resolveRoom(ctx, sess, params.Room)
 			if err != nil {
 				return err
 			}
 
-			if err := sess.KickUser(ctx, roomID, targetUserID, reason); err != nil {
+			if err := sess.KickUser(ctx, roomID, targetUserID, params.Reason); err != nil {
 				return fmt.Errorf("kick user: %w", err)
 			}
 
-			fmt.Fprintf(os.Stdout, "Kicked %s from %s\n", targetUserID, roomFlag)
+			if params.OutputJSON {
+				return cli.WriteJSON(userKickResult{
+					UserID: targetUserID,
+					RoomID: roomID,
+				})
+			}
+
+			fmt.Fprintf(os.Stdout, "Kicked %s from %s\n", targetUserID, params.Room)
 			return nil
 		},
 	}
 }
 
+// userWhoAmIParams holds the parameters for the matrix user whoami command.
+type userWhoAmIParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// userWhoAmIResult is the JSON output for matrix user whoami.
+type userWhoAmIResult struct {
+	UserID string `json:"user_id"`
+}
+
 // userWhoAmICommand returns the "user whoami" subcommand.
 func userWhoAmICommand() *cli.Command {
-	var session cli.SessionConfig
+	var params userWhoAmIParams
 
 	return &cli.Command{
 		Name:    "whoami",
@@ -626,10 +728,9 @@ account is in use.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("whoami", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("whoami", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -638,7 +739,7 @@ account is in use.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
@@ -646,6 +747,10 @@ account is in use.`,
 			userID, err := sess.WhoAmI(ctx)
 			if err != nil {
 				return fmt.Errorf("whoami: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(userWhoAmIResult{UserID: userID})
 			}
 
 			fmt.Fprintln(os.Stdout, userID)

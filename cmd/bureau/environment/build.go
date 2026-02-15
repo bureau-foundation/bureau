@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
@@ -17,12 +15,23 @@ import (
 // Each profile gets its own symlink: /var/bureau/environment/<profile>.
 const defaultOutDir = "/var/bureau/environment"
 
+// buildParams holds the parameters for the environment build command.
+type buildParams struct {
+	FlakeRef      string   `json:"flake_ref"       flag:"flake"          desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
+	OutLink       string   `json:"-"               flag:"out-link"       desc:"output symlink path (default: /var/bureau/environment/<profile>)"`
+	OverrideInput []string `json:"override_input"  flag:"override-input" desc:"override a flake input (format: name=flakeref)"`
+	OutputJSON    bool     `json:"-"               flag:"json"           desc:"output as JSON"`
+}
+
+// buildResult is the JSON output for environment build.
+type buildResult struct {
+	Profile   string `json:"profile"`
+	StorePath string `json:"store_path"`
+	OutLink   string `json:"out_link"`
+}
+
 func buildCommand() *cli.Command {
-	var (
-		flakeRef      string
-		outLink       string
-		overrideInput []string
-	)
+	var params buildParams
 
 	return &cli.Command{
 		Name:    "build",
@@ -38,14 +47,8 @@ runner).
 
 The build output is a directory containing bin/, lib/, share/, etc.
 with symlinks into /nix/store for all packages in the profile.`,
-		Usage: "bureau environment build <profile> [flags]",
-		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("build", pflag.ContinueOnError)
-			flagSet.StringVar(&flakeRef, "flake", defaultFlakeRef, "flake reference for the environment repo")
-			flagSet.StringVar(&outLink, "out-link", "", "output symlink path (default: /var/bureau/environment/<profile>)")
-			flagSet.StringArrayVar(&overrideInput, "override-input", nil, "override a flake input (format: name=flakeref)")
-			return flagSet
-		},
+		Usage:  "bureau environment build <profile> [flags]",
+		Params: func() any { return &params },
 		Examples: []cli.Example{
 			{
 				Description: "Build the workstation profile",
@@ -67,20 +70,29 @@ with symlinks into /nix/store for all packages in the profile.`,
 
 			profile := args[0]
 
+			outLink := params.OutLink
 			if outLink == "" {
 				outLink = filepath.Join(defaultOutDir, profile)
 			}
 
-			options, err := parseOverrideInputs(overrideInput)
+			options, err := parseOverrideInputs(params.OverrideInput)
 			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Building profile %q from %s...\n", profile, flakeRef)
+			fmt.Fprintf(os.Stderr, "Building profile %q from %s...\n", profile, params.FlakeRef)
 
-			storePath, err := buildProfile(flakeRef, profile, outLink, options)
+			storePath, err := buildProfile(params.FlakeRef, profile, outLink, options)
 			if err != nil {
 				return err
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(buildResult{
+					Profile:   profile,
+					StorePath: storePath,
+					OutLink:   outLink,
+				})
 			}
 
 			fmt.Fprintf(os.Stdout, "Built %s\n", storePath)

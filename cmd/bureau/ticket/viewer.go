@@ -6,17 +6,20 @@ package ticket
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ticketui"
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+// viewerParams holds the parameters for the ticket viewer command.
+type viewerParams struct {
+	FilePath string `json:"file" flag:"file" desc:"path to beads JSONL file (default: .beads/issues.jsonl)"`
+}
 
 // ViewerCommand returns the "viewer" subcommand that launches the
 // interactive ticket viewer TUI.
 func ViewerCommand() *cli.Command {
-	var filePath string
+	var params viewerParams
 
 	return &cli.Command{
 		Name:    "viewer",
@@ -36,16 +39,13 @@ directory. Use --file to specify an alternate JSONL path.`,
 				Command:     "bureau ticket viewer --file path/to/issues.jsonl",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("viewer", pflag.ContinueOnError)
-			flagSet.StringVar(&filePath, "file", "", "path to beads JSONL file (default: .beads/issues.jsonl)")
-			return flagSet
-		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
 
+			filePath := params.FilePath
 			if filePath == "" {
 				filePath = ".beads/issues.jsonl"
 			}

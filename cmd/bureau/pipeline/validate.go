@@ -7,12 +7,28 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/pflag"
+
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
 )
 
+// pipelineValidateParams holds the parameters for the pipeline validate command.
+type pipelineValidateParams struct {
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// validationResult is the JSON output for pipeline validate.
+type validationResult struct {
+	File   string   `json:"file"`
+	Valid  bool     `json:"valid"`
+	Issues []string `json:"issues,omitempty"`
+}
+
 // validateCommand returns the "validate" subcommand for validating pipeline files.
 func validateCommand() *cli.Command {
+	var params pipelineValidateParams
+
 	return &cli.Command{
 		Name:    "validate",
 		Summary: "Validate a local pipeline JSONC file",
@@ -35,6 +51,10 @@ before validation.`,
 				Command:     "bureau pipeline validate my-pipeline.jsonc",
 			},
 		},
+		Flags: func() *pflag.FlagSet {
+			return cli.FlagsFromParams("validate", &params)
+		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline validate <file>")
@@ -47,6 +67,15 @@ before validation.`,
 			}
 
 			issues := libpipeline.Validate(content)
+
+			if params.OutputJSON {
+				return cli.WriteJSON(validationResult{
+					File:   path,
+					Valid:  len(issues) == 0,
+					Issues: issues,
+				})
+			}
+
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)

@@ -21,7 +21,6 @@ go_library(
         "//cmd/bureau/cli",
         "//lib/codec",
         "@com_github_fxamacker_cbor_v2//:cbor",
-        "@com_github_spf13_pflag//:pflag",
     ],
 )
 

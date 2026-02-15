@@ -35,12 +35,15 @@ state key defaults to "" (empty string) when not specified.`,
 	}
 }
 
+// stateGetParams holds the parameters for the matrix state get command.
+type stateGetParams struct {
+	cli.SessionConfig
+	StateKey string `json:"state_key" flag:"key" desc:"state key for the event (default: empty string)"`
+}
+
 // stateGetCommand returns the "get" subcommand under "state".
 func stateGetCommand() *cli.Command {
-	var (
-		session  cli.SessionConfig
-		stateKey string
-	)
+	var params stateGetParams
 
 	return &cli.Command{
 		Name:    "get",
@@ -68,11 +71,9 @@ or machine ID as the state key.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("get", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&stateKey, "key", "", "state key for the event (default: empty string)")
-			return flagSet
+			return cli.FlagsFromParams("state get", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix state get [flags] <room> [<event-type>]")
@@ -86,7 +87,7 @@ or machine ID as the state key.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			matrixSession, err := session.Connect(ctx)
+			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -102,28 +103,37 @@ or machine ID as the state key.`,
 				if err != nil {
 					return fmt.Errorf("get room state: %w", err)
 				}
-				return printJSON(events)
+				return cli.WriteJSON(events)
 			}
 
 			// Specific event type with optional --key.
 			eventType := args[1]
 
-			content, err := matrixSession.GetStateEvent(ctx, roomID, eventType, stateKey)
+			content, err := matrixSession.GetStateEvent(ctx, roomID, eventType, params.StateKey)
 			if err != nil {
 				return fmt.Errorf("get state event: %w", err)
 			}
-			return printJSON(content)
+			return cli.WriteJSON(content)
 		},
 	}
 }
 
+// stateSetParams holds the parameters for the matrix state set command.
+type stateSetParams struct {
+	cli.SessionConfig
+	StateKey   string `json:"state_key" flag:"key"   desc:"state key for the event (default: empty string)"`
+	UseStdin   bool   `json:"use_stdin" flag:"stdin"  desc:"read JSON body from stdin instead of positional argument"`
+	OutputJSON bool   `json:"-"         flag:"json"   desc:"output as JSON"`
+}
+
+// stateSetResult is the JSON output for matrix state set.
+type stateSetResult struct {
+	EventID string `json:"event_id"`
+}
+
 // stateSetCommand returns the "set" subcommand under "state".
 func stateSetCommand() *cli.Command {
-	var (
-		session  cli.SessionConfig
-		stateKey string
-		useStdin bool
-	)
+	var params stateSetParams
 
 	return &cli.Command{
 		Name:    "set",
@@ -150,12 +160,9 @@ specific state key.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("set", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&stateKey, "key", "", "state key for the event (default: empty string)")
-			flagSet.BoolVar(&useStdin, "stdin", false, "read JSON body from stdin instead of positional argument")
-			return flagSet
+			return cli.FlagsFromParams("state set", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("usage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
@@ -165,7 +172,7 @@ specific state key.`,
 			eventType := args[1]
 
 			var jsonBody string
-			if useStdin {
+			if params.UseStdin {
 				if len(args) > 2 {
 					return fmt.Errorf("unexpected argument %q: --stdin reads body from stdin, not positional args", args[2])
 				}
@@ -193,7 +200,7 @@ specific state key.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			matrixSession, err := session.Connect(ctx)
+			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -203,23 +210,17 @@ specific state key.`,
 				return err
 			}
 
-			eventID, err := matrixSession.SendStateEvent(ctx, roomID, eventType, stateKey, content)
+			eventID, err := matrixSession.SendStateEvent(ctx, roomID, eventType, params.StateKey, content)
 			if err != nil {
 				return fmt.Errorf("set state event: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(stateSetResult{EventID: eventID})
 			}
 
 			fmt.Fprintln(os.Stdout, eventID)
 			return nil
 		},
 	}
-}
-
-// printJSON marshals the value as indented JSON and writes it to stdout.
-func printJSON(value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
-	}
-	_, err = fmt.Fprintln(os.Stdout, string(data))
-	return err
 }

@@ -28,15 +28,20 @@ import (
 // homeserver. This is the only matrix subcommand that talks directly to
 // the homeserver (no proxy) since it runs before any agent infrastructure
 // exists.
+// setupParams holds the parameters for the matrix setup command. Credential and
+// file path flags are excluded from MCP schema since they involve reading
+// secrets from files/stdin.
+type setupParams struct {
+	HomeserverURL         string   `json:"-"            flag:"homeserver"              desc:"Matrix homeserver URL" default:"http://localhost:6167"`
+	RegistrationTokenFile string   `json:"-"            flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin (required)"`
+	CredentialFile        string   `json:"-"            flag:"credential-file"         desc:"path to write Bureau credentials (required)"`
+	ServerName            string   `json:"server_name"  flag:"server-name"             desc:"Matrix server name for constructing user/room IDs" default:"bureau.local"`
+	AdminUsername         string   `json:"admin_user"   flag:"admin-user"              desc:"admin account username" default:"bureau-admin"`
+	InviteUsers           []string `json:"invite_users" flag:"invite"                  desc:"Matrix user ID to invite to all Bureau rooms (repeatable)"`
+}
+
 func SetupCommand() *cli.Command {
-	var (
-		homeserverURL         string
-		registrationTokenFile string
-		credentialFile        string
-		serverName            string
-		adminUsername         string
-		inviteUsers           []string
-	)
+	var params setupParams
 
 	return &cli.Command{
 		Name:    "setup",
@@ -70,27 +75,21 @@ Standard rooms created:
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("setup", pflag.ContinueOnError)
-			flagSet.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
-			flagSet.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (required)")
-			flagSet.StringVar(&credentialFile, "credential-file", "", "path to write Bureau credentials (required)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name for constructing user/room IDs")
-			flagSet.StringVar(&adminUsername, "admin-user", "bureau-admin", "admin account username")
-			flagSet.StringArrayVar(&inviteUsers, "invite", nil, "Matrix user ID to invite to all Bureau rooms (repeatable)")
-			return flagSet
+			return cli.FlagsFromParams("setup", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
 			}
-			if registrationTokenFile == "" {
+			if params.RegistrationTokenFile == "" {
 				return fmt.Errorf("--registration-token-file is required (use - for stdin)")
 			}
-			if credentialFile == "" {
+			if params.CredentialFile == "" {
 				return fmt.Errorf("--credential-file is required")
 			}
 
-			registrationToken, err := secret.ReadFromPath(registrationTokenFile)
+			registrationToken, err := secret.ReadFromPath(params.RegistrationTokenFile)
 			if err != nil {
 				return fmt.Errorf("read registration token: %w", err)
 			}
@@ -108,12 +107,12 @@ Standard rooms created:
 			defer cancel()
 
 			return runSetup(ctx, logger, setupConfig{
-				homeserverURL:     homeserverURL,
+				homeserverURL:     params.HomeserverURL,
 				registrationToken: registrationToken,
-				credentialFile:    credentialFile,
-				serverName:        serverName,
-				adminUsername:     adminUsername,
-				inviteUsers:       inviteUsers,
+				credentialFile:    params.CredentialFile,
+				serverName:        params.ServerName,
+				adminUsername:     params.AdminUsername,
+				inviteUsers:       params.InviteUsers,
 			})
 		},
 	}

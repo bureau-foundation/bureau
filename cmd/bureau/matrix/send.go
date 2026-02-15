@@ -16,13 +16,22 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// sendParams holds the parameters for the matrix send command.
+type sendParams struct {
+	cli.SessionConfig
+	ThreadID   string `json:"thread_id"  flag:"thread"     desc:"event ID of thread root to reply within"`
+	EventType  string `json:"event_type" flag:"event-type" desc:"custom event type (default: m.room.message)"`
+	OutputJSON bool   `json:"-"          flag:"json"        desc:"output as JSON"`
+}
+
+// sendResult is the JSON output for matrix send.
+type sendResult struct {
+	EventID string `json:"event_id"`
+}
+
 // SendCommand returns the "send" subcommand for sending messages to Matrix rooms.
 func SendCommand() *cli.Command {
-	var (
-		session   cli.SessionConfig
-		threadID  string
-		eventType string
-	)
+	var params sendParams
 
 	return &cli.Command{
 		Name:    "send",
@@ -51,12 +60,9 @@ Bureau protocol events).`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("send", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&threadID, "thread", "", "event ID of thread root to reply within")
-			flagSet.StringVar(&eventType, "event-type", "", "custom event type (default: m.room.message)")
-			return flagSet
+			return cli.FlagsFromParams("send", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("usage: bureau matrix send [flags] <room> <message>")
@@ -71,7 +77,7 @@ Bureau protocol events).`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			matrixSession, err := session.Connect(ctx)
+			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -82,18 +88,22 @@ Bureau protocol events).`,
 			}
 
 			var eventID string
-			if eventType != "" {
+			if params.EventType != "" {
 				// Custom event type: send raw content. The message body is
 				// expected to be JSON, but we send it as a text message
 				// content structure for consistency.
-				eventID, err = matrixSession.SendEvent(ctx, roomID, eventType, messaging.NewTextMessage(messageBody))
-			} else if threadID != "" {
-				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(threadID, messageBody))
+				eventID, err = matrixSession.SendEvent(ctx, roomID, params.EventType, messaging.NewTextMessage(messageBody))
+			} else if params.ThreadID != "" {
+				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(params.ThreadID, messageBody))
 			} else {
 				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewTextMessage(messageBody))
 			}
 			if err != nil {
 				return fmt.Errorf("send message: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(sendResult{EventID: eventID})
 			}
 
 			fmt.Fprintln(os.Stdout, eventID)

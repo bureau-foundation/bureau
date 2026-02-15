@@ -35,12 +35,22 @@ workspaces, project channels, and service directories.`,
 	}
 }
 
+// spaceCreateParams holds the parameters for the matrix space create command.
+type spaceCreateParams struct {
+	cli.SessionConfig
+	Name       string `json:"name"  flag:"name"  desc:"space display name (defaults to alias)"`
+	Topic      string `json:"topic" flag:"topic" desc:"space topic"`
+	OutputJSON bool   `json:"-"     flag:"json"  desc:"output as JSON"`
+}
+
+// spaceCreateResult is the JSON output for matrix space create.
+type spaceCreateResult struct {
+	RoomID string `json:"room_id"`
+	Alias  string `json:"alias"`
+}
+
 func spaceCreateCommand() *cli.Command {
-	var (
-		session cli.SessionConfig
-		name    string
-		topic   string
-	)
+	var params spaceCreateParams
 
 	return &cli.Command{
 		Name:    "create",
@@ -63,12 +73,9 @@ if not specified.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("space create", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&name, "name", "", "space display name (defaults to alias)")
-			flagSet.StringVar(&topic, "topic", "", "space topic")
-			return flagSet
+			return cli.FlagsFromParams("space create", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
@@ -78,6 +85,7 @@ if not specified.`,
 			}
 			alias := args[0]
 
+			name := params.Name
 			if name == "" {
 				name = alias
 			}
@@ -85,7 +93,7 @@ if not specified.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -93,7 +101,7 @@ if not specified.`,
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{
 				Name:       name,
 				Alias:      alias,
-				Topic:      topic,
+				Topic:      params.Topic,
 				Preset:     "private_chat",
 				Visibility: "private",
 				CreationContent: map[string]any{
@@ -102,6 +110,13 @@ if not specified.`,
 			})
 			if err != nil {
 				return fmt.Errorf("create space: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(spaceCreateResult{
+					RoomID: response.RoomID,
+					Alias:  alias,
+				})
 			}
 
 			fmt.Fprintln(os.Stdout, response.RoomID)
@@ -190,8 +205,19 @@ table of room ID, alias, and name.`,
 	}
 }
 
+// spaceDeleteParams holds the parameters for the matrix space delete command.
+type spaceDeleteParams struct {
+	cli.SessionConfig
+	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+}
+
+// spaceDeleteResult is the JSON output for matrix space delete.
+type spaceDeleteResult struct {
+	RoomID string `json:"room_id"`
+}
+
 func spaceDeleteCommand() *cli.Command {
-	var session cli.SessionConfig
+	var params spaceDeleteParams
 
 	return &cli.Command{
 		Name:    "delete",
@@ -213,10 +239,9 @@ reclaim the room.`,
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("space delete", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			return flagSet
+			return cli.FlagsFromParams("space delete", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("space alias or room ID is required\n\nUsage: bureau matrix space delete <alias-or-id> [flags]")
@@ -229,7 +254,7 @@ reclaim the room.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			sess, err := session.Connect(ctx)
+			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return fmt.Errorf("connect: %w", err)
 			}
@@ -241,6 +266,10 @@ reclaim the room.`,
 
 			if err := sess.LeaveRoom(ctx, roomID); err != nil {
 				return fmt.Errorf("leave space: %w", err)
+			}
+
+			if params.OutputJSON {
+				return cli.WriteJSON(spaceDeleteResult{RoomID: roomID})
 			}
 
 			fmt.Fprintf(os.Stdout, "Left space %s\n", roomID)

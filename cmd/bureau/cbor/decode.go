@@ -30,12 +30,15 @@ func init() {
 	}
 }
 
+// decodeParams holds the parameters for the "bureau cbor decode" command.
+type decodeParams struct {
+	Compact  bool `json:"compact"   flag:"compact,c" desc:"compact output (no indentation)"`
+	Slurp    bool `json:"slurp"     flag:"slurp,s"   desc:"read CBOR sequence as JSON array"`
+	HexInput bool `json:"hex_input" flag:"hex,x"     desc:"treat input as hex-encoded CBOR"`
+}
+
 func decodeCommand() *cli.Command {
-	var (
-		compact  bool
-		slurp    bool
-		hexInput bool
-	)
+	var params decodeParams
 
 	return &cli.Command{
 		Name:    "decode",
@@ -74,16 +77,16 @@ protocol documentation) rather than raw binary.`,
 				Command:     "bureau cbor decode -s sequence.cbor",
 			},
 		},
-		Flags: cborFlags(&compact, &slurp, nil, &hexInput),
+		Params: func() any { return &params },
 		Run: func(args []string) error {
-			data, remainingArgs, err := readInput(args, hexInput)
+			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err
 			}
 			if len(remainingArgs) > 0 {
 				return fmt.Errorf("decode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
-			return decodeCBOR(data, os.Stdout, compact, slurp)
+			return decodeCBOR(data, os.Stdout, params.Compact, params.Slurp)
 		},
 	}
 }

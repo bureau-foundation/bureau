@@ -12,8 +12,13 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
+// diagParams holds the parameters for the "bureau cbor diag" command.
+type diagParams struct {
+	HexInput bool `json:"hex_input" flag:"hex,x" desc:"treat input as hex-encoded CBOR"`
+}
+
 func diagCommand() *cli.Command {
-	var hexInput bool
+	var params diagParams
 
 	return &cli.Command{
 		Name:    "diag",
@@ -48,9 +53,9 @@ Examples of diagnostic notation:
 				Command:     "echo '{\"count\":42}' | bureau cbor encode | bureau cbor diag",
 			},
 		},
-		Flags: cborFlags(nil, nil, nil, &hexInput),
+		Params: func() any { return &params },
 		Run: func(args []string) error {
-			data, remainingArgs, err := readInput(args, hexInput)
+			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err
 			}

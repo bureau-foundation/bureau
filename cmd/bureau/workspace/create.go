@@ -20,15 +20,31 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// createParams holds the parameters for the workspace create command.
+type createParams struct {
+	cli.SessionConfig
+	Machine    string   `json:"machine"     flag:"machine"     desc:"machine localpart to host the workspace (required; use 'local' to auto-detect from launcher session)"`
+	Template   string   `json:"template"    flag:"template"    desc:"sandbox template ref for agent principals (required, e.g., bureau/template:base)"`
+	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
+	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	AgentCount int      `json:"agent_count" flag:"agent-count" desc:"number of agent principals to create" default:"1"`
+	OutputJSON bool     `json:"-"           flag:"json"        desc:"output as JSON"`
+}
+
+// createResult is the JSON output for workspace create.
+type createResult struct {
+	Alias      string   `json:"alias"`
+	RoomAlias  string   `json:"room_alias"`
+	RoomID     string   `json:"room_id"`
+	Project    string   `json:"project"`
+	Repository string   `json:"repository,omitempty"`
+	Branch     string   `json:"branch,omitempty"`
+	Machine    string   `json:"machine"`
+	Principals []string `json:"principals"`
+}
+
 func createCommand() *cli.Command {
-	var (
-		session    cli.SessionConfig
-		machine    string
-		template   string
-		params     []string
-		serverName string
-		agentCount int
-	)
+	var params createParams
 
 	return &cli.Command{
 		Name:    "create",
@@ -73,15 +89,9 @@ All worktrees in a project share a single bare git object store at
 			},
 		},
 		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("workspace create", pflag.ContinueOnError)
-			session.AddFlags(flagSet)
-			flagSet.StringVar(&machine, "machine", "", "machine localpart to host the workspace (required; use \"local\" to auto-detect from launcher session)")
-			flagSet.StringVar(&template, "template", "", "sandbox template ref for agent principals (required, e.g., bureau/template:base)")
-			flagSet.StringArrayVar(&params, "param", nil, "key=value parameter (repeatable; recognized: repository, branch)")
-			flagSet.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-			flagSet.IntVar(&agentCount, "agent-count", 1, "number of agent principals to create")
-			return flagSet
+			return cli.FlagsFromParams("workspace create", &params)
 		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")
@@ -89,22 +99,22 @@ All worktrees in a project share a single bare git object store at
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			if machine == "" {
+			if params.Machine == "" {
 				return fmt.Errorf("--machine is required")
 			}
-			if template == "" {
+			if params.Template == "" {
 				return fmt.Errorf("--template is required")
 			}
-			if agentCount < 0 {
-				return fmt.Errorf("--agent-count must be non-negative, got %d", agentCount)
+			if params.AgentCount < 0 {
+				return fmt.Errorf("--agent-count must be non-negative, got %d", params.AgentCount)
 			}
 
-			return runCreate(args[0], &session, machine, template, params, serverName, agentCount)
+			return runCreate(args[0], &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, params.OutputJSON)
 		},
 	}
 }
 
-func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverName string, agentCount int) error {
+func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverName string, agentCount int, outputJSON bool) error {
 	// Validate the workspace alias.
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return fmt.Errorf("invalid workspace alias: %w", err)
@@ -225,8 +235,25 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		}
 	}
 
-	// Print summary.
 	fullAlias := principal.RoomAlias(alias, serverName)
+
+	if outputJSON {
+		var principalNames []string
+		for _, assignment := range assignments {
+			principalNames = append(principalNames, assignment.Localpart)
+		}
+		return cli.WriteJSON(createResult{
+			Alias:      alias,
+			RoomAlias:  fullAlias,
+			RoomID:     workspaceRoomID,
+			Project:    project,
+			Repository: repository,
+			Branch:     branch,
+			Machine:    machine,
+			Principals: principalNames,
+		})
+	}
+
 	fmt.Fprintf(os.Stderr, "Workspace created:\n")
 	fmt.Fprintf(os.Stderr, "  Room:     %s (%s)\n", fullAlias, workspaceRoomID)
 	fmt.Fprintf(os.Stderr, "  Project:  %s\n", project)

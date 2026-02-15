@@ -14,7 +14,14 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 )
 
+// encodeParams holds the parameters for the "bureau cbor encode" command.
+// Encode has no flags but the struct satisfies the structural requirement
+// that every leaf command has a Params function.
+type encodeParams struct{}
+
 func encodeCommand() *cli.Command {
+	var params encodeParams
+
 	return &cli.Command{
 		Name:    "encode",
 		Summary: "Convert JSON to CBOR",
@@ -26,8 +33,8 @@ for interoperability with Bureau services that use integer map keys and
 typed numeric fields.
 
 The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
-		Usage: "bureau cbor encode [file]",
-		Flags: cborFlags(nil, nil, nil, nil),
+		Usage:  "bureau cbor encode [file]",
+		Params: func() any { return &params },
 		Examples: []cli.Example{
 			{
 				Description: "Encode JSON to CBOR",

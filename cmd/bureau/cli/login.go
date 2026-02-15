@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -21,11 +20,15 @@ import (
 // the resulting session to the well-known path (~/.config/bureau/session.json).
 // Subsequent CLI commands (observe, list, dashboard) load this session
 // transparently, like SSH keys.
+// loginParams holds the parameters for the login command. All flags are
+// infrastructure-only (credential handling) and excluded from MCP schema.
+type loginParams struct {
+	HomeserverURL string `json:"-" flag:"homeserver"    desc:"Matrix homeserver URL" default:"http://localhost:6167"`
+	PasswordFile  string `json:"-" flag:"password-file" desc:"path to file containing password, or - to prompt interactively (default: prompt)"`
+}
+
 func LoginCommand() *Command {
-	var (
-		homeserverURL string
-		passwordFile  string
-	)
+	var params loginParams
 
 	return &Command{
 		Name:    "login",
@@ -58,12 +61,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 				Command:     "bureau login ben --password-file /path/to/password",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("login", pflag.ContinueOnError)
-			flagSet.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
-			flagSet.StringVar(&passwordFile, "password-file", "", "path to file containing password, or - to prompt interactively (default: prompt)")
-			return flagSet
-		},
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("username is required\n\nUsage: bureau login <username> [flags]")
@@ -75,7 +73,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 
 			// Read the password. Default to interactive prompt if no
 			// --password-file is given.
-			passwordBuffer, err := readLoginPassword(passwordFile)
+			passwordBuffer, err := readLoginPassword(params.PasswordFile)
 			if err != nil {
 				return fmt.Errorf("read password: %w", err)
 			}
@@ -85,7 +83,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			defer cancel()
 
 			client, err := messaging.NewClient(messaging.ClientConfig{
-				HomeserverURL: homeserverURL,
+				HomeserverURL: params.HomeserverURL,
 			})
 			if err != nil {
 				return fmt.Errorf("create matrix client: %w", err)
@@ -106,7 +104,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			operatorSession := &OperatorSession{
 				UserID:      userID,
 				AccessToken: session.AccessToken(),
-				Homeserver:  homeserverURL,
+				Homeserver:  params.HomeserverURL,
 			}
 
 			if err := SaveSession(operatorSession); err != nil {

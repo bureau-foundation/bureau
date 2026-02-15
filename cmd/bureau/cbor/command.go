@@ -7,23 +7,23 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/spf13/pflag"
 )
 
+// cborParams holds the parameters for the top-level "bureau cbor" command.
+// This command has both Subcommands (decode, encode, diag, validate) and
+// a Run fallback. When the first positional argument matches a subcommand,
+// the framework routes there. Otherwise, Run handles it: no args means
+// default decode; anything else is treated as a jq filter expression.
+type cborParams struct {
+	Compact   bool `json:"compact"    flag:"compact,c"    desc:"compact output (no indentation)"`
+	RawOutput bool `json:"raw_output" flag:"raw-output,r" desc:"raw string output (passed to jq)"`
+	Slurp     bool `json:"slurp"      flag:"slurp,s"      desc:"read CBOR sequence as JSON array"`
+	HexInput  bool `json:"hex_input"  flag:"hex,x"        desc:"treat input as hex-encoded CBOR"`
+}
+
 // Command returns the "cbor" command group.
-//
-// This command has both Subcommands (decode, encode, diag, validate)
-// and a Run fallback. When the first positional argument matches a
-// subcommand, the framework routes there. Otherwise, Run handles it:
-// no args means default decode; anything else is treated as a jq filter
-// expression.
 func Command() *cli.Command {
-	var (
-		compact   bool
-		rawOutput bool
-		slurp     bool
-		hexInput  bool
-	)
+	var params cborParams
 
 	return &cli.Command{
 		Name:    "cbor",
@@ -54,27 +54,27 @@ Whitespace in the hex input is ignored.`,
 			diagCommand(),
 			validateCommand(),
 		},
-		Flags: cborFlags(&compact, &slurp, &rawOutput, &hexInput),
+		Params: func() any { return &params },
 		Run: func(args []string) error {
-			data, remainingArgs, err := readInput(args, hexInput)
+			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err
 			}
 
 			if len(remainingArgs) == 0 {
 				// No arguments: default to decode.
-				return decodeCBOR(data, os.Stdout, compact, slurp)
+				return decodeCBOR(data, os.Stdout, params.Compact, params.Slurp)
 			}
 
 			// Remaining positional args are a jq filter expression.
 			var jqArgs []string
-			if compact {
+			if params.Compact {
 				jqArgs = append(jqArgs, "-c")
 			}
-			if rawOutput {
+			if params.RawOutput {
 				jqArgs = append(jqArgs, "-r")
 			}
-			if slurp {
+			if params.Slurp {
 				jqArgs = append(jqArgs, "-s")
 			}
 			jqArgs = append(jqArgs, remainingArgs...)
@@ -119,27 +119,5 @@ Whitespace in the hex input is ignored.`,
 				Command:     "echo '{\"count\":42}' | bureau cbor encode | bureau cbor decode",
 			},
 		},
-	}
-}
-
-// cborFlags returns a pflag.FlagSet constructor with the common flags
-// shared across decode, filter, and validate modes. Pass nil for any
-// flag pointer that is not applicable to the caller.
-func cborFlags(compact *bool, slurp *bool, rawOutput *bool, hexInput *bool) func() *pflag.FlagSet {
-	return func() *pflag.FlagSet {
-		flagSet := pflag.NewFlagSet("cbor", pflag.ContinueOnError)
-		if compact != nil {
-			flagSet.BoolVarP(compact, "compact", "c", false, "compact output (no indentation)")
-		}
-		if slurp != nil {
-			flagSet.BoolVarP(slurp, "slurp", "s", false, "read CBOR sequence as JSON array")
-		}
-		if rawOutput != nil {
-			flagSet.BoolVarP(rawOutput, "raw-output", "r", false, "raw string output (passed to jq)")
-		}
-		if hexInput != nil {
-			flagSet.BoolVarP(hexInput, "hex", "x", false, "treat input as hex-encoded CBOR")
-		}
-		return flagSet
 	}
 }

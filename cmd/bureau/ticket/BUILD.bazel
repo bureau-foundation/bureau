@@ -15,6 +15,7 @@ go_library(
         "mutate.go",
         "query.go",
         "response.go",
+        "transfer.go",
         "viewer.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/ticket",

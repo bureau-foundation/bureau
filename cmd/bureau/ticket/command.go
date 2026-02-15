@@ -50,6 +50,10 @@ the ticket across all rooms.`,
 			reopenCommand(),
 			batchCommand(),
 
+			// Transfer commands.
+			exportCommand(),
+			importCommand(),
+
 			// Subcommand groups.
 			gateCommand(),
 			depCommand(),
@@ -85,6 +89,14 @@ the ticket across all rooms.`,
 			{
 				Description: "Show ranked tickets for assignment",
 				Command:     "bureau ticket ranked --room '!abc:bureau.local' --json",
+			},
+			{
+				Description: "Export tickets to a file",
+				Command:     "bureau ticket export --room '!abc:bureau.local' --file archive.jsonl",
+			},
+			{
+				Description: "Import tickets into a room",
+				Command:     "bureau ticket import --room '!new:bureau.local' --file archive.jsonl",
 			},
 		},
 	}

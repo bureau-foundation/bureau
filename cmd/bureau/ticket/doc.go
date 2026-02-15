@@ -10,6 +10,11 @@
 // index. Mutation commands (create, update, close, reopen, batch) write
 // to Matrix via the service and update the index immediately.
 //
+// Transfer commands (export, import) serialize tickets as JSONL for
+// archival, room migration, and room splitting. Export streams
+// tickets from a room; import writes them back with original IDs
+// preserved.
+//
 // The "gate" subcommand group manages async coordination conditions.
 // The "dep" subcommand group provides convenience wrappers for
 // modifying the blocked_by dependency list.

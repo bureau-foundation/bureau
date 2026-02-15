@@ -52,6 +52,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("close", ts.handleClose)
 	server.HandleAuth("reopen", ts.handleReopen)
 	server.HandleAuth("batch-create", ts.handleBatchCreate)
+	server.HandleAuth("import", ts.handleImport)
 	server.HandleAuth("resolve-gate", ts.handleResolveGate)
 	server.HandleAuth("update-gate", ts.handleUpdateGate)
 }
@@ -742,6 +743,27 @@ type batchCreateEntry struct {
 	Origin    *schema.TicketOrigin `cbor:"origin,omitempty"`
 }
 
+// importRequest is the input for the "import" action.
+type importRequest struct {
+	Room    string        `cbor:"room"`
+	Tickets []importEntry `cbor:"tickets"`
+}
+
+// importEntry is a single ticket in an import request. Unlike
+// batchCreateEntry, the ID is caller-specified (preserved from export)
+// and the content is the full TicketContent (preserving status,
+// timestamps, assignee, notes, etc.).
+type importEntry struct {
+	ID      string               `cbor:"id"`
+	Content schema.TicketContent `cbor:"content"`
+}
+
+// importResponse is returned by the "import" action.
+type importResponse struct {
+	Room     string `json:"room"`
+	Imported int    `json:"imported"`
+}
+
 // resolveGateRequest is the input for the "resolve-gate" action.
 type resolveGateRequest struct {
 	Ticket string `cbor:"ticket"`
@@ -1210,6 +1232,92 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 	return batchCreateResponse{
 		Room: request.Room,
 		Refs: refToID,
+	}, nil
+}
+
+// handleImport writes tickets with caller-specified IDs, preserving
+// the full TicketContent from an export. This is the counterpart to
+// the list query's JSONL output: export streams entries out, import
+// writes them back with their original IDs.
+//
+// Unlike batch-create, import does not generate IDs or resolve symbolic
+// refs. The caller provides the exact ID and content for each ticket.
+// This makes import suitable for room archival restore, room splitting,
+// and cross-room migration.
+//
+// Validation is all-or-nothing: all tickets are validated before any
+// state events are written. Importing into the same room as the source
+// is an upsert (Matrix state events are idempotent on type + state_key).
+func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/import"); err != nil {
+		return nil, err
+	}
+
+	var request importRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	state, err := ts.requireRoom(request.Room)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(request.Tickets) == 0 {
+		return nil, errors.New("missing required field: tickets")
+	}
+
+	// Collect all IDs in the import set so that blocked_by and parent
+	// references can be validated against both the existing room index
+	// and the incoming batch.
+	importIDs := make(map[string]struct{}, len(request.Tickets))
+	for i, entry := range request.Tickets {
+		if entry.ID == "" {
+			return nil, fmt.Errorf("tickets[%d]: missing required field: id", i)
+		}
+		if _, duplicate := importIDs[entry.ID]; duplicate {
+			return nil, fmt.Errorf("tickets[%d]: duplicate id %q", i, entry.ID)
+		}
+		importIDs[entry.ID] = struct{}{}
+	}
+
+	// Phase 1: Validate all tickets.
+	for i, entry := range request.Tickets {
+		if err := entry.Content.Validate(); err != nil {
+			return nil, fmt.Errorf("tickets[%d] (%s): %w", i, entry.ID, err)
+		}
+
+		// Verify blocked_by references exist in either the import set
+		// or the existing room index.
+		for _, blockerID := range entry.Content.BlockedBy {
+			if _, inImport := importIDs[blockerID]; !inImport {
+				if _, inRoom := state.index.Get(blockerID); !inRoom {
+					return nil, fmt.Errorf("tickets[%d] (%s): blocked_by %q not found in import set or room", i, entry.ID, blockerID)
+				}
+			}
+		}
+
+		// Verify parent reference if specified.
+		if entry.Content.Parent != "" {
+			if _, inImport := importIDs[entry.Content.Parent]; !inImport {
+				if _, inRoom := state.index.Get(entry.Content.Parent); !inRoom {
+					return nil, fmt.Errorf("tickets[%d] (%s): parent %q not found in import set or room", i, entry.ID, entry.Content.Parent)
+				}
+			}
+		}
+	}
+
+	// Phase 2: Write all state events and update the index.
+	for _, entry := range request.Tickets {
+		if _, err := ts.writer.SendStateEvent(ctx, request.Room, schema.EventTypeTicket, entry.ID, entry.Content); err != nil {
+			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", entry.ID, err)
+		}
+		state.index.Put(entry.ID, entry.Content)
+	}
+
+	return importResponse{
+		Room:     request.Room,
+		Imported: len(request.Tickets),
 	}, nil
 }
 

@@ -92,6 +92,12 @@ type batchCreateResult struct {
 	Refs map[string]string `json:"refs"`
 }
 
+// importResult is returned by the "import" action.
+type importResult struct {
+	Room     string `json:"room"`
+	Imported int    `json:"imported"`
+}
+
 // mutationResult is the common response for update, close, reopen,
 // and gate operations. Returns the full updated content.
 type mutationResult struct {

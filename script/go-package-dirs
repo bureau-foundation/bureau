@@ -1,0 +1,37 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Extract unique Go package directories from file paths.
+#
+# Used by pre-commit hooks (lefthook.yml) to scope go vet and golangci-lint
+# to only the packages containing staged changes, rather than ./... which
+# compiles every package in the repo. Tier 3 (bazel build/test) still covers
+# the full repo — Tier 2 only needs to analyze what changed.
+#
+# Usage: go-package-dirs file1.go path/to/file2.go ...
+# Output: one package path per line (./dir format), suitable as arguments
+#         to go vet or golangci-lint run.
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    exit 0
+fi
+
+for file in "$@"; do
+    directory=$(dirname "$file")
+    if [ "$directory" = "." ]; then
+        echo "."
+    else
+        echo "./$directory"
+    fi
+done | sort -u | while IFS= read -r package; do
+    # Skip directories that no longer exist (staged deletion removed
+    # the entire package). If any Go files remain, the directory still
+    # exists and the package will be analyzed — correct behavior since
+    # the package changed.
+    directory="${package#./}"
+    [ -z "$directory" ] && directory="."
+    [ -d "$directory" ] && echo "$package"
+done

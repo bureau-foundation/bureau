@@ -63,16 +63,16 @@ pre-commit:
       priority: 1
 
     # ===================================================================
-    # Tier 2: Static analysis (runs against working tree, not index)
+    # Tier 2: Static analysis (working tree, scoped to staged packages)
     # ===================================================================
 
     go-vet:
-      run: go vet ./...
+      run: go vet $(script/go-package-dirs {staged_files})
       glob: "*.go"
       priority: 2
 
     golangci-lint:
-      run: golangci-lint run --new-from-rev HEAD --timeout=5m
+      run: golangci-lint run --new-from-rev HEAD --timeout=5m $(script/go-package-dirs {staged_files})
       glob: "*.go"
       priority: 2
 

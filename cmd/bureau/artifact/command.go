@@ -85,18 +85,22 @@ BUREAU_ARTIFACT_TOKEN environment variables.`,
 	}
 }
 
-// artifactConnection manages socket and token flags for artifact commands.
+// ArtifactConnection manages socket and token flags for artifact commands.
 // Implements [cli.FlagBinder] so it integrates with the params struct system
 // while handling dynamic defaults from environment variables. Excluded from
 // JSON Schema generation since MCP callers don't specify socket paths.
-type artifactConnection struct {
+//
+// Exported so that embedded struct fields are visible to reflection in
+// [cli.FlagsFromParams] — unexported embedded types cause field.IsExported()
+// to return false, silently skipping FlagBinder detection.
+type ArtifactConnection struct {
 	SocketPath string
 	TokenPath  string
 }
 
 // AddFlags registers --socket and --token-file flags with dynamic defaults
 // from BUREAU_ARTIFACT_SOCKET and BUREAU_ARTIFACT_TOKEN environment variables.
-func (c *artifactConnection) AddFlags(flagSet *pflag.FlagSet) {
+func (c *ArtifactConnection) AddFlags(flagSet *pflag.FlagSet) {
 	socketDefault := defaultSocketPath
 	if envSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); envSocket != "" {
 		socketDefault = envSocket
@@ -111,7 +115,7 @@ func (c *artifactConnection) AddFlags(flagSet *pflag.FlagSet) {
 }
 
 // connect creates an artifact client from the connection parameters.
-func (c *artifactConnection) connect() (*artifact.Client, error) {
+func (c *ArtifactConnection) connect() (*artifact.Client, error) {
 	return artifact.NewClient(c.SocketPath, c.TokenPath)
 }
 
@@ -132,7 +136,7 @@ func formatSize(bytes int64) string {
 // --- store ---
 
 type storeParams struct {
-	artifactConnection
+	ArtifactConnection
 	ContentType string   `json:"content_type" flag:"content-type" desc:"MIME content type (guessed from filename if omitted)"`
 	Description string   `json:"description"  flag:"description"  desc:"human-readable description"`
 	Tag         string   `json:"tag"          flag:"tag"          desc:"tag the artifact after storing"`
@@ -256,7 +260,7 @@ unrecognized extensions.`,
 // --- fetch ---
 
 type fetchParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputPath string `json:"-" flag:"output,o" desc:"output file path (default: stdout)"`
 }
 
@@ -325,7 +329,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 // --- show ---
 
 type showParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
@@ -410,7 +414,7 @@ storage details.`,
 // --- exists ---
 
 type existsParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
@@ -461,7 +465,7 @@ func existsCommand() *cli.Command {
 // --- list ---
 
 type listParams struct {
-	artifactConnection
+	ArtifactConnection
 	ContentType string `json:"content_type" flag:"content-type" desc:"filter by content type"`
 	Label       string `json:"label"        flag:"label"        desc:"filter by label"`
 	CachePolicy string `json:"cache_policy" flag:"cache-policy" desc:"filter by cache policy"`
@@ -559,7 +563,7 @@ are sorted by storage time (newest first).`,
 // --- tag ---
 
 type tagParams struct {
-	artifactConnection
+	ArtifactConnection
 	Optimistic       bool   `json:"optimistic" flag:"optimistic" desc:"overwrite existing tag without CAS check"`
 	ExpectedPrevious string `json:"expected"   flag:"expected"   desc:"expected current target hash (for CAS update)"`
 	OutputJSON       bool   `json:"-"          flag:"json"       desc:"output as JSON"`
@@ -625,7 +629,7 @@ specify the previous target hash for CAS updates.`,
 // --- resolve ---
 
 type resolveParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
@@ -672,7 +676,7 @@ always the full ref.`,
 // --- tags ---
 
 type tagsParams struct {
-	artifactConnection
+	ArtifactConnection
 	Prefix     string `json:"prefix" flag:"prefix" desc:"filter tags by name prefix"`
 	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
 }
@@ -734,7 +738,7 @@ func tagsCommand() *cli.Command {
 // --- delete-tag ---
 
 type deleteTagParams struct {
-	artifactConnection
+	ArtifactConnection
 }
 
 func deleteTagCommand() *cli.Command {
@@ -773,7 +777,7 @@ func deleteTagCommand() *cli.Command {
 // --- pin / unpin ---
 
 type pinParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
@@ -835,7 +839,7 @@ func unpinCommand() *cli.Command {
 // --- gc ---
 
 type gcParams struct {
-	artifactConnection
+	ArtifactConnection
 	DryRun     bool `json:"dry_run" flag:"dry-run" desc:"report what would be collected without deleting"`
 	OutputJSON bool `json:"-"       flag:"json"    desc:"output as JSON"`
 }
@@ -899,7 +903,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 // --- status ---
 
 type statusParams struct {
-	artifactConnection
+	ArtifactConnection
 	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 

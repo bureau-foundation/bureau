@@ -44,7 +44,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 
 	// Bind "ticket" service to a provider principal in the config room.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "service/ticket",
+		Principal: "@service/ticket:" + serverName,
 	})
 
 	// Principal assignment.
@@ -230,12 +230,12 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 
 	// Bind "ticket" in config room to one principal.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "service/ticket/global",
+		Principal: "@service/ticket/global:" + serverName,
 	})
 
 	// Bind "ticket" in workspace room to a different principal. This should win.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "service/ticket/workspace",
+		Principal: "@service/ticket/workspace:" + serverName,
 	})
 
 	// Workspace event so the StartCondition resolves and gives us the workspace room ID.
@@ -367,10 +367,10 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 
 	// Bind both services in the config room.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "service/ticket",
+		Principal: "@service/ticket:" + serverName,
 	})
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "rag", schema.RoomServiceContent{
-		Principal: "service/rag",
+		Principal: "@service/rag:" + serverName,
 	})
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -497,7 +497,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 	})
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "service/ticket",
+		Principal: "@service/ticket:" + serverName,
 	})
 	// "rag" is intentionally NOT bound.
 

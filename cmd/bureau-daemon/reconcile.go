@@ -1091,11 +1091,19 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, roomID)
 		}
 
+		// Extract the localpart from the full Matrix user ID stored in
+		// the binding. The socket path is derived from the localpart,
+		// not the full user ID.
+		localpart, err := principal.LocalpartFromMatrixID(binding.Principal)
+		if err != nil {
+			return "", fmt.Errorf("invalid service principal %q for role %q in room %s: %w", binding.Principal, role, roomID, err)
+		}
+
 		// Derive the host-side socket path from the service principal's
 		// localpart. For local services this is the actual proxy socket;
 		// for remote services (future) the daemon would create a tunnel
 		// socket and use that path instead.
-		socketPath := principal.RunDirSocketPath(d.runDir, binding.Principal)
+		socketPath := principal.RunDirSocketPath(d.runDir, localpart)
 		d.logger.Info("resolved service binding",
 			"role", role,
 			"principal", binding.Principal,

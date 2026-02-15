@@ -379,7 +379,7 @@ func TestDaemonLauncherServiceMounts(t *testing.T) {
 
 	// Bind the "mock" service role to a provider principal in the config room.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "mock", schema.RoomServiceContent{
-		Principal: "service/mock",
+		Principal: "@service/mock:bureau.local",
 	})
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{

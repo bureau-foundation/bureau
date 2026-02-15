@@ -6,6 +6,8 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -216,4 +219,23 @@ func UpdateCredentialFile(path string, updates map[string]string) error {
 	}
 
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600)
+}
+
+// DeriveAdminPassword deterministically derives an account password from the
+// registration token via SHA-256 with a domain separator. The result is
+// returned in an mmap-backed buffer; the caller must close it.
+//
+// This ensures re-running setup with the same token produces the same
+// password (idempotency). Acceptable because the registration token is
+// high-entropy random material (openssl rand -hex 32) and the password
+// only needs to resist online attacks rate-limited by the homeserver.
+func DeriveAdminPassword(registrationToken *secret.Buffer) (*secret.Buffer, error) {
+	preimage, err := secret.Concat("bureau-admin-password:", registrationToken)
+	if err != nil {
+		return nil, fmt.Errorf("building password preimage: %w", err)
+	}
+	defer preimage.Close()
+	hash := sha256.Sum256(preimage.Bytes())
+	hexBytes := []byte(hex.EncodeToString(hash[:]))
+	return secret.NewFromBytes(hexBytes)
 }

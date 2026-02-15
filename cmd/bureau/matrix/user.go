@@ -178,7 +178,7 @@ and proceeds directly to ensuring room membership.`,
 					return fmt.Errorf("protecting registration token: %w", tokenErr)
 				}
 				defer tokenBuffer.Close()
-				passwordBuffer, err = deriveAdminPassword(tokenBuffer)
+				passwordBuffer, err = cli.DeriveAdminPassword(tokenBuffer)
 				if err != nil {
 					return fmt.Errorf("derive password: %w", err)
 				}

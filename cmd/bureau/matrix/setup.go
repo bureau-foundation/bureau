@@ -5,8 +5,6 @@ package matrix
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -137,7 +135,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	}
 
 	// Step 1: Register or login the admin account.
-	adminPassword, err := deriveAdminPassword(config.registrationToken)
+	adminPassword, err := cli.DeriveAdminPassword(config.registrationToken)
 	if err != nil {
 		return fmt.Errorf("derive admin password: %w", err)
 	}
@@ -473,23 +471,4 @@ func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string)
 		"users_default":  0,
 		"events":         events,
 	}
-}
-
-// deriveAdminPassword deterministically derives the admin password from the
-// registration token via SHA-256 with a domain separator. The result is
-// returned in an mmap-backed buffer; the caller must close it.
-//
-// This ensures re-running setup with the same token produces the same
-// password (idempotency). Acceptable because the registration token is
-// high-entropy random material (openssl rand -hex 32) and the password
-// only needs to resist online attacks rate-limited by the homeserver.
-func deriveAdminPassword(registrationToken *secret.Buffer) (*secret.Buffer, error) {
-	preimage, err := secret.Concat("bureau-admin-password:", registrationToken)
-	if err != nil {
-		return nil, fmt.Errorf("building password preimage: %w", err)
-	}
-	defer preimage.Close()
-	hash := sha256.Sum256(preimage.Bytes())
-	hexBytes := []byte(hex.EncodeToString(hash[:]))
-	return secret.NewFromBytes(hexBytes)
 }

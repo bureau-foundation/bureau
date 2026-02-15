@@ -27,6 +27,9 @@ a --room flag with the Matrix room ID. Ticket-scoped commands (show,
 close, deps) take a ticket ID as a positional argument and look up
 the ticket across all rooms.`,
 		Subcommands: []*cli.Command{
+			// Operator commands.
+			enableCommand(),
+
 			// Query commands.
 			listCommand(),
 			showCommand(),

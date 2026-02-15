@@ -255,6 +255,60 @@ func parseDefault(fieldType reflect.Type, value string) (any, error) {
 	}
 }
 
+// OutputSchema generates a JSON Schema from a command's output type.
+// Unlike [ParamsSchema] (which only handles struct types with
+// input-specific tag conventions), OutputSchema handles the full range
+// of command output shapes: structs, slices of structs, and primitives.
+//
+// Pointers are dereferenced. A slice value produces an array schema
+// with items derived from the element type. A struct value produces
+// an object schema using the same [buildObjectSchema] logic as input
+// schemas (json tags for property names, desc tags for descriptions).
+//
+// output is the value returned by [Command.Output] — typically a
+// pointer to the output type's zero value.
+func OutputSchema(output any) (*Schema, error) {
+	typ := reflect.TypeOf(output)
+	if typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+	return schemaForType(typ)
+}
+
+// schemaForType generates a JSON Schema from a reflect.Type. It
+// handles structs (via [buildObjectSchema]), slices (recursively),
+// maps with string keys, and Go primitives.
+func schemaForType(typ reflect.Type) (*Schema, error) {
+	switch typ.Kind() {
+	case reflect.Struct:
+		return buildObjectSchema(typ)
+	case reflect.Slice:
+		items, err := schemaForType(typ.Elem())
+		if err != nil {
+			return nil, fmt.Errorf("array element: %w", err)
+		}
+		return &Schema{Type: "array", Items: items}, nil
+	case reflect.String:
+		return &Schema{Type: "string"}, nil
+	case reflect.Bool:
+		return &Schema{Type: "boolean"}, nil
+	case reflect.Int, reflect.Int64:
+		if typ == reflect.TypeOf(time.Duration(0)) {
+			return &Schema{Type: "string", Format: "duration"}, nil
+		}
+		return &Schema{Type: "integer"}, nil
+	case reflect.Float64:
+		return &Schema{Type: "number"}, nil
+	case reflect.Map:
+		if typ.Key().Kind() == reflect.String {
+			return &Schema{Type: "object"}, nil
+		}
+		return nil, fmt.Errorf("unsupported map key type %s (only string keys supported)", typ.Key())
+	default:
+		return nil, fmt.Errorf("unsupported output type %s", typ.Kind())
+	}
+}
+
 // SchemaJSON is a convenience function that generates a JSON Schema
 // from a parameter struct and marshals it to indented JSON.
 func SchemaJSON(params any) ([]byte, error) {

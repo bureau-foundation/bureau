@@ -39,6 +39,18 @@ func wildcardGrants() []schema.Grant {
 	return []schema.Grant{{Actions: []string{"command/**"}}}
 }
 
+// --- Output types for test commands ---
+
+// formatOutput is the output type for the test_format command.
+type formatOutput struct {
+	Value string `json:"value" desc:"the formatted value"`
+}
+
+// listItem is the output element type for the test_list command.
+type listItem struct {
+	Name string `json:"name" desc:"item name"`
+}
+
 // testCommandTree returns a command tree for MCP server tests. Each
 // call creates fresh parameter variables, so tests are independent.
 func testCommandTree() *cli.Command {
@@ -53,7 +65,8 @@ func testCommandTree() *cli.Command {
 		OutputJSON bool   `json:"-" flag:"json" desc:"output as JSON"`
 	}
 	type listParams struct {
-		Prefix string `json:"prefix" flag:"prefix" desc:"filter prefix" default:""`
+		Prefix     string `json:"prefix" flag:"prefix" desc:"filter prefix" default:""`
+		OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
 	}
 
 	var echoP echoParams
@@ -92,13 +105,13 @@ func testCommandTree() *cli.Command {
 				Summary:        "Conditional JSON output",
 				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("format", &formatP) },
 				Params:         func() any { return &formatP },
+				Output:         func() any { return &formatOutput{} },
 				RequiredGrants: []string{"command/test/format"},
 				Run: func(args []string) error {
 					if formatP.OutputJSON {
-						fmt.Printf(`{"value":%q}`, formatP.Value)
-					} else {
-						fmt.Printf("VALUE: %s", formatP.Value)
+						return cli.WriteJSON(formatOutput{Value: formatP.Value})
 					}
+					fmt.Printf("VALUE: %s", formatP.Value)
 					return nil
 				},
 			},
@@ -107,9 +120,19 @@ func testCommandTree() *cli.Command {
 				Summary:        "List items",
 				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("list", &listP) },
 				Params:         func() any { return &listP },
+				Output:         func() any { return &[]listItem{} },
 				RequiredGrants: []string{"command/test/list"},
 				Run: func(args []string) error {
-					fmt.Println("items")
+					items := []listItem{
+						{Name: "alpha"},
+						{Name: "beta"},
+					}
+					if listP.OutputJSON {
+						return cli.WriteJSON(items)
+					}
+					for _, item := range items {
+						fmt.Println(item.Name)
+					}
 					return nil
 				},
 			},
@@ -818,5 +841,218 @@ func TestServer_GrantFiltering_CallAllowedWithGrant(t *testing.T) {
 	}
 	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "authorized") {
 		t.Errorf("expected output containing 'authorized', got %v", result.Content)
+	}
+}
+
+// --- Output schema tests ---
+
+func TestServer_ToolsListOutputSchema_Present(t *testing.T) {
+	result := listTools(t)
+
+	// test_format has Output (object schema).
+	var formatTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_format" {
+			formatTool = &result.Tools[i]
+			break
+		}
+	}
+	if formatTool == nil {
+		t.Fatal("test_format not found in tools/list response")
+	}
+	if formatTool.OutputSchema == nil {
+		t.Fatal("test_format should have outputSchema (Output is declared)")
+	}
+
+	// After JSON round-trip, OutputSchema is map[string]any.
+	outputSchema, ok := formatTool.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("outputSchema type = %T, want map[string]any", formatTool.OutputSchema)
+	}
+	if outputSchema["type"] != "object" {
+		t.Errorf("outputSchema.type = %v, want %q", outputSchema["type"], "object")
+	}
+	properties, ok := outputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("outputSchema.properties type = %T, want map[string]any", outputSchema["properties"])
+	}
+	if properties["value"] == nil {
+		t.Error("outputSchema missing 'value' property")
+	}
+}
+
+func TestServer_ToolsListOutputSchema_ArrayType(t *testing.T) {
+	result := listTools(t)
+
+	// test_list has Output (array of listItem).
+	var listToolDesc *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_list" {
+			listToolDesc = &result.Tools[i]
+			break
+		}
+	}
+	if listToolDesc == nil {
+		t.Fatal("test_list not found in tools/list response")
+	}
+	if listToolDesc.OutputSchema == nil {
+		t.Fatal("test_list should have outputSchema (Output is declared)")
+	}
+
+	// After JSON round-trip, OutputSchema is map[string]any.
+	outputSchema, ok := listToolDesc.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("outputSchema type = %T, want map[string]any", listToolDesc.OutputSchema)
+	}
+	if outputSchema["type"] != "array" {
+		t.Errorf("outputSchema.type = %v, want %q", outputSchema["type"], "array")
+	}
+	items, ok := outputSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("outputSchema.items type = %T, want map[string]any", outputSchema["items"])
+	}
+	if items["type"] != "object" {
+		t.Errorf("items.type = %v, want %q", items["type"], "object")
+	}
+	itemProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("items.properties type = %T, want map[string]any", items["properties"])
+	}
+	if itemProperties["name"] == nil {
+		t.Error("outputSchema.items missing 'name' property")
+	}
+}
+
+func TestServer_ToolsListOutputSchema_Absent(t *testing.T) {
+	result := listTools(t)
+
+	// test_echo has no Output — outputSchema should be absent.
+	var echoTool *toolDescription
+	for i := range result.Tools {
+		if result.Tools[i].Name == "test_echo" {
+			echoTool = &result.Tools[i]
+			break
+		}
+	}
+	if echoTool == nil {
+		t.Fatal("test_echo not found in tools/list response")
+	}
+	if echoTool.OutputSchema != nil {
+		t.Errorf("test_echo should have nil outputSchema, got %v", echoTool.OutputSchema)
+	}
+}
+
+func TestServer_StructuredContent_ObjectOutput(t *testing.T) {
+	// test_format declares Output (formatOutput) and produces JSON
+	// when --json is forced. The MCP server should parse it and
+	// return structuredContent alongside the text content block.
+	resp := callTool(t, "test_format", map[string]any{"value": "hello"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("structuredContent should be present for tool with outputSchema")
+	}
+
+	// structuredContent should be the parsed JSON object.
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if structured["value"] != "hello" {
+		t.Errorf("structuredContent.value = %v, want %q", structured["value"], "hello")
+	}
+
+	// The text content block should also be present (backward compat).
+	if len(result.Content) == 0 {
+		t.Fatal("expected at least one text content block")
+	}
+	if !strings.Contains(result.Content[0].Text, `"value"`) {
+		t.Errorf("text content = %q, expected JSON containing 'value'", result.Content[0].Text)
+	}
+}
+
+func TestServer_StructuredContent_ArrayOutput(t *testing.T) {
+	resp := callTool(t, "test_list", map[string]any{})
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("structuredContent should be present for tool with outputSchema")
+	}
+
+	// structuredContent should be the parsed JSON array.
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items in structuredContent, got %d", len(items))
+	}
+	first, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("items[0] type = %T, want map[string]any", items[0])
+	}
+	if first["name"] != "alpha" {
+		t.Errorf("items[0].name = %v, want %q", first["name"], "alpha")
+	}
+}
+
+func TestServer_StructuredContent_AbsentWithoutOutputSchema(t *testing.T) {
+	// test_echo has no Output declaration — structuredContent should
+	// not appear in the result.
+	resp := callTool(t, "test_echo", map[string]any{"message": "hello"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if result.StructuredContent != nil {
+		t.Errorf("structuredContent should be nil for tool without outputSchema, got %v",
+			result.StructuredContent)
+	}
+}
+
+func TestServer_StructuredContent_AbsentOnError(t *testing.T) {
+	// test_fail has no Output, but even if it did, structuredContent
+	// should not appear when isError=true.
+	resp := callTool(t, "test_fail", map[string]any{"reason": "oops"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("expected isError=true")
+	}
+	if result.StructuredContent != nil {
+		t.Errorf("structuredContent should be nil on error, got %v",
+			result.StructuredContent)
 	}
 }

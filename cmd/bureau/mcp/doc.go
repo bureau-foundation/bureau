@@ -7,8 +7,12 @@
 //
 // The server discovers tools by walking the CLI command tree and
 // collecting leaf commands that have a [cli.Command.Params] function.
-// Each discovered command becomes an MCP tool with a JSON Schema
+// Each discovered command becomes an MCP tool with inputSchema
 // generated from the parameter struct's tags via [cli.ParamsSchema].
+// Commands that declare [cli.Command.Output] also get an outputSchema
+// reflected from the output type via [cli.OutputSchema], and their
+// results include structuredContent (parsed JSON) alongside the text
+// content block.
 //
 // Tool names are underscore-joined command paths (e.g.,
 // "bureau_pipeline_list" for "bureau pipeline list"). Arguments are

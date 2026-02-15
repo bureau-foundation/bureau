@@ -60,6 +60,26 @@ type Command struct {
 	// are auto-derived.
 	Params func() any
 
+	// Output returns a zero value of the command's output type. Used
+	// by the MCP server to generate outputSchema for tool descriptions
+	// and to return structuredContent in tool results.
+	//
+	// The returned value is only used for type reflection — the server
+	// does not write into it. Commands that produce JSON output should
+	// declare their output type here so MCP clients receive both the
+	// JSON Schema and parsed structured results:
+	//
+	//     type listResult struct {
+	//         Name string `json:"name" desc:"pipeline name"`
+	//     }
+	//     return &Command{
+	//         Params: func() any { return &params },
+	//         Output: func() any { return &[]listResult{} },
+	//     }
+	//
+	// If nil, the tool has no outputSchema and results are text only.
+	Output func() any
+
 	// RequiredGrants lists the authorization action strings needed to
 	// invoke this command via MCP. The MCP server checks all required
 	// grants against the principal's grants (fetched from the credential

@@ -29,12 +29,13 @@ type Server struct {
 
 // tool is a discovered CLI command exposed as an MCP tool.
 type tool struct {
-	name        string
-	title       string
-	description string
-	annotations *toolAnnotations
-	inputSchema *cli.Schema
-	command     *cli.Command
+	name         string
+	title        string
+	description  string
+	annotations  *toolAnnotations
+	inputSchema  *cli.Schema
+	outputSchema *cli.Schema
+	command      *cli.Command
 }
 
 // NewServer creates an MCP server by walking the command tree to
@@ -174,11 +175,12 @@ func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
 			continue
 		}
 		descriptions = append(descriptions, toolDescription{
-			Name:        t.name,
-			Title:       t.title,
-			Description: t.description,
-			InputSchema: t.inputSchema,
-			Annotations: t.annotations,
+			Name:         t.name,
+			Title:        t.title,
+			Description:  t.description,
+			InputSchema:  t.inputSchema,
+			OutputSchema: t.outputSchema,
+			Annotations:  t.annotations,
 		})
 	}
 	if descriptions == nil {
@@ -225,6 +227,29 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 	// MCP requires at least one content block in the result.
 	if len(result.Content) == 0 {
 		result.Content = []contentBlock{{Type: "text", Text: ""}}
+	}
+
+	// When the tool declares an output schema and the call succeeded,
+	// parse the captured JSON output into structuredContent. Per the
+	// MCP specification, tools with outputSchema MUST return both
+	// structuredContent (typed JSON) and a text content block
+	// (serialized JSON for backward compatibility).
+	if t.outputSchema != nil && !result.IsError && output != "" {
+		var structured any
+		if parseErr := json.Unmarshal([]byte(output), &structured); parseErr != nil {
+			// The command declared an output schema but produced
+			// output that doesn't parse as JSON. This is a bug in
+			// the command, not a runtime error. Surface it as a
+			// tool error so it's visible to both the agent and the
+			// operator.
+			result.IsError = true
+			result.Content = append(result.Content, contentBlock{
+				Type: "text",
+				Text: fmt.Sprintf("output schema violation: command produced non-JSON output: %v", parseErr),
+			})
+		} else {
+			result.StructuredContent = structured
+		}
 	}
 
 	return writeResult(encoder, req.ID, result)
@@ -339,18 +364,32 @@ func discoverTools(command *cli.Command, path []string, tools *[]tool) {
 	current[len(path)] = command.Name
 
 	if command.Params != nil && command.Run != nil {
-		schema, err := cli.ParamsSchema(command.Params())
+		toolName := strings.Join(current, "_")
+
+		inputSchema, err := cli.ParamsSchema(command.Params())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mcp: skipping %s: schema error: %v\n",
-				strings.Join(current, "_"), err)
+			fmt.Fprintf(os.Stderr, "mcp: skipping %s: input schema error: %v\n",
+				toolName, err)
 		} else {
+			var outputSchema *cli.Schema
+			if command.Output != nil {
+				outSchema, outErr := cli.OutputSchema(command.Output())
+				if outErr != nil {
+					fmt.Fprintf(os.Stderr, "mcp: %s: output schema error: %v\n",
+						toolName, outErr)
+				} else {
+					outputSchema = outSchema
+				}
+			}
+
 			*tools = append(*tools, tool{
-				name:        strings.Join(current, "_"),
-				title:       command.Summary,
-				description: toolDescriptionText(command),
-				annotations: deriveAnnotations(command),
-				inputSchema: schema,
-				command:     command,
+				name:         toolName,
+				title:        command.Summary,
+				description:  toolDescriptionText(command),
+				annotations:  deriveAnnotations(command),
+				inputSchema:  inputSchema,
+				outputSchema: outputSchema,
+				command:      command,
 			})
 		}
 	}

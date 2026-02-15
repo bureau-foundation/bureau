@@ -24,6 +24,14 @@ type listParams struct {
 	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON instead of a table"`
 }
 
+// pipelineEntry is a single pipeline in the list output. Declared at
+// package level so the MCP server can reflect its type for outputSchema.
+type pipelineEntry struct {
+	Name        string `json:"name"        desc:"pipeline name (state key)"`
+	Description string `json:"description" desc:"human-readable pipeline description"`
+	Steps       int    `json:"steps"       desc:"number of steps in the pipeline"`
+}
+
 // listCommand returns the "list" subcommand for listing pipelines in a room.
 func listCommand() *cli.Command {
 	var params listParams
@@ -51,6 +59,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			return cli.FlagsFromParams("list", &params)
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]pipelineEntry{} },
 		RequiredGrants: []string{"command/pipeline/list"},
 		Run: func(args []string) error {
 			// In CLI mode, the room comes as a positional argument.
@@ -81,12 +90,6 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			events, err := session.GetRoomState(ctx, roomID)
 			if err != nil {
 				return fmt.Errorf("getting room state: %w", err)
-			}
-
-			type pipelineEntry struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				Steps       int    `json:"steps"`
 			}
 
 			var pipelines []pipelineEntry

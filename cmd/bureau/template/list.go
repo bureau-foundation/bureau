@@ -24,6 +24,14 @@ type listParams struct {
 	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON instead of a table"`
 }
 
+// templateEntry is a single template in the list output. Declared at
+// package level so the MCP server can reflect its type for outputSchema.
+type templateEntry struct {
+	Name        string `json:"name"                desc:"template name (state key)"`
+	Description string `json:"description"         desc:"human-readable template description"`
+	Inherits    string `json:"inherits,omitempty"   desc:"parent template reference (e.g. bureau/template:base)"`
+}
+
 // listCommand returns the "list" subcommand for listing templates in a room.
 func listCommand() *cli.Command {
 	var params listParams
@@ -51,6 +59,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			return cli.FlagsFromParams("list", &params)
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]templateEntry{} },
 		RequiredGrants: []string{"command/template/list"},
 		Run: func(args []string) error {
 			// In CLI mode, the room comes as a positional argument.
@@ -81,12 +90,6 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			events, err := session.GetRoomState(ctx, roomID)
 			if err != nil {
 				return fmt.Errorf("getting room state: %w", err)
-			}
-
-			type templateEntry struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				Inherits    string `json:"inherits,omitempty"`
 			}
 
 			var templates []templateEntry

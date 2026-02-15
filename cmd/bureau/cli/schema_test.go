@@ -309,6 +309,177 @@ func TestParamsSchemaFromType(t *testing.T) {
 	}
 }
 
+// --- OutputSchema tests ---
+
+func TestOutputSchema_Struct(t *testing.T) {
+	type entry struct {
+		Name        string `json:"name"        desc:"entry name"`
+		Description string `json:"description" desc:"human-readable description"`
+		Count       int    `json:"count"       desc:"item count"`
+	}
+
+	schema, err := OutputSchema(&entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	if schema.Type != "object" {
+		t.Errorf("Type = %q, want %q", schema.Type, "object")
+	}
+	if len(schema.Properties) != 3 {
+		t.Errorf("expected 3 properties, got %d: %v", len(schema.Properties), propertyNames(schema))
+	}
+
+	nameProp := schema.Properties["name"]
+	if nameProp == nil {
+		t.Fatal("missing name property")
+	}
+	if nameProp.Type != "string" {
+		t.Errorf("name.Type = %q, want %q", nameProp.Type, "string")
+	}
+	if nameProp.Description != "entry name" {
+		t.Errorf("name.Description = %q, want %q", nameProp.Description, "entry name")
+	}
+
+	countProp := schema.Properties["count"]
+	if countProp == nil {
+		t.Fatal("missing count property")
+	}
+	if countProp.Type != "integer" {
+		t.Errorf("count.Type = %q, want %q", countProp.Type, "integer")
+	}
+}
+
+func TestOutputSchema_SliceOfStructs(t *testing.T) {
+	type entry struct {
+		Name  string `json:"name"  desc:"entry name"`
+		Steps int    `json:"steps" desc:"step count"`
+	}
+
+	schema, err := OutputSchema(&[]entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	if schema.Type != "array" {
+		t.Fatalf("Type = %q, want %q", schema.Type, "array")
+	}
+	if schema.Items == nil {
+		t.Fatal("Items is nil for array schema")
+	}
+	if schema.Items.Type != "object" {
+		t.Errorf("Items.Type = %q, want %q", schema.Items.Type, "object")
+	}
+	if len(schema.Items.Properties) != 2 {
+		t.Errorf("expected 2 item properties, got %d", len(schema.Items.Properties))
+	}
+	if schema.Items.Properties["name"] == nil {
+		t.Error("missing name property in items")
+	}
+	if schema.Items.Properties["steps"] == nil {
+		t.Error("missing steps property in items")
+	}
+}
+
+func TestOutputSchema_SliceOfStrings(t *testing.T) {
+	schema, err := OutputSchema(&[]string{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	if schema.Type != "array" {
+		t.Fatalf("Type = %q, want %q", schema.Type, "array")
+	}
+	if schema.Items == nil {
+		t.Fatal("Items is nil for array schema")
+	}
+	if schema.Items.Type != "string" {
+		t.Errorf("Items.Type = %q, want %q", schema.Items.Type, "string")
+	}
+}
+
+func TestOutputSchema_Primitive(t *testing.T) {
+	schema, err := OutputSchema(new(string))
+	if err != nil {
+		t.Fatalf("OutputSchema(string): %v", err)
+	}
+	if schema.Type != "string" {
+		t.Errorf("Type = %q, want %q", schema.Type, "string")
+	}
+
+	schema, err = OutputSchema(new(int))
+	if err != nil {
+		t.Fatalf("OutputSchema(int): %v", err)
+	}
+	if schema.Type != "integer" {
+		t.Errorf("Type = %q, want %q", schema.Type, "integer")
+	}
+
+	schema, err = OutputSchema(new(bool))
+	if err != nil {
+		t.Fatalf("OutputSchema(bool): %v", err)
+	}
+	if schema.Type != "boolean" {
+		t.Errorf("Type = %q, want %q", schema.Type, "boolean")
+	}
+}
+
+func TestOutputSchema_MapStringKeys(t *testing.T) {
+	schema, err := OutputSchema(&map[string]any{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+	if schema.Type != "object" {
+		t.Errorf("Type = %q, want %q", schema.Type, "object")
+	}
+}
+
+func TestOutputSchema_JSONRoundTrip(t *testing.T) {
+	// Verify that a slice-of-struct output schema produces valid JSON
+	// that matches MCP's outputSchema expectations.
+	type entry struct {
+		Name  string `json:"name"  desc:"item name"`
+		Value int    `json:"value" desc:"item value"`
+	}
+
+	schema, err := OutputSchema(&[]entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	data, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if raw["type"] != "array" {
+		t.Errorf("type = %v, want %q", raw["type"], "array")
+	}
+	items, ok := raw["items"].(map[string]any)
+	if !ok {
+		t.Fatal("items is not an object")
+	}
+	if items["type"] != "object" {
+		t.Errorf("items.type = %v, want %q", items["type"], "object")
+	}
+	properties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("items.properties is not an object")
+	}
+	nameProp, ok := properties["name"].(map[string]any)
+	if !ok {
+		t.Fatal("items.properties.name is not an object")
+	}
+	if nameProp["type"] != "string" {
+		t.Errorf("name.type = %v, want %q", nameProp["type"], "string")
+	}
+}
+
 // defaultsEqual compares default values, handling []string specially
 // since reflect.DeepEqual is not available in this comparison context
 // and direct == comparison doesn't work for slices.

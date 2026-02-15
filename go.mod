@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/hanwen/go-fuse/v2 v2.9.0
 	github.com/junegunn/fzf v0.67.0
 	github.com/klauspost/compress v1.18.4
 	github.com/pierrec/lz4/v4 v4.1.25

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
+	artifactfuse "github.com/bureau-foundation/bureau/lib/artifact/fuse"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -42,6 +43,7 @@ func run() error {
 		storeDir      string
 		cacheDir      string
 		cacheSize     int64
+		mountpoint    string
 		showVersion   bool
 	)
 
@@ -54,6 +56,7 @@ func run() error {
 	flag.StringVar(&storeDir, "store-dir", "", "artifact store root directory (required)")
 	flag.StringVar(&cacheDir, "cache-dir", "", "local cache directory (optional, enables ring cache)")
 	flag.Int64Var(&cacheSize, "cache-size", 0, "cache device size in bytes (required if --cache-dir is set)")
+	flag.StringVar(&mountpoint, "mountpoint", "", "FUSE mount directory for read-only artifact access (optional)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -197,6 +200,28 @@ func run() error {
 			"path", cacheDir,
 			"device_size", cacheSize,
 		)
+	}
+
+	// Optionally mount the FUSE filesystem for read-only artifact access.
+	if mountpoint != "" {
+		fuseServer, err := artifactfuse.Mount(artifactfuse.Options{
+			Mountpoint: mountpoint,
+			Store:      store,
+			Cache:      cache,
+			TagStore:   tagStore,
+			AllowOther: true,
+			Logger:     logger,
+		})
+		if err != nil {
+			return fmt.Errorf("mounting FUSE filesystem: %w", err)
+		}
+		defer func() {
+			if err := fuseServer.Unmount(); err != nil {
+				logger.Error("failed to unmount FUSE filesystem", "error", err)
+			} else {
+				logger.Info("FUSE filesystem unmounted", "mountpoint", mountpoint)
+			}
+		}()
 	}
 
 	clk := clock.Real()

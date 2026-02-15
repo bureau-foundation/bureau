@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/artifact",
+        "//lib/artifact/fuse",
         "//lib/clock",
         "//lib/codec",
         "//lib/principal",

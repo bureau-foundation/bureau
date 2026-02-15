@@ -114,12 +114,30 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 
 	// Accept pending invites. The service may have been invited to
 	// rooms while it was offline.
-	service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)
+	acceptedRooms := service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)
 
 	// Build the ticket index from all joined rooms' state.
 	totalTickets := 0
 	for roomID, room := range response.Rooms.Join {
 		tickets := ts.processRoomState(ctx, roomID, room.State.Events, room.Timeline.Events)
+		totalTickets += tickets
+	}
+
+	// Accepted rooms don't appear in Rooms.Join until the next /sync
+	// batch. Fetch their full state directly so they are indexed
+	// before the socket opens — without this, callers connecting
+	// right after the socket appears can reference rooms the service
+	// hasn't tracked yet.
+	for _, roomID := range acceptedRooms {
+		events, err := ts.session.GetRoomState(ctx, roomID)
+		if err != nil {
+			ts.logger.Error("failed to fetch state for accepted room",
+				"room_id", roomID,
+				"error", err,
+			)
+			continue
+		}
+		tickets := ts.processRoomState(ctx, roomID, events, nil)
 		totalTickets += tickets
 	}
 
@@ -214,9 +232,9 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID string, st
 func (ts *TicketService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
 	// Accept invites to new rooms.
 	if len(response.Rooms.Invite) > 0 {
-		accepted := service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)
-		if accepted > 0 {
-			ts.logger.Info("accepted room invites", "count", accepted)
+		acceptedRooms := service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)
+		if len(acceptedRooms) > 0 {
+			ts.logger.Info("accepted room invites", "count", len(acceptedRooms))
 		}
 	}
 

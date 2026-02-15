@@ -70,11 +70,28 @@ func (as *ArtifactService) initialSync(ctx context.Context) (string, error) {
 	)
 
 	// Accept pending invites.
-	service.AcceptInvites(ctx, as.session, response.Rooms.Invite, as.logger)
+	acceptedRooms := service.AcceptInvites(ctx, as.session, response.Rooms.Invite, as.logger)
 
 	// Discover rooms with artifact scope.
 	for roomID, room := range response.Rooms.Join {
 		as.processRoomState(roomID, room.State.Events, room.Timeline.Events)
+	}
+
+	// Accepted rooms don't appear in Rooms.Join until the next /sync
+	// batch. Fetch their full state directly so they are discovered
+	// before the socket opens — without this, callers connecting
+	// right after the socket appears can reference rooms the service
+	// hasn't tracked yet.
+	for _, roomID := range acceptedRooms {
+		events, err := as.session.GetRoomState(ctx, roomID)
+		if err != nil {
+			as.logger.Error("failed to fetch state for accepted room",
+				"room_id", roomID,
+				"error", err,
+			)
+			continue
+		}
+		as.processRoomState(roomID, events, nil)
 	}
 
 	as.logger.Info("artifact rooms discovered",
@@ -117,9 +134,9 @@ func (as *ArtifactService) processRoomState(roomID string, stateEvents, timeline
 func (as *ArtifactService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
 	// Accept invites to new rooms.
 	if len(response.Rooms.Invite) > 0 {
-		accepted := service.AcceptInvites(ctx, as.session, response.Rooms.Invite, as.logger)
-		if accepted > 0 {
-			as.logger.Info("accepted room invites", "count", accepted)
+		acceptedRooms := service.AcceptInvites(ctx, as.session, response.Rooms.Invite, as.logger)
+		if len(acceptedRooms) > 0 {
+			as.logger.Info("accepted room invites", "count", len(acceptedRooms))
 		}
 	}
 

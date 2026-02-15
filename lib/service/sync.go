@@ -119,11 +119,11 @@ func RunSyncLoop(ctx context.Context, session *messaging.Session, config SyncCon
 }
 
 // AcceptInvites joins all rooms the service has been invited to.
-// Returns the number of invites accepted. Services should call this
-// during initial sync processing and on each incremental sync that
-// contains invites.
-func AcceptInvites(ctx context.Context, session *messaging.Session, invites map[string]messaging.InvitedRoom, logger *slog.Logger) int {
-	accepted := 0
+// Returns the room IDs that were successfully joined. Services should
+// call this during initial sync processing and on each incremental
+// sync that contains invites.
+func AcceptInvites(ctx context.Context, session *messaging.Session, invites map[string]messaging.InvitedRoom, logger *slog.Logger) []string {
+	var accepted []string
 	for roomID := range invites {
 		logger.Info("accepting room invite", "room_id", roomID)
 		if _, err := session.JoinRoom(ctx, roomID); err != nil {
@@ -133,7 +133,7 @@ func AcceptInvites(ctx context.Context, session *messaging.Session, invites map[
 			)
 			continue
 		}
-		accepted++
+		accepted = append(accepted, roomID)
 	}
 	return accepted
 }

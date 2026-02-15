@@ -107,6 +107,12 @@ func testCommandTree() *cli.Command {
 				Params:         func() any { return &formatP },
 				Output:         func() any { return &formatOutput{} },
 				RequiredGrants: []string{"command/test/format"},
+				Examples: []cli.Example{
+					{
+						Description: "Format a greeting",
+						Command:     "bureau test format --value hello",
+					},
+				},
 				Run: func(args []string) error {
 					if formatP.OutputJSON {
 						return cli.WriteJSON(formatOutput{Value: formatP.Value})
@@ -176,6 +182,13 @@ func initMessages() []map[string]any {
 // server and returns the responses. Notifications produce no response.
 func mcpSession(t *testing.T, root *cli.Command, grants []schema.Grant, messages ...map[string]any) []testResponse {
 	t.Helper()
+	return mcpSessionWithOptions(t, root, grants, nil, messages...)
+}
+
+// mcpSessionWithOptions is like mcpSession but accepts server options
+// (e.g., WithProgressiveDisclosure).
+func mcpSessionWithOptions(t *testing.T, root *cli.Command, grants []schema.Grant, options []ServerOption, messages ...map[string]any) []testResponse {
+	t.Helper()
 
 	var input bytes.Buffer
 	for _, msg := range messages {
@@ -188,7 +201,7 @@ func mcpSession(t *testing.T, root *cli.Command, grants []schema.Grant, messages
 	}
 
 	var output bytes.Buffer
-	server := NewServer(root, grants)
+	server := NewServer(root, grants, options...)
 	if err := server.Run(&input, &output); err != nil {
 		t.Fatalf("server.Run: %v", err)
 	}
@@ -287,6 +300,50 @@ func callToolWithGrants(t *testing.T, grants []schema.Grant, name string, argume
 func callToolResult(t *testing.T, name string, arguments map[string]any) toolsCallResult {
 	t.Helper()
 	resp := callTool(t, name, arguments)
+	if resp.Error != nil {
+		t.Fatalf("tools/call %q: JSON-RPC error code=%d message=%q",
+			name, resp.Error.Code, resp.Error.Message)
+	}
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal tools/call %q result: %v", name, err)
+	}
+	return result
+}
+
+// --- Progressive mode helpers ---
+
+// progressiveSession runs an initialized MCP session in progressive
+// (meta-tool) mode against testCommandTree with wildcard grants.
+func progressiveSession(t *testing.T, messages ...map[string]any) []testResponse {
+	t.Helper()
+	return progressiveSessionWithGrants(t, wildcardGrants(), messages...)
+}
+
+// progressiveSessionWithGrants runs an initialized MCP session in
+// progressive mode with the specified grants.
+func progressiveSessionWithGrants(t *testing.T, grants []schema.Grant, messages ...map[string]any) []testResponse {
+	t.Helper()
+	root := testCommandTree()
+	all := append(initMessages(), messages...)
+	return mcpSessionWithOptions(t, root, grants, []ServerOption{WithProgressiveDisclosure()}, all...)
+}
+
+// callMetaTool calls a meta-tool in progressive mode and returns the
+// parsed result. Fails the test on JSON-RPC errors.
+func callMetaTool(t *testing.T, name string, arguments map[string]any) toolsCallResult {
+	t.Helper()
+	params := map[string]any{"name": name}
+	if arguments != nil {
+		params["arguments"] = arguments
+	}
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  params,
+	})
+	resp := responses[1]
 	if resp.Error != nil {
 		t.Fatalf("tools/call %q: JSON-RPC error code=%d message=%q",
 			name, resp.Error.Code, resp.Error.Message)
@@ -1054,5 +1111,453 @@ func TestServer_StructuredContent_AbsentOnError(t *testing.T) {
 	if result.StructuredContent != nil {
 		t.Errorf("structuredContent should be nil on error, got %v",
 			result.StructuredContent)
+	}
+}
+
+// --- Progressive mode tests ---
+
+func TestServer_Progressive_ToolsListOnlyMetaTools(t *testing.T) {
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	resp := responses[1]
+	if resp.Error != nil {
+		t.Fatalf("tools/list error: %v", resp.Error)
+	}
+
+	var result toolsListResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	// Progressive mode exposes exactly 3 meta-tools.
+	if len(result.Tools) != 3 {
+		t.Fatalf("expected 3 meta-tools, got %d", len(result.Tools))
+	}
+
+	names := make(map[string]bool)
+	for _, tool := range result.Tools {
+		names[tool.Name] = true
+	}
+	for _, expected := range []string{metaToolList, metaToolDescribe, metaToolCall} {
+		if !names[expected] {
+			t.Errorf("missing meta-tool %q", expected)
+		}
+	}
+
+	// Meta-tools should have inputSchema.
+	for _, tool := range result.Tools {
+		if tool.InputSchema == nil {
+			t.Errorf("meta-tool %q has nil inputSchema", tool.Name)
+		}
+	}
+
+	// bureau_tools_list and bureau_tools_describe should have outputSchema.
+	for _, tool := range result.Tools {
+		if tool.Name == metaToolCall {
+			if tool.OutputSchema != nil {
+				t.Errorf("%s should have nil outputSchema (dynamic output)", metaToolCall)
+			}
+			continue
+		}
+		if tool.OutputSchema == nil {
+			t.Errorf("meta-tool %q should have outputSchema", tool.Name)
+		}
+	}
+}
+
+func TestServer_Progressive_MetaToolAnnotations(t *testing.T) {
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+
+	var result toolsListResult
+	if err := json.Unmarshal(responses[1].Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.Name == metaToolCall {
+			// bureau_tools_call has no annotations (inherits MCP defaults
+			// because safety depends on the inner tool).
+			if tool.Annotations != nil {
+				t.Errorf("%s should have nil annotations, got %+v", metaToolCall, tool.Annotations)
+			}
+			continue
+		}
+		// bureau_tools_list and bureau_tools_describe are read-only.
+		if tool.Annotations == nil {
+			t.Fatalf("%s should have annotations", tool.Name)
+		}
+		if tool.Annotations.ReadOnlyHint == nil || !*tool.Annotations.ReadOnlyHint {
+			t.Errorf("%s should have readOnlyHint=true", tool.Name)
+		}
+	}
+}
+
+func TestServer_Progressive_ToolsList(t *testing.T) {
+	result := callMetaTool(t, metaToolList, nil)
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("structuredContent should be present")
+	}
+
+	// Parse the structured content as a list of tool summaries.
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+
+	// With wildcard grants, all 4 test tools should be listed.
+	if len(items) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(items))
+	}
+
+	// Check that each item has name, title, and category.
+	for _, item := range items {
+		summary, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("item type = %T, want map[string]any", item)
+		}
+		if summary["name"] == nil || summary["title"] == nil {
+			t.Errorf("tool summary missing fields: %v", summary)
+		}
+		// Category is the second segment of the tool name. For test
+		// tools like "test_echo", category is "echo".
+		if summary["category"] == nil || summary["category"] == "" {
+			t.Errorf("tool %v has empty category", summary["name"])
+		}
+	}
+}
+
+func TestServer_Progressive_ToolsListCategoryFilter(t *testing.T) {
+	// Test tools have names like test_echo, test_fail, etc.
+	// Category "echo" matches only test_echo.
+	result := callMetaTool(t, metaToolList, map[string]any{
+		"category": "echo",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false")
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tool for category 'echo', got %d", len(items))
+	}
+	first := items[0].(map[string]any)
+	if first["name"] != "test_echo" {
+		t.Errorf("name = %v, want %q", first["name"], "test_echo")
+	}
+}
+
+func TestServer_Progressive_ToolsListCategoryFilterNoMatch(t *testing.T) {
+	result := callMetaTool(t, metaToolList, map[string]any{
+		"category": "nonexistent",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false")
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 tools for nonexistent category, got %d", len(items))
+	}
+}
+
+func TestServer_Progressive_ToolsListGrantFiltering(t *testing.T) {
+	// Only grant echo — bureau_tools_list should only show echo.
+	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
+	responses := progressiveSessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": metaToolList,
+		},
+	})
+	resp := responses[1]
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tool with echo grant, got %d", len(items))
+	}
+	first := items[0].(map[string]any)
+	if first["name"] != "test_echo" {
+		t.Errorf("expected test_echo, got %v", first["name"])
+	}
+}
+
+func TestServer_Progressive_ToolsDescribe(t *testing.T) {
+	result := callMetaTool(t, metaToolDescribe, map[string]any{
+		"name": "test_format",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("structuredContent should be present")
+	}
+
+	detail, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+
+	if detail["name"] != "test_format" {
+		t.Errorf("name = %v, want %q", detail["name"], "test_format")
+	}
+	if detail["title"] != "Conditional JSON output" {
+		t.Errorf("title = %v, want %q", detail["title"], "Conditional JSON output")
+	}
+	if detail["inputSchema"] == nil {
+		t.Error("inputSchema should be present")
+	}
+	if detail["outputSchema"] == nil {
+		t.Error("outputSchema should be present (test_format declares Output)")
+	}
+
+	// Check that examples are included.
+	examples, ok := detail["examples"].([]any)
+	if !ok {
+		t.Fatalf("examples type = %T, want []any", detail["examples"])
+	}
+	if len(examples) != 1 {
+		t.Fatalf("expected 1 example, got %d", len(examples))
+	}
+	example := examples[0].(map[string]any)
+	if example["command"] != "bureau test format --value hello" {
+		t.Errorf("example command = %v, want %q", example["command"], "bureau test format --value hello")
+	}
+}
+
+func TestServer_Progressive_ToolsDescribeUnknown(t *testing.T) {
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolDescribe,
+			"arguments": map[string]any{"name": "nonexistent_tool"},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(resp.Error.Message, "unknown tool") {
+		t.Errorf("error message = %q, want it to contain 'unknown tool'", resp.Error.Message)
+	}
+}
+
+func TestServer_Progressive_ToolsDescribeUnauthorized(t *testing.T) {
+	// Grant only echo, try to describe format.
+	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
+	responses := progressiveSessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolDescribe,
+			"arguments": map[string]any{"name": "test_format"},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for unauthorized tool")
+	}
+	if !strings.Contains(resp.Error.Message, "not authorized") {
+		t.Errorf("error message = %q, want it to contain 'not authorized'", resp.Error.Message)
+	}
+}
+
+func TestServer_Progressive_ToolsCall(t *testing.T) {
+	result := callMetaTool(t, metaToolCall, map[string]any{
+		"name":      "test_echo",
+		"arguments": map[string]any{"message": "hello from meta"},
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected at least one content block")
+	}
+	if !strings.Contains(result.Content[0].Text, "hello from meta") {
+		t.Errorf("content = %q, want it to contain 'hello from meta'", result.Content[0].Text)
+	}
+
+	// bureau_tools_call has no outputSchema, so structuredContent
+	// should not be present even if the inner tool has one.
+	if result.StructuredContent != nil {
+		t.Errorf("structuredContent should be nil for meta-tool call-through, got %v",
+			result.StructuredContent)
+	}
+}
+
+func TestServer_Progressive_ToolsCallError(t *testing.T) {
+	result := callMetaTool(t, metaToolCall, map[string]any{
+		"name":      "test_fail",
+		"arguments": map[string]any{"reason": "meta-fail"},
+	})
+
+	if !result.IsError {
+		t.Error("expected isError=true")
+	}
+	var errorFound bool
+	for _, block := range result.Content {
+		if strings.Contains(block.Text, "meta-fail") {
+			errorFound = true
+		}
+	}
+	if !errorFound {
+		t.Errorf("expected error content containing 'meta-fail', got %v", result.Content)
+	}
+}
+
+func TestServer_Progressive_ToolsCallUnknown(t *testing.T) {
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolCall,
+			"arguments": map[string]any{"name": "nonexistent_tool"},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(resp.Error.Message, "unknown tool") {
+		t.Errorf("error message = %q, want it to contain 'unknown tool'", resp.Error.Message)
+	}
+}
+
+func TestServer_Progressive_ToolsCallUnauthorized(t *testing.T) {
+	// Grant only echo, try to call format through meta-tool.
+	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
+	responses := progressiveSessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolCall,
+			"arguments": map[string]any{"name": "test_format", "arguments": map[string]any{"value": "x"}},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for unauthorized tool")
+	}
+	if !strings.Contains(resp.Error.Message, "not authorized") {
+		t.Errorf("error message = %q, want it to contain 'not authorized'", resp.Error.Message)
+	}
+}
+
+func TestServer_Progressive_ToolsCallRecursionPrevented(t *testing.T) {
+	// Trying to call bureau_tools_list through bureau_tools_call
+	// should be rejected to prevent recursion.
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolCall,
+			"arguments": map[string]any{"name": metaToolList},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for recursive meta-tool call")
+	}
+	if !strings.Contains(resp.Error.Message, "meta-tools cannot be called") {
+		t.Errorf("error message = %q, want it to contain 'meta-tools cannot be called'",
+			resp.Error.Message)
+	}
+}
+
+func TestServer_Progressive_DirectToolBlocked(t *testing.T) {
+	// In progressive mode, calling a real tool directly (not through
+	// bureau_tools_call) should be rejected.
+	responses := progressiveSession(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "test_echo",
+			"arguments": map[string]any{"message": "direct"},
+		},
+	})
+	resp := responses[1]
+	if resp.Error == nil {
+		t.Fatal("expected error for direct tool call in progressive mode")
+	}
+	if !strings.Contains(resp.Error.Message, "not directly callable in progressive mode") {
+		t.Errorf("error message = %q, want it to mention progressive mode", resp.Error.Message)
+	}
+}
+
+// --- Unit tests for meta-tool helpers ---
+
+func TestToolCategory(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		want     string
+	}{
+		{"three segments", "bureau_pipeline_list", "pipeline"},
+		{"four segments", "bureau_ticket_dep_add", "ticket"},
+		{"two segments", "bureau_quickstart", "quickstart"},
+		{"single segment", "standalone", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toolCategory(tt.toolName)
+			if got != tt.want {
+				t.Errorf("toolCategory(%q) = %q, want %q", tt.toolName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsMetaTool(t *testing.T) {
+	if !isMetaTool(metaToolList) {
+		t.Errorf("isMetaTool(%q) = false, want true", metaToolList)
+	}
+	if !isMetaTool(metaToolDescribe) {
+		t.Errorf("isMetaTool(%q) = false, want true", metaToolDescribe)
+	}
+	if !isMetaTool(metaToolCall) {
+		t.Errorf("isMetaTool(%q) = false, want true", metaToolCall)
+	}
+	if isMetaTool("test_echo") {
+		t.Error("isMetaTool(test_echo) = true, want false")
 	}
 }

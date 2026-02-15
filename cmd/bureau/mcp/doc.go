@@ -25,5 +25,21 @@
 // are hidden (default-deny). This prevents sandboxed agents from
 // seeing or invoking tools they are not authorized to use.
 //
+// # Progressive disclosure
+//
+// With [WithProgressiveDisclosure], the server exposes three
+// meta-tools instead of the full tool catalog:
+//
+//   - bureau_tools_list: lightweight listing of tool names, summaries,
+//     and categories, with optional category filtering.
+//   - bureau_tools_describe: full tool description including
+//     inputSchema, outputSchema, annotations, and examples.
+//   - bureau_tools_call: invoke a tool by name with arguments.
+//
+// This reduces the initial tool payload from O(n) tool descriptions
+// to 3 fixed entries, which matters for agents with tight context
+// budgets. Authorization grants still apply: meta-tools only expose
+// and execute tools the principal is authorized to use.
+//
 // This package implements the 2025-11-25 MCP protocol specification.
 package mcp

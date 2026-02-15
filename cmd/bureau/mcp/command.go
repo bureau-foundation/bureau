@@ -3,7 +3,10 @@
 
 package mcp
 
-import "github.com/bureau-foundation/bureau/cmd/bureau/cli"
+import (
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/spf13/pflag"
+)
 
 // Command returns the "mcp" command group. The root parameter is the
 // top-level CLI command tree, used for tool discovery when the "serve"
@@ -25,7 +28,16 @@ from parameter struct tags.`,
 	}
 }
 
+// serveParams holds the parameters for the MCP serve command.
+// The json:"-" tags exclude these from MCP tool schemas — this
+// command configures the server itself, not an agent-callable tool.
+type serveParams struct {
+	Progressive bool `json:"-" flag:"progressive" desc:"expose meta-tools for progressive discovery instead of all tools directly"`
+}
+
 func serveCommand(root *cli.Command) *cli.Command {
+	var params serveParams
+
 	return &cli.Command{
 		Name:    "serve",
 		Summary: "Start MCP server on stdin/stdout",
@@ -40,21 +52,37 @@ Tools are filtered by the principal's authorization grants, obtained
 from the proxy socket. Only commands whose RequiredGrants are all
 satisfied by the principal's grants appear in the tool list.
 
+With --progressive, the server exposes three meta-tools
+(bureau_tools_list, bureau_tools_describe, bureau_tools_call)
+instead of the full tool catalog. Agents discover and invoke tools
+on demand, reducing the initial tool payload from O(n) descriptions
+to 3 fixed entries.
+
 This command is intended to be launched by MCP-capable clients
 (such as AI agent frameworks) as a subprocess.`,
-		Usage: "bureau mcp serve",
+		Usage: "bureau mcp serve [--progressive]",
 		Examples: []cli.Example{
 			{
-				Description: "Start MCP server (typically launched by an agent framework)",
+				Description: "Start MCP server with all tools exposed directly",
 				Command:     "bureau mcp serve",
 			},
+			{
+				Description: "Start MCP server with progressive discovery meta-tools",
+				Command:     "bureau mcp serve --progressive",
+			},
 		},
+		Flags:  func() *pflag.FlagSet { return cli.FlagsFromParams("serve", &params) },
+		Params: func() any { return &params },
 		Run: func(args []string) error {
 			grants, err := fetchGrants()
 			if err != nil {
 				return err
 			}
-			server := NewServer(root, grants)
+			var options []ServerOption
+			if params.Progressive {
+				options = append(options, WithProgressiveDisclosure())
+			}
+			server := NewServer(root, grants, options...)
 			return server.Serve()
 		},
 	}

@@ -9,6 +9,7 @@ go_library(
         "command.go",
         "doc.go",
         "grants.go",
+        "metatools.go",
         "protocol.go",
         "server.go",
     ],
@@ -19,6 +20,7 @@ go_library(
         "//lib/authorization",
         "//lib/schema",
         "//lib/version",
+        "@com_github_spf13_pflag//:pflag",
     ],
 )
 

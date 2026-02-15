@@ -25,6 +25,29 @@ type Server struct {
 	toolsByName map[string]*tool
 	grants      []schema.Grant
 	initialized bool
+	progressive bool
+}
+
+// ServerOption configures optional server behavior.
+type ServerOption func(*Server)
+
+// WithProgressiveDisclosure enables meta-tool mode. Instead of
+// exposing all discovered tools directly in tools/list, the server
+// exposes three synthetic meta-tools (bureau_tools_list,
+// bureau_tools_describe, bureau_tools_call) that let agents discover
+// and invoke tools on demand.
+//
+// This reduces the initial tool catalog from O(n) tool descriptions
+// (~200-500 tokens each) to 3 fixed entries (~600 tokens total),
+// which is significant for agents with tight context budgets.
+//
+// In progressive mode, the real tools are still discovered and stored
+// internally — they're accessed through the meta-tools rather than
+// exposed directly.
+func WithProgressiveDisclosure() ServerOption {
+	return func(s *Server) {
+		s.progressive = true
+	}
 }
 
 // tool is a discovered CLI command exposed as an MCP tool.
@@ -48,8 +71,11 @@ type tool struct {
 // appear in tools/list and are accepted by tools/call. Commands
 // without RequiredGrants are hidden (default-deny). Use a wildcard
 // grant (actions: ["command/**"]) for operator/development access.
-func NewServer(root *cli.Command, grants []schema.Grant) *Server {
+func NewServer(root *cli.Command, grants []schema.Grant, options ...ServerOption) *Server {
 	s := &Server{grants: grants}
+	for _, option := range options {
+		option(s)
+	}
 
 	discoverTools(root, nil, &s.tools)
 
@@ -169,6 +195,12 @@ func (s *Server) handlePing(encoder *json.Encoder, req *request) error {
 }
 
 func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
+	if s.progressive {
+		return writeResult(encoder, req.ID, toolsListResult{
+			Tools: metaToolDescriptions(),
+		})
+	}
+
 	var descriptions []toolDescription
 	for _, t := range s.tools {
 		if !s.toolAuthorized(&t) {
@@ -199,6 +231,16 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 		return writeError(encoder, req.ID, codeInvalidParams, "invalid tools/call params: "+err.Error())
 	}
 
+	// In progressive mode, only meta-tools are callable directly.
+	// Real tools must be invoked through bureau_tools_call.
+	if s.progressive {
+		if isMetaTool(params.Name) {
+			return s.dispatchMetaTool(encoder, req, params.Name, params.Arguments)
+		}
+		return writeError(encoder, req.ID, codeInvalidParams,
+			fmt.Sprintf("tool %q is not directly callable in progressive mode; use %s", params.Name, metaToolCall))
+	}
+
 	t, ok := s.toolsByName[params.Name]
 	if !ok {
 		return writeError(encoder, req.ID, codeInvalidParams, "unknown tool: "+params.Name)
@@ -209,25 +251,7 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 	}
 
 	output, runErr := s.executeTool(t, params.Arguments)
-
-	result := toolsCallResult{}
-	if output != "" {
-		result.Content = append(result.Content, contentBlock{
-			Type: "text",
-			Text: output,
-		})
-	}
-	if runErr != nil {
-		result.IsError = true
-		result.Content = append(result.Content, contentBlock{
-			Type: "text",
-			Text: runErr.Error(),
-		})
-	}
-	// MCP requires at least one content block in the result.
-	if len(result.Content) == 0 {
-		result.Content = []contentBlock{{Type: "text", Text: ""}}
-	}
+	result := buildToolResult(output, runErr)
 
 	// When the tool declares an output schema and the call succeeded,
 	// parse the captured JSON output into structuredContent. Per the
@@ -253,6 +277,31 @@ func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
 	}
 
 	return writeResult(encoder, req.ID, result)
+}
+
+// buildToolResult assembles a toolsCallResult from captured output
+// and an optional run error. This is the common base for both direct
+// tool calls and meta-tool call-through results.
+func buildToolResult(output string, runErr error) toolsCallResult {
+	result := toolsCallResult{}
+	if output != "" {
+		result.Content = append(result.Content, contentBlock{
+			Type: "text",
+			Text: output,
+		})
+	}
+	if runErr != nil {
+		result.IsError = true
+		result.Content = append(result.Content, contentBlock{
+			Type: "text",
+			Text: runErr.Error(),
+		})
+	}
+	// MCP requires at least one content block in the result.
+	if len(result.Content) == 0 {
+		result.Content = []contentBlock{{Type: "text", Text: ""}}
+	}
+	return result
 }
 
 // toolAuthorized returns true if the principal's grants satisfy all of

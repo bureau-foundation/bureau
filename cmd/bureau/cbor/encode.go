@@ -33,8 +33,9 @@ for interoperability with Bureau services that use integer map keys and
 typed numeric fields.
 
 The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
-		Usage:  "bureau cbor encode [file]",
-		Params: func() any { return &params },
+		Usage:          "bureau cbor encode [file]",
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/cbor/encode"},
 		Examples: []cli.Example{
 			{
 				Description: "Encode JSON to CBOR",

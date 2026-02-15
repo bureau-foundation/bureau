@@ -55,7 +55,8 @@ content, not the resolved inheritance chain — use "bureau template show
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("diff", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/template/diff"},
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template diff [flags] <template-ref> <file>")

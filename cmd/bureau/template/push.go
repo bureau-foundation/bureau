@@ -65,7 +65,8 @@ exist without actually publishing.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("push", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/template/push"},
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template push [flags] <template-ref> <file>")

@@ -67,7 +67,8 @@ is immediately rotated.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("provision", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/machine/provision"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")

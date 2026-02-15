@@ -47,8 +47,9 @@ runner).
 
 The build output is a directory containing bin/, lib/, share/, etc.
 with symlinks into /nix/store for all packages in the profile.`,
-		Usage:  "bureau environment build <profile> [flags]",
-		Params: func() any { return &params },
+		Usage:          "bureau environment build <profile> [flags]",
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/environment/build"},
 		Examples: []cli.Example{
 			{
 				Description: "Build the workstation profile",

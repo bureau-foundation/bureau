@@ -71,7 +71,8 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("doctor", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/doctor"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

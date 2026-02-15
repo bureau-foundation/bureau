@@ -77,7 +77,8 @@ protocol documentation) rather than raw binary.`,
 				Command:     "bureau cbor decode -s sequence.cbor",
 			},
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/cbor/decode"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {

@@ -75,7 +75,8 @@ Standard rooms created:
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("setup", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/setup"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

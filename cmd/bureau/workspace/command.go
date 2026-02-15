@@ -112,7 +112,8 @@ Use "bureau matrix room leave" separately to remove the room.`,
 				Command:     "bureau workspace destroy iree/amdgpu/inference --mode delete --credential-file ./creds",
 			},
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/workspace/destroy"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
@@ -209,7 +210,8 @@ the workspace alias, project, repository, and status.
 
 This is a Matrix-only query — works from any machine without needing
 access to the workspace filesystem.`,
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/workspace/list"},
 		Run: func(args []string) error {
 			return runList(args, params.OutputJSON)
 		},
@@ -366,14 +368,15 @@ type aliasRunFunc func(alias, serverName string, outputJSON bool) error
 
 // aliasCommand constructs a workspace subcommand that takes a single
 // positional alias argument and the standard workspaceAliasParams flags.
-func aliasCommand(name, summary, description, usage string, run aliasRunFunc) *cli.Command {
+func aliasCommand(name, summary, description, usage, grant string, run aliasRunFunc) *cli.Command {
 	var params workspaceAliasParams
 	return &cli.Command{
-		Name:        name,
-		Summary:     summary,
-		Description: description,
-		Usage:       usage,
-		Params:      func() any { return &params },
+		Name:           name,
+		Summary:        summary,
+		Description:    description,
+		Usage:          usage,
+		RequiredGrants: []string{grant},
+		Params:         func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: %s", usage)
@@ -396,6 +399,7 @@ current Matrix lifecycle state.
 This is a remote command — the daemon on the hosting machine executes
 it and replies via Matrix.`,
 		"bureau workspace status <alias> [flags]",
+		"command/workspace/status",
 		runStatus)
 }
 
@@ -453,6 +457,7 @@ func duCommand() *cli.Command {
 each worktree, .shared/ (virtualenvs, build caches), and .cache/
 (cross-project caches). Helps identify where disk space went.`,
 		"bureau workspace du <alias> [flags]",
+		"command/workspace/du",
 		runDu)
 }
 
@@ -557,8 +562,9 @@ The daemon spawns a pipeline executor to perform the git operations
 (worktree creation, submodule init, project-level setup scripts).
 This is an async operation — the command returns immediately with
 an "accepted" status.`,
-		Usage:  "bureau workspace worktree add <alias> [flags]",
-		Params: func() any { return &params },
+		Usage:          "bureau workspace worktree add <alias> [flags]",
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/workspace/worktree/add"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
@@ -684,8 +690,9 @@ mode, the worktree is removed without preserving changes.
 
 The daemon spawns a pipeline executor to perform the removal. This is
 an async operation — the command returns immediately.`,
-		Usage:  "bureau workspace worktree remove <alias> [flags]",
-		Params: func() any { return &params },
+		Usage:          "bureau workspace worktree remove <alias> [flags]",
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/workspace/worktree/remove"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
@@ -780,6 +787,7 @@ This is a remote command — the daemon on the hosting machine
 executes it. Fetch can take minutes for large repos, so the poll
 timeout is extended to 5 minutes.`,
 		"bureau workspace fetch <alias> [flags]",
+		"command/workspace/fetch",
 		runFetch)
 }
 
@@ -836,6 +844,7 @@ func worktreeListCommand() *cli.Command {
 		`List all git worktrees in a workspace's .bare directory. Shows the
 raw git worktree list output including paths and branch information.`,
 		"bureau workspace worktree list <alias> [flags]",
+		"command/workspace/worktree/list",
 		runWorktreeList)
 }
 

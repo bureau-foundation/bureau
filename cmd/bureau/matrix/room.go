@@ -85,7 +85,8 @@ such as m.bureau.machine_key or m.bureau.service.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("room create", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/room/create"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
@@ -188,7 +189,8 @@ lists all joined rooms that are NOT spaces.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("room list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/room/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -362,7 +364,8 @@ to clear the m.space.child event in the space.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("room delete", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/room/delete"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
@@ -425,7 +428,8 @@ Displays a table of user ID, display name, and membership state
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("room members", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/room/members"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")

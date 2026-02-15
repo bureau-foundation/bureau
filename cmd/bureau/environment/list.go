@@ -38,7 +38,8 @@ different source.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/environment/list"},
 		Examples: []cli.Example{
 			{
 				Description: "List profiles from the default environment repo",

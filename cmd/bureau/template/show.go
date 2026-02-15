@@ -46,7 +46,8 @@ template overrides versus what it inherits.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("show", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/template/show"},
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau template show [flags] <template-ref>")

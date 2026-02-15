@@ -73,7 +73,8 @@ or machine ID as the state key.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("state get", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/state/get"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix state get [flags] <room> [<event-type>]")
@@ -162,7 +163,8 @@ specific state key.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("state set", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/state/set"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("usage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")

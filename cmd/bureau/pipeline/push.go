@@ -61,7 +61,8 @@ without actually publishing.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("push", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/pipeline/push"},
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau pipeline push [flags] <pipeline-ref> <file>")

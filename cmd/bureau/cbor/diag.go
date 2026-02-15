@@ -53,7 +53,8 @@ Examples of diagnostic notation:
 				Command:     "echo '{\"count\":42}' | bureau cbor encode | bureau cbor diag",
 			},
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/cbor/diag"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {

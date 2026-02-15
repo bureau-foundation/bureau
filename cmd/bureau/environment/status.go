@@ -39,7 +39,8 @@ environments.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("status", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/environment/status"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

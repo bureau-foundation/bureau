@@ -91,7 +91,8 @@ All worktrees in a project share a single bare git object store at
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("workspace create", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/workspace/create"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")

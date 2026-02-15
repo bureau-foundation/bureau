@@ -62,7 +62,8 @@ Bureau protocol events).`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("send", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/send"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("usage: bureau matrix send [flags] <room> <message>")

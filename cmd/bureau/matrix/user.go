@@ -105,7 +105,8 @@ and proceeds directly to ensuring room membership.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("user create", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/user/create"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("username is required\n\nUsage: bureau matrix user create <username> [flags]")
@@ -424,7 +425,8 @@ authenticated user has joined.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("user list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/user/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])
@@ -574,7 +576,8 @@ func userInviteCommand() *cli.Command {
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("invite", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/user/invite"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix user invite <user-id> --room <room>")
@@ -655,7 +658,8 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("kick", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/user/kick"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: bureau matrix user kick <user-id> --room <room>")
@@ -730,7 +734,8 @@ account is in use.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("whoami", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/matrix/user/whoami"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

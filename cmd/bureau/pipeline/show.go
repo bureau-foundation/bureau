@@ -41,7 +41,8 @@ see is what the executor runs.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("show", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/pipeline/show"},
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline show [flags] <pipeline-ref>")

@@ -40,7 +40,8 @@ Shows each machine's name, public key, and last status heartbeat
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/machine/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

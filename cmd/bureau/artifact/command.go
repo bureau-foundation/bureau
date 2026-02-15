@@ -179,7 +179,8 @@ unrecognized extensions.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("store", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/store"},
 		Run: func(args []string) error {
 			ctx := context.Background()
 			client, err := params.connect()
@@ -288,7 +289,8 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("fetch", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/fetch"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
@@ -357,7 +359,8 @@ storage details.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("show", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
@@ -430,7 +433,8 @@ func existsCommand() *cli.Command {
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("exists", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
@@ -508,7 +512,8 @@ are sorted by storage time (newest first).`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("list", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/list"},
 		Run: func(args []string) error {
 			ctx := context.Background()
 			client, err := params.connect()
@@ -599,7 +604,8 @@ specify the previous target hash for CAS updates.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("tag", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
 				return fmt.Errorf("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
@@ -646,7 +652,8 @@ always the full ref.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("resolve", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
@@ -702,7 +709,8 @@ func tagsCommand() *cli.Command {
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("tags", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/tags"},
 		Run: func(args []string) error {
 			ctx := context.Background()
 			client, err := params.connect()
@@ -751,7 +759,8 @@ func deleteTagCommand() *cli.Command {
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("delete-tag", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/delete-tag"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
@@ -799,7 +808,8 @@ func pinToggleCommand(
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams(name, &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("ref argument required\n\nUsage: %s", usage)
@@ -868,7 +878,8 @@ Use --dry-run to see what would be removed without actually deleting.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("gc", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/gc"},
 		Run: func(args []string) error {
 			ctx := context.Background()
 			client, err := params.connect()
@@ -919,7 +930,8 @@ authentication — it is a health check.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("status", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/artifact/status"},
 		Run: func(args []string) error {
 			ctx := context.Background()
 			// Status is unauthenticated — use token if available,

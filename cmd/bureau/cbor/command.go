@@ -54,7 +54,8 @@ Whitespace in the hex input is ignored.`,
 			diagCommand(),
 			validateCommand(),
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/cbor"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {

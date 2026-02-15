@@ -51,7 +51,8 @@ homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("decommission", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/machine/decommission"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine decommission <machine-name> [flags]")

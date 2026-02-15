@@ -61,7 +61,8 @@ With a file argument, also classifies each change:
 		Flags: func() *pflag.FlagSet {
 			return cli.FlagsFromParams("impact", &params)
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/template/impact"},
 		Run: func(args []string) error {
 			if len(args) < 1 || len(args) > 2 {
 				return fmt.Errorf("usage: bureau template impact [flags] <template-ref> [file]")

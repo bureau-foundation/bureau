@@ -51,7 +51,8 @@ With -s, validates each item in a CBOR sequence independently.`,
 				Command:     "echo 'a1636b657963766174' | bureau cbor validate --hex",
 			},
 		},
-		Params: func() any { return &params },
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/cbor/validate"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {

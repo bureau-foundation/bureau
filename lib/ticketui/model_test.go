@@ -161,19 +161,23 @@ func TestNewModel(t *testing.T) {
 	source := testSource()
 	model := NewModel(source)
 
-	// NewModel loads Ready view: open tickets with all deps satisfied.
-	// tkt-001 (open, P0), tkt-002 (open, P1) are ready.
-	// tkt-003 (closed) and tkt-004 (in_progress) are not ready.
-	if len(model.entries) != 2 {
-		t.Fatalf("expected 2 ready entries, got %d", len(model.entries))
+	// NewModel loads Ready view: open+unblocked tickets plus in_progress.
+	// tkt-001 (open, P0), tkt-002 (open, P1), tkt-004 (in_progress, P1).
+	// tkt-003 (closed) is excluded.
+	if len(model.entries) != 3 {
+		t.Fatalf("expected 3 ready entries, got %d", len(model.entries))
 	}
 
-	// Sorted by priority: P0 first.
+	// Sorted by priority then creation time: P0 first, then P1s
+	// in creation order.
 	if model.entries[0].ID != "tkt-001" {
 		t.Errorf("first entry should be tkt-001 (P0), got %s", model.entries[0].ID)
 	}
-	if model.entries[1].ID != "tkt-002" {
-		t.Errorf("second entry should be tkt-002 (P1), got %s", model.entries[1].ID)
+	if model.entries[1].ID != "tkt-004" {
+		t.Errorf("second entry should be tkt-004 (P1, earlier creation), got %s", model.entries[1].ID)
+	}
+	if model.entries[2].ID != "tkt-002" {
+		t.Errorf("third entry should be tkt-002 (P1, later creation), got %s", model.entries[2].ID)
 	}
 
 	// Stats should reflect all tickets, not just ready.
@@ -183,8 +187,8 @@ func TestNewModel(t *testing.T) {
 
 	// Items list includes an "ungrouped" header (these test tickets
 	// have no parent epic).
-	if len(model.items) != 3 {
-		t.Fatalf("expected 3 items (1 header + 2 tickets), got %d", len(model.items))
+	if len(model.items) != 4 {
+		t.Fatalf("expected 4 items (1 header + 3 tickets), got %d", len(model.items))
 	}
 	if !model.items[0].IsHeader {
 		t.Error("first item should be a group header")
@@ -203,7 +207,7 @@ func TestModelNavigation(t *testing.T) {
 	model = updated.(Model)
 
 	// Initial cursor is on the first item (the header).
-	// Items: [0]=header("ungrouped"), [1]=tkt-001, [2]=tkt-002
+	// Items: [0]=header("ungrouped"), [1]=tkt-001, [2]=tkt-004, [3]=tkt-002
 	if model.cursor != 0 {
 		t.Errorf("initial cursor should be 0 (header), got %d", model.cursor)
 	}
@@ -222,32 +226,46 @@ func TestModelNavigation(t *testing.T) {
 		t.Errorf("cursor after second j should be 2, got %d", model.cursor)
 	}
 
-	// Move down again (should stay at 2 — last item).
+	// Move down to third ticket.
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	model = updated.(Model)
-	if model.cursor != 2 {
-		t.Errorf("cursor after third j should stay at 2, got %d", model.cursor)
+	if model.cursor != 3 {
+		t.Errorf("cursor after third j should be 3, got %d", model.cursor)
+	}
+
+	// Move down again (should stay at 3 — last item).
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+	if model.cursor != 3 {
+		t.Errorf("cursor after fourth j should stay at 3, got %d", model.cursor)
 	}
 
 	// Move up.
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	model = updated.(Model)
+	if model.cursor != 2 {
+		t.Errorf("cursor after k should be 2, got %d", model.cursor)
+	}
+
+	// Move up again.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	model = updated.(Model)
 	if model.cursor != 1 {
-		t.Errorf("cursor after k should be 1, got %d", model.cursor)
+		t.Errorf("cursor after second k should be 1, got %d", model.cursor)
 	}
 
 	// Move up to header.
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	model = updated.(Model)
 	if model.cursor != 0 {
-		t.Errorf("cursor after second k should be 0 (header), got %d", model.cursor)
+		t.Errorf("cursor after third k should be 0 (header), got %d", model.cursor)
 	}
 
 	// Move up again (should stay at 0 — first item).
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	model = updated.(Model)
 	if model.cursor != 0 {
-		t.Errorf("cursor after third k should stay at 0, got %d", model.cursor)
+		t.Errorf("cursor after fourth k should stay at 0, got %d", model.cursor)
 	}
 }
 
@@ -280,7 +298,7 @@ func TestModelView(t *testing.T) {
 	if !strings.Contains(view, "P0") {
 		t.Error("view should contain P0 priority")
 	}
-	if !strings.Contains(view, "2 shown") {
+	if !strings.Contains(view, "3 shown") {
 		t.Error("view should contain shown count")
 	}
 	if !strings.Contains(view, "q quit") {

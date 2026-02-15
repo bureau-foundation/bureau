@@ -29,8 +29,8 @@ type Event struct {
 // range from a local in-memory index ([IndexSource]) to a CBOR socket
 // client. The TUI code is identical regardless of backend.
 type Source interface {
-	// Ready returns tickets available for work: open, all blockers
-	// closed, all gates satisfied.
+	// Ready returns actionable tickets: open+unblocked+gates-satisfied,
+	// plus in_progress tickets already being worked on.
 	Ready() Snapshot
 
 	// Blocked returns tickets that are open but have unsatisfied
@@ -87,7 +87,8 @@ func NewIndexSource(index *ticket.Index) *IndexSource {
 	}
 }
 
-// Ready returns tickets available for work with global statistics.
+// Ready returns actionable tickets (open+unblocked and in_progress)
+// with global statistics.
 func (source *IndexSource) Ready() Snapshot {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()

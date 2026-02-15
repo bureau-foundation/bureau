@@ -311,8 +311,9 @@ func (ts *TicketService) roomQuery(
 	return entriesFromIndex(queryFunc(state.index), ""), nil
 }
 
-// handleReady returns open tickets with no open blockers and all
-// gates satisfied within a room.
+// handleReady returns actionable tickets within a room: open tickets
+// with all blockers closed and gates satisfied, plus in_progress
+// tickets.
 func (ts *TicketService) handleReady(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	return ts.roomQuery(token, raw, "ticket/ready", (*ticket.Index).Ready)
 }

@@ -63,10 +63,11 @@ func TestLoadBeadsFile(t *testing.T) {
 		len(source.Blocked().Entries),
 		allSnapshot.Stats.Total)
 
-	// Verify every ready entry is open.
+	// Verify every ready entry is either open or in_progress.
 	for _, entry := range readySnapshot.Entries {
-		if entry.Content.Status != "open" {
-			t.Errorf("ready ticket %s has status %q, expected open", entry.ID, entry.Content.Status)
+		if entry.Content.Status != "open" && entry.Content.Status != "in_progress" {
+			t.Errorf("ready ticket %s has status %q, expected open or in_progress",
+				entry.ID, entry.Content.Status)
 		}
 	}
 

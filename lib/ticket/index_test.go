@@ -193,22 +193,28 @@ func TestReadyBasic(t *testing.T) {
 	// Open, no blockers, no gates → ready.
 	idx.Put("tkt-a", makeTicket("Ready ticket"))
 
-	// Closed → not ready.
+	// Closed → not in Ready.
 	closed := makeTicket("Closed ticket")
 	closed.Status = "closed"
 	idx.Put("tkt-b", closed)
 
-	// In progress → not ready.
+	// In progress → included in Ready (actionable work).
 	inProgress := makeTicket("In progress")
 	inProgress.Status = "in_progress"
 	idx.Put("tkt-c", inProgress)
 
 	ready := idx.Ready()
-	if len(ready) != 1 {
-		t.Fatalf("Ready() returned %d entries, want 1", len(ready))
+	if len(ready) != 2 {
+		t.Fatalf("Ready() returned %d entries, want 2 (open + in_progress)", len(ready))
 	}
-	if ready[0].ID != "tkt-a" {
-		t.Errorf("Ready()[0].ID = %q, want %q", ready[0].ID, "tkt-a")
+	if !containsID(ready, "tkt-a") {
+		t.Error("open unblocked ticket should be in Ready")
+	}
+	if !containsID(ready, "tkt-c") {
+		t.Error("in_progress ticket should be in Ready")
+	}
+	if containsID(ready, "tkt-b") {
+		t.Error("closed ticket should not be in Ready")
 	}
 }
 
@@ -428,6 +434,11 @@ func TestReadyAndBlockedPartitionOpen(t *testing.T) {
 	done.Status = "closed"
 	idx.Put("tkt-d", done)
 
+	// In progress → Ready (actionable work), not Blocked.
+	working := makeTicket("Working")
+	working.Status = "in_progress"
+	idx.Put("tkt-e", working)
+
 	ready := idx.Ready()
 	blockedEntries := idx.Blocked()
 
@@ -438,6 +449,9 @@ func TestReadyAndBlockedPartitionOpen(t *testing.T) {
 	}
 	if !containsID(ready, "tkt-blocker") {
 		t.Errorf("tkt-blocker should be ready, ready=%v", readyIDs)
+	}
+	if !containsID(ready, "tkt-e") {
+		t.Errorf("tkt-e (in_progress) should be in Ready, ready=%v", readyIDs)
 	}
 
 	blockedIDs := entryIDs(blockedEntries)

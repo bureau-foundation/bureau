@@ -88,6 +88,46 @@ func TestMetadataStoreWriteRead(t *testing.T) {
 	}
 }
 
+func TestValidateVisibility(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantErr bool
+	}{
+		{VisibilityPrivate, false},
+		{VisibilityPublic, false},
+		{"", true},
+		{"banana", true},
+		{"PRIVATE", true}, // case-sensitive
+		{"Protected", true},
+	}
+
+	for _, test := range tests {
+		err := ValidateVisibility(test.input)
+		if (err != nil) != test.wantErr {
+			t.Errorf("ValidateVisibility(%q): err=%v, wantErr=%v", test.input, err, test.wantErr)
+		}
+	}
+}
+
+func TestNormalizeVisibility(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", VisibilityPrivate},
+		{VisibilityPrivate, VisibilityPrivate},
+		{VisibilityPublic, VisibilityPublic},
+		{"banana", "banana"}, // NormalizeVisibility doesn't validate — that's ValidateVisibility's job
+	}
+
+	for _, test := range tests {
+		got := NormalizeVisibility(test.input)
+		if got != test.want {
+			t.Errorf("NormalizeVisibility(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
 func TestMetadataStoreReadNotFound(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewMetadataStore(dir)

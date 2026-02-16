@@ -17,6 +17,46 @@ import (
 // per-artifact metadata files.
 const metadataDir = "metadata"
 
+// Visibility levels for artifacts. Visibility is immutable — set on
+// store and cannot be changed afterward. See artifacts.md, "Encryption
+// and Visibility" section.
+const (
+	// VisibilityPrivate means the artifact is encrypted before any
+	// transfer outside the Bureau network. Filename, content type,
+	// and content are all encrypted. The artifact reference is also
+	// obscured in external storage.
+	VisibilityPrivate = "private"
+
+	// VisibilityPublic means the artifact is not encrypted for
+	// external storage. Used for content from public sources where
+	// encryption adds cost without security benefit. Still
+	// integrity-verified via hash.
+	VisibilityPublic = "public"
+)
+
+// ValidateVisibility checks that a visibility value is one of the
+// allowed levels. Returns an error for invalid values. Empty string
+// is invalid — callers should normalize to VisibilityPrivate before
+// validating (see NormalizeVisibility).
+func ValidateVisibility(visibility string) error {
+	switch visibility {
+	case VisibilityPrivate, VisibilityPublic:
+		return nil
+	default:
+		return fmt.Errorf("invalid visibility %q: must be %q or %q", visibility, VisibilityPrivate, VisibilityPublic)
+	}
+}
+
+// NormalizeVisibility returns the canonical visibility value. Empty
+// string defaults to VisibilityPrivate per the security-by-default
+// design principle.
+func NormalizeVisibility(visibility string) string {
+	if visibility == "" {
+		return VisibilityPrivate
+	}
+	return visibility
+}
+
 // ArtifactMetadata holds per-artifact metadata that supplements the
 // reconstruction record. Written when an artifact is stored, read on
 // fetch (to populate FetchResponse.ContentType and Filename) and on

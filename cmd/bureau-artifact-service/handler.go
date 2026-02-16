@@ -244,6 +244,14 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 		return
 	}
 
+	// Normalize and validate visibility before any writes.
+	// Default to private per security-by-default design.
+	header.Visibility = artifact.NormalizeVisibility(header.Visibility)
+	if err := artifact.ValidateVisibility(header.Visibility); err != nil {
+		as.writeError(conn, err.Error())
+		return
+	}
+
 	// Store the artifact locally. The write mutex serializes all
 	// writes to the store, metadata, ref index, and tag store.
 	storeResult, meta, err := as.storeLocally(ctx, conn, &header)
@@ -422,6 +430,7 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 			Hash:        artifact.FormatHash(fileHash),
 			ChunkCount:  record.ChunkCount,
 			Compression: meta.Compression,
+			Visibility:  meta.Visibility,
 			Data:        content,
 		}
 		conn.SetWriteDeadline(time.Now().Add(writeTimeout))
@@ -439,6 +448,7 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 		Hash:        artifact.FormatHash(fileHash),
 		ChunkCount:  record.ChunkCount,
 		Compression: meta.Compression,
+		Visibility:  meta.Visibility,
 		// Data is nil — content follows as a sized binary stream.
 	}
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
@@ -640,6 +650,7 @@ func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []
 			Size:        entry.Metadata.Size,
 			Labels:      entry.Metadata.Labels,
 			CachePolicy: entry.Metadata.CachePolicy,
+			Visibility:  entry.Metadata.Visibility,
 			StoredAt:    entry.Metadata.StoredAt.UTC().Format(time.RFC3339),
 		}
 	}
@@ -1520,17 +1531,21 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 		return artifact.Hash{}, false
 	}
 
-	// Persist metadata. We carry forward the content type and filename
-	// from the upstream response. Other fields (labels, description,
-	// cache policy) are not available from the fetch response — they
-	// belong to the upstream's metadata and are not part of the wire
-	// protocol. The local copy gets minimal metadata reflecting its
-	// origin as a cache fill.
+	// Persist metadata. We carry forward the content type, filename,
+	// and visibility from the upstream response. Other fields (labels,
+	// description, cache policy) are not available from the fetch
+	// response — they belong to the upstream's metadata. The local
+	// copy gets minimal metadata reflecting its origin as a cache fill.
+	//
+	// Visibility must be preserved: a private artifact at the upstream
+	// must remain private in the local cache. Default to private if
+	// the upstream didn't include visibility (older service version).
 	meta := &artifact.ArtifactMetadata{
 		FileHash:       storeResult.FileHash,
 		Ref:            storeResult.Ref,
 		ContentType:    result.Response.ContentType,
 		Filename:       result.Response.Filename,
+		Visibility:     artifact.NormalizeVisibility(result.Response.Visibility),
 		Size:           storeResult.Size,
 		ChunkCount:     storeResult.ChunkCount,
 		ContainerCount: storeResult.ContainerCount,

@@ -1103,6 +1103,269 @@ func TestStoreUpdatesArtifactIndex(t *testing.T) {
 	}
 }
 
+// --- Visibility tests ---
+
+func TestStoreDefaultsToPrivateVisibility(t *testing.T) {
+	as := testService(t)
+
+	content := []byte("should be private by default")
+	conn, wait := startHandler(t, as)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		// Visibility not set — should default to "private".
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Verify metadata has private visibility.
+	hash, err := artifact.ParseHash(response.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := as.metadataStore.Read(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Visibility != artifact.VisibilityPrivate {
+		t.Errorf("visibility = %q, want %q", meta.Visibility, artifact.VisibilityPrivate)
+	}
+}
+
+func TestStoreAcceptsPublicVisibility(t *testing.T) {
+	as := testService(t)
+
+	content := []byte("public dataset content")
+	conn, wait := startHandler(t, as)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		Visibility:  "public",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	hash, err := artifact.ParseHash(response.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := as.metadataStore.Read(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Visibility != artifact.VisibilityPublic {
+		t.Errorf("visibility = %q, want %q", meta.Visibility, artifact.VisibilityPublic)
+	}
+}
+
+func TestStoreRejectsInvalidVisibility(t *testing.T) {
+	as := testService(t)
+
+	content := []byte("bad visibility")
+	conn, wait := startHandler(t, as)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		Visibility:  "banana",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var errResp artifact.ErrorResponse
+	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if errResp.Error == "" {
+		t.Fatal("expected error response for invalid visibility")
+	}
+	if !strings.Contains(errResp.Error, "invalid visibility") {
+		t.Errorf("error = %q, want it to contain %q", errResp.Error, "invalid visibility")
+	}
+}
+
+func TestFetchResponseIncludesVisibility(t *testing.T) {
+	as := testService(t)
+
+	// Store via the handler to get proper visibility defaulting.
+	content := []byte("fetch visibility test")
+	conn, wait := startHandler(t, as)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		Visibility:  "public",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var storeResp artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &storeResp); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Fetch the artifact and check visibility in the response.
+	conn2, wait2 := startHandler(t, as)
+	if err := artifact.WriteMessage(conn2, &artifact.FetchRequest{
+		Action: "fetch",
+		Ref:    storeResp.Ref,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var fetchResp artifact.FetchResponse
+	if err := artifact.ReadMessage(conn2, &fetchResp); err != nil {
+		t.Fatal(err)
+	}
+	wait2()
+
+	if fetchResp.Visibility != artifact.VisibilityPublic {
+		t.Errorf("fetch response visibility = %q, want %q", fetchResp.Visibility, artifact.VisibilityPublic)
+	}
+}
+
+func TestPinPreservesVisibility(t *testing.T) {
+	as := testService(t)
+
+	// Store a public artifact via the handler.
+	content := []byte("pin visibility test")
+	conn, wait := startHandler(t, as)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		Visibility:  "public",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var storeResp artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &storeResp); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Pin the artifact — this updates metadata (cache_policy).
+	conn2, wait2 := startHandler(t, as)
+	if err := artifact.WriteMessage(conn2, &artifact.PinRequest{
+		Action: "pin",
+		Ref:    storeResp.Ref,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var pinResp artifact.PinResponse
+	if err := artifact.ReadMessage(conn2, &pinResp); err != nil {
+		t.Fatal(err)
+	}
+	wait2()
+
+	// Verify visibility was not clobbered by the pin's metadata rewrite.
+	hash, err := artifact.ParseHash(storeResp.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := as.metadataStore.Read(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Visibility != artifact.VisibilityPublic {
+		t.Errorf("after pin, visibility = %q, want %q", meta.Visibility, artifact.VisibilityPublic)
+	}
+	if meta.CachePolicy != "pin" {
+		t.Errorf("after pin, cache_policy = %q, want %q", meta.CachePolicy, "pin")
+	}
+}
+
+func TestListIncludesVisibility(t *testing.T) {
+	as := testService(t)
+
+	// Store one public and one private (default) artifact via handler.
+	for _, visibility := range []string{"public", ""} {
+		content := []byte("list-vis-" + visibility)
+		conn, wait := startHandler(t, as)
+		header := &artifact.StoreHeader{
+			Action:      "store",
+			ContentType: "text/plain",
+			Size:        int64(len(content)),
+			Data:        content,
+			Visibility:  visibility,
+		}
+		if err := artifact.WriteMessage(conn, header); err != nil {
+			t.Fatal(err)
+		}
+		var resp artifact.StoreResponse
+		if err := artifact.ReadMessage(conn, &resp); err != nil {
+			t.Fatal(err)
+		}
+		wait()
+	}
+
+	// List all artifacts and check visibility is populated.
+	conn, wait := startHandler(t, as)
+	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+		Action: "list",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var listResp artifact.ListResponse
+	if err := artifact.ReadMessage(conn, &listResp); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if listResp.Total != 2 {
+		t.Fatalf("list total = %d, want 2", listResp.Total)
+	}
+
+	visibilities := map[string]bool{}
+	for _, summary := range listResp.Artifacts {
+		if summary.Visibility == "" {
+			t.Errorf("artifact %s has empty visibility in list response", summary.Ref)
+		}
+		visibilities[summary.Visibility] = true
+	}
+	if !visibilities["public"] {
+		t.Error("expected one artifact with visibility=public in list")
+	}
+	if !visibilities["private"] {
+		t.Error("expected one artifact with visibility=private in list")
+	}
+}
+
 // --- Pin/Unpin tests ---
 
 func TestPinArtifact(t *testing.T) {
@@ -2062,6 +2325,7 @@ func storeTestArtifactWithMeta(t *testing.T, as *ArtifactService, content []byte
 		Filename:       filename,
 		Description:    description,
 		Labels:         labels,
+		Visibility:     artifact.VisibilityPrivate,
 		Size:           result.Size,
 		ChunkCount:     result.ChunkCount,
 		ContainerCount: result.ContainerCount,
@@ -2098,6 +2362,7 @@ func storeTestArtifactWithTTLAndPolicy(t *testing.T, as *ArtifactService, conten
 		FileHash:       result.FileHash,
 		Ref:            result.Ref,
 		ContentType:    contentType,
+		Visibility:     artifact.VisibilityPrivate,
 		Size:           result.Size,
 		ChunkCount:     result.ChunkCount,
 		ContainerCount: result.ContainerCount,

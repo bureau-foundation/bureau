@@ -136,6 +136,7 @@ type FetchResponse struct {
 	Hash        string `json:"hash"`
 	ChunkCount  int    `json:"chunk_count"`
 	Compression string `json:"compression"`
+	Visibility  string `json:"visibility,omitempty"`
 
 	// Data holds the content for small artifacts. Nil for large
 	// artifacts — content follows as a binary stream.
@@ -563,6 +564,7 @@ type ArtifactSummary struct {
 	Size        int64    `json:"size"`
 	Labels      []string `json:"labels,omitempty"`
 	CachePolicy string   `json:"cache_policy,omitempty"`
+	Visibility  string   `json:"visibility"`
 	StoredAt    string   `json:"stored_at"`
 }
 

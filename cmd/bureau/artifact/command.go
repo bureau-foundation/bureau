@@ -142,7 +142,7 @@ type storeParams struct {
 	Description string   `json:"description"   flag:"description"  desc:"human-readable description"`
 	Tag         string   `json:"tag"           flag:"tag"          desc:"tag the artifact after storing"`
 	CachePolicy string   `json:"cache_policy"  flag:"cache-policy" desc:"cache policy (e.g. pin, replicate)"`
-	Visibility  string   `json:"visibility"    flag:"visibility"   desc:"visibility level"`
+	Visibility  string   `json:"visibility"    flag:"visibility"   desc:"visibility level: private (default, encrypted for external transfer) or public"`
 	TTL         string   `json:"ttl"           flag:"ttl"          desc:"time-to-live (e.g. 72h, 7d)"`
 	Labels      []string `json:"labels"        flag:"label"        desc:"labels (repeatable)"`
 	PushTo      []string `json:"push_to"       flag:"push-to"      desc:"push artifact to machine(s) after storing (repeatable)"`
@@ -407,9 +407,7 @@ storage details.`,
 			if meta.CachePolicy != "" {
 				fmt.Fprintf(writer, "Cache Policy:\t%s\n", meta.CachePolicy)
 			}
-			if meta.Visibility != "" {
-				fmt.Fprintf(writer, "Visibility:\t%s\n", meta.Visibility)
-			}
+			fmt.Fprintf(writer, "Visibility:\t%s\n", artifact.NormalizeVisibility(meta.Visibility))
 			if meta.TTL != "" {
 				fmt.Fprintf(writer, "TTL:\t%s\n", meta.TTL)
 			}

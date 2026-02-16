@@ -34,6 +34,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -154,7 +155,7 @@ func run() error {
 	}
 
 	// Load the saved Matrix session.
-	session, err := loadSession(stateDir, homeserverURL, logger)
+	_, session, err := service.LoadSession(stateDir, homeserverURL, logger)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
 	}
@@ -415,7 +416,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	}
 
 	// Save the session for subsequent boots.
-	if err := saveSession(stateDir, homeserverURL, session); err != nil {
+	if err := service.SaveSession(stateDir, homeserverURL, session); err != nil {
 		return fmt.Errorf("saving session: %w", err)
 	}
 
@@ -527,7 +528,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	}
 
 	// Save the session.
-	if err := saveSession(stateDir, config.HomeserverURL, session); err != nil {
+	if err := service.SaveSession(stateDir, config.HomeserverURL, session); err != nil {
 		return fmt.Errorf("saving session: %w", err)
 	}
 
@@ -553,75 +554,6 @@ func derivePermanentPassword(machineName string, keypair *sealed.Keypair) (*secr
 	hash := sha256.Sum256([]byte("bureau-machine-permanent:" + machineName + ":" + keypair.PrivateKey.String()))
 	hexBytes := []byte(hex.EncodeToString(hash[:]))
 	return secret.NewFromBytes(hexBytes)
-}
-
-// sessionData is the JSON structure stored on disk for the Matrix session.
-type sessionData struct {
-	HomeserverURL string `json:"homeserver_url"`
-	UserID        string `json:"user_id"`
-	AccessToken   string `json:"access_token"`
-}
-
-// saveSession writes the Matrix session to disk for use on subsequent boots.
-func saveSession(stateDir string, homeserverURL string, session *messaging.Session) error {
-	data := sessionData{
-		HomeserverURL: homeserverURL,
-		UserID:        session.UserID(),
-		AccessToken:   session.AccessToken(),
-	}
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshaling session: %w", err)
-	}
-
-	sessionPath := filepath.Join(stateDir, "session.json")
-	writeError := os.WriteFile(sessionPath, jsonData, 0600)
-	secret.Zero(jsonData)
-
-	if writeError != nil {
-		return fmt.Errorf("writing session to %s: %w", sessionPath, writeError)
-	}
-
-	return nil
-}
-
-// loadSession reads the saved Matrix session from disk and creates a Session.
-func loadSession(stateDir string, homeserverURL string, logger *slog.Logger) (*messaging.Session, error) {
-	sessionPath := filepath.Join(stateDir, "session.json")
-
-	jsonData, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading session from %s: %w", sessionPath, err)
-	}
-
-	var data sessionData
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		secret.Zero(jsonData)
-		return nil, fmt.Errorf("parsing session from %s: %w", sessionPath, err)
-	}
-	secret.Zero(jsonData)
-
-	if data.AccessToken == "" {
-		return nil, fmt.Errorf("session file %s has empty access token", sessionPath)
-	}
-
-	// Use the homeserver URL from the flag if provided, falling back to
-	// the saved URL. This allows changing the URL without re-registering.
-	serverURL := homeserverURL
-	if serverURL == "" {
-		serverURL = data.HomeserverURL
-	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: serverURL,
-		Logger:        logger,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating matrix client: %w", err)
-	}
-
-	return client.SessionFromToken(data.UserID, data.AccessToken)
 }
 
 // managedSandbox tracks a running sandbox for a principal. A "sandbox" is the

@@ -73,6 +73,35 @@ func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messagin
 	return client, session, nil
 }
 
+// SaveSession writes a Matrix session to stateDir/session.json. The
+// homeserverURL is stored alongside the user ID and access token so
+// that LoadSession can reconstruct the client later.
+//
+// The JSON bytes are zeroed after writing to limit the window during
+// which the access token exists in process memory as cleartext.
+func SaveSession(stateDir, homeserverURL string, session *messaging.Session) error {
+	data := SessionData{
+		HomeserverURL: homeserverURL,
+		UserID:        session.UserID(),
+		AccessToken:   session.AccessToken(),
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling session: %w", err)
+	}
+
+	sessionPath := filepath.Join(stateDir, "session.json")
+	writeError := os.WriteFile(sessionPath, jsonData, 0600)
+	secret.Zero(jsonData)
+
+	if writeError != nil {
+		return fmt.Errorf("writing session to %s: %w", sessionPath, writeError)
+	}
+
+	return nil
+}
+
 // ValidateSession calls WhoAmI to verify the session's access token
 // is still valid and returns the authenticated user ID. This should
 // be called once at startup after LoadSession.

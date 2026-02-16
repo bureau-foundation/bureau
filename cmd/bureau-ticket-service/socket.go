@@ -1055,6 +1055,22 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 			return nil, err
 		}
 
+		// Closing and reopening require dedicated grants so that
+		// operators can give workers ticket/update without letting
+		// them close or reopen. Without these checks, a caller
+		// could bypass handleClose's ticket/close check by calling
+		// update with status:"closed".
+		if proposedStatus == "closed" && content.Status != "closed" {
+			if err := requireGrant(token, "ticket/close"); err != nil {
+				return nil, err
+			}
+		}
+		if content.Status == "closed" && proposedStatus != "closed" {
+			if err := requireGrant(token, "ticket/reopen"); err != nil {
+				return nil, err
+			}
+		}
+
 		if proposedStatus != content.Status {
 			// Auto-clear assignee when leaving in_progress.
 			if content.Status == "in_progress" && proposedStatus != "in_progress" {
@@ -1125,7 +1141,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 // Validates that the current status allows closing and auto-clears the
 // assignee if the ticket was in_progress.
 func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/update"); err != nil {
+	if err := requireGrant(token, "ticket/close"); err != nil {
 		return nil, err
 	}
 
@@ -1177,7 +1193,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 // handleReopen transitions a ticket from "closed" back to "open",
 // clearing the close timestamp and reason.
 func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/update"); err != nil {
+	if err := requireGrant(token, "ticket/reopen"); err != nil {
 		return nil, err
 	}
 

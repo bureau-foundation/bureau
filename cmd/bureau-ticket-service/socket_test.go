@@ -90,6 +90,14 @@ func testServer(t *testing.T, rooms map[string]*roomState) (*service.ServiceClie
 // grants — all grant checks should fail.
 func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.ServiceClient, func()) {
 	t.Helper()
+	return testServerWithGrants(t, rooms, nil)
+}
+
+// testServerWithGrants creates a TicketService with a running socket
+// server and returns a ServiceClient whose token carries the specified
+// grants. Pass nil for no grants (all checks fail).
+func testServerWithGrants(t *testing.T, rooms map[string]*roomState, grants []servicetoken.Grant) (*service.ServiceClient, func()) {
+	t.Helper()
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -127,8 +135,11 @@ func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.Ser
 	}()
 	waitForSocket(t, socketPath)
 
-	// Mint a token with no grants.
-	tokenBytes := mintToken(t, privateKey, "agent/unauthorized", nil)
+	subject := "agent/tester"
+	if grants == nil {
+		subject = "agent/unauthorized"
+	}
+	tokenBytes := mintToken(t, privateKey, subject, grants)
 	client := service.NewServiceClientFromToken(socketPath, tokenBytes)
 
 	cleanup := func() {
@@ -136,6 +147,66 @@ func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.Ser
 		wg.Wait()
 	}
 	return client, cleanup
+}
+
+// testMutationServerWithGrants creates a TicketService with a fakeWriter
+// for mutation testing, using the specified grants. This is like
+// testMutationServer but allows testing fine-grained authorization.
+func testMutationServerWithGrants(t *testing.T, rooms map[string]*roomState, grants []servicetoken.Grant) *testEnv {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating keypair: %v", err)
+	}
+
+	testClock := clock.Fake(testClockEpoch)
+	authConfig := &service.AuthConfig{
+		PublicKey: publicKey,
+		Audience:  "ticket",
+		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     testClock,
+	}
+
+	socketDir := t.TempDir()
+	socketPath := filepath.Join(socketDir, "ticket.sock")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := service.NewSocketServer(socketPath, logger, authConfig)
+
+	writer := &fakeWriter{}
+	ts := &TicketService{
+		writer:     writer,
+		clock:      testClock,
+		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		serverName: "bureau.local",
+		rooms:      rooms,
+		logger:     logger,
+	}
+	ts.registerActions(server)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+	waitForSocket(t, socketPath)
+
+	tokenBytes := mintToken(t, privateKey, "agent/tester", grants)
+	client := service.NewServiceClientFromToken(socketPath, tokenBytes)
+
+	cleanup := func() {
+		cancel()
+		wg.Wait()
+	}
+	return &testEnv{
+		client:  client,
+		writer:  writer,
+		service: ts,
+		cleanup: cleanup,
+	}
 }
 
 // mintToken creates a signed test token with specific grants.
@@ -1893,4 +1964,158 @@ func TestHandleUpdateGateMissingStatus(t *testing.T) {
 		"gate":   "ci-pass",
 	}, nil)
 	requireServiceError(t, err)
+}
+
+// --- Fine-grained grant enforcement tests ---
+//
+// These verify that close and reopen operations require dedicated
+// grants (ticket/close, ticket/reopen) separate from ticket/update.
+// A principal with ticket/update but not ticket/close cannot close
+// tickets — this enables the asymmetric permission model where PMs
+// close tickets and workers only update them.
+
+func TestCloseRequiresCloseGrant(t *testing.T) {
+	// Token has ticket/update but NOT ticket/close.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update"}},
+	})
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"reason": "done",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if serviceErr.Action != "close" {
+		t.Errorf("action: got %q, want 'close'", serviceErr.Action)
+	}
+}
+
+func TestReopenRequiresReopenGrant(t *testing.T) {
+	// Token has ticket/update but NOT ticket/reopen.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update"}},
+	})
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "reopen", map[string]any{
+		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if serviceErr.Action != "reopen" {
+		t.Errorf("action: got %q, want 'reopen'", serviceErr.Action)
+	}
+}
+
+func TestUpdateToClosedRequiresCloseGrant(t *testing.T) {
+	// Token has ticket/update but NOT ticket/close. Closing via the
+	// update action (status: "closed") should still be denied.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update"}},
+	})
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"status": "closed",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if serviceErr.Action != "update" {
+		t.Errorf("action: got %q, want 'update'", serviceErr.Action)
+	}
+}
+
+func TestUpdateFromClosedRequiresReopenGrant(t *testing.T) {
+	// Token has ticket/update but NOT ticket/reopen. Reopening via
+	// the update action (status: "open" on a closed ticket) should
+	// still be denied.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update"}},
+	})
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
+		"status": "open",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if serviceErr.Action != "update" {
+		t.Errorf("action: got %q, want 'update'", serviceErr.Action)
+	}
+}
+
+func TestCloseAllowedWithCloseGrant(t *testing.T) {
+	// Token has both ticket/update and ticket/close. Close should work.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update", "ticket/close"}},
+	})
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"reason": "done",
+	}, &result)
+	if err != nil {
+		t.Fatalf("close with ticket/close grant should succeed: %v", err)
+	}
+	if result.Content.Status != "closed" {
+		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	}
+}
+
+func TestReopenAllowedWithReopenGrant(t *testing.T) {
+	// Token has both ticket/update and ticket/reopen. Reopen should work.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/update", "ticket/reopen"}},
+	})
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "reopen", map[string]any{
+		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
+	}, &result)
+	if err != nil {
+		t.Fatalf("reopen with ticket/reopen grant should succeed: %v", err)
+	}
+	if result.Content.Status != "open" {
+		t.Errorf("status: got %q, want 'open'", result.Content.Status)
+	}
+}
+
+func TestWildcardGrantCoversCloseAndReopen(t *testing.T) {
+	// Token has ticket/* which should match ticket/close and
+	// ticket/reopen. This verifies that the existing tests using
+	// ticket/* continue to work with the new grant checks.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{"ticket/*"}},
+	})
+	defer env.cleanup()
+
+	ctx := context.Background()
+
+	// Close should succeed.
+	err := env.client.Call(ctx, "close", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"reason": "done",
+	}, nil)
+	if err != nil {
+		t.Fatalf("close with ticket/* grant should succeed: %v", err)
+	}
+
+	// Reopen should succeed (tkt-closed is already closed).
+	err = env.client.Call(ctx, "reopen", map[string]any{
+		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
+	}, nil)
+	if err != nil {
+		t.Fatalf("reopen with ticket/* grant should succeed: %v", err)
+	}
 }

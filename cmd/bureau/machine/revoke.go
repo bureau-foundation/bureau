@@ -62,17 +62,17 @@ depending on the homeserver — this is by design for emergency revocation.`,
 		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("machine name is required\n\nUsage: bureau machine revoke <machine-name> [flags]")
+				return cli.Validation("machine name is required\n\nUsage: bureau machine revoke <machine-name> [flags]")
 			}
 			machineName := args[0]
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.CredentialFile == "" {
-				return fmt.Errorf("--credential-file is required")
+				return cli.Validation("--credential-file is required")
 			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
-				return fmt.Errorf("invalid machine name: %w", err)
+				return cli.Validation("invalid machine name: %w", err)
 			}
 
 			return runRevoke(machineName, params.CredentialFile, params.ServerName, params.Reason)
@@ -86,29 +86,29 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 
 	credentials, err := cli.ReadCredentialFile(credentialFile)
 	if err != nil {
-		return fmt.Errorf("read credential file: %w", err)
+		return cli.Internal("read credential file: %w", err)
 	}
 
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
-		return fmt.Errorf("credential file missing MATRIX_HOMESERVER_URL")
+		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
 	}
 	adminUserID := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
 	})
 	if err != nil {
-		return fmt.Errorf("create matrix client: %w", err)
+		return cli.Internal("create matrix client: %w", err)
 	}
 
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
-		return fmt.Errorf("create admin session: %w", err)
+		return cli.Internal("create admin session: %w", err)
 	}
 	defer adminSession.Close()
 
@@ -158,7 +158,7 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
+		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
 	}
 
 	// Clear machine_key and machine_status.
@@ -185,7 +185,7 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
 		} else {
-			return fmt.Errorf("resolve config room %q: %w", configAlias, err)
+			return cli.NotFound("resolve config room %q: %w", configAlias, err)
 		}
 	} else {
 		// Clear machine_config.
@@ -280,7 +280,7 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 func generateRandomPassword() (string, error) {
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
-		return "", fmt.Errorf("generate random bytes: %w", err)
+		return "", cli.Internal("generate random bytes: %w", err)
 	}
 	return hex.EncodeToString(randomBytes), nil
 }

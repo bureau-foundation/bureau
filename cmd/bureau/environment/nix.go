@@ -5,9 +5,9 @@ package environment
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/nix"
 )
 
@@ -36,7 +36,7 @@ func parseOverrideInputs(overrides []string) (*nixOptions, error) {
 	for _, override := range overrides {
 		parts := strings.SplitN(override, "=", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, fmt.Errorf("invalid --override-input %q (expected name=flakeref)", override)
+			return nil, cli.Validation("invalid --override-input %q (expected name=flakeref)", override)
 		}
 		options.OverrideInputs[parts[0]] = parts[1]
 	}
@@ -82,13 +82,13 @@ func listProfiles(flakeRef string, options *nixOptions) ([]profileInfo, error) {
 
 	var show flakeShowJSON
 	if err := json.Unmarshal([]byte(output), &show); err != nil {
-		return nil, fmt.Errorf("parsing nix flake show output: %w", err)
+		return nil, cli.Internal("parsing nix flake show output: %w", err)
 	}
 
 	system := currentSystem()
 	systemPackages, ok := show.Packages[system]
 	if !ok {
-		return nil, fmt.Errorf("no packages for system %q in %s", system, flakeRef)
+		return nil, cli.NotFound("no packages for system %q in %s", system, flakeRef)
 	}
 
 	var profiles []profileInfo

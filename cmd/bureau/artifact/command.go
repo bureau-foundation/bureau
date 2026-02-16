@@ -203,13 +203,13 @@ unrecognized extensions.`,
 				filePath := args[0]
 				file, err := os.Open(filePath)
 				if err != nil {
-					return fmt.Errorf("opening %s: %w", filePath, err)
+					return cli.Internal("opening %s: %w", filePath, err)
 				}
 				defer file.Close()
 
 				info, err := file.Stat()
 				if err != nil {
-					return fmt.Errorf("stat %s: %w", filePath, err)
+					return cli.Internal("stat %s: %w", filePath, err)
 				}
 				size = info.Size()
 				content = file
@@ -241,7 +241,7 @@ unrecognized extensions.`,
 			if size >= 0 && size <= artifact.SmallArtifactThreshold {
 				data, err := io.ReadAll(content)
 				if err != nil {
-					return fmt.Errorf("reading content: %w", err)
+					return cli.Internal("reading content: %w", err)
 				}
 				header.Data = data
 				header.Size = int64(len(data))
@@ -306,7 +306,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 		RequiredGrants: []string{"command/artifact/fetch"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
+				return cli.Validation("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
 			}
 
 			ctx := context.Background()
@@ -325,7 +325,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 			if params.OutputPath != "" {
 				file, err := os.Create(params.OutputPath)
 				if err != nil {
-					return fmt.Errorf("creating output file: %w", err)
+					return cli.Internal("creating output file: %w", err)
 				}
 				defer file.Close()
 				output = file
@@ -334,7 +334,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 			}
 
 			if _, err := io.Copy(output, result.Content); err != nil {
-				return fmt.Errorf("writing content: %w", err)
+				return cli.Internal("writing content: %w", err)
 			}
 			return nil
 		},
@@ -375,7 +375,7 @@ storage details.`,
 		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
+				return cli.Validation("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
 			}
 
 			ctx := context.Background()
@@ -446,7 +446,7 @@ func existsCommand() *cli.Command {
 		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
+				return cli.Validation("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
 			}
 
 			ctx := context.Background()
@@ -615,7 +615,7 @@ specify the previous target hash for CAS updates.`,
 		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
-				return fmt.Errorf("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
+				return cli.Validation("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
 			}
 
 			ctx := context.Background()
@@ -662,7 +662,7 @@ always the full ref.`,
 		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
+				return cli.Validation("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
 			}
 
 			ctx := context.Background()
@@ -766,7 +766,7 @@ func deleteTagCommand() *cli.Command {
 		RequiredGrants: []string{"command/artifact/delete-tag"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
+				return cli.Validation("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
 			}
 
 			ctx := context.Background()
@@ -815,7 +815,7 @@ func pinToggleCommand(
 		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("ref argument required\n\nUsage: %s", usage)
+				return cli.Validation("ref argument required\n\nUsage: %s", usage)
 			}
 
 			ctx := context.Background()

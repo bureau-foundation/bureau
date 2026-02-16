@@ -63,10 +63,10 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Room == "" {
-				return fmt.Errorf("room is required\n\nusage: bureau template list [flags] <room-alias-localpart>")
+				return cli.Validation("room is required\n\nusage: bureau template list [flags] <room-alias-localpart>")
 			}
 
 			roomAlias := principal.RoomAlias(params.Room, params.ServerName)
@@ -79,13 +79,13 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
-				return fmt.Errorf("resolving room alias %q: %w", roomAlias, err)
+				return cli.NotFound("resolving room alias %q: %w", roomAlias, err)
 			}
 
 			// Fetch all state events in the room, then filter for templates.
 			events, err := session.GetRoomState(ctx, roomID)
 			if err != nil {
-				return fmt.Errorf("getting room state: %w", err)
+				return cli.Internal("getting room state: %w", err)
 			}
 
 			var templates []templateEntry

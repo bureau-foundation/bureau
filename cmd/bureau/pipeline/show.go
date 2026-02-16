@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -42,12 +41,12 @@ see is what the executor runs.`,
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau pipeline show [flags] <pipeline-ref>")
+				return cli.Validation("usage: bureau pipeline show [flags] <pipeline-ref>")
 			}
 
 			ref, err := schema.ParsePipelineRef(args[0])
 			if err != nil {
-				return fmt.Errorf("parsing pipeline reference: %w", err)
+				return cli.Validation("parsing pipeline reference: %w", err)
 			}
 
 			ctx, cancel, session, err := cli.ConnectOperator()
@@ -59,17 +58,17 @@ see is what the executor runs.`,
 			roomAlias := ref.RoomAlias(params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
-				return fmt.Errorf("resolving room alias %q: %w", roomAlias, err)
+				return cli.NotFound("resolving room alias %q: %w", roomAlias, err)
 			}
 
 			raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypePipeline, ref.Pipeline)
 			if err != nil {
-				return fmt.Errorf("fetching pipeline %q from %s: %w", ref.Pipeline, roomAlias, err)
+				return cli.NotFound("fetching pipeline %q from %s: %w", ref.Pipeline, roomAlias, err)
 			}
 
 			var content schema.PipelineContent
 			if err := json.Unmarshal(raw, &content); err != nil {
-				return fmt.Errorf("parsing pipeline content: %w", err)
+				return cli.Internal("parsing pipeline content: %w", err)
 			}
 
 			return printPipelineJSON(&content)

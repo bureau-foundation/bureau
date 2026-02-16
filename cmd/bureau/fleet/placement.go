@@ -64,7 +64,7 @@ eligibility).`,
 		RequiredGrants: []string{"command/fleet/place"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("service localpart required\n\nUsage: bureau fleet place <service> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau fleet place <service> [flags]")
 			}
 			serviceLocalpart := args[0]
 
@@ -85,7 +85,7 @@ eligibility).`,
 
 			var response placeResponse
 			if err := client.Call(ctx, "place", fields, &response); err != nil {
-				return fmt.Errorf("placing service: %w", err)
+				return cli.Internal("placing service: %w", err)
 			}
 
 			result := placeResult{
@@ -151,11 +151,11 @@ daemon to tear down the service's sandbox.`,
 		RequiredGrants: []string{"command/fleet/unplace"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("service localpart required\n\nUsage: bureau fleet unplace <service> --machine <machine> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau fleet unplace <service> --machine <machine> [flags]")
 			}
 			serviceLocalpart := args[0]
 			if params.Machine == "" {
-				return fmt.Errorf("--machine is required")
+				return cli.Validation("--machine is required")
 			}
 
 			client, err := params.connect()
@@ -171,7 +171,7 @@ daemon to tear down the service's sandbox.`,
 				"service": serviceLocalpart,
 				"machine": params.Machine,
 			}, &response); err != nil {
-				return fmt.Errorf("unplacing service: %w", err)
+				return cli.Internal("unplacing service: %w", err)
 			}
 
 			result := unplaceResult{
@@ -249,7 +249,7 @@ placement. Use this to preview what "place" would choose.`,
 		RequiredGrants: []string{"command/fleet/plan"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("service localpart required\n\nUsage: bureau fleet plan <service> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau fleet plan <service> [flags]")
 			}
 			serviceLocalpart := args[0]
 
@@ -265,7 +265,7 @@ placement. Use this to preview what "place" would choose.`,
 			if err := client.Call(ctx, "plan", map[string]any{
 				"service": serviceLocalpart,
 			}, &response); err != nil {
-				return fmt.Errorf("planning placement: %w", err)
+				return cli.Internal("planning placement: %w", err)
 			}
 
 			candidates := make([]planCandidateJSON, len(response.Candidates))

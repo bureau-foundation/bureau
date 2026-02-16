@@ -77,7 +77,7 @@ func FlagsFromParams(name string, params any) *pflag.FlagSet {
 func BindFlags(params any, flagSet *pflag.FlagSet) error {
 	value := reflect.ValueOf(params)
 	if value.Kind() != reflect.Ptr || value.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("params must be a pointer to a struct, got %T", params)
+		return Validation("params must be a pointer to a struct, got %T", params)
 	}
 	return bindStructFields(value.Elem(), flagSet)
 }
@@ -104,7 +104,7 @@ func bindStructFields(structValue reflect.Value, flagSet *pflag.FlagSet) error {
 		// This handles both exported and unexported embedded types.
 		if field.Anonymous && field.Type.Kind() == reflect.Struct {
 			if err := bindStructFields(fieldValue, flagSet); err != nil {
-				return fmt.Errorf("embedded %s: %w", field.Name, err)
+				return Internal("embedded %s: %w", field.Name, err)
 			}
 			continue
 		}
@@ -120,11 +120,11 @@ func bindStructFields(structValue reflect.Value, flagSet *pflag.FlagSet) error {
 		defaultString := field.Tag.Get("default")
 
 		if !fieldValue.CanAddr() {
-			return fmt.Errorf("field %s: not addressable", field.Name)
+			return Internal("field %s: not addressable", field.Name)
 		}
 
 		if err := bindField(fieldValue, flagSet, name, shorthand, description, defaultString); err != nil {
-			return fmt.Errorf("field %s: %w", field.Name, err)
+			return Internal("field %s: %w", field.Name, err)
 		}
 	}
 
@@ -148,35 +148,35 @@ func bindField(fieldValue reflect.Value, flagSet *pflag.FlagSet, name, shorthand
 	case *bool:
 		defaultValue, err := parseBoolDefault(defaultString)
 		if err != nil {
-			return fmt.Errorf("default for --%s: %w", name, err)
+			return Validation("default for --%s: %w", name, err)
 		}
 		flagSet.BoolVarP(target, name, shorthand, defaultValue, description)
 
 	case *int:
 		defaultValue, err := parseIntDefault(defaultString)
 		if err != nil {
-			return fmt.Errorf("default for --%s: %w", name, err)
+			return Validation("default for --%s: %w", name, err)
 		}
 		flagSet.IntVarP(target, name, shorthand, defaultValue, description)
 
 	case *int64:
 		defaultValue, err := parseInt64Default(defaultString)
 		if err != nil {
-			return fmt.Errorf("default for --%s: %w", name, err)
+			return Validation("default for --%s: %w", name, err)
 		}
 		flagSet.Int64VarP(target, name, shorthand, defaultValue, description)
 
 	case *float64:
 		defaultValue, err := parseFloat64Default(defaultString)
 		if err != nil {
-			return fmt.Errorf("default for --%s: %w", name, err)
+			return Validation("default for --%s: %w", name, err)
 		}
 		flagSet.Float64VarP(target, name, shorthand, defaultValue, description)
 
 	case *time.Duration:
 		defaultValue, err := parseDurationDefault(defaultString)
 		if err != nil {
-			return fmt.Errorf("default for --%s: %w", name, err)
+			return Validation("default for --%s: %w", name, err)
 		}
 		flagSet.DurationVarP(target, name, shorthand, defaultValue, description)
 
@@ -188,7 +188,7 @@ func bindField(fieldValue reflect.Value, flagSet *pflag.FlagSet, name, shorthand
 		flagSet.StringSliceVarP(target, name, shorthand, defaultValue, description)
 
 	default:
-		return fmt.Errorf("unsupported type %s for flag --%s", fieldValue.Type(), name)
+		return Validation("unsupported type %s for flag --%s", fieldValue.Type(), name)
 	}
 
 	return nil

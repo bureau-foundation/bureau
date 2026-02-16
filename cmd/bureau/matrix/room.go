@@ -86,15 +86,15 @@ such as m.bureau.machine_key or m.bureau.service.`,
 		RequiredGrants: []string{"command/matrix/room/create"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
+				return cli.Validation("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			alias := args[0]
 
 			if params.Space == "" {
-				return fmt.Errorf("--space is required (rooms must belong to a space)")
+				return cli.Validation("--space is required (rooms must belong to a space)")
 			}
 
 			name := params.Name
@@ -107,13 +107,13 @@ such as m.bureau.machine_key or m.bureau.service.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			// Resolve the parent space.
 			spaceRoomID, err := resolveRoom(ctx, sess, params.Space)
 			if err != nil {
-				return fmt.Errorf("resolve space: %w", err)
+				return cli.NotFound("resolve space: %w", err)
 			}
 
 			// Build power levels. Admin-only by default, with optional
@@ -130,7 +130,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				PowerLevelContentOverride: powerLevels,
 			})
 			if err != nil {
-				return fmt.Errorf("create room: %w", err)
+				return cli.Internal("create room: %w", err)
 			}
 
 			// Add as child of the parent space.
@@ -139,7 +139,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 					"via": []string{params.ServerName},
 				})
 			if err != nil {
-				return fmt.Errorf("add room as child of space %s: %w", spaceRoomID, err)
+				return cli.Internal("add room as child of space %s: %w", spaceRoomID, err)
 			}
 
 			if done, err := params.EmitJSON(roomCreateResult{
@@ -189,7 +189,7 @@ lists all joined rooms that are NOT spaces.`,
 		RequiredGrants: []string{"command/matrix/room/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -197,7 +197,7 @@ lists all joined rooms that are NOT spaces.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			if params.Space != "" {
@@ -221,13 +221,13 @@ type roomEntry struct {
 func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string, jsonOutput *cli.JSONOutput) error {
 	spaceRoomID, err := resolveRoom(ctx, session, spaceTarget)
 	if err != nil {
-		return fmt.Errorf("resolve space: %w", err)
+		return cli.NotFound("resolve space: %w", err)
 	}
 
 	// Get all state events from the space.
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
-		return fmt.Errorf("get space state: %w", err)
+		return cli.Internal("get space state: %w", err)
 	}
 
 	// Extract child room IDs from m.space.child state events.
@@ -266,7 +266,7 @@ func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTar
 func listAllRooms(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
-		return fmt.Errorf("list joined rooms: %w", err)
+		return cli.Internal("list joined rooms: %w", err)
 	}
 
 	var rooms []roomEntry
@@ -363,10 +363,10 @@ to clear the m.space.child event in the space.`,
 		RequiredGrants: []string{"command/matrix/room/delete"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
+				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			target := args[0]
 
@@ -375,7 +375,7 @@ to clear the m.space.child event in the space.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -384,7 +384,7 @@ to clear the m.space.child event in the space.`,
 			}
 
 			if err := sess.LeaveRoom(ctx, roomID); err != nil {
-				return fmt.Errorf("leave room: %w", err)
+				return cli.Internal("leave room: %w", err)
 			}
 
 			if done, err := params.EmitJSON(roomDeleteResult{RoomID: roomID}); done {
@@ -426,10 +426,10 @@ Displays a table of user ID, display name, and membership state
 		RequiredGrants: []string{"command/matrix/room/members"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")
+				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			target := args[0]
 
@@ -438,7 +438,7 @@ Displays a table of user ID, display name, and membership state
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -448,7 +448,7 @@ Displays a table of user ID, display name, and membership state
 
 			members, err := sess.GetRoomMembers(ctx, roomID)
 			if err != nil {
-				return fmt.Errorf("get room members: %w", err)
+				return cli.Internal("get room members: %w", err)
 			}
 
 			if done, err := params.EmitJSON(members); done {

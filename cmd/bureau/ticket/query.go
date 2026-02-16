@@ -59,7 +59,7 @@ time (oldest first).`,
 		RequiredGrants: []string{"command/ticket/list"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			client, err := params.connect()
@@ -148,10 +148,10 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket show <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket show <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -268,7 +268,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 		RequiredGrants: []string{"command/ticket/ranked"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			client, err := params.connect()
@@ -347,10 +347,10 @@ all rooms and includes the room ID in results.`,
 			if len(args) == 1 {
 				params.Pattern = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Pattern == "" {
-				return fmt.Errorf("search pattern is required\n\nUsage: bureau ticket grep <pattern>")
+				return cli.Validation("search pattern is required\n\nUsage: bureau ticket grep <pattern>")
 			}
 
 			client, err := params.connect()
@@ -408,7 +408,7 @@ for a room.`,
 		RequiredGrants: []string{"command/ticket/stats"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			client, err := params.connect()
@@ -554,10 +554,10 @@ becomes ready, including indirect (transitive) dependencies.`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket deps <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket deps <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -621,10 +621,10 @@ showing how many are closed out of the total.`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket children <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket children <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -687,10 +687,10 @@ depth (irreducible sequential steps).`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket epic-health <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket epic-health <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -732,7 +732,7 @@ depth (irreducible sequential steps).`,
 // output as JSON or table.
 func roomScopedQuery(connection TicketConnection, room, action, grant string, jsonOutput *cli.JSONOutput) error {
 	if room == "" {
-		return fmt.Errorf("--room is required")
+		return cli.Validation("--room is required")
 	}
 
 	client, err := connection.connect()

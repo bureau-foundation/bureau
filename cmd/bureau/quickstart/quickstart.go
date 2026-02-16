@@ -78,10 +78,10 @@ Supported agents:
 		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.CredentialFile == "" {
-				return fmt.Errorf("--credential-file is required\n\nUsage: bureau quickstart [flags]")
+				return cli.Validation("--credential-file is required\n\nUsage: bureau quickstart [flags]")
 			}
 
 			return run(Config{
@@ -113,7 +113,7 @@ func run(config Config) error {
 	// Validate agent type.
 	templateName, recognized := templateForAgent(config.Agent)
 	if !recognized {
-		return fmt.Errorf("unknown agent type %q (supported: test, claude)", config.Agent)
+		return cli.Validation("unknown agent type %q (supported: test, claude)", config.Agent)
 	}
 
 	// Run preflight checks.
@@ -134,36 +134,36 @@ func run(config Config) error {
 	}
 
 	if !preflightPassed(results) {
-		return fmt.Errorf("preflight checks failed — fix the issues above and retry")
+		return cli.Internal("preflight checks failed — fix the issues above and retry")
 	}
 	fmt.Fprintf(os.Stderr, "\n")
 
 	// Load admin credentials.
 	credentials, err := cli.ReadCredentialFile(config.CredentialFile)
 	if err != nil {
-		return fmt.Errorf("read credential file: %w", err)
+		return cli.Internal("read credential file: %w", err)
 	}
 
 	adminUserID := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 	if registrationToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: config.HomeserverURL,
 	})
 	if err != nil {
-		return fmt.Errorf("create matrix client: %w", err)
+		return cli.Internal("create matrix client: %w", err)
 	}
 
 	admin, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
-		return fmt.Errorf("create admin session: %w", err)
+		return cli.Internal("create admin session: %w", err)
 	}
 	defer admin.Close()
 
@@ -172,7 +172,7 @@ func run(config Config) error {
 	// whose key matches this RunDir.
 	machineName := config.MachineName
 	if machineName == "" {
-		return fmt.Errorf("--machine-name is required (auto-detection not yet implemented)")
+		return cli.Validation("--machine-name is required (auto-detection not yet implemented)")
 	}
 
 	// Resolve the template room and publish quickstart templates.
@@ -180,7 +180,7 @@ func run(config Config) error {
 	templateRoomAlias := principal.RoomAlias("bureau/template", config.ServerName)
 	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolve template room %q: %w", templateRoomAlias, err)
+		return cli.NotFound("resolve template room %q: %w", templateRoomAlias, err)
 	}
 
 	templates := agentTemplates()
@@ -188,7 +188,7 @@ func run(config Config) error {
 		_, err := admin.SendStateEvent(ctx, templateRoomID,
 			schema.EventTypeTemplate, name, content)
 		if err != nil {
-			return fmt.Errorf("publish template %q: %w", name, err)
+			return cli.Internal("publish template %q: %w", name, err)
 		}
 		fmt.Fprintf(os.Stderr, "  Published: %s\n", name)
 	}
@@ -197,13 +197,13 @@ func run(config Config) error {
 	configAlias := principal.RoomAlias("bureau/config/"+machineName, config.ServerName)
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
-		return fmt.Errorf("resolve config room %q: %w", configAlias, err)
+		return cli.NotFound("resolve config room %q: %w", configAlias, err)
 	}
 
 	// Join the config room as admin (may already be a member).
 	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			return fmt.Errorf("join config room: %w", err)
+			return cli.Internal("join config room: %w", err)
 		}
 	}
 
@@ -213,13 +213,13 @@ func run(config Config) error {
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer registrationTokenBuffer.Close()
 
 	quickstartPassword, err := secret.Concat("quickstart-", registrationTokenBuffer)
 	if err != nil {
-		return fmt.Errorf("building quickstart password: %w", err)
+		return cli.Internal("building quickstart password: %w", err)
 	}
 	defer quickstartPassword.Close()
 
@@ -233,10 +233,10 @@ func run(config Config) error {
 			// Already registered — log in instead.
 			sysadminSession, err = client.Login(ctx, sysadminLocalpart, quickstartPassword)
 			if err != nil {
-				return fmt.Errorf("login existing sysadmin principal: %w", err)
+				return cli.Internal("login existing sysadmin principal: %w", err)
 			}
 		} else {
-			return fmt.Errorf("register sysadmin principal: %w", err)
+			return cli.Internal("register sysadmin principal: %w", err)
 		}
 	}
 	sysadminToken := sysadminSession.AccessToken()
@@ -249,12 +249,12 @@ func run(config Config) error {
 	if err := admin.InviteUser(ctx, configRoomID, sysadminUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			sysadminSession.Close()
-			return fmt.Errorf("invite sysadmin to config room: %w", err)
+			return cli.Internal("invite sysadmin to config room: %w", err)
 		}
 	}
 	if _, err := sysadminSession.JoinRoom(ctx, configRoomID); err != nil {
 		sysadminSession.Close()
-		return fmt.Errorf("sysadmin join config room: %w", err)
+		return cli.Internal("sysadmin join config room: %w", err)
 	}
 	sysadminSession.Close()
 
@@ -262,22 +262,22 @@ func run(config Config) error {
 	machineAlias := principal.RoomAlias("bureau/machine", config.ServerName)
 	machineRoomID, err := admin.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machine room: %w", err)
+		return cli.NotFound("resolve machine room: %w", err)
 	}
 
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 		schema.EventTypeMachineKey, machineName)
 	if err != nil {
-		return fmt.Errorf("get machine key for %s: %w", machineName, err)
+		return cli.NotFound("get machine key for %s: %w", machineName, err)
 	}
 	var machineKey struct {
 		PublicKey string `json:"public_key"`
 	}
 	if err := json.Unmarshal(machineKeyJSON, &machineKey); err != nil {
-		return fmt.Errorf("unmarshal machine key: %w", err)
+		return cli.Internal("unmarshal machine key: %w", err)
 	}
 	if machineKey.PublicKey == "" {
-		return fmt.Errorf("machine %s has an empty public key", machineName)
+		return cli.Internal("machine %s has an empty public key", machineName)
 	}
 
 	// Seal and push credentials.
@@ -289,12 +289,12 @@ func run(config Config) error {
 	}
 	credentialJSON, err := json.Marshal(credentialBundle)
 	if err != nil {
-		return fmt.Errorf("marshal credentials: %w", err)
+		return cli.Internal("marshal credentials: %w", err)
 	}
 
 	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machineKey.PublicKey})
 	if err != nil {
-		return fmt.Errorf("encrypt credentials: %w", err)
+		return cli.Internal("encrypt credentials: %w", err)
 	}
 
 	machineUserID := principal.MatrixUserID(machineName, config.ServerName)
@@ -309,7 +309,7 @@ func run(config Config) error {
 			"provisioned_at": time.Now().UTC().Format(time.RFC3339),
 		})
 	if err != nil {
-		return fmt.Errorf("push credentials: %w", err)
+		return cli.Internal("push credentials: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "  Credentials sealed and pushed\n")
 
@@ -327,7 +327,7 @@ func run(config Config) error {
 			},
 		})
 	if err != nil {
-		return fmt.Errorf("push machine config: %w", err)
+		return cli.Internal("push machine config: %w", err)
 	}
 
 	// Wait for the proxy socket (proves sandbox was created).
@@ -339,7 +339,7 @@ func run(config Config) error {
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for proxy socket at %s (30s)\n"+
+			return cli.Transient("timed out waiting for proxy socket at %s (30s)\n"+
 				"  Check launcher and daemon logs for errors", proxySocketPath)
 		}
 		time.Sleep(100 * time.Millisecond)

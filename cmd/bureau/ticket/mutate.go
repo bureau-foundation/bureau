@@ -59,13 +59,13 @@ Required fields: --room, --title, --type. Priority defaults to P2
 		RequiredGrants: []string{"command/ticket/create"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 			if params.Title == "" {
-				return fmt.Errorf("--title is required")
+				return cli.Validation("--title is required")
 			}
 			if params.Type == "" {
-				return fmt.Errorf("--type is required")
+				return cli.Validation("--type is required")
 			}
 
 			client, err := params.connect()
@@ -163,10 +163,10 @@ assignee.`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket update <ticket-id> [flags]")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket update <ticket-id> [flags]")
 			}
 
 			client, err := params.connect()
@@ -261,10 +261,10 @@ ticket was in_progress, the assignee is auto-cleared.`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket close <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket close <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -324,10 +324,10 @@ close timestamp and reason.`,
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
-				return fmt.Errorf("expected 1 positional argument, got %d", len(args))
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket reopen <ticket-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket reopen <ticket-id>")
 			}
 
 			client, err := params.connect()
@@ -407,24 +407,24 @@ created.`,
 		RequiredGrants: []string{"command/ticket/batch"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 			if params.File == "" {
-				return fmt.Errorf("--file is required")
+				return cli.Validation("--file is required")
 			}
 
 			data, err := os.ReadFile(params.File)
 			if err != nil {
-				return fmt.Errorf("reading %s: %w", params.File, err)
+				return cli.Internal("reading %s: %w", params.File, err)
 			}
 
 			var tickets []batchTicket
 			if err := json.Unmarshal(data, &tickets); err != nil {
-				return fmt.Errorf("parsing %s: %w", params.File, err)
+				return cli.Internal("parsing %s: %w", params.File, err)
 			}
 
 			if len(tickets) == 0 {
-				return fmt.Errorf("file contains no tickets")
+				return cli.Validation("file contains no tickets")
 			}
 
 			client, err := params.connect()

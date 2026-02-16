@@ -76,10 +76,10 @@ controller's socket API does not expose a config-write action.`,
 		RequiredGrants: []string{"command/fleet/config"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.Name == "" {
-				return fmt.Errorf("--name is required (the fleet controller's principal localpart, e.g., service/fleet/prod)")
+				return cli.Validation("--name is required (the fleet controller's principal localpart, e.g., service/fleet/prod)")
 			}
 			return runConfig(&params)
 		},
@@ -103,7 +103,7 @@ func runConfig(params *configParams) error {
 
 	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("connecting admin session: %w", err)
+		return cli.Internal("connecting admin session: %w", err)
 	}
 	defer session.Close()
 
@@ -112,12 +112,12 @@ func runConfig(params *configParams) error {
 	if fleetRoomID == "" && params.SessionConfig.CredentialFile != "" {
 		credentials, credErr := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 		if credErr != nil {
-			return fmt.Errorf("reading credentials for fleet room: %w", credErr)
+			return cli.Internal("reading credentials for fleet room: %w", credErr)
 		}
 		fleetRoomID = credentials["MATRIX_FLEET_ROOM"]
 	}
 	if fleetRoomID == "" {
-		return fmt.Errorf("--fleet-room is required (or set MATRIX_FLEET_ROOM in the credential file)")
+		return cli.Validation("--fleet-room is required (or set MATRIX_FLEET_ROOM in the credential file)")
 	}
 
 	// Read existing config.
@@ -125,10 +125,10 @@ func runConfig(params *configParams) error {
 	existingContent, err := session.GetStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, params.Name)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return fmt.Errorf("parsing existing fleet config: %w", unmarshalErr)
+			return cli.Internal("parsing existing fleet config: %w", unmarshalErr)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return fmt.Errorf("reading fleet config: %w", err)
+		return cli.Internal("reading fleet config: %w", err)
 	}
 
 	if !hasConfigUpdates(params) {
@@ -158,7 +158,7 @@ func runConfig(params *configParams) error {
 	// Write mode: merge updates and publish.
 	if params.RebalancePolicy != "" {
 		if params.RebalancePolicy != "auto" && params.RebalancePolicy != "alert" {
-			return fmt.Errorf("--rebalance-policy must be 'auto' or 'alert', got %q", params.RebalancePolicy)
+			return cli.Validation("--rebalance-policy must be 'auto' or 'alert', got %q", params.RebalancePolicy)
 		}
 		config.RebalancePolicy = params.RebalancePolicy
 	}
@@ -183,7 +183,7 @@ func runConfig(params *configParams) error {
 
 	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, params.Name, config)
 	if err != nil {
-		return fmt.Errorf("publishing fleet config: %w", err)
+		return cli.Internal("publishing fleet config: %w", err)
 	}
 
 	result := configResult{

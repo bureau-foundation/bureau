@@ -77,18 +77,18 @@ Standard rooms created:
 		RequiredGrants: []string{"command/matrix/setup"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.RegistrationTokenFile == "" {
-				return fmt.Errorf("--registration-token-file is required (use - for stdin)")
+				return cli.Validation("--registration-token-file is required (use - for stdin)")
 			}
 			if params.CredentialFile == "" {
-				return fmt.Errorf("--credential-file is required")
+				return cli.Validation("--credential-file is required")
 			}
 
 			registrationToken, err := secret.ReadFromPath(params.RegistrationTokenFile)
 			if err != nil {
-				return fmt.Errorf("read registration token: %w", err)
+				return cli.Internal("read registration token: %w", err)
 			}
 			defer registrationToken.Close()
 
@@ -130,18 +130,18 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		Logger:        logger,
 	})
 	if err != nil {
-		return fmt.Errorf("create matrix client: %w", err)
+		return cli.Internal("create matrix client: %w", err)
 	}
 
 	// Step 1: Register or login the admin account.
 	adminPassword, err := cli.DeriveAdminPassword(config.registrationToken)
 	if err != nil {
-		return fmt.Errorf("derive admin password: %w", err)
+		return cli.Internal("derive admin password: %w", err)
 	}
 	defer adminPassword.Close()
 	session, err := registerOrLogin(ctx, client, config.adminUsername, adminPassword, config.registrationToken)
 	if err != nil {
-		return fmt.Errorf("get admin session: %w", err)
+		return cli.Internal("get admin session: %w", err)
 	}
 	defer session.Close()
 	logger.Info("admin session established", "user_id", session.UserID())
@@ -149,7 +149,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	// Step 2: Create Bureau space.
 	spaceRoomID, err := ensureSpace(ctx, session, config.serverName, logger)
 	if err != nil {
-		return fmt.Errorf("create bureau space: %w", err)
+		return cli.Internal("create bureau space: %w", err)
 	}
 	logger.Info("bureau space ready", "room_id", spaceRoomID)
 
@@ -161,7 +161,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		roomID, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
 			spaceRoomID, config.serverName, room.powerLevels(session.UserID()), logger)
 		if err != nil {
-			return fmt.Errorf("create %s: %w", room.name, err)
+			return cli.Internal("create %s: %w", room.name, err)
 		}
 		logger.Info(room.name+" ready", "room_id", roomID)
 		roomIDs[room.alias] = roomID
@@ -170,14 +170,14 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	// Publish base templates into the template room.
 	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
 		if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
-			return fmt.Errorf("publish base templates: %w", err)
+			return cli.Internal("publish base templates: %w", err)
 		}
 	}
 
 	// Publish base pipelines into the pipeline room.
 	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
 		if err := publishBasePipelines(ctx, session, pipelineRoomID, logger); err != nil {
-			return fmt.Errorf("publish base pipelines: %w", err)
+			return cli.Internal("publish base pipelines: %w", err)
 		}
 	}
 
@@ -203,7 +203,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
 		spaceRoomID, roomIDs); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
+		return cli.Internal("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
 
@@ -248,7 +248,7 @@ func ensureSpace(ctx context.Context, session *messaging.Session, serverName str
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("resolve alias %q: %w", alias, err)
+		return "", cli.Internal("resolve alias %q: %w", alias, err)
 	}
 
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -263,7 +263,7 @@ func ensureSpace(ctx context.Context, session *messaging.Session, serverName str
 		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID(), nil),
 	})
 	if err != nil {
-		return "", fmt.Errorf("create bureau space: %w", err)
+		return "", cli.Internal("create bureau space: %w", err)
 	}
 	return response.RoomID, nil
 }
@@ -279,7 +279,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("resolve alias %q: %w", alias, err)
+		return "", cli.Internal("resolve alias %q: %w", alias, err)
 	}
 
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -291,7 +291,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 		PowerLevelContentOverride: powerLevels,
 	})
 	if err != nil {
-		return "", fmt.Errorf("create room %q: %w", aliasLocal, err)
+		return "", cli.Internal("create room %q: %w", aliasLocal, err)
 	}
 
 	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
@@ -299,7 +299,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 			"via": []string{serverName},
 		})
 	if err != nil {
-		return "", fmt.Errorf("add room %q as child of space: %w", aliasLocal, err)
+		return "", cli.Internal("add room %q as child of space: %w", aliasLocal, err)
 	}
 
 	return response.RoomID, nil
@@ -315,7 +315,7 @@ func inviteIfNeeded(ctx context.Context, session *messaging.Session, roomID, roo
 			)
 			return nil
 		}
-		return fmt.Errorf("invite %q to %s (%s): %w", userID, roomName, roomID, err)
+		return cli.Internal("invite %q to %s (%s): %w", userID, roomName, roomID, err)
 	}
 	logger.Info("invited user to room",
 		"user_id", userID,
@@ -354,7 +354,7 @@ func publishBaseTemplates(ctx context.Context, session *messaging.Session, templ
 	for _, template := range baseTemplates() {
 		_, err := session.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name, template.content)
 		if err != nil {
-			return fmt.Errorf("publishing template %q: %w", template.name, err)
+			return cli.Internal("publishing template %q: %w", template.name, err)
 		}
 		logger.Info("published template", "name", template.name, "room_id", templateRoomID)
 	}
@@ -367,12 +367,12 @@ func publishBaseTemplates(ctx context.Context, session *messaging.Session, templ
 func publishBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string, logger *slog.Logger) error {
 	pipelines, err := content.Pipelines()
 	if err != nil {
-		return fmt.Errorf("loading embedded pipelines: %w", err)
+		return cli.Internal("loading embedded pipelines: %w", err)
 	}
 	for _, pipeline := range pipelines {
 		_, err := session.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, pipeline.Name, pipeline.Content)
 		if err != nil {
-			return fmt.Errorf("publishing pipeline %q: %w", pipeline.Name, err)
+			return cli.Internal("publishing pipeline %q: %w", pipeline.Name, err)
 		}
 		logger.Info("published pipeline", "name", pipeline.Name, "room_id", pipelineRoomID)
 	}

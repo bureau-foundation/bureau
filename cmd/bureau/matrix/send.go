@@ -63,10 +63,10 @@ Bureau protocol events).`,
 		RequiredGrants: []string{"command/matrix/send"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
-				return fmt.Errorf("usage: bureau matrix send [flags] <room> <message>")
+				return cli.Validation("usage: bureau matrix send [flags] <room> <message>")
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("unexpected argument: %s (room and message should each be a single argument)", args[2])
+				return cli.Validation("unexpected argument: %s (room and message should each be a single argument)", args[2])
 			}
 
 			roomTarget := args[0]
@@ -77,7 +77,7 @@ Bureau protocol events).`,
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
@@ -97,7 +97,7 @@ Bureau protocol events).`,
 				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewTextMessage(messageBody))
 			}
 			if err != nil {
-				return fmt.Errorf("send message: %w", err)
+				return cli.Internal("send message: %w", err)
 			}
 
 			if done, err := params.EmitJSON(sendResult{EventID: eventID}); done {
@@ -117,12 +117,12 @@ func resolveRoom(ctx context.Context, session *messaging.Session, target string)
 	if strings.HasPrefix(target, "#") {
 		roomID, err := session.ResolveAlias(ctx, target)
 		if err != nil {
-			return "", fmt.Errorf("resolve alias %q: %w", target, err)
+			return "", cli.NotFound("resolve alias %q: %w", target, err)
 		}
 		return roomID, nil
 	}
 	if !strings.HasPrefix(target, "!") {
-		return "", fmt.Errorf("room must be an alias (#...) or room ID (!...): got %q", target)
+		return "", cli.Validation("room must be an alias (#...) or room ID (!...): got %q", target)
 	}
 	return target, nil
 }

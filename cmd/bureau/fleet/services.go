@@ -65,7 +65,7 @@ replica count, current instance count, failover policy, and priority.`,
 		RequiredGrants: []string{"command/fleet/list-services"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			client, err := params.connect()
@@ -78,7 +78,7 @@ replica count, current instance count, failover policy, and priority.`,
 
 			var response listServicesResponse
 			if err := client.Call(ctx, "list-services", nil, &response); err != nil {
-				return fmt.Errorf("listing services: %w", err)
+				return cli.Internal("listing services: %w", err)
 			}
 
 			if done, err := params.EmitJSON(listServicesResult{Services: response.Services}); done {
@@ -176,7 +176,7 @@ failover policy, and all current instances with their host machines.`,
 		RequiredGrants: []string{"command/fleet/show-service"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("service localpart required\n\nUsage: bureau fleet show-service <localpart> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau fleet show-service <localpart> [flags]")
 			}
 			serviceLocalpart := args[0]
 
@@ -192,7 +192,7 @@ failover policy, and all current instances with their host machines.`,
 			if err := client.Call(ctx, "show-service", map[string]any{
 				"service": serviceLocalpart,
 			}, &response); err != nil {
-				return fmt.Errorf("showing service: %w", err)
+				return cli.Internal("showing service: %w", err)
 			}
 
 			instances := make([]serviceInstanceResult, len(response.Instances))

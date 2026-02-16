@@ -64,18 +64,18 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("username is required\n\nUsage: bureau login <username> [flags]")
+				return Validation("username is required\n\nUsage: bureau login <username> [flags]")
 			}
 			username := args[0]
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return Validation("unexpected argument: %s", args[1])
 			}
 
 			// Read the password. Default to interactive prompt if no
 			// --password-file is given.
 			passwordBuffer, err := readLoginPassword(params.PasswordFile)
 			if err != nil {
-				return fmt.Errorf("read password: %w", err)
+				return Internal("read password: %w", err)
 			}
 			defer passwordBuffer.Close()
 
@@ -86,19 +86,19 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 				HomeserverURL: params.HomeserverURL,
 			})
 			if err != nil {
-				return fmt.Errorf("create matrix client: %w", err)
+				return Internal("create matrix client: %w", err)
 			}
 
 			session, err := client.Login(ctx, username, passwordBuffer)
 			if err != nil {
-				return fmt.Errorf("login failed: %w", err)
+				return Internal("login failed: %w", err)
 			}
 			defer session.Close()
 
 			// Verify the session works before saving.
 			userID, err := session.WhoAmI(ctx)
 			if err != nil {
-				return fmt.Errorf("session verification failed: %w", err)
+				return Internal("session verification failed: %w", err)
 			}
 
 			operatorSession := &OperatorSession{
@@ -108,7 +108,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			}
 
 			if err := SaveSession(operatorSession); err != nil {
-				return fmt.Errorf("save session: %w", err)
+				return Internal("save session: %w", err)
 			}
 
 			path := SessionFilePath()
@@ -133,14 +133,14 @@ func readLoginPassword(passwordFile string) (*secret.Buffer, error) {
 	// Interactive prompt — read from terminal with echo disabled.
 	stdinFileDescriptor := int(os.Stdin.Fd())
 	if !term.IsTerminal(stdinFileDescriptor) {
-		return nil, fmt.Errorf("no terminal available for interactive password prompt (use --password-file)")
+		return nil, Validation("no terminal available for interactive password prompt (use --password-file)")
 	}
 
 	fmt.Fprint(os.Stderr, "Password: ")
 	passwordBytes, err := term.ReadPassword(stdinFileDescriptor)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		return nil, fmt.Errorf("reading password: %w", err)
+		return nil, Internal("reading password: %w", err)
 	}
 
 	buffer, err := secret.NewFromBytes(passwordBytes)
@@ -156,7 +156,7 @@ func readLoginPassword(passwordFile string) (*secret.Buffer, error) {
 func readSecretFile(path string) (*secret.Buffer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, Internal("reading %s: %w", path, err)
 	}
 
 	// Strip trailing newlines — files often end with one.
@@ -166,7 +166,7 @@ func readSecretFile(path string) (*secret.Buffer, error) {
 
 	if len(data) == 0 {
 		secret.Zero(data)
-		return nil, fmt.Errorf("file %s is empty (after stripping trailing newlines)", path)
+		return nil, Validation("file %s is empty (after stripping trailing newlines)", path)
 	}
 
 	buffer, err := secret.NewFromBytes(data)

@@ -52,7 +52,7 @@ the number of assigned principals.`,
 		RequiredGrants: []string{"command/fleet/list-machines"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			client, err := params.connect()
@@ -65,7 +65,7 @@ the number of assigned principals.`,
 
 			var response machinesResponse
 			if err := client.Call(ctx, "list-machines", nil, &response); err != nil {
-				return fmt.Errorf("listing machines: %w", err)
+				return cli.Internal("listing machines: %w", err)
 			}
 
 			if done, err := params.EmitJSON(listMachinesResult{Machines: response.Machines}); done {
@@ -152,7 +152,7 @@ current resource usage, and all assigned principals.`,
 		RequiredGrants: []string{"command/fleet/show-machine"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("machine localpart required\n\nUsage: bureau fleet show-machine <localpart> [flags]")
+				return cli.Validation("machine localpart required\n\nUsage: bureau fleet show-machine <localpart> [flags]")
 			}
 			machineLocalpart := args[0]
 
@@ -168,7 +168,7 @@ current resource usage, and all assigned principals.`,
 			if err := client.Call(ctx, "show-machine", map[string]any{
 				"machine": machineLocalpart,
 			}, &response); err != nil {
-				return fmt.Errorf("showing machine: %w", err)
+				return cli.Internal("showing machine: %w", err)
 			}
 
 			result := showMachineResult{

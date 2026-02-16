@@ -95,7 +95,7 @@ func testCommandTree() *cli.Command {
 				RequiredGrants: []string{"command/test/fail"},
 				Run: func(args []string) error {
 					fmt.Print("partial")
-					return fmt.Errorf("intentional failure: %s", failP.Reason)
+					return cli.Internal("intentional failure: %s", failP.Reason)
 				},
 			},
 			{
@@ -671,6 +671,17 @@ func TestServer_ToolsCallError(t *testing.T) {
 	}
 	if !strings.Contains(result.Content[1].Text, "test error") {
 		t.Errorf("error content = %q, want it to contain 'test error'", result.Content[1].Text)
+	}
+
+	// ErrorInfo should carry structured error metadata.
+	if result.ErrorInfo == nil {
+		t.Fatal("errorInfo should be present on tool error")
+	}
+	if result.ErrorInfo.Category != string(cli.CategoryInternal) {
+		t.Errorf("errorInfo.category = %q, want %q", result.ErrorInfo.Category, cli.CategoryInternal)
+	}
+	if result.ErrorInfo.Retryable {
+		t.Error("errorInfo.retryable should be false for internal errors")
 	}
 }
 
@@ -1510,6 +1521,14 @@ func TestServer_Progressive_ToolsCallError(t *testing.T) {
 	if !errorFound {
 		t.Errorf("expected error content containing 'meta-fail', got %v", result.Content)
 	}
+
+	// ErrorInfo should propagate through progressive mode too.
+	if result.ErrorInfo == nil {
+		t.Fatal("errorInfo should be present on meta-tool error")
+	}
+	if result.ErrorInfo.Category != "internal" {
+		t.Errorf("errorInfo.category = %q, want %q", result.ErrorInfo.Category, "internal")
+	}
 }
 
 func TestServer_Progressive_ToolsCallUnknown(t *testing.T) {
@@ -1592,6 +1611,114 @@ func TestServer_Progressive_DirectToolBlocked(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error.Message, "not directly callable in progressive mode") {
 		t.Errorf("error message = %q, want it to mention progressive mode", resp.Error.Message)
+	}
+}
+
+// --- Error classification tests ---
+
+func TestServer_ErrorInfo_PresentOnError(t *testing.T) {
+	result := callToolResult(t, "test_fail", map[string]any{"reason": "classify me"})
+
+	if !result.IsError {
+		t.Fatal("expected isError=true")
+	}
+	if result.ErrorInfo == nil {
+		t.Fatal("errorInfo should be present when isError=true")
+	}
+	// The test_fail command returns cli.Internal, so category should
+	// be "internal" and retryable should be false.
+	if result.ErrorInfo.Category != "internal" {
+		t.Errorf("category = %q, want %q", result.ErrorInfo.Category, "internal")
+	}
+	if result.ErrorInfo.Retryable {
+		t.Error("retryable should be false for internal errors")
+	}
+}
+
+func TestServer_ErrorInfo_AbsentOnSuccess(t *testing.T) {
+	result := callToolResult(t, "test_echo", map[string]any{"message": "success"})
+
+	if result.IsError {
+		t.Fatal("expected isError=false")
+	}
+	if result.ErrorInfo != nil {
+		t.Errorf("errorInfo should be nil on success, got %+v", result.ErrorInfo)
+	}
+}
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		wantCategory  string
+		wantRetryable bool
+	}{
+		{
+			name:          "ToolError validation",
+			err:           cli.Validation("--room is required"),
+			wantCategory:  "validation",
+			wantRetryable: false,
+		},
+		{
+			name:          "ToolError not_found",
+			err:           cli.NotFound("ticket %s not found", "tkt-123"),
+			wantCategory:  "not_found",
+			wantRetryable: false,
+		},
+		{
+			name:          "ToolError forbidden",
+			err:           cli.Forbidden("access denied"),
+			wantCategory:  "forbidden",
+			wantRetryable: false,
+		},
+		{
+			name:          "ToolError conflict",
+			err:           cli.Conflict("already exists"),
+			wantCategory:  "conflict",
+			wantRetryable: false,
+		},
+		{
+			name:          "ToolError transient",
+			err:           cli.Transient("connection refused"),
+			wantCategory:  "transient",
+			wantRetryable: true,
+		},
+		{
+			name:          "ToolError internal",
+			err:           cli.Internal("unexpected: %s", "oops"),
+			wantCategory:  "internal",
+			wantRetryable: false,
+		},
+		{
+			name:          "plain error defaults to internal",
+			err:           fmt.Errorf("something broke"),
+			wantCategory:  "internal",
+			wantRetryable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := classifyError(tt.err)
+			if info.Category != tt.wantCategory {
+				t.Errorf("category = %q, want %q", info.Category, tt.wantCategory)
+			}
+			if info.Retryable != tt.wantRetryable {
+				t.Errorf("retryable = %v, want %v", info.Retryable, tt.wantRetryable)
+			}
+		})
+	}
+}
+
+func TestClassifyError_WrappedToolError(t *testing.T) {
+	// A ToolError wrapped in fmt.Errorf should still be classified
+	// by the inner ToolError's category.
+	inner := cli.Validation("bad input")
+	wrapped := fmt.Errorf("outer context: %w", inner)
+
+	info := classifyError(wrapped)
+	if info.Category != "validation" {
+		t.Errorf("category = %q, want %q", info.Category, "validation")
 	}
 }
 

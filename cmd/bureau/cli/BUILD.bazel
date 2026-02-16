@@ -20,6 +20,7 @@ go_library(
         "schema.go",
         "session_config.go",
         "suggest.go",
+        "toolerror.go",
         "whoami.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cli",

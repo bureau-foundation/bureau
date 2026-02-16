@@ -72,10 +72,10 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 		RequiredGrants: []string{"command/matrix/doctor"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.DryRun && !params.Fix {
-				return fmt.Errorf("--dry-run requires --fix")
+				return cli.Validation("--dry-run requires --fix")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -90,7 +90,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			if params.SessionConfig.CredentialFile != "" {
 				storedCredentials, err = cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 				if err != nil {
-					return fmt.Errorf("read credential file: %w", err)
+					return cli.Internal("read credential file: %w", err)
 				}
 			}
 
@@ -98,12 +98,12 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				HomeserverURL: homeserverURL,
 			})
 			if err != nil {
-				return fmt.Errorf("create client: %w", err)
+				return cli.Internal("create client: %w", err)
 			}
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -150,7 +150,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				if params.SessionConfig.CredentialFile != "" {
 					storedCredentials, err = cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 					if err != nil {
-						return fmt.Errorf("re-read credential file: %w", err)
+						return cli.Internal("re-read credential file: %w", err)
 					}
 				}
 			}

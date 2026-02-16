@@ -40,7 +40,7 @@ environments.`,
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			var entries []statusEntry

@@ -6,12 +6,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -39,17 +39,17 @@ func fetchGrants() ([]schema.Grant, error) {
 
 	response, err := client.Get("http://localhost/v1/grants")
 	if err != nil {
-		return nil, fmt.Errorf("fetching grants from proxy at %s: %w", socketPath, err)
+		return nil, cli.Internal("fetching grants from proxy at %s: %w", socketPath, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("proxy returned %s for GET /v1/grants", response.Status)
+		return nil, cli.Internal("proxy returned %s for GET /v1/grants", response.Status)
 	}
 
 	var grants []schema.Grant
 	if err := json.NewDecoder(response.Body).Decode(&grants); err != nil {
-		return nil, fmt.Errorf("decoding grants response: %w", err)
+		return nil, cli.Internal("decoding grants response: %w", err)
 	}
 
 	return grants, nil

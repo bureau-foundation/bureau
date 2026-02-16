@@ -73,10 +73,10 @@ or machine ID as the state key.`,
 		RequiredGrants: []string{"command/matrix/state/get"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("usage: bureau matrix state get [flags] <room> [<event-type>]")
+				return cli.Validation("usage: bureau matrix state get [flags] <room> [<event-type>]")
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("unexpected argument: %s", args[2])
+				return cli.Validation("unexpected argument: %s", args[2])
 			}
 
 			roomTarget := args[0]
@@ -86,7 +86,7 @@ or machine ID as the state key.`,
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
@@ -98,7 +98,7 @@ or machine ID as the state key.`,
 				// No event type: get all state.
 				events, err := matrixSession.GetRoomState(ctx, roomID)
 				if err != nil {
-					return fmt.Errorf("get room state: %w", err)
+					return cli.Internal("get room state: %w", err)
 				}
 				return cli.WriteJSON(events)
 			}
@@ -108,7 +108,7 @@ or machine ID as the state key.`,
 
 			content, err := matrixSession.GetStateEvent(ctx, roomID, eventType, params.StateKey)
 			if err != nil {
-				return fmt.Errorf("get state event: %w", err)
+				return cli.Internal("get state event: %w", err)
 			}
 			return cli.WriteJSON(content)
 		},
@@ -162,7 +162,7 @@ specific state key.`,
 		RequiredGrants: []string{"command/matrix/state/set"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
-				return fmt.Errorf("usage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
+				return cli.Validation("usage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
 			}
 
 			roomTarget := args[0]
@@ -171,19 +171,19 @@ specific state key.`,
 			var jsonBody string
 			if params.UseStdin {
 				if len(args) > 2 {
-					return fmt.Errorf("unexpected argument %q: --stdin reads body from stdin, not positional args", args[2])
+					return cli.Validation("unexpected argument %q: --stdin reads body from stdin, not positional args", args[2])
 				}
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
-					return fmt.Errorf("read stdin: %w", err)
+					return cli.Internal("read stdin: %w", err)
 				}
 				jsonBody = string(data)
 			} else {
 				if len(args) < 3 {
-					return fmt.Errorf("missing JSON body (provide as last argument or use --stdin)")
+					return cli.Validation("missing JSON body (provide as last argument or use --stdin)")
 				}
 				if len(args) > 3 {
-					return fmt.Errorf("unexpected argument: %s", args[3])
+					return cli.Validation("unexpected argument: %s", args[3])
 				}
 				jsonBody = args[2]
 			}
@@ -191,7 +191,7 @@ specific state key.`,
 			// Validate that the body is valid JSON before sending.
 			var content json.RawMessage
 			if err := json.Unmarshal([]byte(jsonBody), &content); err != nil {
-				return fmt.Errorf("invalid JSON body: %w", err)
+				return cli.Validation("invalid JSON body: %w", err)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -199,7 +199,7 @@ specific state key.`,
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
@@ -209,7 +209,7 @@ specific state key.`,
 
 			eventID, err := matrixSession.SendStateEvent(ctx, roomID, eventType, params.StateKey, content)
 			if err != nil {
-				return fmt.Errorf("set state event: %w", err)
+				return cli.Internal("set state event: %w", err)
 			}
 
 			if done, err := params.EmitJSON(stateSetResult{EventID: eventID}); done {

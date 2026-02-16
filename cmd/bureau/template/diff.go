@@ -56,7 +56,7 @@ content, not the resolved inheritance chain — use "bureau template show
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
-				return fmt.Errorf("usage: bureau template diff [flags] <template-ref> <file>")
+				return cli.Validation("usage: bureau template diff [flags] <template-ref> <file>")
 			}
 
 			templateRefString := args[0]
@@ -65,7 +65,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			// Parse the template reference.
 			ref, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
-				return fmt.Errorf("parsing template reference: %w", err)
+				return cli.Validation("parsing template reference: %w", err)
 			}
 
 			// Read the local file.
@@ -89,11 +89,11 @@ content, not the resolved inheritance chain — use "bureau template show
 			// Serialize both to JSON for comparison.
 			remoteJSON, err := json.MarshalIndent(remoteContent, "", "  ")
 			if err != nil {
-				return fmt.Errorf("marshal remote template: %w", err)
+				return cli.Internal("marshal remote template: %w", err)
 			}
 			localJSON, err := json.MarshalIndent(localContent, "", "  ")
 			if err != nil {
-				return fmt.Errorf("marshal local template: %w", err)
+				return cli.Internal("marshal local template: %w", err)
 			}
 
 			remoteLines := strings.Split(string(remoteJSON), "\n")

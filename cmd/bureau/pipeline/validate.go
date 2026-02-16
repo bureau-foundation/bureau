@@ -55,7 +55,7 @@ before validation.`,
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau pipeline validate <file>")
+				return cli.Validation("usage: bureau pipeline validate <file>")
 			}
 
 			path := args[0]
@@ -78,7 +78,7 @@ before validation.`,
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
 				}
-				return fmt.Errorf("%s: %d validation issue(s) found", path, len(issues))
+				return cli.Validation("%s: %d validation issue(s) found", path, len(issues))
 			}
 
 			fmt.Fprintf(os.Stdout, "%s: valid\n", path)

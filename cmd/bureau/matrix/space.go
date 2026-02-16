@@ -76,10 +76,10 @@ if not specified.`,
 		RequiredGrants: []string{"command/matrix/space/create"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
+				return cli.Validation("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			alias := args[0]
 
@@ -93,7 +93,7 @@ if not specified.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -107,7 +107,7 @@ if not specified.`,
 				},
 			})
 			if err != nil {
-				return fmt.Errorf("create space: %w", err)
+				return cli.Internal("create space: %w", err)
 			}
 
 			if done, err := params.EmitJSON(spaceCreateResult{
@@ -160,7 +160,7 @@ table of room ID, alias, and name.`,
 		RequiredGrants: []string{"command/matrix/space/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -168,12 +168,12 @@ table of room ID, alias, and name.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomIDs, err := sess.JoinedRooms(ctx)
 			if err != nil {
-				return fmt.Errorf("list joined rooms: %w", err)
+				return cli.Internal("list joined rooms: %w", err)
 			}
 
 			var spaces []spaceEntry
@@ -242,10 +242,10 @@ reclaim the room.`,
 		RequiredGrants: []string{"command/matrix/space/delete"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("space alias or room ID is required\n\nUsage: bureau matrix space delete <alias-or-id> [flags]")
+				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space delete <alias-or-id> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			target := args[0]
 
@@ -254,7 +254,7 @@ reclaim the room.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -263,7 +263,7 @@ reclaim the room.`,
 			}
 
 			if err := sess.LeaveRoom(ctx, roomID); err != nil {
-				return fmt.Errorf("leave space: %w", err)
+				return cli.Internal("leave space: %w", err)
 			}
 
 			if done, err := params.EmitJSON(spaceDeleteResult{RoomID: roomID}); done {
@@ -305,10 +305,10 @@ Displays a table of user ID, display name, and membership state
 		RequiredGrants: []string{"command/matrix/space/members"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("space alias or room ID is required\n\nUsage: bureau matrix space members <alias-or-id> [flags]")
+				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space members <alias-or-id> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			target := args[0]
 
@@ -317,7 +317,7 @@ Displays a table of user ID, display name, and membership state
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+				return cli.Internal("connect: %w", err)
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -327,7 +327,7 @@ Displays a table of user ID, display name, and membership state
 
 			members, err := sess.GetRoomMembers(ctx, roomID)
 			if err != nil {
-				return fmt.Errorf("get space members: %w", err)
+				return cli.Internal("get space members: %w", err)
 			}
 
 			if done, err := params.EmitJSON(members); done {

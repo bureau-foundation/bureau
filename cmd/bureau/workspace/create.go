@@ -92,19 +92,19 @@ All worktrees in a project share a single bare git object store at
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")
+				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.Machine == "" {
-				return fmt.Errorf("--machine is required")
+				return cli.Validation("--machine is required")
 			}
 			if params.Template == "" {
-				return fmt.Errorf("--template is required")
+				return cli.Validation("--template is required")
 			}
 			if params.AgentCount < 0 {
-				return fmt.Errorf("--agent-count must be non-negative, got %d", params.AgentCount)
+				return cli.Validation("--agent-count must be non-negative, got %d", params.AgentCount)
 			}
 
 			return runCreate(args[0], &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
@@ -115,13 +115,13 @@ All worktrees in a project share a single bare git object store at
 func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverName string, agentCount int, jsonOutput *cli.JSONOutput) error {
 	// Validate the workspace alias.
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return fmt.Errorf("invalid workspace alias: %w", err)
+		return cli.Validation("invalid workspace alias: %w", err)
 	}
 
 	// The alias must have at least two segments: project/worktree.
 	project, worktreePath, hasWorktree := strings.Cut(alias, "/")
 	if !hasWorktree {
-		return fmt.Errorf("workspace alias must have at least two segments (project/path), got %q", alias)
+		return cli.Validation("workspace alias must have at least two segments (project/path), got %q", alias)
 	}
 
 	// Resolve "local" to the actual machine localpart from the launcher's
@@ -130,7 +130,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	if machine == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
-			return fmt.Errorf("resolving local machine identity: %w", err)
+			return cli.NotFound("resolving local machine identity: %w", err)
 		}
 		machine = resolved
 		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machine)
@@ -138,7 +138,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 
 	// Validate the machine localpart.
 	if err := principal.ValidateLocalpart(machine); err != nil {
-		return fmt.Errorf("invalid machine name: %w", err)
+		return cli.Validation("invalid machine name: %w", err)
 	}
 
 	// Parse key=value parameters.
@@ -160,7 +160,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 
 	sess, err := session.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return cli.Internal("connect: %w", err)
 	}
 	defer sess.Close()
 
@@ -171,13 +171,13 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	spaceAlias := principal.RoomAlias("bureau", serverName)
 	spaceRoomID, err := sess.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return fmt.Errorf("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
+		return cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
 	}
 
 	// Ensure the workspace room exists (idempotent).
 	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID, machineUserID, spaceRoomID)
 	if err != nil {
-		return fmt.Errorf("ensuring workspace room: %w", err)
+		return cli.Internal("ensuring workspace room: %w", err)
 	}
 
 	// Publish the ProjectConfig state event.
@@ -197,7 +197,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeProject, project, projectConfig)
 	if err != nil {
-		return fmt.Errorf("publishing project config: %w", err)
+		return cli.Internal("publishing project config: %w", err)
 	}
 
 	// Publish the initial workspace lifecycle event. The setup principal
@@ -211,7 +211,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		return fmt.Errorf("publishing workspace state: %w", err)
+		return cli.Internal("publishing workspace state: %w", err)
 	}
 
 	// Build principal assignments (setup + agents + teardown).
@@ -220,7 +220,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	// Update the machine's MachineConfig with the new principals.
 	err = updateMachineConfig(ctx, sess, machine, serverName, assignments)
 	if err != nil {
-		return fmt.Errorf("updating machine config: %w", err)
+		return cli.Internal("updating machine config: %w", err)
 	}
 
 	// Invite the machine daemon to the workspace room so it can read
@@ -229,7 +229,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	if err != nil {
 		// M_FORBIDDEN is fine — the machine may already be a member.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			return fmt.Errorf("inviting machine %s to workspace room: %w", machineUserID, err)
+			return cli.Internal("inviting machine %s to workspace room: %w", machineUserID, err)
 		}
 	}
 
@@ -292,7 +292,7 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("resolving workspace alias %q: %w", fullAlias, err)
+		return "", cli.Internal("resolving workspace alias %q: %w", fullAlias, err)
 	}
 
 	// Room doesn't exist — create it.
@@ -310,11 +310,11 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 			// Race: room created between our resolve and creation attempt.
 			roomID, err = session.ResolveAlias(ctx, fullAlias)
 			if err != nil {
-				return "", fmt.Errorf("room exists but cannot resolve alias %q: %w", fullAlias, err)
+				return "", cli.Internal("room exists but cannot resolve alias %q: %w", fullAlias, err)
 			}
 			return roomID, nil
 		}
-		return "", fmt.Errorf("creating workspace room: %w", err)
+		return "", cli.Internal("creating workspace room: %w", err)
 	}
 
 	// Add as a child of the Bureau space.
@@ -323,7 +323,7 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 			"via": []string{serverName},
 		})
 	if err != nil {
-		return "", fmt.Errorf("adding workspace room as child of Bureau space: %w", err)
+		return "", cli.Internal("adding workspace room as child of Bureau space: %w", err)
 	}
 
 	return response.RoomID, nil
@@ -428,7 +428,7 @@ func updateMachineConfig(ctx context.Context, session *messaging.Session, machin
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolve config room %s: %w (has the machine been registered?)", configRoomAlias, err)
+		return cli.NotFound("resolve config room %s: %w (has the machine been registered?)", configRoomAlias, err)
 	}
 
 	// Read the existing MachineConfig.
@@ -436,10 +436,10 @@ func updateMachineConfig(ctx context.Context, session *messaging.Session, machin
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine)
 	if err == nil {
 		if unmarshalError := json.Unmarshal(existingContent, &config); unmarshalError != nil {
-			return fmt.Errorf("parsing existing machine config: %w", unmarshalError)
+			return cli.Internal("parsing existing machine config: %w", unmarshalError)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return fmt.Errorf("reading machine config: %w", err)
+		return cli.Internal("reading machine config: %w", err)
 	}
 
 	// Build a set of existing localparts for deduplication.
@@ -466,7 +466,7 @@ func updateMachineConfig(ctx context.Context, session *messaging.Session, machin
 
 	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine, config)
 	if err != nil {
-		return fmt.Errorf("publishing machine config: %w", err)
+		return cli.Internal("publishing machine config: %w", err)
 	}
 
 	return nil
@@ -479,10 +479,10 @@ func parseParams(rawParams []string) (map[string]string, error) {
 	for _, param := range rawParams {
 		key, value, found := strings.Cut(param, "=")
 		if !found {
-			return nil, fmt.Errorf("invalid --param %q: expected key=value", param)
+			return nil, cli.Validation("invalid --param %q: expected key=value", param)
 		}
 		if key == "" {
-			return nil, fmt.Errorf("invalid --param %q: empty key", param)
+			return nil, cli.Validation("invalid --param %q: empty key", param)
 		}
 		result[key] = value
 	}

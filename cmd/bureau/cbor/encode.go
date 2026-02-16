@@ -57,7 +57,7 @@ The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
 				return err
 			}
 			if len(remainingArgs) > 0 {
-				return fmt.Errorf("encode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+				return cli.Validation("encode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
 			return encodeCBOR(data, os.Stdout)
 		},
@@ -67,7 +67,7 @@ The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
 // encodeCBOR encodes JSON data as CBOR and writes it to w.
 func encodeCBOR(data []byte, w io.Writer) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected JSON data")
+		return cli.Validation("empty input: expected JSON data")
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -75,14 +75,14 @@ func encodeCBOR(data []byte, w io.Writer) error {
 
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return fmt.Errorf("decode JSON: %w", err)
+		return cli.Internal("decode JSON: %w", err)
 	}
 
 	value = convertNumbers(value)
 
 	cborData, err := codec.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("encode CBOR: %w", err)
+		return cli.Internal("encode CBOR: %w", err)
 	}
 
 	_, err = w.Write(cborData)

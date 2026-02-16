@@ -60,7 +60,7 @@ With -s, validates each item in a CBOR sequence independently.`,
 				return err
 			}
 			if len(remainingArgs) > 0 {
-				return fmt.Errorf("validate takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+				return cli.Validation("validate takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
 			return validateCBOR(data, os.Stdout, params.Slurp)
 		},
@@ -71,7 +71,7 @@ With -s, validates each item in a CBOR sequence independently.`,
 // CBOR by decoding and re-encoding, then comparing bytes.
 func validateCBOR(data []byte, w io.Writer, slurp bool) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	if slurp {
@@ -84,12 +84,12 @@ func validateCBOR(data []byte, w io.Writer, slurp bool) error {
 func validateSingle(data []byte, w io.Writer) error {
 	var value any
 	if err := toolDecMode.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("decode CBOR: %w", err)
+		return cli.Internal("decode CBOR: %w", err)
 	}
 
 	reencoded, err := codec.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("re-encode CBOR: %w", err)
+		return cli.Internal("re-encode CBOR: %w", err)
 	}
 
 	if bytes.Equal(data, reencoded) {
@@ -110,19 +110,19 @@ func validateSequence(data []byte, w io.Writer) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("decode CBOR sequence item %d: %w", count, err)
+			return cli.Internal("decode CBOR sequence item %d: %w", count, err)
 		}
 
 		itemBytes, err := codec.Marshal(value)
 		if err != nil {
-			return fmt.Errorf("re-encode CBOR sequence item %d: %w", count, err)
+			return cli.Internal("re-encode CBOR sequence item %d: %w", count, err)
 		}
 		reencoded.Write(itemBytes)
 		count++
 	}
 
 	if count == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	if bytes.Equal(data, reencoded.Bytes()) {
@@ -146,6 +146,6 @@ func describeMismatch(original, reencoded []byte) error {
 		offset++
 	}
 
-	return fmt.Errorf("not deterministic: first difference at byte %d (original %d bytes, re-encoded %d bytes)",
+	return cli.Validation("not deterministic: first difference at byte %d (original %d bytes, re-encoded %d bytes)",
 		offset, len(original), len(reencoded))
 }

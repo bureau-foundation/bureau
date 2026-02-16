@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -74,7 +73,7 @@ func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error)
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
-			return nil, fmt.Errorf("read credential file: %w", err)
+			return nil, Internal("read credential file: %w", err)
 		}
 		if homeserverURL == "" {
 			homeserverURL = credentials["MATRIX_HOMESERVER_URL"]
@@ -89,13 +88,13 @@ func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error)
 
 	// Validate required fields.
 	if homeserverURL == "" {
-		return nil, fmt.Errorf("--homeserver is required (or use --credential-file)")
+		return nil, Validation("--homeserver is required (or use --credential-file)")
 	}
 	if token == "" {
-		return nil, fmt.Errorf("--token is required (or use --credential-file)")
+		return nil, Validation("--token is required (or use --credential-file)")
 	}
 	if userID == "" {
-		return nil, fmt.Errorf("--user-id is required (or use --credential-file)")
+		return nil, Validation("--user-id is required (or use --credential-file)")
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -107,7 +106,7 @@ func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error)
 		Logger:        logger,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create matrix client: %w", err)
+		return nil, Internal("create matrix client: %w", err)
 	}
 
 	return client.SessionFromToken(userID, token)
@@ -123,14 +122,14 @@ func (c *SessionConfig) ResolveHomeserverURL() (string, error) {
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
-			return "", fmt.Errorf("read credential file: %w", err)
+			return "", Internal("read credential file: %w", err)
 		}
 		if url, ok := credentials["MATRIX_HOMESERVER_URL"]; ok && url != "" {
 			return url, nil
 		}
-		return "", fmt.Errorf("credential file missing MATRIX_HOMESERVER_URL")
+		return "", Validation("credential file missing MATRIX_HOMESERVER_URL")
 	}
-	return "", fmt.Errorf("--homeserver or --credential-file is required")
+	return "", Validation("--homeserver or --credential-file is required")
 }
 
 // ReadCredentialFile parses a key=value credential file. Lines starting
@@ -159,12 +158,12 @@ func ReadCredentialFile(path string) (map[string]string, error) {
 		}
 		key, value, found := strings.Cut(line, "=")
 		if !found {
-			return nil, fmt.Errorf("line %d: expected KEY=VALUE, got %q", lineNumber, line)
+			return nil, Internal("line %d: expected KEY=VALUE, got %q", lineNumber, line)
 		}
 		credentials[key] = value
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading credential file: %w", err)
+		return nil, Internal("reading credential file: %w", err)
 	}
 
 	return credentials, nil
@@ -178,7 +177,7 @@ func ReadCredentialFile(path string) (map[string]string, error) {
 func UpdateCredentialFile(path string, updates map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read credential file: %w", err)
+		return Internal("read credential file: %w", err)
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -232,7 +231,7 @@ func UpdateCredentialFile(path string, updates map[string]string) error {
 func DeriveAdminPassword(registrationToken *secret.Buffer) (*secret.Buffer, error) {
 	preimage, err := secret.Concat("bureau-admin-password:", registrationToken)
 	if err != nil {
-		return nil, fmt.Errorf("building password preimage: %w", err)
+		return nil, Internal("building password preimage: %w", err)
 	}
 	defer preimage.Close()
 	hash := sha256.Sum256(preimage.Bytes())

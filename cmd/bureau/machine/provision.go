@@ -67,17 +67,17 @@ is immediately rotated.`,
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")
+				return cli.Validation("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")
 			}
 			machineName := args[0]
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.CredentialFile == "" {
-				return fmt.Errorf("--credential-file is required")
+				return cli.Validation("--credential-file is required")
 			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
-				return fmt.Errorf("invalid machine name: %w", err)
+				return cli.Validation("invalid machine name: %w", err)
 			}
 
 			return runProvision(machineName, params.CredentialFile, params.ServerName, params.OutputPath)
@@ -92,28 +92,28 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	// Read the credential file for admin access and the registration token.
 	credentials, err := cli.ReadCredentialFile(credentialFile)
 	if err != nil {
-		return fmt.Errorf("read credential file: %w", err)
+		return cli.Internal("read credential file: %w", err)
 	}
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
 	}
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
-		return fmt.Errorf("credential file missing MATRIX_HOMESERVER_URL")
+		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
 	}
 	adminUserID := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
 	})
 	if err != nil {
-		return fmt.Errorf("create matrix client: %w", err)
+		return cli.Internal("create matrix client: %w", err)
 	}
 
 	// Generate a random one-time password (32 bytes = 64 hex chars).
@@ -121,19 +121,19 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	// are moved into an mmap-backed buffer.
 	passwordBytes := make([]byte, 32)
 	if _, err := rand.Read(passwordBytes); err != nil {
-		return fmt.Errorf("generate random password: %w", err)
+		return cli.Internal("generate random password: %w", err)
 	}
 	hexBytes := []byte(hex.EncodeToString(passwordBytes))
 	secret.Zero(passwordBytes)
 	oneTimePassword, err := secret.NewFromBytes(hexBytes)
 	if err != nil {
-		return fmt.Errorf("protecting one-time password: %w", err)
+		return cli.Internal("protecting one-time password: %w", err)
 	}
 	defer oneTimePassword.Close()
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer registrationTokenBuffer.Close()
 
@@ -150,16 +150,16 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	})
 	if registerError != nil {
 		if messaging.IsMatrixError(registerError, messaging.ErrCodeUserInUse) {
-			return fmt.Errorf("machine account %s already exists (use 'bureau machine decommission' first to re-provision)", machineUserID)
+			return cli.Conflict("machine account %s already exists (use 'bureau machine decommission' first to re-provision)", machineUserID)
 		}
-		return fmt.Errorf("register machine account: %w", registerError)
+		return cli.Internal("register machine account: %w", registerError)
 	}
 	fmt.Fprintf(os.Stderr, "  Account created: %s\n", machineUserID)
 
 	// Get an admin session for room management.
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
-		return fmt.Errorf("create admin session: %w", err)
+		return cli.Internal("create admin session: %w", err)
 	}
 	defer adminSession.Close()
 
@@ -167,11 +167,11 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
+		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
 	}
 	if err := adminSession.InviteUser(ctx, machineRoomID, machineUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return fmt.Errorf("invite machine to machine room: %w", err)
+			return cli.Internal("invite machine to machine room: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", machineAlias)
 	} else {
@@ -181,11 +181,11 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	serviceAlias := principal.RoomAlias("bureau/service", serverName)
 	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		return fmt.Errorf("resolve service room %q: %w", serviceAlias, err)
+		return cli.NotFound("resolve service room %q: %w", serviceAlias, err)
 	}
 	if err := adminSession.InviteUser(ctx, serviceRoomID, machineUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return fmt.Errorf("invite machine to service room: %w", err)
+			return cli.Internal("invite machine to service room: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", serviceAlias)
 	} else {
@@ -211,7 +211,7 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 		if messaging.IsMatrixError(createError, messaging.ErrCodeRoomInUse) {
 			fmt.Fprintf(os.Stderr, "  Config room already exists\n")
 		} else {
-			return fmt.Errorf("create config room: %w", createError)
+			return cli.Internal("create config room: %w", createError)
 		}
 	} else {
 		// Set power levels: admin=100, machine=50. Machine can invite
@@ -219,7 +219,7 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
 			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 		if err != nil {
-			return fmt.Errorf("set config room power levels: %w", err)
+			return cli.Internal("set config room power levels: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "  Config room created: %s\n", configRoom.RoomID)
 	}
@@ -234,12 +234,12 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 
 	if outputPath != "" {
 		if err := bootstrap.WriteConfig(outputPath, config); err != nil {
-			return fmt.Errorf("write bootstrap config: %w", err)
+			return cli.Internal("write bootstrap config: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "\nBootstrap config written to %s\n", outputPath)
 	} else {
 		if err := bootstrap.WriteToStdout(config); err != nil {
-			return fmt.Errorf("write bootstrap config to stdout: %w", err)
+			return cli.Internal("write bootstrap config to stdout: %w", err)
 		}
 	}
 

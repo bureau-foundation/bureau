@@ -62,7 +62,7 @@ without actually publishing.`,
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
-				return fmt.Errorf("usage: bureau pipeline push [flags] <pipeline-ref> <file>")
+				return cli.Validation("usage: bureau pipeline push [flags] <pipeline-ref> <file>")
 			}
 
 			pipelineRefString := args[0]
@@ -71,7 +71,7 @@ without actually publishing.`,
 			// Parse the pipeline reference.
 			ref, err := schema.ParsePipelineRef(pipelineRefString)
 			if err != nil {
-				return fmt.Errorf("parsing pipeline reference: %w", err)
+				return cli.Validation("parsing pipeline reference: %w", err)
 			}
 
 			// Read and validate the local file.
@@ -85,7 +85,7 @@ without actually publishing.`,
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
 				}
-				return fmt.Errorf("%s: %d validation issue(s) found", filePath, len(issues))
+				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
 
 			// Connect to Matrix for room verification and publishing.
@@ -99,7 +99,7 @@ without actually publishing.`,
 			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
-				return fmt.Errorf("resolving target room %q: %w", roomAlias, err)
+				return cli.NotFound("resolving target room %q: %w", roomAlias, err)
 			}
 
 			if params.DryRun {
@@ -122,7 +122,7 @@ without actually publishing.`,
 			// Publish the pipeline as a state event.
 			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipeline, ref.Pipeline, content)
 			if err != nil {
-				return fmt.Errorf("publishing pipeline: %w", err)
+				return cli.Internal("publishing pipeline: %w", err)
 			}
 
 			if done, err := params.EmitJSON(pushResult{

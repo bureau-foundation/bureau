@@ -71,13 +71,13 @@ workstation's MachineConfig, and enables tickets in all rooms under
 		RequiredGrants: []string{"command/ticket/enable"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.Space == "" {
-				return fmt.Errorf("--space is required")
+				return cli.Validation("--space is required")
 			}
 			if params.Host == "" {
-				return fmt.Errorf("--host is required")
+				return cli.Validation("--host is required")
 			}
 			return runEnable(&params)
 		},
@@ -100,20 +100,20 @@ func runEnable(params *enableParams) error {
 	if host == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
-			return fmt.Errorf("resolving local machine identity: %w", err)
+			return cli.Internal("resolving local machine identity: %w", err)
 		}
 		host = resolved
 		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
 	}
 
 	if err := principal.ValidateLocalpart(host); err != nil {
-		return fmt.Errorf("invalid host: %w", err)
+		return cli.Internal("invalid host: %w", err)
 	}
 
 	// Derive the service principal localpart from the space name.
 	servicePrincipal := "service/ticket/" + params.Space
 	if err := principal.ValidateLocalpart(servicePrincipal); err != nil {
-		return fmt.Errorf("invalid service principal %q: %w", servicePrincipal, err)
+		return cli.Internal("invalid service principal %q: %w", servicePrincipal, err)
 	}
 
 	serviceUserID := principal.MatrixUserID(servicePrincipal, params.ServerName)
@@ -124,41 +124,41 @@ func runEnable(params *enableParams) error {
 
 	// Read credentials for registration token and admin session.
 	if params.SessionConfig.CredentialFile == "" {
-		return fmt.Errorf("--credential-file is required for service account registration")
+		return cli.Validation("--credential-file is required for service account registration")
 	}
 	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
-		return fmt.Errorf("reading credentials: %w", err)
+		return cli.Internal("reading credentials: %w", err)
 	}
 
 	// Connect as admin for state event publishing and room management.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("connecting admin session: %w", err)
+		return cli.Internal("connecting admin session: %w", err)
 	}
 	defer adminSession.Close()
 
 	// Step 1: Register the ticket service Matrix account (idempotent).
 	if err := registerServiceAccount(ctx, credentials, servicePrincipal, params.ServerName); err != nil {
-		return fmt.Errorf("registering service account: %w", err)
+		return cli.Internal("registering service account: %w", err)
 	}
 
 	// Step 2: Resolve the space and discover child rooms.
 	spaceRoomID, err := adminSession.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return fmt.Errorf("resolving space %s: %w (has 'bureau matrix space create %s' been run?)", spaceAlias, err, params.Space)
+		return cli.NotFound("resolving space %s: %w (has 'bureau matrix space create %s' been run?)", spaceAlias, err, params.Space)
 	}
 
 	childRoomIDs, err := getSpaceChildren(ctx, adminSession, spaceRoomID)
 	if err != nil {
-		return fmt.Errorf("listing space children: %w", err)
+		return cli.Internal("listing space children: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Space %s (%s): %d rooms\n", spaceAlias, spaceRoomID, len(childRoomIDs))
 
 	// Step 3: Publish PrincipalAssignment to the machine config room.
 	if err := publishPrincipalAssignment(ctx, adminSession, host, servicePrincipal, params.Space, params.ServerName); err != nil {
-		return fmt.Errorf("publishing principal assignment: %w", err)
+		return cli.Internal("publishing principal assignment: %w", err)
 	}
 
 	// Step 4: Configure each room for ticket management.
@@ -214,33 +214,33 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
 	})
 	if err != nil {
-		return fmt.Errorf("creating matrix client: %w", err)
+		return cli.Internal("creating matrix client: %w", err)
 	}
 
 	// Derive password from registration token (same as bureau matrix user create
 	// for agent accounts — deterministic, no interactive login needed).
 	tokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer tokenBuffer.Close()
 
 	passwordBuffer, err := cli.DeriveAdminPassword(tokenBuffer)
 	if err != nil {
-		return fmt.Errorf("deriving password: %w", err)
+		return cli.Internal("deriving password: %w", err)
 	}
 	defer passwordBuffer.Close()
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer registrationTokenBuffer.Close()
 
@@ -256,7 +256,7 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 			fmt.Fprintf(os.Stderr, "Service account %s already exists.\n", principal.MatrixUserID(servicePrincipal, serverName))
 			return nil
 		}
-		return fmt.Errorf("registering %s: %w", servicePrincipal, registerErr)
+		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
 	}
 	defer session.Close()
 
@@ -268,7 +268,7 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 func getSpaceChildren(ctx context.Context, session *messaging.Session, spaceRoomID string) ([]string, error) {
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
-		return nil, fmt.Errorf("fetching space state: %w", err)
+		return nil, cli.Internal("fetching space state: %w", err)
 	}
 
 	var children []string
@@ -295,7 +295,7 @@ func publishPrincipalAssignment(ctx context.Context, session *messaging.Session,
 	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
+		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
 	}
 
 	// Read existing MachineConfig.
@@ -303,10 +303,10 @@ func publishPrincipalAssignment(ctx context.Context, session *messaging.Session,
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return fmt.Errorf("parsing existing machine config: %w", unmarshalErr)
+			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return fmt.Errorf("reading machine config: %w", err)
+		return cli.Internal("reading machine config: %w", err)
 	}
 
 	// Check if the principal already exists.
@@ -329,7 +329,7 @@ func publishPrincipalAssignment(ctx context.Context, session *messaging.Session,
 
 	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host, config)
 	if err != nil {
-		return fmt.Errorf("publishing machine config: %w", err)
+		return cli.Internal("publishing machine config: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, host)
@@ -350,7 +350,7 @@ func configureRoom(ctx context.Context, session *messaging.Session, roomID, serv
 	}
 	_, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig)
 	if err != nil {
-		return fmt.Errorf("publishing ticket config: %w", err)
+		return cli.Internal("publishing ticket config: %w", err)
 	}
 
 	// Publish room service binding (state_key="ticket").
@@ -359,20 +359,20 @@ func configureRoom(ctx context.Context, session *messaging.Session, roomID, serv
 	}
 	_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeRoomService, "ticket", roomService)
 	if err != nil {
-		return fmt.Errorf("publishing room service binding: %w", err)
+		return cli.Internal("publishing room service binding: %w", err)
 	}
 
 	// Invite the service to the room (idempotent — M_FORBIDDEN means already a member).
 	if err := session.InviteUser(ctx, roomID, serviceUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			return fmt.Errorf("inviting service: %w", err)
+			return cli.Internal("inviting service: %w", err)
 		}
 	}
 
 	// Configure power levels. Read-modify-write on the existing power levels
 	// to add the ticket service user and ticket event type requirements.
 	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID); err != nil {
-		return fmt.Errorf("configuring power levels: %w", err)
+		return cli.Internal("configuring power levels: %w", err)
 	}
 
 	return nil
@@ -388,12 +388,12 @@ func configureTicketPowerLevels(ctx context.Context, session *messaging.Session,
 	// Read current power levels.
 	content, err := session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
-		return fmt.Errorf("reading power levels: %w", err)
+		return cli.Internal("reading power levels: %w", err)
 	}
 
 	var powerLevels map[string]any
 	if err := json.Unmarshal(content, &powerLevels); err != nil {
-		return fmt.Errorf("parsing power levels: %w", err)
+		return cli.Internal("parsing power levels: %w", err)
 	}
 
 	// Ensure the users map exists and set the service principal to PL 10.
@@ -417,7 +417,7 @@ func configureTicketPowerLevels(ctx context.Context, session *messaging.Session,
 	// Write back the updated power levels.
 	_, err = session.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels)
 	if err != nil {
-		return fmt.Errorf("updating power levels: %w", err)
+		return cli.Internal("updating power levels: %w", err)
 	}
 
 	return nil

@@ -86,7 +86,7 @@ protocol documentation) rather than raw binary.`,
 				return err
 			}
 			if len(remainingArgs) > 0 {
-				return fmt.Errorf("decode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+				return cli.Validation("decode takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
 			return decodeCBOR(data, os.Stdout, params.Compact, params.Slurp)
 		},
@@ -96,7 +96,7 @@ protocol documentation) rather than raw binary.`,
 // decodeCBOR decodes CBOR data and writes JSON to w.
 func decodeCBOR(data []byte, w io.Writer, compact bool, slurp bool) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	if slurp {
@@ -105,7 +105,7 @@ func decodeCBOR(data []byte, w io.Writer, compact bool, slurp bool) error {
 
 	var value any
 	if err := toolDecMode.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("decode CBOR: %w", err)
+		return cli.Internal("decode CBOR: %w", err)
 	}
 
 	return writeJSON(w, normalizeValue(value), compact)
@@ -122,13 +122,13 @@ func decodeSlurp(data []byte, w io.Writer, compact bool) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("decode CBOR sequence item %d: %w", len(items), err)
+			return cli.Internal("decode CBOR sequence item %d: %w", len(items), err)
 		}
 		items = append(items, normalizeValue(value))
 	}
 
 	if len(items) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	return writeJSON(w, items, compact)
@@ -176,7 +176,7 @@ func writeJSON(w io.Writer, value any, compact bool) error {
 		output, err = json.MarshalIndent(value, "", "  ")
 	}
 	if err != nil {
-		return fmt.Errorf("encode JSON: %w", err)
+		return cli.Internal("encode JSON: %w", err)
 	}
 
 	_, err = fmt.Fprintln(w, string(output))

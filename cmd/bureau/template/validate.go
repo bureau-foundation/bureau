@@ -53,7 +53,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau template validate <file>")
+				return cli.Validation("usage: bureau template validate <file>")
 			}
 
 			path := args[0]
@@ -76,7 +76,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
 				}
-				return fmt.Errorf("%s: %d validation issue(s) found", path, len(issues))
+				return cli.Validation("%s: %d validation issue(s) found", path, len(issues))
 			}
 
 			fmt.Fprintf(os.Stdout, "%s: valid\n", path)
@@ -94,7 +94,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 func readTemplateFile(path string) (*schema.TemplateContent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, cli.Internal("reading %s: %w", path, err)
 	}
 
 	// Strip comments and trailing commas before parsing as standard JSON.
@@ -102,7 +102,7 @@ func readTemplateFile(path string) (*schema.TemplateContent, error) {
 
 	var content schema.TemplateContent
 	if err := json.Unmarshal(stripped, &content); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, cli.Internal("parsing %s: %w", path, err)
 	}
 
 	return &content, nil

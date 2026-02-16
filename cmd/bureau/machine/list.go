@@ -41,7 +41,7 @@ Shows each machine's name, public key, and last status heartbeat
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -74,12 +74,12 @@ func runList(ctx context.Context, session *messaging.Session, serverName string,
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
+		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return fmt.Errorf("get machine room state: %w", err)
+		return cli.Internal("get machine room state: %w", err)
 	}
 
 	// Index machine keys, statuses, and hardware info by state_key (machine name).

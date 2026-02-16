@@ -53,7 +53,7 @@ different source.`,
 		},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			options, err := parseOverrideInputs(params.OverrideInput)

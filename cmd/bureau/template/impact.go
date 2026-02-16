@@ -62,13 +62,13 @@ With a file argument, also classifies each change:
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) < 1 || len(args) > 2 {
-				return fmt.Errorf("usage: bureau template impact [flags] <template-ref> [file]")
+				return cli.Validation("usage: bureau template impact [flags] <template-ref> [file]")
 			}
 
 			targetRefString := args[0]
 			targetRef, err := schema.ParseTemplateRef(targetRefString)
 			if err != nil {
-				return fmt.Errorf("parsing template reference: %w", err)
+				return cli.Validation("parsing template reference: %w", err)
 			}
 
 			// If a local file is provided, read it for change classification.
@@ -154,7 +154,7 @@ type machineConfig struct {
 func (a *impactAnalyzer) discoverMachineConfigs() ([]machineConfig, error) {
 	roomIDs, err := a.session.JoinedRooms(a.ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing joined rooms: %w", err)
+		return nil, cli.Internal("listing joined rooms: %w", err)
 	}
 
 	var results []machineConfig
@@ -289,7 +289,7 @@ func (a *impactAnalyzer) templateDependsOn(
 
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
-		return false, 0, fmt.Errorf("parsing %q: %w", templateRef, err)
+		return false, 0, cli.Validation("parsing %q: %w", templateRef, err)
 	}
 
 	depth := 0
@@ -323,7 +323,7 @@ func (a *impactAnalyzer) templateDependsOn(
 
 		parent, err := schema.ParseTemplateRef(template.Inherits)
 		if err != nil {
-			return false, 0, fmt.Errorf("parsing inherits %q in %q: %w", template.Inherits, currentString, err)
+			return false, 0, cli.Validation("parsing inherits %q in %q: %w", template.Inherits, currentString, err)
 		}
 		current = parent
 		depth++
@@ -380,7 +380,7 @@ func (a *impactAnalyzer) classifyChanges(results []*impactResult, targetRef stri
 func (a *impactAnalyzer) resolveWithOverride(templateRef, overrideRef string, overrideContent *schema.TemplateContent) (*schema.TemplateContent, error) {
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
-		return nil, fmt.Errorf("parsing %q: %w", templateRef, err)
+		return nil, cli.Validation("parsing %q: %w", templateRef, err)
 	}
 
 	var chain []schema.TemplateContent
@@ -390,7 +390,7 @@ func (a *impactAnalyzer) resolveWithOverride(templateRef, overrideRef string, ov
 	for {
 		currentString := current.String()
 		if visited[currentString] {
-			return nil, fmt.Errorf("inheritance cycle at %q", currentString)
+			return nil, cli.Validation("inheritance cycle at %q", currentString)
 		}
 		visited[currentString] = true
 
@@ -412,7 +412,7 @@ func (a *impactAnalyzer) resolveWithOverride(templateRef, overrideRef string, ov
 
 		parent, err := schema.ParseTemplateRef(template.Inherits)
 		if err != nil {
-			return nil, fmt.Errorf("parsing inherits %q: %w", template.Inherits, err)
+			return nil, cli.Validation("parsing inherits %q: %w", template.Inherits, err)
 		}
 		current = parent
 	}

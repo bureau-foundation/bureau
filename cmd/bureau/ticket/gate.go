@@ -70,13 +70,13 @@ The gate is identified by its ID within the ticket.`,
 				params.Gate = args[1]
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("expected 2 positional arguments, got %d", len(args))
+				return cli.Validation("expected 2 positional arguments, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket gate resolve <ticket-id> <gate-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket gate resolve <ticket-id> <gate-id>")
 			}
 			if params.Gate == "" {
-				return fmt.Errorf("gate ID is required\n\nUsage: bureau ticket gate resolve <ticket-id> <gate-id>")
+				return cli.Validation("gate ID is required\n\nUsage: bureau ticket gate resolve <ticket-id> <gate-id>")
 			}
 
 			client, err := params.connect()
@@ -150,16 +150,16 @@ gate satisfaction.`,
 				params.Gate = args[1]
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("expected 2 positional arguments, got %d", len(args))
+				return cli.Validation("expected 2 positional arguments, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket gate update <ticket-id> <gate-id> --status STATUS")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket gate update <ticket-id> <gate-id> --status STATUS")
 			}
 			if params.Gate == "" {
-				return fmt.Errorf("gate ID is required\n\nUsage: bureau ticket gate update <ticket-id> <gate-id> --status STATUS")
+				return cli.Validation("gate ID is required\n\nUsage: bureau ticket gate update <ticket-id> <gate-id> --status STATUS")
 			}
 			if params.Status == "" {
-				return fmt.Errorf("--status is required (pending or satisfied)")
+				return cli.Validation("--status is required (pending or satisfied)")
 			}
 
 			client, err := params.connect()

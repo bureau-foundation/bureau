@@ -5,7 +5,9 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // Server is an MCP server that exposes Bureau CLI commands as tools
@@ -112,7 +115,7 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 		var req request
 		if err := json.Unmarshal(line, &req); err != nil {
 			if writeErr := writeError(encoder, json.RawMessage("null"), codeParseError, "parse error: "+err.Error()); writeErr != nil {
-				return fmt.Errorf("writing parse error response: %w", writeErr)
+				return cli.Internal("writing parse error response: %w", writeErr)
 			}
 			continue
 		}
@@ -120,7 +123,7 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 		if req.JSONRPC != "2.0" {
 			if !req.isNotification() {
 				if writeErr := writeError(encoder, req.ID, codeInvalidRequest, "unsupported JSON-RPC version"); writeErr != nil {
-					return fmt.Errorf("writing version error response: %w", writeErr)
+					return cli.Internal("writing version error response: %w", writeErr)
 				}
 			}
 			continue
@@ -296,12 +299,57 @@ func buildToolResult(output string, runErr error) toolsCallResult {
 			Type: "text",
 			Text: runErr.Error(),
 		})
+		result.ErrorInfo = classifyError(runErr)
 	}
 	// MCP requires at least one content block in the result.
 	if len(result.Content) == 0 {
 		result.Content = []contentBlock{{Type: "text", Text: ""}}
 	}
 	return result
+}
+
+// classifyError extracts structured error metadata from an error.
+// It checks for ToolError first (the primary path after migration),
+// then falls back to known error types (MatrixError, context errors)
+// for defense in depth.
+func classifyError(err error) *errorInfo {
+	var toolErr *cli.ToolError
+	if errors.As(err, &toolErr) {
+		return &errorInfo{
+			Category:  string(toolErr.Category),
+			Retryable: toolErr.Category == cli.CategoryTransient,
+		}
+	}
+
+	// Fallback: classify known library error types that might not
+	// be wrapped in a ToolError.
+	var matrixErr *messaging.MatrixError
+	if errors.As(err, &matrixErr) {
+		return classifyMatrixError(matrixErr)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return &errorInfo{Category: string(cli.CategoryTransient), Retryable: true}
+	}
+
+	return &errorInfo{Category: string(cli.CategoryInternal), Retryable: false}
+}
+
+// classifyMatrixError maps a Matrix homeserver error to an error category.
+func classifyMatrixError(err *messaging.MatrixError) *errorInfo {
+	switch err.Code {
+	case messaging.ErrCodeForbidden, messaging.ErrCodeUnknownToken:
+		return &errorInfo{Category: string(cli.CategoryForbidden), Retryable: false}
+	case messaging.ErrCodeNotFound:
+		return &errorInfo{Category: string(cli.CategoryNotFound), Retryable: false}
+	case messaging.ErrCodeLimitExceeded:
+		return &errorInfo{Category: string(cli.CategoryTransient), Retryable: true}
+	case messaging.ErrCodeUserInUse, messaging.ErrCodeRoomInUse, messaging.ErrCodeExclusive:
+		return &errorInfo{Category: string(cli.CategoryConflict), Retryable: false}
+	case messaging.ErrCodeInvalidParam, messaging.ErrCodeMissingParam:
+		return &errorInfo{Category: string(cli.CategoryValidation), Retryable: false}
+	default:
+		return &errorInfo{Category: string(cli.CategoryInternal), Retryable: false}
+	}
 }
 
 // toolAuthorized returns true if the principal's grants satisfy all of
@@ -338,7 +386,7 @@ func (s *Server) executeTool(t *tool, arguments json.RawMessage) (string, error)
 	// Overlay with the JSON arguments from the MCP client.
 	if len(arguments) > 0 && string(arguments) != "null" {
 		if err := json.Unmarshal(arguments, params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
+			return "", cli.Validation("invalid arguments: %w", err)
 		}
 	}
 
@@ -364,7 +412,7 @@ func enableJSONOutput(params any) {
 func captureRun(run func([]string) error) (string, error) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
-		return "", fmt.Errorf("creating output pipe: %w", err)
+		return "", cli.Internal("creating output pipe: %w", err)
 	}
 
 	saved := os.Stdout
@@ -391,7 +439,7 @@ func captureRun(run func([]string) error) (string, error) {
 	reader.Close()
 
 	if captured.err != nil {
-		return "", fmt.Errorf("reading captured output: %w", captured.err)
+		return "", cli.Internal("reading captured output: %w", captured.err)
 	}
 
 	return string(captured.data), runErr

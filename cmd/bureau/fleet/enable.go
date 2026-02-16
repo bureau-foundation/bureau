@@ -74,13 +74,13 @@ workstation's MachineConfig, and the daemon starts the fleet controller.`,
 		RequiredGrants: []string{"command/fleet/enable"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			if params.Name == "" {
-				return fmt.Errorf("--name is required")
+				return cli.Validation("--name is required")
 			}
 			if params.Host == "" {
-				return fmt.Errorf("--host is required")
+				return cli.Validation("--host is required")
 			}
 			return runEnable(&params)
 		},
@@ -93,20 +93,20 @@ func runEnable(params *enableParams) error {
 	if host == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
-			return fmt.Errorf("resolving local machine identity: %w", err)
+			return cli.Internal("resolving local machine identity: %w", err)
 		}
 		host = resolved
 		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
 	}
 
 	if err := principal.ValidateLocalpart(host); err != nil {
-		return fmt.Errorf("invalid host: %w", err)
+		return cli.Validation("invalid host: %w", err)
 	}
 
 	// Derive the service principal localpart from the name.
 	servicePrincipal := "service/fleet/" + params.Name
 	if err := principal.ValidateLocalpart(servicePrincipal); err != nil {
-		return fmt.Errorf("invalid service principal %q: %w", servicePrincipal, err)
+		return cli.Validation("invalid service principal %q: %w", servicePrincipal, err)
 	}
 
 	serviceUserID := principal.MatrixUserID(servicePrincipal, params.ServerName)
@@ -116,28 +116,28 @@ func runEnable(params *enableParams) error {
 
 	// Read credentials for registration token and admin session.
 	if params.SessionConfig.CredentialFile == "" {
-		return fmt.Errorf("--credential-file is required for service account registration")
+		return cli.Validation("--credential-file is required for service account registration")
 	}
 	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
-		return fmt.Errorf("reading credentials: %w", err)
+		return cli.Internal("reading credentials: %w", err)
 	}
 
 	// Connect as admin for state event publishing.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("connecting admin session: %w", err)
+		return cli.Internal("connecting admin session: %w", err)
 	}
 	defer adminSession.Close()
 
 	// Step 1: Register the fleet controller Matrix account (idempotent).
 	if err := registerFleetServiceAccount(ctx, credentials, servicePrincipal, params.ServerName); err != nil {
-		return fmt.Errorf("registering service account: %w", err)
+		return cli.Internal("registering service account: %w", err)
 	}
 
 	// Step 2: Publish PrincipalAssignment to the machine config room.
 	if err := publishFleetAssignment(ctx, adminSession, host, servicePrincipal, params.Name, params.ServerName); err != nil {
-		return fmt.Errorf("publishing principal assignment: %w", err)
+		return cli.Internal("publishing principal assignment: %w", err)
 	}
 
 	// Step 3: Publish fleet room_service binding in all machine config rooms.
@@ -145,7 +145,7 @@ func runEnable(params *enableParams) error {
 	// any agent on any machine in the deployment.
 	bindingCount, err := publishFleetBindings(ctx, adminSession, serviceUserID, params.ServerName)
 	if err != nil {
-		return fmt.Errorf("publishing fleet bindings: %w", err)
+		return cli.Internal("publishing fleet bindings: %w", err)
 	}
 
 	if done, err := params.EmitJSON(enableResult{
@@ -177,33 +177,33 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
 	})
 	if err != nil {
-		return fmt.Errorf("creating matrix client: %w", err)
+		return cli.Internal("creating matrix client: %w", err)
 	}
 
 	// Derive password from registration token (same deterministic
 	// derivation as bureau matrix user create for agent accounts).
 	tokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer tokenBuffer.Close()
 
 	passwordBuffer, err := cli.DeriveAdminPassword(tokenBuffer)
 	if err != nil {
-		return fmt.Errorf("deriving password: %w", err)
+		return cli.Internal("deriving password: %w", err)
 	}
 	defer passwordBuffer.Close()
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
 	if err != nil {
-		return fmt.Errorf("protecting registration token: %w", err)
+		return cli.Internal("protecting registration token: %w", err)
 	}
 	defer registrationTokenBuffer.Close()
 
@@ -217,7 +217,7 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 			fmt.Fprintf(os.Stderr, "Service account %s already exists.\n", principal.MatrixUserID(servicePrincipal, serverName))
 			return nil
 		}
-		return fmt.Errorf("registering %s: %w", servicePrincipal, registerErr)
+		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
 	}
 	defer session.Close()
 
@@ -237,12 +237,12 @@ func publishFleetBindings(ctx context.Context, session *messaging.Session, servi
 	machineAlias := schema.FullRoomAlias(schema.RoomAliasMachine, serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return 0, fmt.Errorf("resolving machine room %s: %w", machineAlias, err)
+		return 0, cli.NotFound("resolving machine room %s: %w", machineAlias, err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return 0, fmt.Errorf("reading machine room state: %w", err)
+		return 0, cli.Internal("reading machine room state: %w", err)
 	}
 
 	binding := schema.RoomServiceContent{Principal: serviceUserID}
@@ -285,7 +285,7 @@ func publishFleetAssignment(ctx context.Context, session *messaging.Session, hos
 	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
+		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
 	}
 
 	// Read existing MachineConfig.
@@ -293,10 +293,10 @@ func publishFleetAssignment(ctx context.Context, session *messaging.Session, hos
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return fmt.Errorf("parsing existing machine config: %w", unmarshalErr)
+			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return fmt.Errorf("reading machine config: %w", err)
+		return cli.Internal("reading machine config: %w", err)
 	}
 
 	// Check if the principal already exists.
@@ -319,7 +319,7 @@ func publishFleetAssignment(ctx context.Context, session *messaging.Session, hos
 
 	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host, config)
 	if err != nil {
-		return fmt.Errorf("publishing machine config: %w", err)
+		return cli.Internal("publishing machine config: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, host)

@@ -4,8 +4,6 @@
 package ticket
 
 import (
-	"fmt"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ticketui"
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,7 +40,7 @@ directory. Use --file to specify an alternate JSONL path.`,
 		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			filePath := params.FilePath
@@ -52,7 +50,7 @@ directory. Use --file to specify an alternate JSONL path.`,
 
 			source, err := ticketui.LoadBeadsFile(filePath)
 			if err != nil {
-				return fmt.Errorf("load tickets from %s: %w", filePath, err)
+				return cli.Internal("load tickets from %s: %w", filePath, err)
 			}
 
 			model := ticketui.NewModel(source)

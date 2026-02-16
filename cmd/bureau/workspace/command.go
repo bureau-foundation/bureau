@@ -117,13 +117,13 @@ Use "bureau matrix room leave" separately to remove the room.`,
 		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
+				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.Mode != "archive" && params.Mode != "delete" {
-				return fmt.Errorf("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
+				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
 
 			return runDestroy(args[0], &params.SessionConfig, params.Mode, params.ServerName)
@@ -141,7 +141,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 // teardown principal's condition becomes true.
 func runDestroy(alias string, session *cli.SessionConfig, mode, serverName string) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return fmt.Errorf("invalid workspace alias: %w", err)
+		return cli.Validation("invalid workspace alias: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -149,7 +149,7 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 
 	sess, err := session.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return cli.Internal("connect: %w", err)
 	}
 	defer sess.Close()
 
@@ -157,20 +157,20 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 	fullAlias := principal.RoomAlias(alias, serverName)
 	workspaceRoomID, err := sess.ResolveAlias(ctx, fullAlias)
 	if err != nil {
-		return fmt.Errorf("resolve workspace room %s: %w", fullAlias, err)
+		return cli.NotFound("resolve workspace room %s: %w", fullAlias, err)
 	}
 
 	// Read the current workspace state and verify status is "active".
 	workspaceContent, err := sess.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
 	if err != nil {
-		return fmt.Errorf("reading workspace state: %w", err)
+		return cli.Internal("reading workspace state: %w", err)
 	}
 	var workspaceState schema.WorkspaceState
 	if err := json.Unmarshal(workspaceContent, &workspaceState); err != nil {
-		return fmt.Errorf("parsing workspace state: %w", err)
+		return cli.Internal("parsing workspace state: %w", err)
 	}
 	if workspaceState.Status != "active" {
-		return fmt.Errorf("workspace %s is in status %q, expected \"active\"", alias, workspaceState.Status)
+		return cli.Conflict("workspace %s is in status %q, expected \"active\"", alias, workspaceState.Status)
 	}
 
 	// Transition the workspace to "teardown" with the requested mode.
@@ -185,7 +185,7 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 	workspaceState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
 	if err != nil {
-		return fmt.Errorf("publishing teardown status: %w", err)
+		return cli.Internal("publishing teardown status: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", alias, mode)
@@ -246,7 +246,7 @@ func runList(args []string, jsonOutput *cli.JSONOutput) error {
 
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
-		return fmt.Errorf("listing joined rooms: %w", err)
+		return cli.Internal("listing joined rooms: %w", err)
 	}
 
 	var workspaces []workspaceInfo
@@ -380,10 +380,10 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 		Params:         func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("workspace alias is required\n\nUsage: %s", usage)
+				return cli.Validation("workspace alias is required\n\nUsage: %s", usage)
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			return run(args[0], params.ServerName, &params.JSONOutput)
 		},
@@ -429,7 +429,7 @@ func runStatus(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	if done, err := jsonOutput.EmitJSON(result.Result); done {
@@ -488,7 +488,7 @@ func runDu(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	if done, err := jsonOutput.EmitJSON(result.Result); done {
@@ -572,10 +572,10 @@ an "accepted" status.`,
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
+				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			return runWorktreeAdd(args[0], params.Branch, params.ServerName, &params.JSONOutput)
 		},
@@ -584,7 +584,7 @@ an "accepted" status.`,
 
 func runWorktreeAdd(alias, branch, serverName string, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return fmt.Errorf("invalid worktree alias: %w", err)
+		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
 	ctx, cancel, session, err := cli.ConnectOperator()
@@ -607,7 +607,7 @@ func runWorktreeAdd(alias, branch, serverName string, jsonOutput *cli.JSONOutput
 	}
 
 	if workspaceState.Status != "active" {
-		return fmt.Errorf("workspace %s is in status %q (must be \"active\" to add worktrees)", workspaceAlias, workspaceState.Status)
+		return cli.Conflict("workspace %s is in status %q (must be \"active\" to add worktrees)", workspaceAlias, workspaceState.Status)
 	}
 
 	// Derive the worktree subpath: the part of the alias after the
@@ -638,7 +638,7 @@ func runWorktreeAdd(alias, branch, serverName string, jsonOutput *cli.JSONOutput
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	principalName, _ := result.Result["principal"].(string)
@@ -702,13 +702,13 @@ an async operation — the command returns immediately.`,
 		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
+				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.Mode != "archive" && params.Mode != "delete" {
-				return fmt.Errorf("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
+				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
 			return runWorktreeRemove(args[0], params.Mode, params.ServerName, &params.JSONOutput)
 		},
@@ -717,7 +717,7 @@ an async operation — the command returns immediately.`,
 
 func runWorktreeRemove(alias, mode, serverName string, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return fmt.Errorf("invalid worktree alias: %w", err)
+		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
 	ctx, cancel, session, err := cli.ConnectOperator()
@@ -734,7 +734,7 @@ func runWorktreeRemove(alias, mode, serverName string, jsonOutput *cli.JSONOutpu
 	}
 
 	if workspaceState.Status != "active" {
-		return fmt.Errorf("workspace %s is in status %q (must be \"active\" to remove worktrees)", workspaceAlias, workspaceState.Status)
+		return cli.Conflict("workspace %s is in status %q (must be \"active\" to remove worktrees)", workspaceAlias, workspaceState.Status)
 	}
 
 	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)
@@ -758,7 +758,7 @@ func runWorktreeRemove(alias, mode, serverName string, jsonOutput *cli.JSONOutpu
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	principalName, _ := result.Result["principal"].(string)
@@ -831,7 +831,7 @@ func runFetch(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	if done, err := jsonOutput.EmitJSON(result.Result); done {
@@ -881,7 +881,7 @@ func runWorktreeList(alias, serverName string, jsonOutput *cli.JSONOutput) error
 	}
 
 	if result.Status == "error" {
-		return fmt.Errorf("daemon error: %s", result.Error)
+		return cli.Internal("daemon error: %s", result.Error)
 	}
 
 	if done, err := jsonOutput.EmitJSON(result.Result); done {

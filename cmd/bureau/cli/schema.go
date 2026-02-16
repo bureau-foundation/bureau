@@ -5,7 +5,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -72,7 +71,7 @@ func ParamsSchema(params any) (*Schema, error) {
 		value = value.Elem()
 	}
 	if value.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("params must be a struct or pointer to struct, got %T", params)
+		return nil, Internal("params must be a struct or pointer to struct, got %T", params)
 	}
 
 	return buildObjectSchema(value.Type())
@@ -85,7 +84,7 @@ func ParamsSchemaFromType(structType reflect.Type) (*Schema, error) {
 		structType = structType.Elem()
 	}
 	if structType.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("expected struct type, got %s", structType.Kind())
+		return nil, Internal("expected struct type, got %s", structType.Kind())
 	}
 	return buildObjectSchema(structType)
 }
@@ -117,7 +116,7 @@ func buildObjectSchema(structType reflect.Type) (*Schema, error) {
 		if field.Anonymous && field.Type.Kind() == reflect.Struct {
 			embedded, err := buildObjectSchema(field.Type)
 			if err != nil {
-				return nil, fmt.Errorf("embedded %s: %w", field.Name, err)
+				return nil, Internal("embedded %s: %w", field.Name, err)
 			}
 			for name, prop := range embedded.Properties {
 				schema.Properties[name] = prop
@@ -140,7 +139,7 @@ func buildObjectSchema(structType reflect.Type) (*Schema, error) {
 		// Build the property schema from the field's type and tags.
 		propSchema, err := fieldSchema(field)
 		if err != nil {
-			return nil, fmt.Errorf("field %s: %w", field.Name, err)
+			return nil, Internal("field %s: %w", field.Name, err)
 		}
 
 		schema.Properties[propertyName] = propSchema
@@ -224,7 +223,7 @@ func fieldSchemaWithDefault(schema *Schema, field reflect.StructField) (*Schema,
 	if defaultString := field.Tag.Get("default"); defaultString != "" {
 		defaultValue, err := parseDefault(field.Type, defaultString)
 		if err != nil {
-			return nil, fmt.Errorf("default: %w", err)
+			return nil, Internal("default: %w", err)
 		}
 		schema.Default = defaultValue
 	}
@@ -262,9 +261,9 @@ func parseDefault(fieldType reflect.Type, value string) (any, error) {
 		if fieldType.Elem().Kind() == reflect.String {
 			return strings.Split(value, ","), nil
 		}
-		return nil, fmt.Errorf("unsupported slice type %s", fieldType)
+		return nil, Internal("unsupported slice type %s", fieldType)
 	default:
-		return nil, fmt.Errorf("unsupported type %s", fieldType)
+		return nil, Internal("unsupported type %s", fieldType)
 	}
 }
 
@@ -324,13 +323,13 @@ func schemaForType(typ reflect.Type) (*Schema, error) {
 	case reflect.Slice:
 		items, err := schemaForType(typ.Elem())
 		if err != nil {
-			return nil, fmt.Errorf("array element: %w", err)
+			return nil, Internal("array element: %w", err)
 		}
 		return &Schema{Type: "array", Items: items}, nil
 	case reflect.Array:
 		items, err := schemaForType(typ.Elem())
 		if err != nil {
-			return nil, fmt.Errorf("array element: %w", err)
+			return nil, Internal("array element: %w", err)
 		}
 		return &Schema{Type: "array", Items: items}, nil
 	case reflect.Ptr:
@@ -347,7 +346,7 @@ func schemaForType(typ reflect.Type) (*Schema, error) {
 		return &Schema{Type: "number"}, nil
 	case reflect.Map:
 		if !mapKeyMarshalable(typ.Key().Kind()) {
-			return nil, fmt.Errorf("unsupported map key type %s", typ.Key())
+			return nil, Internal("unsupported map key type %s", typ.Key())
 		}
 		// For map[K]any, the value type is interface{} which accepts
 		// any JSON value — produce a plain object without
@@ -364,7 +363,7 @@ func schemaForType(typ reflect.Type) (*Schema, error) {
 		// interface{} / any — no type constraint.
 		return &Schema{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported type %s (%s)", typ, typ.Kind())
+		return nil, Internal("unsupported type %s (%s)", typ, typ.Kind())
 	}
 }
 

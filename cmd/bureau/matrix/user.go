@@ -107,14 +107,14 @@ and proceeds directly to ensuring room membership.`,
 		RequiredGrants: []string{"command/matrix/user/create"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("username is required\n\nUsage: bureau matrix user create <username> [flags]")
+				return cli.Validation("username is required\n\nUsage: bureau matrix user create <username> [flags]")
 			}
 			username := args[0]
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			if params.Operator && params.CredentialFile == "" {
-				return fmt.Errorf("--operator requires --credential-file (needed for admin session and Bureau room discovery)")
+				return cli.Validation("--operator requires --credential-file (needed for admin session and Bureau room discovery)")
 			}
 
 			// Parse the credential file once. Both the registration flow
@@ -124,7 +124,7 @@ and proceeds directly to ensuring room membership.`,
 				var err error
 				credentials, err = cli.ReadCredentialFile(params.CredentialFile)
 				if err != nil {
-					return fmt.Errorf("read credential file: %w", err)
+					return cli.Internal("read credential file: %w", err)
 				}
 			}
 
@@ -142,17 +142,17 @@ and proceeds directly to ensuring room membership.`,
 			}
 			if params.RegistrationTokenFile != "" {
 				if params.RegistrationTokenFile == "-" && params.PasswordFile == "-" {
-					return fmt.Errorf("--registration-token-file and --password-file cannot both be - (stdin)")
+					return cli.Validation("--registration-token-file and --password-file cannot both be - (stdin)")
 				}
 				tokenBuffer, err := secret.ReadFromPath(params.RegistrationTokenFile)
 				if err != nil {
-					return fmt.Errorf("read registration token: %w", err)
+					return cli.Internal("read registration token: %w", err)
 				}
 				defer tokenBuffer.Close()
 				registrationToken = tokenBuffer.String()
 			}
 			if registrationToken == "" {
-				return fmt.Errorf("registration token is required (use --credential-file or --registration-token-file)")
+				return cli.Validation("registration token is required (use --credential-file or --registration-token-file)")
 			}
 			if homeserverURL == "" {
 				homeserverURL = "http://localhost:6167"
@@ -165,7 +165,7 @@ and proceeds directly to ensuring room membership.`,
 			if params.PasswordFile != "" {
 				passwordBuffer, err = readPassword(params.PasswordFile)
 				if err != nil {
-					return fmt.Errorf("read password: %w", err)
+					return cli.Internal("read password: %w", err)
 				}
 				defer passwordBuffer.Close()
 			} else {
@@ -174,12 +174,12 @@ and proceeds directly to ensuring room membership.`,
 				// with the same token produces the same account.
 				tokenBuffer, tokenErr := secret.NewFromString(registrationToken)
 				if tokenErr != nil {
-					return fmt.Errorf("protecting registration token: %w", tokenErr)
+					return cli.Internal("protecting registration token: %w", tokenErr)
 				}
 				defer tokenBuffer.Close()
 				passwordBuffer, err = cli.DeriveAdminPassword(tokenBuffer)
 				if err != nil {
-					return fmt.Errorf("derive password: %w", err)
+					return cli.Internal("derive password: %w", err)
 				}
 				defer passwordBuffer.Close()
 			}
@@ -191,7 +191,7 @@ and proceeds directly to ensuring room membership.`,
 				HomeserverURL: homeserverURL,
 			})
 			if err != nil {
-				return fmt.Errorf("create matrix client: %w", err)
+				return cli.Internal("create matrix client: %w", err)
 			}
 
 			// Register the account. In operator mode, M_USER_IN_USE means
@@ -200,7 +200,7 @@ and proceeds directly to ensuring room membership.`,
 			userID := fmt.Sprintf("@%s:%s", username, params.ServerName)
 			registrationTokenBuffer, tokenErr := secret.NewFromString(registrationToken)
 			if tokenErr != nil {
-				return fmt.Errorf("protecting registration token: %w", tokenErr)
+				return cli.Internal("protecting registration token: %w", tokenErr)
 			}
 			defer registrationTokenBuffer.Close()
 
@@ -220,14 +220,14 @@ and proceeds directly to ensuring room membership.`,
 					session, loginErr = client.Login(ctx, username, passwordBuffer)
 					if loginErr != nil {
 						if params.PasswordFile != "" {
-							return fmt.Errorf("account %s already exists but the provided password does not match (the existing password was not changed)", userID)
+							return cli.Conflict("account %s already exists but the provided password does not match (the existing password was not changed)", userID)
 						}
-						return fmt.Errorf("account %s already exists and login with derived password failed: %w", userID, loginErr)
+						return cli.Conflict("account %s already exists and login with derived password failed: %w", userID, loginErr)
 					}
 					fmt.Fprintf(os.Stderr, "Account %s already exists, logged in.\n", userID)
 					fmt.Fprintf(os.Stderr, "Ensuring room membership.\n")
 				} else {
-					return fmt.Errorf("register user %q: %w", username, registerErr)
+					return cli.Internal("register user %q: %w", username, registerErr)
 				}
 			} else if !params.OutputJSON {
 				fmt.Fprintf(os.Stdout, "User ID:       %s\n", session.UserID())
@@ -267,12 +267,12 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 	adminUserID := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
-		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
-		return fmt.Errorf("creating admin session: %w", err)
+		return cli.Internal("creating admin session: %w", err)
 	}
 	defer adminSession.Close()
 
@@ -292,7 +292,7 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 	for _, room := range bureauRooms {
 		roomID := credentials[room.credentialKey]
 		if roomID == "" {
-			return fmt.Errorf("credential file missing %s", room.credentialKey)
+			return cli.Validation("credential file missing %s", room.credentialKey)
 		}
 
 		// Step 1: Admin invites the user. Idempotent — M_FORBIDDEN
@@ -303,7 +303,7 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 				alreadyMember = true
 			} else {
-				return fmt.Errorf("invite %s to %s (%s): %w", userID, room.name, roomID, err)
+				return cli.Internal("invite %s to %s (%s): %w", userID, room.name, roomID, err)
 			}
 		}
 
@@ -311,7 +311,7 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 		// you're already in is a no-op.
 		_, err = userSession.JoinRoom(ctx, roomID)
 		if err != nil {
-			return fmt.Errorf("join %s (%s): %w", room.name, roomID, err)
+			return cli.Internal("join %s (%s): %w", room.name, roomID, err)
 		}
 
 		if alreadyMember {
@@ -345,7 +345,7 @@ func readPassword(path string) (*secret.Buffer, error) {
 	first, err := term.ReadPassword(stdinFd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		return nil, fmt.Errorf("reading password: %w", err)
+		return nil, cli.Internal("reading password: %w", err)
 	}
 
 	fmt.Fprint(os.Stderr, "Confirm password: ")
@@ -353,7 +353,7 @@ func readPassword(path string) (*secret.Buffer, error) {
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		secret.Zero(first)
-		return nil, fmt.Errorf("reading password confirmation: %w", err)
+		return nil, cli.Internal("reading password confirmation: %w", err)
 	}
 
 	match := len(first) == len(second)
@@ -369,7 +369,7 @@ func readPassword(path string) (*secret.Buffer, error) {
 
 	if !match {
 		secret.Zero(first)
-		return nil, fmt.Errorf("passwords do not match")
+		return nil, cli.Validation("passwords do not match")
 	}
 
 	// Move into mmap-backed buffer; NewFromBytes zeros the source.
@@ -426,7 +426,7 @@ authenticated user has joined.`,
 		RequiredGrants: []string{"command/matrix/user/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -454,7 +454,7 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 
 	members, err := session.GetRoomMembers(ctx, roomID)
 	if err != nil {
-		return fmt.Errorf("get room members: %w", err)
+		return cli.Internal("get room members: %w", err)
 	}
 
 	var entries []userListEntry
@@ -482,7 +482,7 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 func listAllMembers(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
 	rooms, err := session.JoinedRooms(ctx)
 	if err != nil {
-		return fmt.Errorf("get joined rooms: %w", err)
+		return cli.Internal("get joined rooms: %w", err)
 	}
 
 	// Collect unique members across all rooms.
@@ -490,7 +490,7 @@ func listAllMembers(ctx context.Context, session *messaging.Session, jsonOutput 
 	for _, roomID := range rooms {
 		members, err := session.GetRoomMembers(ctx, roomID)
 		if err != nil {
-			return fmt.Errorf("get members for room %s: %w", roomID, err)
+			return cli.Internal("get members for room %s: %w", roomID, err)
 		}
 		for _, member := range members {
 			if member.Membership != "join" {
@@ -576,15 +576,15 @@ func userInviteCommand() *cli.Command {
 		RequiredGrants: []string{"command/matrix/user/invite"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("usage: bureau matrix user invite <user-id> --room <room>")
+				return cli.Validation("usage: bureau matrix user invite <user-id> --room <room>")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			targetUserID := args[0]
 
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -601,7 +601,7 @@ func userInviteCommand() *cli.Command {
 			}
 
 			if err := sess.InviteUser(ctx, roomID, targetUserID); err != nil {
-				return fmt.Errorf("invite user: %w", err)
+				return cli.Internal("invite user: %w", err)
 			}
 
 			if done, err := params.EmitJSON(userInviteResult{
@@ -657,15 +657,15 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		RequiredGrants: []string{"command/matrix/user/kick"},
 		Run: func(args []string) error {
 			if len(args) < 1 {
-				return fmt.Errorf("usage: bureau matrix user kick <user-id> --room <room>")
+				return cli.Validation("usage: bureau matrix user kick <user-id> --room <room>")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			targetUserID := args[0]
 
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -682,7 +682,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 			}
 
 			if err := sess.KickUser(ctx, roomID, targetUserID, params.Reason); err != nil {
-				return fmt.Errorf("kick user: %w", err)
+				return cli.Internal("kick user: %w", err)
 			}
 
 			if done, err := params.EmitJSON(userKickResult{
@@ -732,7 +732,7 @@ account is in use.`,
 		RequiredGrants: []string{"command/matrix/user/whoami"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -745,7 +745,7 @@ account is in use.`,
 
 			userID, err := sess.WhoAmI(ctx)
 			if err != nil {
-				return fmt.Errorf("whoami: %w", err)
+				return cli.Internal("whoami: %w", err)
 			}
 
 			if done, err := params.EmitJSON(userWhoAmIResult{UserID: userID}); done {

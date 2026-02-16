@@ -62,7 +62,7 @@ Examples of diagnostic notation:
 				return err
 			}
 			if len(remainingArgs) > 0 {
-				return fmt.Errorf("diag takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
+				return cli.Validation("diag takes no positional arguments besides an optional file path, got %q", remainingArgs[0])
 			}
 			return diagCBOR(data, os.Stdout)
 		},
@@ -72,7 +72,7 @@ Examples of diagnostic notation:
 // diagCBOR writes diagnostic notation for CBOR data to w.
 func diagCBOR(data []byte, w io.Writer) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	// Process as a sequence: diagnose each item and print on its
@@ -83,7 +83,7 @@ func diagCBOR(data []byte, w io.Writer) error {
 		notation, rest, err := codec.DiagnoseFirst(remaining)
 		if err != nil {
 			offset := len(data) - len(remaining)
-			return fmt.Errorf("diagnose CBOR at byte %d: %w", offset, err)
+			return cli.Internal("diagnose CBOR at byte %d: %w", offset, err)
 		}
 		if _, err := fmt.Fprintln(w, notation); err != nil {
 			return err

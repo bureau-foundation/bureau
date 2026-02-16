@@ -6,7 +6,6 @@ package cbor
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 
@@ -20,17 +19,17 @@ import (
 // goes directly to stdout/stderr.
 func filterCBOR(data []byte, jqArgs []string) error {
 	if len(data) == 0 {
-		return fmt.Errorf("empty input: expected CBOR data")
+		return cli.Validation("empty input: expected CBOR data")
 	}
 
 	var value any
 	if err := toolDecMode.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("decode CBOR: %w", err)
+		return cli.Internal("decode CBOR: %w", err)
 	}
 
 	jsonData, err := json.Marshal(normalizeValue(value))
 	if err != nil {
-		return fmt.Errorf("encode JSON for jq: %w", err)
+		return cli.Internal("encode JSON for jq: %w", err)
 	}
 
 	return runJQ(jsonData, jqArgs)
@@ -42,7 +41,7 @@ func filterCBOR(data []byte, jqArgs []string) error {
 func runJQ(jsonData []byte, jqArgs []string) error {
 	jqPath, err := exec.LookPath("jq")
 	if err != nil {
-		return fmt.Errorf("jq not found in PATH; install jq or use \"bureau cbor decode\" for raw JSON output")
+		return cli.Internal("jq not found in PATH; install jq or use \"bureau cbor decode\" for raw JSON output")
 	}
 
 	cmd := exec.Command(jqPath, jqArgs...)
@@ -56,7 +55,7 @@ func runJQ(jsonData []byte, jqArgs []string) error {
 			// correctly (e.g., jq -e returns 1 for false/null).
 			return &cli.ExitError{Code: exitErr.ExitCode()}
 		}
-		return fmt.Errorf("run jq: %w", err)
+		return cli.Internal("run jq: %w", err)
 	}
 	return nil
 }

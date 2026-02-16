@@ -5,7 +5,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -39,13 +38,13 @@ func ResolveLocalMachine() (string, error) {
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf(
+			return "", NotFound(
 				"no launcher session found at %s — is the Bureau launcher running on this machine? "+
 					"(set BUREAU_LAUNCHER_SESSION to override the path)",
 				sessionPath,
 			)
 		}
-		return "", fmt.Errorf("reading launcher session %s: %w", sessionPath, err)
+		return "", Internal("reading launcher session %s: %w", sessionPath, err)
 	}
 
 	// The launcher's session file has {homeserver_url, user_id, access_token}.
@@ -54,16 +53,16 @@ func ResolveLocalMachine() (string, error) {
 		UserID string `json:"user_id"`
 	}
 	if err := json.Unmarshal(data, &session); err != nil {
-		return "", fmt.Errorf("parsing launcher session %s: %w", sessionPath, err)
+		return "", Internal("parsing launcher session %s: %w", sessionPath, err)
 	}
 
 	if session.UserID == "" {
-		return "", fmt.Errorf("launcher session %s has no user_id", sessionPath)
+		return "", Validation("launcher session %s has no user_id", sessionPath)
 	}
 
 	localpart, err := principal.LocalpartFromMatrixID(session.UserID)
 	if err != nil {
-		return "", fmt.Errorf("extracting machine name from launcher session: %w", err)
+		return "", Internal("extracting machine name from launcher session: %w", err)
 	}
 
 	return localpart, nil

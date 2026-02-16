@@ -66,7 +66,7 @@ exist without actually publishing.`,
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
-				return fmt.Errorf("usage: bureau template push [flags] <template-ref> <file>")
+				return cli.Validation("usage: bureau template push [flags] <template-ref> <file>")
 			}
 
 			templateRefString := args[0]
@@ -75,7 +75,7 @@ exist without actually publishing.`,
 			// Parse the template reference.
 			ref, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
-				return fmt.Errorf("parsing template reference: %w", err)
+				return cli.Validation("parsing template reference: %w", err)
 			}
 
 			// Read and validate the local file.
@@ -89,7 +89,7 @@ exist without actually publishing.`,
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
 				}
-				return fmt.Errorf("%s: %d validation issue(s) found", filePath, len(issues))
+				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
 
 			// Connect to Matrix for inheritance verification and publishing.
@@ -103,17 +103,17 @@ exist without actually publishing.`,
 			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
-				return fmt.Errorf("resolving target room %q: %w", roomAlias, err)
+				return cli.NotFound("resolving target room %q: %w", roomAlias, err)
 			}
 
 			// Verify inheritance target exists (if any).
 			if content.Inherits != "" {
 				parentRef, err := schema.ParseTemplateRef(content.Inherits)
 				if err != nil {
-					return fmt.Errorf("invalid inherits reference %q: %w", content.Inherits, err)
+					return cli.Validation("invalid inherits reference %q: %w", content.Inherits, err)
 				}
 				if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
-					return fmt.Errorf("parent template %q not found in Matrix: %w", content.Inherits, err)
+					return cli.NotFound("parent template %q not found in Matrix: %w", content.Inherits, err)
 				}
 				fmt.Fprintf(os.Stderr, "parent template %q: found\n", content.Inherits)
 			}
@@ -138,7 +138,7 @@ exist without actually publishing.`,
 			// Publish the template as a state event.
 			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTemplate, ref.Template, content)
 			if err != nil {
-				return fmt.Errorf("publishing template: %w", err)
+				return cli.Internal("publishing template: %w", err)
 			}
 
 			if done, err := params.EmitJSON(templatePushResult{

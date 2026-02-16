@@ -75,10 +75,10 @@ admin to add an observe allowance for your identity on the target.`,
 		},
 		Run: func(args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("target argument required\n\nUsage: bureau observe <target> [flags]")
+				return cli.Validation("target argument required\n\nUsage: bureau observe <target> [flags]")
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 			target := strings.TrimPrefix(args[0], "@")
 
@@ -99,14 +99,14 @@ admin to add an observe allowance for your identity on the target.`,
 				Token:     operatorSession.AccessToken,
 			})
 			if err != nil {
-				return fmt.Errorf("connect to %s: %w", target, err)
+				return cli.Internal("connect to %s: %w", target, err)
 			}
 			defer session.Close()
 
 			stdinFd := int(os.Stdin.Fd())
 			oldState, err := term.MakeRaw(stdinFd)
 			if err != nil {
-				return fmt.Errorf("set terminal raw mode: %w", err)
+				return cli.Internal("set terminal raw mode: %w", err)
 			}
 			defer term.Restore(stdinFd, oldState)
 
@@ -203,7 +203,7 @@ display their role identity.`,
 				channel = args[0]
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("unexpected argument: %s", args[1])
+				return cli.Validation("unexpected argument: %s", args[1])
 			}
 
 			// Load operator session for authentication. Required even
@@ -227,7 +227,7 @@ display their role identity.`,
 				var err error
 				layout, err = loadLayoutFile(layoutFile)
 				if err != nil {
-					return fmt.Errorf("load layout file: %w", err)
+					return cli.Internal("load layout file: %w", err)
 				}
 				// Derive session name from the filename.
 				name := strings.TrimSuffix(layoutFile, ".json")
@@ -248,7 +248,7 @@ display their role identity.`,
 					Token:    operatorSession.AccessToken,
 				})
 				if err != nil {
-					return fmt.Errorf("query channel layout: %w", err)
+					return cli.Internal("query channel layout: %w", err)
 				}
 				// Derive session name from the channel alias. Strip the
 				// sigil and server name to get a clean path:
@@ -271,7 +271,7 @@ display their role identity.`,
 					Token:    operatorSession.AccessToken,
 				})
 				if err != nil {
-					return fmt.Errorf("query machine layout: %w", err)
+					return cli.Internal("query machine layout: %w", err)
 				}
 				layout = response.Layout
 				sessionName = "observe/machine/" + response.Machine
@@ -293,7 +293,7 @@ display their role identity.`,
 			server := tmux.NewServer(tmuxSocket, "")
 
 			if err := observe.Dashboard(server, sessionName, socketPath, layout); err != nil {
-				return fmt.Errorf("create dashboard: %w", err)
+				return cli.Internal("create dashboard: %w", err)
 			}
 
 			fmt.Fprintf(os.Stderr, "dashboard session created: %s\n", sessionName)
@@ -305,7 +305,7 @@ display their role identity.`,
 			// Attach to the session via exec (replaces this process).
 			tmuxBinary, err := exec.LookPath("tmux")
 			if err != nil {
-				return fmt.Errorf("tmux not found in PATH: %w", err)
+				return cli.Internal("tmux not found in PATH: %w", err)
 			}
 
 			// Build the full exec argv without mutating tmuxArgs.
@@ -332,11 +332,11 @@ func loadLayoutFile(path string) (*observe.Layout, error) {
 
 	var content schema.LayoutContent
 	if err := json.Unmarshal(data, &content); err != nil {
-		return nil, fmt.Errorf("parsing layout JSON: %w", err)
+		return nil, cli.Internal("parsing layout JSON: %w", err)
 	}
 
 	if len(content.Windows) == 0 {
-		return nil, fmt.Errorf("layout has no windows")
+		return nil, cli.Validation("layout has no windows")
 	}
 
 	return observe.SchemaToLayout(content), nil
@@ -415,7 +415,7 @@ Machine statuses:
 		RequiredGrants: []string{"command/observe/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			operatorSession, err := cli.LoadSession()

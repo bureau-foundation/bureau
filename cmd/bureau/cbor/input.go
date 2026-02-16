@@ -6,10 +6,11 @@ package cbor
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"os"
 	"unicode"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
 // readInput resolves input data from either a file (the last element
@@ -31,7 +32,7 @@ func readInput(args []string, hexMode bool) ([]byte, []string, error) {
 		if err == nil && !info.IsDir() {
 			data, err = os.ReadFile(candidate)
 			if err != nil {
-				return nil, nil, fmt.Errorf("read %s: %w", candidate, err)
+				return nil, nil, cli.Internal("read %s: %w", candidate, err)
 			}
 			remainingArgs = args[:length-1]
 		}
@@ -41,7 +42,7 @@ func readInput(args []string, hexMode bool) ([]byte, []string, error) {
 		var err error
 		data, err = io.ReadAll(os.Stdin)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read stdin: %w", err)
+			return nil, nil, cli.Internal("read stdin: %w", err)
 		}
 	}
 
@@ -68,13 +69,13 @@ func decodeHexInput(data []byte) ([]byte, error) {
 	}, data)
 
 	if len(cleaned) == 0 {
-		return nil, fmt.Errorf("empty input after stripping whitespace from hex")
+		return nil, cli.Validation("empty input after stripping whitespace from hex")
 	}
 
 	decoded := make([]byte, hex.DecodedLen(len(cleaned)))
 	count, err := hex.Decode(decoded, cleaned)
 	if err != nil {
-		return nil, fmt.Errorf("decode hex: %w", err)
+		return nil, cli.Internal("decode hex: %w", err)
 	}
 	return decoded[:count], nil
 }

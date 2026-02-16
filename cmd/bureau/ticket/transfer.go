@@ -60,7 +60,7 @@ Use --status to export only tickets in a particular state (e.g.
 		RequiredGrants: []string{"command/ticket/export"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 
 			client, err := params.connect()
@@ -86,7 +86,7 @@ Use --status to export only tickets in a particular state (e.g.
 			if params.File != "" && params.File != "-" {
 				file, err := os.Create(params.File)
 				if err != nil {
-					return fmt.Errorf("creating output file: %w", err)
+					return cli.Internal("creating output file: %w", err)
 				}
 				defer file.Close()
 				output = file
@@ -104,12 +104,12 @@ Use --status to export only tickets in a particular state (e.g.
 					entry.Room = params.Room
 				}
 				if err := encoder.Encode(entry); err != nil {
-					return fmt.Errorf("writing entry %s: %w", entry.ID, err)
+					return cli.Internal("writing entry %s: %w", entry.ID, err)
 				}
 			}
 
 			if err := writer.Flush(); err != nil {
-				return fmt.Errorf("flushing output: %w", err)
+				return cli.Internal("flushing output: %w", err)
 			}
 
 			if params.File != "" && params.File != "-" {
@@ -172,10 +172,10 @@ invalid, none are imported.`,
 		RequiredGrants: []string{"command/ticket/import"},
 		Run: func(args []string) error {
 			if params.Room == "" {
-				return fmt.Errorf("--room is required")
+				return cli.Validation("--room is required")
 			}
 			if params.File == "" {
-				return fmt.Errorf("--file is required")
+				return cli.Validation("--file is required")
 			}
 
 			// Read and parse the JSONL input.
@@ -183,7 +183,7 @@ invalid, none are imported.`,
 			if params.File != "-" {
 				file, err := os.Open(params.File)
 				if err != nil {
-					return fmt.Errorf("opening input file: %w", err)
+					return cli.Internal("opening input file: %w", err)
 				}
 				defer file.Close()
 				input = file
@@ -208,13 +208,13 @@ invalid, none are imported.`,
 
 				var entry importEntry
 				if err := json.Unmarshal(line, &entry); err != nil {
-					return fmt.Errorf("line %d: invalid JSON: %w", lineNumber, err)
+					return cli.Validation("line %d: invalid JSON: %w", lineNumber, err)
 				}
 				if entry.ID == "" {
-					return fmt.Errorf("line %d: missing required field: id", lineNumber)
+					return cli.Validation("line %d: missing required field: id", lineNumber)
 				}
 				if entry.Content.Title == "" {
-					return fmt.Errorf("line %d (%s): missing required field: content.title", lineNumber, entry.ID)
+					return cli.Validation("line %d (%s): missing required field: content.title", lineNumber, entry.ID)
 				}
 
 				if params.ResetStatus {
@@ -227,11 +227,11 @@ invalid, none are imported.`,
 				entries = append(entries, entry)
 			}
 			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("reading input: %w", err)
+				return cli.Internal("reading input: %w", err)
 			}
 
 			if len(entries) == 0 {
-				return fmt.Errorf("no tickets found in input")
+				return cli.Validation("no tickets found in input")
 			}
 
 			// Build the import request. The service-side type uses

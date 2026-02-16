@@ -70,13 +70,13 @@ cycle.`,
 				params.DependsOn = args[1]
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("expected 2 positional arguments, got %d", len(args))
+				return cli.Validation("expected 2 positional arguments, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket dep add <ticket-id> <depends-on-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket dep add <ticket-id> <depends-on-id>")
 			}
 			if params.DependsOn == "" {
-				return fmt.Errorf("depends-on ticket ID is required\n\nUsage: bureau ticket dep add <ticket-id> <depends-on-id>")
+				return cli.Validation("depends-on ticket ID is required\n\nUsage: bureau ticket dep add <ticket-id> <depends-on-id>")
 			}
 
 			client, err := params.connect()
@@ -95,7 +95,7 @@ cycle.`,
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
-				return fmt.Errorf("fetching ticket: %w", err)
+				return cli.Internal("fetching ticket: %w", err)
 			}
 
 			blockedBy := current.Content.BlockedBy
@@ -164,13 +164,13 @@ func depRemoveCommand() *cli.Command {
 				params.DependsOn = args[1]
 			}
 			if len(args) > 2 {
-				return fmt.Errorf("expected 2 positional arguments, got %d", len(args))
+				return cli.Validation("expected 2 positional arguments, got %d", len(args))
 			}
 			if params.Ticket == "" {
-				return fmt.Errorf("ticket ID is required\n\nUsage: bureau ticket dep remove <ticket-id> <depends-on-id>")
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket dep remove <ticket-id> <depends-on-id>")
 			}
 			if params.DependsOn == "" {
-				return fmt.Errorf("depends-on ticket ID is required\n\nUsage: bureau ticket dep remove <ticket-id> <depends-on-id>")
+				return cli.Validation("depends-on ticket ID is required\n\nUsage: bureau ticket dep remove <ticket-id> <depends-on-id>")
 			}
 
 			client, err := params.connect()
@@ -189,13 +189,13 @@ func depRemoveCommand() *cli.Command {
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
-				return fmt.Errorf("fetching ticket: %w", err)
+				return cli.Internal("fetching ticket: %w", err)
 			}
 
 			blockedBy := current.Content.BlockedBy
 			index := slices.Index(blockedBy, params.DependsOn)
 			if index < 0 {
-				return fmt.Errorf("%s does not depend on %s", params.Ticket, params.DependsOn)
+				return cli.NotFound("%s does not depend on %s", params.Ticket, params.DependsOn)
 			}
 
 			blockedBy = slices.Delete(blockedBy, index, index+1)

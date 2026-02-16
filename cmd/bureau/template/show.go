@@ -4,8 +4,6 @@
 package template
 
 import (
-	"fmt"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
@@ -47,7 +45,7 @@ template overrides versus what it inherits.`,
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau template show [flags] <template-ref>")
+				return cli.Validation("usage: bureau template show [flags] <template-ref>")
 			}
 
 			templateRefString := args[0]
@@ -61,7 +59,7 @@ template overrides versus what it inherits.`,
 			if params.Raw {
 				ref, err := schema.ParseTemplateRef(templateRefString)
 				if err != nil {
-					return fmt.Errorf("parsing template reference: %w", err)
+					return cli.Validation("parsing template reference: %w", err)
 				}
 				content, err := libtmpl.Fetch(ctx, session, ref, params.ServerName)
 				if err != nil {

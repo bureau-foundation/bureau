@@ -31,13 +31,13 @@ type commandResult struct {
 // without the leading # or trailing :server.
 func resolveWorkspaceRoom(ctx context.Context, session *messaging.Session, alias, serverName string) (string, error) {
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return "", fmt.Errorf("invalid alias %q: %w", alias, err)
+		return "", cli.Validation("invalid alias %q: %w", alias, err)
 	}
 
 	fullAlias := principal.RoomAlias(alias, serverName)
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
-		return "", fmt.Errorf("resolving room %s: %w", fullAlias, err)
+		return "", cli.NotFound("resolving room %s: %w", fullAlias, err)
 	}
 	return roomID, nil
 }
@@ -56,7 +56,7 @@ func findParentWorkspace(ctx context.Context, session *messaging.Session, alias,
 	for {
 		lastSlash := strings.LastIndex(remaining, "/")
 		if lastSlash < 0 {
-			return "", nil, "", fmt.Errorf("no parent workspace found for %q (walked up to root)", alias)
+			return "", nil, "", cli.NotFound("no parent workspace found for %q (walked up to root)", alias)
 		}
 		candidate := remaining[:lastSlash]
 		remaining = candidate
@@ -68,7 +68,7 @@ func findParentWorkspace(ctx context.Context, session *messaging.Session, alias,
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				continue
 			}
-			return "", nil, "", fmt.Errorf("resolving %s: %w", fullAlias, err)
+			return "", nil, "", cli.Internal("resolving %s: %w", fullAlias, err)
 		}
 
 		// Room exists — check for workspace state.
@@ -96,7 +96,7 @@ func sendWorkspaceCommand(
 ) (string, string, error) {
 	requestID, err := cli.GenerateRequestID()
 	if err != nil {
-		return "", "", fmt.Errorf("generating request ID: %w", err)
+		return "", "", cli.Internal("generating request ID: %w", err)
 	}
 
 	command := schema.CommandMessage{
@@ -110,7 +110,7 @@ func sendWorkspaceCommand(
 
 	eventID, err := session.SendEvent(ctx, roomID, "m.room.message", command)
 	if err != nil {
-		return "", "", fmt.Errorf("sending %s command: %w", commandName, err)
+		return "", "", cli.Internal("sending %s command: %w", commandName, err)
 	}
 
 	return eventID, requestID, nil
@@ -136,7 +136,7 @@ func waitForCommandResult(
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timed out waiting for command result (request_id=%s): %w", requestID, ctx.Err())
+			return nil, cli.Transient("timed out waiting for command result (request_id=%s): %w", requestID, ctx.Err())
 		default:
 		}
 
@@ -150,7 +150,7 @@ func waitForCommandResult(
 			// timeout handles this naturally.
 			select {
 			case <-ctx.Done():
-				return nil, fmt.Errorf("timed out waiting for command result: %w", ctx.Err())
+				return nil, cli.Transient("timed out waiting for command result: %w", ctx.Err())
 			case <-time.After(pollInterval):
 				continue
 			}
@@ -173,12 +173,12 @@ func waitForCommandResult(
 			// Parse the result.
 			contentJSON, err := json.Marshal(event.Content)
 			if err != nil {
-				return nil, fmt.Errorf("marshaling result content: %w", err)
+				return nil, cli.Internal("marshaling result content: %w", err)
 			}
 
 			var result commandResult
 			if err := json.Unmarshal(contentJSON, &result); err != nil {
-				return nil, fmt.Errorf("parsing command result: %w", err)
+				return nil, cli.Internal("parsing command result: %w", err)
 			}
 
 			return &result, nil
@@ -187,7 +187,7 @@ func waitForCommandResult(
 		// Back off gradually.
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timed out waiting for command result: %w", ctx.Err())
+			return nil, cli.Transient("timed out waiting for command result: %w", ctx.Err())
 		case <-time.After(pollInterval):
 		}
 		if pollInterval < maxInterval {
@@ -206,11 +206,11 @@ func waitForCommandResult(
 func extractSubpath(alias, workspaceAlias string) (string, error) {
 	prefix := workspaceAlias + "/"
 	if !strings.HasPrefix(alias, prefix) {
-		return "", fmt.Errorf("alias %q does not start with workspace prefix %q", alias, prefix)
+		return "", cli.Internal("alias %q does not start with workspace prefix %q", alias, prefix)
 	}
 	subpath := alias[len(prefix):]
 	if subpath == "" {
-		return "", fmt.Errorf("alias %q is identical to workspace alias (no worktree subpath)", alias)
+		return "", cli.Validation("alias %q is identical to workspace alias (no worktree subpath)", alias)
 	}
 	return subpath, nil
 }
@@ -221,12 +221,12 @@ func extractSubpath(alias, workspaceAlias string) (string, error) {
 func readWorkspaceState(ctx context.Context, session *messaging.Session, roomID string) (*schema.WorkspaceState, error) {
 	raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
 	if err != nil {
-		return nil, fmt.Errorf("reading workspace state: %w", err)
+		return nil, cli.Internal("reading workspace state: %w", err)
 	}
 
 	var state schema.WorkspaceState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, fmt.Errorf("parsing workspace state: %w", err)
+		return nil, cli.Internal("parsing workspace state: %w", err)
 	}
 	return &state, nil
 }

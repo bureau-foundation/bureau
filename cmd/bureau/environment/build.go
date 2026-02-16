@@ -68,7 +68,7 @@ with symlinks into /nix/store for all packages in the profile.`,
 		},
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau environment build <profile>")
+				return cli.Validation("usage: bureau environment build <profile>")
 			}
 
 			profile := args[0]

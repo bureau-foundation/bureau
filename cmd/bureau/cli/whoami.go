@@ -59,7 +59,7 @@ session file is read (no network access).`,
 		Output: func() any { return &whoamiOutput{} },
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return Validation("unexpected argument: %s", args[0])
 			}
 
 			path := SessionFilePath()
@@ -82,12 +82,12 @@ session file is read (no network access).`,
 					HomeserverURL: session.Homeserver,
 				})
 				if err != nil {
-					return fmt.Errorf("create client: %w", err)
+					return Internal("create client: %w", err)
 				}
 
 				matrixSession, err := client.SessionFromToken(session.UserID, session.AccessToken)
 				if err != nil {
-					return fmt.Errorf("create session: %w", err)
+					return Internal("create session: %w", err)
 				}
 				defer matrixSession.Close()
 
@@ -101,7 +101,7 @@ session file is read (no network access).`,
 					fmt.Fprintf(os.Stdout, "Homeserver:   %s\n", output.Homeserver)
 					fmt.Fprintf(os.Stdout, "Session file: %s\n", output.SessionFile)
 					fmt.Fprintf(os.Stdout, "Status:       INVALID (token rejected by homeserver)\n")
-					return fmt.Errorf("session expired or revoked — run \"bureau login\" to refresh")
+					return Forbidden("session expired or revoked — run \"bureau login\" to refresh")
 				}
 
 				output.Status = fmt.Sprintf("valid (verified as %s)", verifiedUserID)

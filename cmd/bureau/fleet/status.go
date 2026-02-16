@@ -67,7 +67,7 @@ Connects to the fleet controller's socket and calls the "info" and
 		RequiredGrants: []string{"command/fleet/status"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument: %s", args[0])
+				return cli.Validation("unexpected argument: %s", args[0])
 			}
 			return runStatus(&params)
 		},
@@ -113,13 +113,13 @@ func runStatus(params *statusParams) error {
 	// Fetch aggregate info.
 	var info infoResponse
 	if err := client.Call(ctx, "info", nil, &info); err != nil {
-		return fmt.Errorf("fetching fleet info: %w", err)
+		return cli.Internal("fetching fleet info: %w", err)
 	}
 
 	// Fetch per-machine health.
 	var machines machinesResponse
 	if err := client.Call(ctx, "list-machines", nil, &machines); err != nil {
-		return fmt.Errorf("fetching machine list: %w", err)
+		return cli.Internal("fetching machine list: %w", err)
 	}
 
 	machineList := make([]machineHealth, len(machines.Machines))

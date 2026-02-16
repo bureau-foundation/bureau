@@ -5,7 +5,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -37,13 +36,13 @@ func ConnectOperator() (context.Context, context.CancelFunc, *messaging.Session,
 	})
 	if err != nil {
 		cancel()
-		return nil, nil, nil, fmt.Errorf("create matrix client: %w", err)
+		return nil, nil, nil, Internal("create matrix client: %w", err)
 	}
 
 	session, err := client.SessionFromToken(operatorSession.UserID, operatorSession.AccessToken)
 	if err != nil {
 		cancel()
-		return nil, nil, nil, fmt.Errorf("create session: %w", err)
+		return nil, nil, nil, Internal("create session: %w", err)
 	}
 
 	return ctx, cancel, session, nil

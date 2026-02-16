@@ -132,7 +132,7 @@ type Example struct {
 // in the CLI tree but not yet implemented. Using a shared function ensures
 // consistent wording and makes it easy to grep for unfinished commands.
 func ErrNotImplemented(command string) error {
-	return fmt.Errorf("%s: not yet implemented", command)
+	return Internal("%s: not yet implemented", command)
 }
 
 // FlagSet returns the command's flag set, resolving it from the first
@@ -182,10 +182,10 @@ func (c *Command) Execute(args []string) error {
 		if c.Run == nil {
 			suggestion := suggestCommand(name, c.Subcommands)
 			if suggestion != "" {
-				return fmt.Errorf("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",
+				return Validation("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",
 					name, suggestion, c.fullName())
 			}
-			return fmt.Errorf("unknown command %q\n\nRun '%s --help' for usage.",
+			return Validation("unknown command %q\n\nRun '%s --help' for usage.",
 				name, c.fullName())
 		}
 	}
@@ -194,7 +194,7 @@ func (c *Command) Execute(args []string) error {
 	if len(c.Subcommands) > 0 && c.Run == nil {
 		if len(args) == 0 {
 			c.PrintHelp(os.Stderr)
-			return fmt.Errorf("subcommand required")
+			return Validation("subcommand required")
 		}
 		// args[0] starts with "-" but we have no Run function.
 		if isHelpFlag(args[0]) {
@@ -202,7 +202,7 @@ func (c *Command) Execute(args []string) error {
 			return nil
 		}
 		c.PrintHelp(os.Stderr)
-		return fmt.Errorf("subcommand required (got flag %q)", args[0])
+		return Validation("subcommand required (got flag %q)", args[0])
 	}
 
 	// Parse flags if defined (explicitly or derived from Params).
@@ -221,12 +221,12 @@ func (c *Command) Execute(args []string) error {
 				// parse may have consumed state).
 				suggestion := suggestFlag(args, c.FlagSet())
 				if suggestion != "" {
-					return fmt.Errorf("%s (did you mean %s?)\n\nRun '%s --help' for usage.",
+					return Validation("%s (did you mean %s?)\n\nRun '%s --help' for usage.",
 						errMsg, suggestion, c.fullName())
 				}
 			}
 
-			return fmt.Errorf("%s\n\nRun '%s --help' for usage.",
+			return Validation("%s\n\nRun '%s --help' for usage.",
 				errMsg, c.fullName())
 		}
 		args = flagSet.Args()
@@ -238,7 +238,7 @@ func (c *Command) Execute(args []string) error {
 
 	// No Run, no subcommands matched — show help.
 	c.PrintHelp(os.Stderr)
-	return fmt.Errorf("no action defined for %q", c.fullName())
+	return Internal("no action defined for %q", c.fullName())
 }
 
 // PrintHelp writes structured help output to w.

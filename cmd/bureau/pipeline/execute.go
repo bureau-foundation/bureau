@@ -67,22 +67,22 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("usage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")
+				return cli.Validation("usage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")
 			}
 			if params.Machine == "" {
-				return fmt.Errorf("--machine is required")
+				return cli.Validation("--machine is required")
 			}
 
 			pipelineRefString := args[0]
 
 			// Validate the pipeline ref is parseable.
 			if _, err := schema.ParsePipelineRef(pipelineRefString); err != nil {
-				return fmt.Errorf("parsing pipeline reference: %w", err)
+				return cli.Validation("parsing pipeline reference: %w", err)
 			}
 
 			// Validate the machine localpart.
 			if err := principal.ValidateLocalpart(params.Machine); err != nil {
-				return fmt.Errorf("invalid machine name: %w", err)
+				return cli.Validation("invalid machine name: %w", err)
 			}
 
 			// Parse key=value parameters. The pipeline ref goes into
@@ -93,10 +93,10 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			for _, param := range params.Param {
 				key, value, found := strings.Cut(param, "=")
 				if !found {
-					return fmt.Errorf("invalid --param %q: expected key=value", param)
+					return cli.Validation("invalid --param %q: expected key=value", param)
 				}
 				if key == "" {
-					return fmt.Errorf("invalid --param %q: empty key", param)
+					return cli.Validation("invalid --param %q: empty key", param)
 				}
 				parameters[key] = value
 			}
@@ -105,7 +105,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			// threaded result replies.
 			requestID, err := cli.GenerateRequestID()
 			if err != nil {
-				return fmt.Errorf("generating request ID: %w", err)
+				return cli.Internal("generating request ID: %w", err)
 			}
 
 			// Connect to Matrix.
@@ -120,7 +120,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			configRoomAlias := principal.RoomAlias("bureau/config/"+params.Machine, params.ServerName)
 			configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 			if err != nil {
-				return fmt.Errorf("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)
+				return cli.NotFound("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)
 			}
 
 			// Build the command message.
@@ -135,7 +135,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			// Send as an m.room.message event.
 			eventID, err := session.SendEvent(ctx, configRoomID, "m.room.message", command)
 			if err != nil {
-				return fmt.Errorf("sending pipeline.execute command: %w", err)
+				return cli.Internal("sending pipeline.execute command: %w", err)
 			}
 
 			if done, err := params.EmitJSON(executeResult{

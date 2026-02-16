@@ -137,11 +137,29 @@ type toolsCallParams struct {
 // toolsCallResult is the server's tools/call response. StructuredContent
 // carries typed JSON when the tool declares an outputSchema; per the spec,
 // the serialized JSON is also included in a text content block for
-// backward compatibility.
+// backward compatibility. ErrorInfo is a Bureau extension that provides
+// structured error metadata alongside the human-readable text in content
+// blocks, enabling agents to make programmatic recovery decisions.
 type toolsCallResult struct {
 	Content           []contentBlock `json:"content"`
 	StructuredContent any            `json:"structuredContent,omitempty"`
 	IsError           bool           `json:"isError,omitempty"`
+	ErrorInfo         *errorInfo     `json:"errorInfo,omitempty"`
+}
+
+// errorInfo carries structured error metadata when IsError is true.
+// This is a Bureau extension to the MCP protocol: clients that don't
+// understand errorInfo ignore the field, while Bureau-aware agents use
+// it to decide whether to retry, fix input, or escalate.
+type errorInfo struct {
+	// Category classifies the error. One of: validation, not_found,
+	// forbidden, conflict, transient, internal.
+	Category string `json:"category"`
+
+	// Retryable indicates whether repeating the same call might succeed.
+	// True for transient errors (network, timeout, rate limit); false
+	// for validation, not_found, forbidden, and internal errors.
+	Retryable bool `json:"retryable"`
 }
 
 // contentBlock is an MCP content block within a tool result.

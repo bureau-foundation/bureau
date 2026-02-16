@@ -73,8 +73,8 @@ for file in "${files[@]}"; do
         if [[ "$rest" == "$commented_header"* ]]; then
             continue
         fi
-        printf '%s\n%s\n%s' "$first_line" "$commented_header" "$rest" > "$file"
+        printf '%s\n%s\n%s\n' "$first_line" "$commented_header" "$rest" > "$file"
     else
-        printf '%s\n%s' "$commented_header" "$content" > "$file"
+        printf '%s\n%s\n' "$commented_header" "$content" > "$file"
     fi
 done

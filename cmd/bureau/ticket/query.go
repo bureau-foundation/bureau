@@ -55,6 +55,7 @@ time (oldest first).`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]ticketEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/list"},
 		Run: func(args []string) error {
 			if params.Room == "" {
@@ -141,6 +142,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &showResult{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/show"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -205,6 +207,7 @@ Sorted by priority (most urgent first), then creation time.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]ticketEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ready"},
 		Run: func(args []string) error {
 			return roomScopedQuery(params.TicketConnection, params.Room, "ready", "ticket/ready", &params.JSONOutput)
@@ -231,6 +234,7 @@ non-closed blocker or unsatisfied gate.`,
 		Usage:          "bureau ticket blocked --room ROOM [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]ticketEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/blocked"},
 		Run: func(args []string) error {
 			return roomScopedQuery(params.TicketConnection, params.Room, "blocked", "ticket/blocked", &params.JSONOutput)
@@ -260,6 +264,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 		Usage:          "bureau ticket ranked --room ROOM [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]rankedEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ranked"},
 		Run: func(args []string) error {
 			if params.Room == "" {
@@ -336,6 +341,7 @@ all rooms and includes the room ID in results.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]ticketEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/grep"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -398,6 +404,7 @@ for a room.`,
 		Usage:          "bureau ticket stats --room ROOM [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &ticket.Stats{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stats"},
 		Run: func(args []string) error {
 			if params.Room == "" {
@@ -475,6 +482,7 @@ total tickets, and per-room summaries. Requires authentication.`,
 		Usage:          "bureau ticket info [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &serviceInfo{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/info"},
 		Run: func(args []string) error {
 			client, err := params.connect()
@@ -540,6 +548,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 		Usage:          "bureau ticket deps <ticket-id> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &depsResult{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/deps"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -606,6 +615,7 @@ showing how many are closed out of the total.`,
 		Usage:          "bureau ticket children <ticket-id> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &childrenResult{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/children"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -671,6 +681,7 @@ depth (irreducible sequential steps).`,
 		Usage:          "bureau ticket epic-health <ticket-id> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &epicHealthResult{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/epic-health"},
 		Run: func(args []string) error {
 			if len(args) == 1 {

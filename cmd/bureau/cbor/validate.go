@@ -52,6 +52,7 @@ With -s, validates each item in a CBOR sequence independently.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/validate"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)

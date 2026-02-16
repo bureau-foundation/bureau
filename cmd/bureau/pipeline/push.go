@@ -59,6 +59,7 @@ without actually publishing.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &pushResult{} },
 		RequiredGrants: []string{"command/pipeline/push"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau pipeline push [flags] <pipeline-ref> <file>")

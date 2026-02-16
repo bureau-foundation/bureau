@@ -63,6 +63,7 @@ exist without actually publishing.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &templatePushResult{} },
 		RequiredGrants: []string{"command/template/push"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template push [flags] <template-ref> <file>")

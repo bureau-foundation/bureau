@@ -55,6 +55,7 @@ Whitespace in the hex input is ignored.`,
 			validateCommand(),
 		},
 		Params:         func() any { return &params },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/cbor"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)

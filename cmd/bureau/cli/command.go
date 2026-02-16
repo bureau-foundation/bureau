@@ -80,6 +80,18 @@ type Command struct {
 	// If nil, the tool has no outputSchema and results are text only.
 	Output func() any
 
+	// Annotations describes the command's behavioral properties (read-only,
+	// destructive, idempotent, open-world) for tool servers like MCP. These
+	// help agents decide which tools are safe to call without confirmation,
+	// which can be retried, and which require explicit approval.
+	//
+	// Every MCP-visible command (one with Params, Run, and RequiredGrants)
+	// must set Annotations using one of the preset constructors:
+	// [ReadOnly], [Idempotent], [Create], or [Destructive].
+	//
+	// The build-time lint test in cmd/bureau/main_test.go enforces this.
+	Annotations *ToolAnnotations
+
 	// RequiredGrants lists the authorization action strings needed to
 	// invoke this command via MCP. The MCP server checks all required
 	// grants against the principal's grants (fetched from the credential

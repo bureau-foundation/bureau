@@ -38,6 +38,7 @@ Shows each machine's name, public key, and last status heartbeat
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]machineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

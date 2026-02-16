@@ -89,6 +89,7 @@ All worktrees in a project share a single bare git object store at
 		Params:         func() any { return &params },
 		Output:         func() any { return &createResult{} },
 		RequiredGrants: []string{"command/workspace/create"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")

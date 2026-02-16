@@ -64,6 +64,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &executeResult{} },
 		RequiredGrants: []string{"command/pipeline/execute"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")

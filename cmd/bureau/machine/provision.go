@@ -64,6 +64,7 @@ is immediately rotated.`,
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")

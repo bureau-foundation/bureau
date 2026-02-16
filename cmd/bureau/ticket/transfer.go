@@ -56,6 +56,7 @@ Use --status to export only tickets in a particular state (e.g.
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]ticketEntry{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/export"},
 		Run: func(args []string) error {
 			if params.Room == "" {
@@ -167,6 +168,7 @@ invalid, none are imported.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &importResult{} },
+		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/import"},
 		Run: func(args []string) error {
 			if params.Room == "" {

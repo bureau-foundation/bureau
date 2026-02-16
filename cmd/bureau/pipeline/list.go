@@ -56,6 +56,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]pipelineEntry{} },
 		RequiredGrants: []string{"command/pipeline/list"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			// In CLI mode, the room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.

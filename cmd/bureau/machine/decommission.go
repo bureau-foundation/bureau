@@ -48,6 +48,7 @@ homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/decommission"},
+		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) < 1 {
 				return fmt.Errorf("machine name is required\n\nUsage: bureau machine decommission <machine-name> [flags]")

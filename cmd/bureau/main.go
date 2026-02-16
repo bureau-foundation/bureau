@@ -36,7 +36,10 @@ func main() {
 	}
 }
 
-func run() error {
+// rootCommand builds the complete CLI command tree. Extracted from run()
+// so that main_test.go can walk the tree for lint checks without
+// invoking Execute.
+func rootCommand() *cli.Command {
 	root := &cli.Command{
 		Name: "bureau",
 		Description: `Bureau: AI agent orchestration system.
@@ -113,5 +116,9 @@ observation, and structured messaging via Matrix.`,
 	// the tree is constructed.
 	root.Subcommands = append(root.Subcommands, mcpcmd.Command(root))
 
-	return root.Execute(os.Args[1:])
+	return root
+}
+
+func run() error {
+	return rootCommand().Execute(os.Args[1:])
 }

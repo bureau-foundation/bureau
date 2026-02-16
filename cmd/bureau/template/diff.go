@@ -53,6 +53,7 @@ content, not the resolved inheritance chain — use "bureau template show
 		Params:         func() any { return &params },
 		Output:         func() any { return &diffResult{} },
 		RequiredGrants: []string{"command/template/diff"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 2 {
 				return fmt.Errorf("usage: bureau template diff [flags] <template-ref> <file>")

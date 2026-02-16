@@ -55,6 +55,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &createResult{} },
+		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/create"},
 		Run: func(args []string) error {
 			if params.Room == "" {
@@ -156,6 +157,7 @@ assignee.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/update"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -253,6 +255,7 @@ ticket was in_progress, the assignee is auto-cleared.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/close"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -315,6 +318,7 @@ close timestamp and reason.`,
 		Usage:          "bureau ticket reopen <ticket-id> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/reopen"},
 		Run: func(args []string) error {
 			if len(args) == 1 {
@@ -399,6 +403,7 @@ created.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &batchCreateResult{} },
+		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/batch"},
 		Run: func(args []string) error {
 			if params.Room == "" {

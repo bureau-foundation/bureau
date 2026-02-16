@@ -67,6 +67,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &enableResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/enable"},
 		Run: func(args []string) error {
 			if len(args) > 0 {

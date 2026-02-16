@@ -114,6 +114,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/workspace/destroy"},
+		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
@@ -213,6 +214,7 @@ access to the workspace filesystem.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]workspaceInfo{} },
 		RequiredGrants: []string{"command/workspace/list"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			return runList(args, &params.JSONOutput)
 		},
@@ -366,7 +368,7 @@ type aliasRunFunc func(alias, serverName string, jsonOutput *cli.JSONOutput) err
 
 // aliasCommand constructs a workspace subcommand that takes a single
 // positional alias argument and the standard workspaceAliasParams flags.
-func aliasCommand(name, summary, description, usage, grant string, run aliasRunFunc) *cli.Command {
+func aliasCommand(name, summary, description, usage, grant string, annotations *cli.ToolAnnotations, run aliasRunFunc) *cli.Command {
 	var params workspaceAliasParams
 	return &cli.Command{
 		Name:           name,
@@ -374,6 +376,7 @@ func aliasCommand(name, summary, description, usage, grant string, run aliasRunF
 		Description:    description,
 		Usage:          usage,
 		RequiredGrants: []string{grant},
+		Annotations:    annotations,
 		Params:         func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -398,6 +401,7 @@ This is a remote command — the daemon on the hosting machine executes
 it and replies via Matrix.`,
 		"bureau workspace status <alias> [flags]",
 		"command/workspace/status",
+		cli.ReadOnly(),
 		runStatus)
 }
 
@@ -456,6 +460,7 @@ each worktree, .shared/ (virtualenvs, build caches), and .cache/
 (cross-project caches). Helps identify where disk space went.`,
 		"bureau workspace du <alias> [flags]",
 		"command/workspace/du",
+		cli.ReadOnly(),
 		runDu)
 }
 
@@ -564,6 +569,7 @@ an "accepted" status.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &worktreeAddResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/add"},
+		Annotations:    cli.Create(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
@@ -693,6 +699,7 @@ an async operation — the command returns immediately.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &worktreeRemoveResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/remove"},
+		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
@@ -788,6 +795,7 @@ executes it. Fetch can take minutes for large repos, so the poll
 timeout is extended to 5 minutes.`,
 		"bureau workspace fetch <alias> [flags]",
 		"command/workspace/fetch",
+		cli.Idempotent(),
 		runFetch)
 }
 
@@ -845,6 +853,7 @@ func worktreeListCommand() *cli.Command {
 raw git worktree list output including paths and branch information.`,
 		"bureau workspace worktree list <alias> [flags]",
 		"command/workspace/worktree/list",
+		cli.ReadOnly(),
 		runWorktreeList)
 }
 

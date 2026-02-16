@@ -79,6 +79,7 @@ func testCommandTree() *cli.Command {
 				Name:           "echo",
 				Summary:        "Echo a message",
 				Description:    "Echo the provided message to stdout.",
+				Annotations:    cli.ReadOnly(),
 				Params:         func() any { return &echoP },
 				RequiredGrants: []string{"command/test/echo"},
 				Run: func(args []string) error {
@@ -89,6 +90,7 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "fail",
 				Summary:        "Always fails with a reason",
+				Annotations:    cli.Create(),
 				Params:         func() any { return &failP },
 				RequiredGrants: []string{"command/test/fail"},
 				Run: func(args []string) error {
@@ -99,6 +101,7 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "format",
 				Summary:        "Conditional JSON output",
+				Annotations:    cli.Idempotent(),
 				Params:         func() any { return &formatP },
 				Output:         func() any { return &formatOutput{} },
 				RequiredGrants: []string{"command/test/format"},
@@ -119,6 +122,7 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "list",
 				Summary:        "List items",
+				Annotations:    cli.ReadOnly(),
 				Params:         func() any { return &listP },
 				Output:         func() any { return &[]listItem{} },
 				RequiredGrants: []string{"command/test/list"},
@@ -572,7 +576,7 @@ func TestServer_ToolsListAnnotations(t *testing.T) {
 		t.Error("test_list should have readOnlyHint=true")
 	}
 
-	// Find the echo tool and verify it has no annotations.
+	// Find the echo tool and verify it has explicit ReadOnly annotations.
 	var echoTool *toolDescription
 	for i := range result.Tools {
 		if result.Tools[i].Name == "test_echo" {
@@ -583,8 +587,11 @@ func TestServer_ToolsListAnnotations(t *testing.T) {
 	if echoTool == nil {
 		t.Fatal("test_echo not found in tools/list response")
 	}
-	if echoTool.Annotations != nil {
-		t.Errorf("test_echo should have nil annotations, got %+v", echoTool.Annotations)
+	if echoTool.Annotations == nil {
+		t.Fatal("test_echo should have annotations (explicit ReadOnly)")
+	}
+	if echoTool.Annotations.ReadOnlyHint == nil || !*echoTool.Annotations.ReadOnlyHint {
+		t.Error("test_echo should have readOnlyHint=true")
 	}
 }
 
@@ -705,62 +712,133 @@ func TestEnableJSONOutput_NoFlag(t *testing.T) {
 	enableJSONOutput(p)
 }
 
-func TestDeriveAnnotations(t *testing.T) {
-	tests := []struct {
-		name           string
-		commandName    string
-		wantNil        bool
-		wantReadOnly   bool
-		wantIdempotent bool
-	}{
-		{
-			name:           "list command is read-only and idempotent",
-			commandName:    "list",
-			wantReadOnly:   true,
-			wantIdempotent: true,
-		},
-		{
-			name:        "non-list command has no annotations",
-			commandName: "create",
-			wantNil:     true,
-		},
-		{
-			name:        "empty name has no annotations",
-			commandName: "",
-			wantNil:     true,
-		},
-	}
+func TestResolveAnnotations(t *testing.T) {
+	t.Run("explicit annotations take precedence", func(t *testing.T) {
+		command := &cli.Command{
+			Name:        "list",
+			Annotations: cli.Destructive(),
+		}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations")
+		}
+		// Even though the name is "list", the explicit Destructive()
+		// annotation should override the read-only heuristic.
+		if annotations.DestructiveHint == nil || !*annotations.DestructiveHint {
+			t.Error("destructiveHint should be true (explicit annotation)")
+		}
+		if annotations.ReadOnlyHint == nil || *annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be false (explicit annotation)")
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			command := &cli.Command{Name: tt.commandName}
-			annotations := deriveAnnotations(command)
+	t.Run("heuristic fallback for list", func(t *testing.T) {
+		command := &cli.Command{Name: "list"}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations for list command")
+		}
+		if annotations.ReadOnlyHint == nil || !*annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be true")
+		}
+		if annotations.IdempotentHint == nil || !*annotations.IdempotentHint {
+			t.Error("idempotentHint should be true")
+		}
+		if annotations.DestructiveHint == nil || *annotations.DestructiveHint {
+			t.Error("destructiveHint should be false")
+		}
+	})
 
-			if tt.wantNil {
-				if annotations != nil {
-					t.Fatalf("expected nil annotations for %q, got %+v",
-						tt.commandName, annotations)
-				}
-				return
-			}
+	t.Run("no annotations for unknown command", func(t *testing.T) {
+		command := &cli.Command{Name: "create"}
+		annotations := resolveAnnotations(command)
+		if annotations != nil {
+			t.Fatalf("expected nil annotations, got %+v", annotations)
+		}
+	})
 
-			if annotations == nil {
-				t.Fatalf("expected non-nil annotations for %q", tt.commandName)
-			}
-			if annotations.ReadOnlyHint == nil || *annotations.ReadOnlyHint != tt.wantReadOnly {
-				t.Errorf("readOnlyHint = %v, want %v", annotations.ReadOnlyHint, tt.wantReadOnly)
-			}
-			if annotations.IdempotentHint == nil || *annotations.IdempotentHint != tt.wantIdempotent {
-				t.Errorf("idempotentHint = %v, want %v", annotations.IdempotentHint, tt.wantIdempotent)
-			}
-			if annotations.DestructiveHint == nil || *annotations.DestructiveHint != false {
-				t.Errorf("destructiveHint should be false for list commands")
-			}
-			if annotations.OpenWorldHint == nil || *annotations.OpenWorldHint != false {
-				t.Errorf("openWorldHint should be false for list commands")
-			}
-		})
-	}
+	t.Run("ReadOnly preset", func(t *testing.T) {
+		command := &cli.Command{
+			Name:        "show",
+			Annotations: cli.ReadOnly(),
+		}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations")
+		}
+		if !*annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be true")
+		}
+		if *annotations.DestructiveHint {
+			t.Error("destructiveHint should be false")
+		}
+		if !*annotations.IdempotentHint {
+			t.Error("idempotentHint should be true")
+		}
+		if *annotations.OpenWorldHint {
+			t.Error("openWorldHint should be false")
+		}
+	})
+
+	t.Run("Create preset", func(t *testing.T) {
+		command := &cli.Command{
+			Name:        "create",
+			Annotations: cli.Create(),
+		}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations")
+		}
+		if *annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be false")
+		}
+		if *annotations.DestructiveHint {
+			t.Error("destructiveHint should be false")
+		}
+		if *annotations.IdempotentHint {
+			t.Error("idempotentHint should be false")
+		}
+	})
+
+	t.Run("Idempotent preset", func(t *testing.T) {
+		command := &cli.Command{
+			Name:        "update",
+			Annotations: cli.Idempotent(),
+		}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations")
+		}
+		if *annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be false")
+		}
+		if *annotations.DestructiveHint {
+			t.Error("destructiveHint should be false")
+		}
+		if !*annotations.IdempotentHint {
+			t.Error("idempotentHint should be true")
+		}
+	})
+
+	t.Run("Destructive preset", func(t *testing.T) {
+		command := &cli.Command{
+			Name:        "delete",
+			Annotations: cli.Destructive(),
+		}
+		annotations := resolveAnnotations(command)
+		if annotations == nil {
+			t.Fatal("expected non-nil annotations")
+		}
+		if *annotations.ReadOnlyHint {
+			t.Error("readOnlyHint should be false")
+		}
+		if !*annotations.DestructiveHint {
+			t.Error("destructiveHint should be true")
+		}
+		if *annotations.IdempotentHint {
+			t.Error("idempotentHint should be false")
+		}
+	})
 }
 
 // --- Grant filtering tests ---

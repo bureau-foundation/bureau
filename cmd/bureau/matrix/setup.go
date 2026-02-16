@@ -70,6 +70,7 @@ Standard rooms created:
 				Command:     "bureau matrix setup --registration-token-file ./token --credential-file ./creds --invite @alice:bureau.local",
 			},
 		},
+		Annotations:    cli.Create(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/setup"},
 		Run: func(args []string) error {

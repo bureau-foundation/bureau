@@ -35,6 +35,7 @@ typed numeric fields.
 The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
 		Usage:          "bureau cbor encode [file]",
 		Params:         func() any { return &params },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/encode"},
 		Examples: []cli.Example{
 			{

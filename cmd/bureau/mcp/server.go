@@ -429,7 +429,7 @@ func discoverTools(command *cli.Command, path []string, tools *[]tool) {
 				name:         toolName,
 				title:        command.Summary,
 				description:  toolDescriptionText(command),
-				annotations:  deriveAnnotations(command),
+				annotations:  resolveAnnotations(command),
 				inputSchema:  inputSchema,
 				outputSchema: outputSchema,
 				command:      command,
@@ -451,11 +451,26 @@ func toolDescriptionText(command *cli.Command) string {
 	return command.Summary
 }
 
-// deriveAnnotations infers tool annotations from the command name.
-// List commands are marked read-only, idempotent, and non-destructive.
-// Returns nil when no annotations can be confidently inferred, letting
-// clients apply the MCP defaults (destructive, non-idempotent, open-world).
-func deriveAnnotations(command *cli.Command) *toolAnnotations {
+// resolveAnnotations translates a command's behavioral annotations into
+// MCP protocol hints. When a command declares explicit [cli.ToolAnnotations],
+// those are used directly. Otherwise, the function falls back to
+// name-based inference as a safety net for commands that haven't been
+// updated yet — "list" commands are assumed read-only and idempotent.
+//
+// Returns nil when no annotations are available (neither explicit nor
+// inferred), letting MCP clients apply the spec defaults (destructive,
+// non-idempotent, open-world).
+func resolveAnnotations(command *cli.Command) *toolAnnotations {
+	if command.Annotations != nil {
+		return &toolAnnotations{
+			ReadOnlyHint:    command.Annotations.ReadOnly,
+			DestructiveHint: command.Annotations.Destructive,
+			IdempotentHint:  command.Annotations.Idempotent,
+			OpenWorldHint:   command.Annotations.OpenWorld,
+		}
+	}
+
+	// Heuristic fallback for commands that haven't declared annotations.
 	switch command.Name {
 	case "list":
 		return &toolAnnotations{

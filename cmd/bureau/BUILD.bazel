@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "bureau_lib",
@@ -33,4 +33,11 @@ go_binary(
     name = "bureau",
     embed = [":bureau_lib"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau_test",
+    srcs = ["main_test.go"],
+    embed = [":bureau_lib"],
+    deps = ["//cmd/bureau/cli"],
 )

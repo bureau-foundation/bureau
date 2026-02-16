@@ -51,6 +51,7 @@ with symlinks into /nix/store for all packages in the profile.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &buildResult{} },
 		RequiredGrants: []string{"command/environment/build"},
+		Annotations:    cli.Create(),
 		Examples: []cli.Example{
 			{
 				Description: "Build the workstation profile",

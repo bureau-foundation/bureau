@@ -59,6 +59,7 @@ With a file argument, also classifies each change:
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]impactResult{} },
 		RequiredGrants: []string{"command/template/impact"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) < 1 || len(args) > 2 {
 				return fmt.Errorf("usage: bureau template impact [flags] <template-ref> [file]")

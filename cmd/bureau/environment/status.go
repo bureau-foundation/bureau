@@ -37,6 +37,7 @@ environments.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]statusEntry{} },
 		RequiredGrants: []string{"command/environment/status"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

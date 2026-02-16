@@ -60,6 +60,7 @@ cycle.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/add"},
 		Run: func(args []string) error {
 			if len(args) >= 1 {
@@ -153,6 +154,7 @@ func depRemoveCommand() *cli.Command {
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/remove"},
 		Run: func(args []string) error {
 			if len(args) >= 1 {

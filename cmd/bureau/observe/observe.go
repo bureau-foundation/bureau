@@ -411,6 +411,7 @@ Machine statuses:
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &observe.ListResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/observe/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {

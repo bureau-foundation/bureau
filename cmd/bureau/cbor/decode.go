@@ -78,6 +78,7 @@ protocol documentation) rather than raw binary.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/decode"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)

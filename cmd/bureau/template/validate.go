@@ -50,6 +50,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &templateValidationResult{} },
 		RequiredGrants: []string{"command/template/validate"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau template validate <file>")

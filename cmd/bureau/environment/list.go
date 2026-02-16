@@ -36,6 +36,7 @@ different source.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]profileInfo{} },
 		RequiredGrants: []string{"command/environment/list"},
+		Annotations:    cli.ReadOnly(),
 		Examples: []cli.Example{
 			{
 				Description: "List profiles from the default environment repo",

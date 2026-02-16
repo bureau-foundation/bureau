@@ -54,6 +54,7 @@ Examples of diagnostic notation:
 			},
 		},
 		Params:         func() any { return &params },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/diag"},
 		Run: func(args []string) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)

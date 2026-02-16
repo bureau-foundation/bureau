@@ -44,6 +44,7 @@ template overrides versus what it inherits.`,
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/show"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau template show [flags] <template-ref>")

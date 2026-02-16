@@ -183,6 +183,7 @@ unrecognized extensions.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.StoreResponse{} },
+		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/artifact/store"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -301,6 +302,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/fetch"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -369,6 +371,7 @@ storage details.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.ArtifactMetadata{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -439,6 +442,7 @@ func existsCommand() *cli.Command {
 1 if it does not. With --json, outputs the exists response.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.ExistsResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -516,6 +520,7 @@ are sorted by storage time (newest first).`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.ListResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/list"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -606,6 +611,7 @@ specify the previous target hash for CAS updates.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.TagResponse{} },
+		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
@@ -652,6 +658,7 @@ canonical artifact reference. Useful for scripting: the output is
 always the full ref.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.ResolveResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -707,6 +714,7 @@ func tagsCommand() *cli.Command {
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.TagsResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/tags"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -754,6 +762,7 @@ func deleteTagCommand() *cli.Command {
 		Summary:        "Delete a tag",
 		Usage:          "bureau artifact delete-tag <name> [flags]",
 		Params:         func() any { return &params },
+		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/delete-tag"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -789,6 +798,7 @@ type pinParams struct {
 // the human-readable confirmation verb.
 func pinToggleCommand(
 	name, summary, verb string,
+	annotations *cli.ToolAnnotations,
 	call func(*artifact.Client, context.Context, string) (*artifact.PinResponse, error),
 ) *cli.Command {
 	var params pinParams
@@ -801,6 +811,7 @@ func pinToggleCommand(
 		Usage:          usage,
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.PinResponse{} },
+		Annotations:    annotations,
 		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -830,12 +841,12 @@ func pinToggleCommand(
 
 func pinCommand() *cli.Command {
 	return pinToggleCommand("pin", "Pin an artifact (protect from GC)", "pinned",
-		(*artifact.Client).Pin)
+		cli.Idempotent(), (*artifact.Client).Pin)
 }
 
 func unpinCommand() *cli.Command {
 	return pinToggleCommand("unpin", "Unpin an artifact (allow GC)", "unpinned",
-		(*artifact.Client).Unpin)
+		cli.Idempotent(), (*artifact.Client).Unpin)
 }
 
 // --- gc ---
@@ -869,6 +880,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.GCResponse{} },
+		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/gc"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -919,6 +931,7 @@ func statusCommand() *cli.Command {
 authentication — it is a health check.`,
 		Params:         func() any { return &params },
 		Output:         func() any { return &artifact.StatusResponse{} },
+		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/status"},
 		Run: func(args []string) error {
 			ctx := context.Background()

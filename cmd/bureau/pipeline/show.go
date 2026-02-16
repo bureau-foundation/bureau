@@ -39,6 +39,7 @@ see is what the executor runs.`,
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/show"},
+		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("usage: bureau pipeline show [flags] <pipeline-ref>")

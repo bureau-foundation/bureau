@@ -11,6 +11,7 @@ import (
 	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
+	fleetcmd "github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	mcpcmd "github.com/bureau-foundation/bureau/cmd/bureau/mcp"
@@ -61,6 +62,7 @@ observation, and structured messaging via Matrix.`,
 			workspacecmd.Command(),
 			ticketcmd.Command(),
 			artifactcmd.Command(),
+			fleetcmd.Command(),
 			cborcmd.Command(),
 			{
 				Name:    "version",

@@ -62,6 +62,21 @@ type observeRequest struct {
 	// to only currently-observable targets.
 	Observable bool `json:"observable,omitempty"`
 
+	// Actor is the localpart of the acting principal for authorization
+	// queries. Used when Action is "query_authorization".
+	Actor string `json:"actor,omitempty"`
+
+	// AuthAction is the action to check for authorization queries
+	// (e.g., "observe", "ticket/create"). Named "auth_action" in JSON
+	// to avoid collision with the dispatch Action field.
+	// Used when Action is "query_authorization".
+	AuthAction string `json:"auth_action,omitempty"`
+
+	// Target is the localpart of the target principal for authorization
+	// queries. Empty for self-service actions.
+	// Used when Action is "query_authorization".
+	Target string `json:"target,omitempty"`
+
 	// Observer is the Matrix user ID of the entity making this request.
 	// Required for all actions — the daemon verifies this via Token.
 	Observer string `json:"observer,omitempty"`
@@ -265,6 +280,10 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		d.handleMachineLayout(clientConnection, request)
 	case "list":
 		d.handleList(clientConnection, request)
+	case "query_authorization":
+		d.handleQueryAuthorization(clientConnection, request)
+	case "query_grants", "query_allowances":
+		d.handleQueryPrincipalPolicy(clientConnection, request)
 	default:
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("unknown action %q", request.Action))
@@ -1125,6 +1144,20 @@ func cleanupRelayProcess(command *exec.Cmd) error {
 func (d *Daemon) sendObserveError(connection net.Conn, message string) {
 	d.logger.Warn("observe request failed", "error", message)
 	json.NewEncoder(connection).Encode(observeResponse{Error: message})
+}
+
+// sendObserveJSON marshals any response value as JSON and writes it as a
+// newline-terminated line to the client connection. Falls back to
+// sendObserveError if marshaling fails. Used by query handlers that return
+// typed response structs (auth queries, etc.).
+func (d *Daemon) sendObserveJSON(clientConnection net.Conn, response any) {
+	data, err := json.Marshal(response)
+	if err != nil {
+		d.sendObserveError(clientConnection, "marshaling observe response: "+err.Error())
+		return
+	}
+	data = append(data, '\n')
+	clientConnection.Write(data) //nolint:errcheck // best-effort response
 }
 
 // bufferedConn wraps a net.Conn with a buffered reader for reads while

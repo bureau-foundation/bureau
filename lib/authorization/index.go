@@ -4,6 +4,7 @@
 package authorization
 
 import (
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -281,25 +282,40 @@ func (idx *Index) Allowances(localpart string) []schema.Allowance {
 	return copyAllowances(allowances)
 }
 
+// Denials returns a deep copy of the resolved denials for a principal.
+// Returns nil if the principal is not in the index.
+func (idx *Index) Denials(localpart string) []schema.Denial {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	denials := idx.denials[localpart]
+	if denials == nil {
+		return nil
+	}
+	return copyDenials(denials)
+}
+
+// AllowanceDenials returns a deep copy of the resolved allowance denials
+// for a principal. Returns nil if the principal is not in the index.
+func (idx *Index) AllowanceDenials(localpart string) []schema.AllowanceDenial {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	allowanceDenials := idx.allowanceDenials[localpart]
+	if allowanceDenials == nil {
+		return nil
+	}
+	return copyAllowanceDenials(allowanceDenials)
+}
+
 // copyGrants returns a deep copy of a grant slice. Inner string slices
-// are copied so the caller cannot mutate the index's data.
+// are cloned so the caller cannot mutate the index's data.
 func copyGrants(grants []schema.Grant) []schema.Grant {
 	result := make([]schema.Grant, len(grants))
 	for i, grant := range grants {
-		result[i] = schema.Grant{
-			ExpiresAt: grant.ExpiresAt,
-			Ticket:    grant.Ticket,
-			GrantedBy: grant.GrantedBy,
-			GrantedAt: grant.GrantedAt,
-		}
-		if grant.Actions != nil {
-			result[i].Actions = make([]string, len(grant.Actions))
-			copy(result[i].Actions, grant.Actions)
-		}
-		if grant.Targets != nil {
-			result[i].Targets = make([]string, len(grant.Targets))
-			copy(result[i].Targets, grant.Targets)
-		}
+		grant.Actions = slices.Clone(grant.Actions)
+		grant.Targets = slices.Clone(grant.Targets)
+		result[i] = grant
 	}
 	return result
 }
@@ -308,14 +324,31 @@ func copyGrants(grants []schema.Grant) []schema.Grant {
 func copyAllowances(allowances []schema.Allowance) []schema.Allowance {
 	result := make([]schema.Allowance, len(allowances))
 	for i, allowance := range allowances {
-		if allowance.Actions != nil {
-			result[i].Actions = make([]string, len(allowance.Actions))
-			copy(result[i].Actions, allowance.Actions)
-		}
-		if allowance.Actors != nil {
-			result[i].Actors = make([]string, len(allowance.Actors))
-			copy(result[i].Actors, allowance.Actors)
-		}
+		allowance.Actions = slices.Clone(allowance.Actions)
+		allowance.Actors = slices.Clone(allowance.Actors)
+		result[i] = allowance
+	}
+	return result
+}
+
+// copyDenials returns a deep copy of a denial slice.
+func copyDenials(denials []schema.Denial) []schema.Denial {
+	result := make([]schema.Denial, len(denials))
+	for i, denial := range denials {
+		denial.Actions = slices.Clone(denial.Actions)
+		denial.Targets = slices.Clone(denial.Targets)
+		result[i] = denial
+	}
+	return result
+}
+
+// copyAllowanceDenials returns a deep copy of an allowance denial slice.
+func copyAllowanceDenials(denials []schema.AllowanceDenial) []schema.AllowanceDenial {
+	result := make([]schema.AllowanceDenial, len(denials))
+	for i, denial := range denials {
+		denial.Actions = slices.Clone(denial.Actions)
+		denial.Actors = slices.Clone(denial.Actors)
+		result[i] = denial
 	}
 	return result
 }

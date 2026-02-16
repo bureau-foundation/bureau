@@ -61,6 +61,31 @@ type QueryLayoutResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// queryDaemonRaw connects to the daemon's observe socket, sends the
+// JSON-encoded request, and returns the raw response line. This is the
+// shared transport layer for all observe query functions — each caller
+// sets the action on its typed request struct before passing it here,
+// then unmarshals the returned bytes into its own response type.
+func queryDaemonRaw(daemonSocket string, request any) ([]byte, error) {
+	connection, err := net.Dial("unix", daemonSocket)
+	if err != nil {
+		return nil, fmt.Errorf("dial daemon socket %s: %w", daemonSocket, err)
+	}
+	defer connection.Close()
+
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return nil, fmt.Errorf("send observe request: %w", err)
+	}
+
+	reader := bufio.NewReader(connection)
+	responseLine, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read observe response: %w", err)
+	}
+
+	return responseLine, nil
+}
+
 // QueryLayout connects to the daemon's observe socket and requests the
 // expanded layout for a channel. The daemon resolves the channel alias
 // to a room ID, fetches the m.bureau.layout state event, fetches room
@@ -71,29 +96,14 @@ type QueryLayoutResponse struct {
 // (typically DefaultDaemonSocket). The caller must set Channel, Observer,
 // and Token on the request; the Action field is set automatically.
 func QueryLayout(daemonSocket string, request QueryLayoutRequest) (*Layout, error) {
-	connection, err := net.Dial("unix", daemonSocket)
-	if err != nil {
-		return nil, fmt.Errorf("dial daemon socket %s: %w", daemonSocket, err)
-	}
-	defer connection.Close()
-
-	// Send the query request as JSON + newline (same line protocol as
-	// ObserveRequest).
 	request.Action = "query_layout"
-	if err := json.NewEncoder(connection).Encode(request); err != nil {
-		return nil, fmt.Errorf("send query_layout request: %w", err)
-	}
-
-	// Read the JSON response line. The daemon closes the connection
-	// after sending this — no binary protocol follows.
-	reader := bufio.NewReader(connection)
-	responseLine, err := reader.ReadBytes('\n')
+	data, err := queryDaemonRaw(daemonSocket, request)
 	if err != nil {
-		return nil, fmt.Errorf("read query_layout response: %w", err)
+		return nil, err
 	}
 
 	var response QueryLayoutResponse
-	if err := json.Unmarshal(responseLine, &response); err != nil {
+	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, fmt.Errorf("unmarshal query_layout response: %w", err)
 	}
 

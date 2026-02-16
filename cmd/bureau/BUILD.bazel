@@ -13,6 +13,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//cmd/bureau/artifact",
+        "//cmd/bureau/auth",
         "//cmd/bureau/cbor",
         "//cmd/bureau/cli",
         "//cmd/bureau/credential",

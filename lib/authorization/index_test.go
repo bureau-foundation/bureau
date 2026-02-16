@@ -382,4 +382,108 @@ func TestIndex_NilForUnknownPrincipal(t *testing.T) {
 	if allowances := index.Allowances("nonexistent"); allowances != nil {
 		t.Errorf("Allowances for unknown = %v, want nil", allowances)
 	}
+	if denials := index.Denials("nonexistent"); denials != nil {
+		t.Errorf("Denials for unknown = %v, want nil", denials)
+	}
+	if allowanceDenials := index.AllowanceDenials("nonexistent"); allowanceDenials != nil {
+		t.Errorf("AllowanceDenials for unknown = %v, want nil", allowanceDenials)
+	}
+}
+
+func TestIndex_DenialsAccessor(t *testing.T) {
+	index := NewIndex()
+
+	policy := schema.AuthorizationPolicy{
+		Grants: []schema.Grant{
+			{Actions: []string{"observe/**"}, Targets: []string{"**"}},
+		},
+		Denials: []schema.Denial{
+			{Actions: []string{"observe/read-write"}, Targets: []string{"secret/**"}},
+			{Actions: []string{"interrupt/**"}},
+		},
+	}
+
+	index.SetPrincipal("agent/alpha", policy)
+
+	denials := index.Denials("agent/alpha")
+	if len(denials) != 2 {
+		t.Fatalf("Denials length = %d, want 2", len(denials))
+	}
+	if denials[0].Actions[0] != "observe/read-write" {
+		t.Errorf("denial[0] action = %q, want observe/read-write", denials[0].Actions[0])
+	}
+	if denials[1].Actions[0] != "interrupt/**" {
+		t.Errorf("denial[1] action = %q, want interrupt/**", denials[1].Actions[0])
+	}
+
+	// Verify deep copy: mutating the returned slice should not affect the index.
+	denials[0].Actions[0] = "mutated"
+	original := index.Denials("agent/alpha")
+	if original[0].Actions[0] != "observe/read-write" {
+		t.Errorf("mutation leaked into index: got %q", original[0].Actions[0])
+	}
+}
+
+func TestIndex_AllowanceDenialsAccessor(t *testing.T) {
+	index := NewIndex()
+
+	policy := schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe/**"}, Actors: []string{"**"}},
+		},
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**"}},
+		},
+	}
+
+	index.SetPrincipal("agent/alpha", policy)
+
+	allowanceDenials := index.AllowanceDenials("agent/alpha")
+	if len(allowanceDenials) != 1 {
+		t.Fatalf("AllowanceDenials length = %d, want 1", len(allowanceDenials))
+	}
+	if allowanceDenials[0].Actions[0] != "observe/read-write" {
+		t.Errorf("allowance denial action = %q, want observe/read-write", allowanceDenials[0].Actions[0])
+	}
+	if allowanceDenials[0].Actors[0] != "untrusted/**" {
+		t.Errorf("allowance denial actor = %q, want untrusted/**", allowanceDenials[0].Actors[0])
+	}
+
+	// Verify deep copy.
+	allowanceDenials[0].Actors[0] = "mutated"
+	original := index.AllowanceDenials("agent/alpha")
+	if original[0].Actors[0] != "untrusted/**" {
+		t.Errorf("mutation leaked into index: got %q", original[0].Actors[0])
+	}
+}
+
+func TestIndex_DenialsRemovedWithPrincipal(t *testing.T) {
+	index := NewIndex()
+
+	policy := schema.AuthorizationPolicy{
+		Denials: []schema.Denial{
+			{Actions: []string{"observe/**"}},
+		},
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe/**"}, Actors: []string{"**"}},
+		},
+	}
+
+	index.SetPrincipal("agent/alpha", policy)
+
+	if denials := index.Denials("agent/alpha"); len(denials) != 1 {
+		t.Fatalf("Denials before remove = %d, want 1", len(denials))
+	}
+	if allowanceDenials := index.AllowanceDenials("agent/alpha"); len(allowanceDenials) != 1 {
+		t.Fatalf("AllowanceDenials before remove = %d, want 1", len(allowanceDenials))
+	}
+
+	index.RemovePrincipal("agent/alpha")
+
+	if denials := index.Denials("agent/alpha"); denials != nil {
+		t.Errorf("Denials after remove = %v, want nil", denials)
+	}
+	if allowanceDenials := index.AllowanceDenials("agent/alpha"); allowanceDenials != nil {
+		t.Errorf("AllowanceDenials after remove = %v, want nil", allowanceDenials)
+	}
 }

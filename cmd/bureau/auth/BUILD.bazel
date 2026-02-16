@@ -1,0 +1,21 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "check.go",
+        "command.go",
+        "doc.go",
+        "policy.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/schema",
+        "//observe",
+    ],
+)

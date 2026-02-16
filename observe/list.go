@@ -4,10 +4,8 @@
 package observe
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 )
 
 // ListRequest is sent to the daemon's observe socket to request a list
@@ -96,25 +94,14 @@ type ListMachine struct {
 // (typically DefaultDaemonSocket). The caller must set Observer, Token,
 // and Observable on the request; the Action field is set automatically.
 func ListTargets(daemonSocket string, request ListRequest) (*ListResponse, error) {
-	connection, err := net.Dial("unix", daemonSocket)
-	if err != nil {
-		return nil, fmt.Errorf("dial daemon socket %s: %w", daemonSocket, err)
-	}
-	defer connection.Close()
-
 	request.Action = "list"
-	if err := json.NewEncoder(connection).Encode(request); err != nil {
-		return nil, fmt.Errorf("send list request: %w", err)
-	}
-
-	reader := bufio.NewReader(connection)
-	responseLine, err := reader.ReadBytes('\n')
+	data, err := queryDaemonRaw(daemonSocket, request)
 	if err != nil {
-		return nil, fmt.Errorf("read list response: %w", err)
+		return nil, err
 	}
 
 	var response ListResponse
-	if err := json.Unmarshal(responseLine, &response); err != nil {
+	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, fmt.Errorf("unmarshal list response: %w", err)
 	}
 

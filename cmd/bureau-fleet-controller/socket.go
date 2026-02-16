@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -27,6 +28,7 @@ func (fc *FleetController) registerActions(server *service.SocketServer) {
 	server.HandleAuth("place", fc.handlePlace)
 	server.HandleAuth("unplace", fc.handleUnplace)
 	server.HandleAuth("plan", fc.handlePlan)
+	server.HandleAuth("machine-health", fc.handleMachineHealth)
 }
 
 // --- Authorization helper ---
@@ -525,4 +527,80 @@ func (fc *FleetController) handlePlan(ctx context.Context, token *servicetoken.T
 		Candidates:      candidates,
 		CurrentMachines: currentMachines,
 	}, nil
+}
+
+// --- Machine health ---
+
+// machineHealthRequest optionally identifies a single machine to
+// inspect. If Machine is empty, all machines are returned.
+type machineHealthRequest struct {
+	Machine string `cbor:"machine"`
+}
+
+// machineHealthResponse contains health state for one or more machines.
+type machineHealthResponse struct {
+	Machines []machineHealthEntry `cbor:"machines"`
+}
+
+// machineHealthEntry is the health state of a single machine.
+type machineHealthEntry struct {
+	Localpart        string `cbor:"localpart"`
+	HealthState      string `cbor:"health_state"`
+	LastHeartbeat    string `cbor:"last_heartbeat"`
+	StalenessSeconds int    `cbor:"staleness_seconds"`
+}
+
+// handleMachineHealth returns the health state of tracked machines.
+// If a specific machine is requested, returns only that machine.
+// Requires "fleet/machine-health".
+func (fc *FleetController) handleMachineHealth(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "fleet/machine-health"); err != nil {
+		return nil, err
+	}
+
+	var request machineHealthRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	now := fc.clock.Now()
+
+	if request.Machine != "" {
+		machine, exists := fc.machines[request.Machine]
+		if !exists {
+			return nil, fmt.Errorf("machine %s not found", request.Machine)
+		}
+		return machineHealthResponse{
+			Machines: []machineHealthEntry{buildHealthEntry(request.Machine, machine, now)},
+		}, nil
+	}
+
+	entries := make([]machineHealthEntry, 0, len(fc.machines))
+	for localpart, machine := range fc.machines {
+		entries = append(entries, buildHealthEntry(localpart, machine, now))
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Localpart < entries[j].Localpart
+	})
+
+	return machineHealthResponse{Machines: entries}, nil
+}
+
+// buildHealthEntry constructs a machineHealthEntry from a machineState.
+func buildHealthEntry(localpart string, machine *machineState, now time.Time) machineHealthEntry {
+	entry := machineHealthEntry{
+		Localpart:   localpart,
+		HealthState: machine.healthState,
+	}
+	if entry.HealthState == "" {
+		entry.HealthState = "unknown"
+	}
+	if !machine.lastHeartbeat.IsZero() {
+		entry.LastHeartbeat = machine.lastHeartbeat.UTC().Format(time.RFC3339)
+		entry.StalenessSeconds = int(now.Sub(machine.lastHeartbeat).Seconds())
+	}
+	return entry
 }

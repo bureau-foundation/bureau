@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -90,6 +91,15 @@ type machineState struct {
 	// configRoomID is the machine's config room ID, used for writing
 	// PrincipalAssignment events.
 	configRoomID string
+
+	// lastHeartbeat is the time the fleet controller last received a
+	// MachineStatus event for this machine. Used for staleness
+	// detection in checkMachineHealth.
+	lastHeartbeat time.Time
+
+	// healthState tracks the machine's current health: "online",
+	// "suspect", or "offline".
+	healthState string
 }
 
 // fleetServiceState tracks a fleet service definition and its current
@@ -322,7 +332,10 @@ func (fc *FleetController) processMachineInfoEvent(event messaging.Event) {
 }
 
 // processMachineStatusEvent parses a machine status event and updates
-// the machines map.
+// the machines map. Each status event is treated as a heartbeat: the
+// machine's lastHeartbeat timestamp is set to the current clock time,
+// and its healthState is set to "online". If the machine was previously
+// offline or suspect, recovery is logged.
 func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 	stateKey := *event.StateKey
 	if len(event.Content) == 0 {
@@ -345,7 +358,19 @@ func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 		}
 		fc.machines[stateKey] = machine
 	}
+
+	previousHealthState := machine.healthState
+
 	machine.status = content
+	machine.lastHeartbeat = fc.clock.Now()
+	machine.healthState = healthOnline
+
+	if previousHealthState == healthOffline || previousHealthState == healthSuspect {
+		fc.logger.Info("machine recovered",
+			"machine", stateKey,
+			"previous_state", previousHealthState,
+		)
+	}
 }
 
 // processMachineConfigEvent parses a machine config event from a
@@ -456,6 +481,10 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Reconcile after processing all events: compare desired replica
 	// counts with actual instance counts and place/unplace as needed.
 	fc.reconcile(ctx)
+
+	// Evaluate machine health after reconciliation so that newly
+	// stale machines trigger failover in the same sync cycle.
+	fc.checkMachineHealth(ctx)
 }
 
 // processLeave handles a room leave event. If the room was a known

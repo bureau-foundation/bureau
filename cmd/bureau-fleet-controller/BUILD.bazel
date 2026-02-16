@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "doc.go",
         "execute.go",
+        "health.go",
         "main.go",
         "placement.go",
         "socket.go",
@@ -37,6 +38,7 @@ go_test(
     name = "bureau-fleet-controller_test",
     srcs = [
         "execute_test.go",
+        "health_test.go",
         "placement_test.go",
         "socket_test.go",
         "sync_test.go",

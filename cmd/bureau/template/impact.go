@@ -12,8 +12,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -24,8 +22,8 @@ import (
 // impactParams holds the parameters for the template impact command. The
 // template ref and optional file path are positional in CLI mode.
 type impactParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON"`
 }
 
 // impactCommand returns the "impact" subcommand for analyzing the effect of a
@@ -57,9 +55,6 @@ With a file argument, also classifies each change:
 				Description: "Classify what would change if you pushed a modified template",
 				Command:     "bureau template impact bureau/template:llm-agent llm-agent.json",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("impact", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/impact"},
@@ -121,7 +116,7 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			return printImpactResults(affected, targetRefCanonical, proposedContent != nil, params.OutputJSON)
+			return printImpactResults(affected, targetRefCanonical, proposedContent != nil, &params.JSONOutput)
 		},
 	}
 }
@@ -499,9 +494,9 @@ func classifyTemplateChange(current, proposed *schema.TemplateContent) (string, 
 }
 
 // printImpactResults formats and prints the impact analysis.
-func printImpactResults(results []*impactResult, targetRef string, hasFile bool, asJSON bool) error {
-	if asJSON {
-		return cli.WriteJSON(results)
+func printImpactResults(results []*impactResult, targetRef string, hasFile bool, jsonOutput *cli.JSONOutput) error {
+	if done, err := jsonOutput.EmitJSON(results); done {
+		return err
 	}
 
 	if len(results) == 0 {

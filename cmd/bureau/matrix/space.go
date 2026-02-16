@@ -10,8 +10,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -38,9 +36,9 @@ workspaces, project channels, and service directories.`,
 // spaceCreateParams holds the parameters for the matrix space create command.
 type spaceCreateParams struct {
 	cli.SessionConfig
-	Name       string `json:"name"  flag:"name"  desc:"space display name (defaults to alias)"`
-	Topic      string `json:"topic" flag:"topic" desc:"space topic"`
-	OutputJSON bool   `json:"-"     flag:"json"  desc:"output as JSON"`
+	Name  string `json:"name"  flag:"name"  desc:"space display name (defaults to alias)"`
+	Topic string `json:"topic" flag:"topic" desc:"space topic"`
+	cli.JSONOutput
 }
 
 // spaceCreateResult is the JSON output for matrix space create.
@@ -71,9 +69,6 @@ if not specified.`,
 				Description: "Create a space with a topic",
 				Command:     "bureau matrix space create research --topic 'Research coordination' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("space create", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/create"},
@@ -113,11 +108,11 @@ if not specified.`,
 				return fmt.Errorf("create space: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(spaceCreateResult{
-					RoomID: response.RoomID,
-					Alias:  alias,
-				})
+			if done, err := params.EmitJSON(spaceCreateResult{
+				RoomID: response.RoomID,
+				Alias:  alias,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintln(os.Stdout, response.RoomID)
@@ -129,7 +124,7 @@ if not specified.`,
 // spaceListParams holds the parameters for the matrix space list command.
 type spaceListParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // spaceEntry holds the JSON-serializable data for a single space.
@@ -156,9 +151,6 @@ table of room ID, alias, and name.`,
 				Description: "List spaces using a credential file",
 				Command:     "bureau matrix space list --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("space list", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/list"},
@@ -193,8 +185,8 @@ table of room ID, alias, and name.`,
 				})
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(spaces)
+			if done, err := params.EmitJSON(spaces); done {
+				return err
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -210,7 +202,7 @@ table of room ID, alias, and name.`,
 // spaceDeleteParams holds the parameters for the matrix space delete command.
 type spaceDeleteParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // spaceDeleteResult is the JSON output for matrix space delete.
@@ -240,9 +232,6 @@ reclaim the room.`,
 				Command:     "bureau matrix space delete '!abc123:bureau.local' --credential-file ./creds",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("space delete", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/delete"},
 		Run: func(args []string) error {
@@ -271,8 +260,8 @@ reclaim the room.`,
 				return fmt.Errorf("leave space: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(spaceDeleteResult{RoomID: roomID})
+			if done, err := params.EmitJSON(spaceDeleteResult{RoomID: roomID}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "Left space %s\n", roomID)
@@ -284,7 +273,7 @@ reclaim the room.`,
 // spaceMembersParams holds the parameters for the matrix space members command.
 type spaceMembersParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func spaceMembersCommand() *cli.Command {
@@ -303,9 +292,6 @@ Displays a table of user ID, display name, and membership state
 				Description: "List members by alias",
 				Command:     "bureau matrix space members '#my-project:bureau.local' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("space members", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/members"},
@@ -336,8 +322,8 @@ Displays a table of user ID, display name, and membership state
 				return fmt.Errorf("get space members: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(members)
+			if done, err := params.EmitJSON(members); done {
+				return err
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

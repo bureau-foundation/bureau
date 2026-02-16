@@ -10,7 +10,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -48,7 +47,7 @@ type userCreateParams struct {
 	PasswordFile          string `json:"-"           flag:"password-file"           desc:"path to file containing password, or - to prompt interactively (default: derive from registration token)"`
 	ServerName            string `json:"server_name" flag:"server-name"             desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
 	Operator              bool   `json:"operator"    flag:"operator"                desc:"invite the user to all Bureau infrastructure rooms (requires --credential-file)"`
-	OutputJSON            bool   `json:"-"           flag:"json"                    desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // userCreateResult is the JSON output for matrix user create.
@@ -101,9 +100,6 @@ and proceeds directly to ensuring room membership.`,
 				Description: "Create an account with explicit token file",
 				Command:     "bureau matrix user create ben --registration-token-file .env-token --password-file -",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("user create", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/create"},
@@ -244,15 +240,15 @@ and proceeds directly to ensuring room membership.`,
 				}
 			}
 
-			if params.OutputJSON {
-				result := userCreateResult{
-					UserID:        session.UserID(),
-					AlreadyExists: alreadyExists,
-				}
-				if !alreadyExists {
-					result.AccessToken = session.AccessToken()
-				}
-				return cli.WriteJSON(result)
+			result := userCreateResult{
+				UserID:        session.UserID(),
+				AlreadyExists: alreadyExists,
+			}
+			if !alreadyExists {
+				result.AccessToken = session.AccessToken()
+			}
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			return nil
@@ -386,8 +382,8 @@ func readPassword(path string) (*secret.Buffer, error) {
 // userListParams holds the parameters for the matrix user list command.
 type userListParams struct {
 	cli.SessionConfig
-	Room       string `json:"room" flag:"room" desc:"room alias or ID to list members of"`
-	OutputJSON bool   `json:"-"    flag:"json" desc:"output as JSON"`
+	Room string `json:"room" flag:"room" desc:"room alias or ID to list members of"`
+	cli.JSONOutput
 }
 
 // userListEntry holds the JSON-serializable data for a single user listing.
@@ -422,9 +418,6 @@ authenticated user has joined.`,
 				Command:     "bureau matrix user list --credential-file ./creds",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("user list", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/list"},
 		Run: func(args []string) error {
@@ -441,15 +434,15 @@ authenticated user has joined.`,
 			}
 
 			if params.Room != "" {
-				return listRoomMembers(ctx, sess, params.Room, params.OutputJSON)
+				return listRoomMembers(ctx, sess, params.Room, &params.JSONOutput)
 			}
-			return listAllMembers(ctx, sess, params.OutputJSON)
+			return listAllMembers(ctx, sess, &params.JSONOutput)
 		},
 	}
 }
 
 // listRoomMembers lists members of a single room, resolving aliases as needed.
-func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAlias string, outputJSON bool) error {
+func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAlias string, jsonOutput *cli.JSONOutput) error {
 	roomID, err := resolveRoom(ctx, session, roomIDOrAlias)
 	if err != nil {
 		return err
@@ -460,16 +453,16 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 		return fmt.Errorf("get room members: %w", err)
 	}
 
-	if outputJSON {
-		var entries []userListEntry
-		for _, member := range members {
-			entries = append(entries, userListEntry{
-				UserID:      member.UserID,
-				DisplayName: member.DisplayName,
-				Membership:  member.Membership,
-			})
-		}
-		return cli.WriteJSON(entries)
+	var entries []userListEntry
+	for _, member := range members {
+		entries = append(entries, userListEntry{
+			UserID:      member.UserID,
+			DisplayName: member.DisplayName,
+			Membership:  member.Membership,
+		})
+	}
+	if done, err := jsonOutput.EmitJSON(entries); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -482,7 +475,7 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 
 // listAllMembers aggregates unique members across all joined rooms, fetching
 // display names for each unique user.
-func listAllMembers(ctx context.Context, session *messaging.Session, outputJSON bool) error {
+func listAllMembers(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
 	rooms, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return fmt.Errorf("get joined rooms: %w", err)
@@ -505,22 +498,22 @@ func listAllMembers(ctx context.Context, session *messaging.Session, outputJSON 
 		}
 	}
 
-	if outputJSON {
-		var entries []userListEntry
-		for _, member := range uniqueMembers {
-			displayName := member.DisplayName
-			if displayName == "" {
-				fetched, err := session.GetDisplayName(ctx, member.UserID)
-				if err == nil {
-					displayName = fetched
-				}
+	var entries []userListEntry
+	for _, member := range uniqueMembers {
+		displayName := member.DisplayName
+		if displayName == "" {
+			fetched, err := session.GetDisplayName(ctx, member.UserID)
+			if err == nil {
+				displayName = fetched
 			}
-			entries = append(entries, userListEntry{
-				UserID:      member.UserID,
-				DisplayName: displayName,
-			})
 		}
-		return cli.WriteJSON(entries)
+		entries = append(entries, userListEntry{
+			UserID:      member.UserID,
+			DisplayName: displayName,
+		})
+	}
+	if done, err := jsonOutput.EmitJSON(entries); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -547,8 +540,8 @@ func listAllMembers(ctx context.Context, session *messaging.Session, outputJSON 
 // userInviteParams holds the parameters for the matrix user invite command.
 type userInviteParams struct {
 	cli.SessionConfig
-	Room       string `json:"room" flag:"room" desc:"room alias or ID to invite the user to (required)"`
-	OutputJSON bool   `json:"-"    flag:"json" desc:"output as JSON"`
+	Room string `json:"room" flag:"room" desc:"room alias or ID to invite the user to (required)"`
+	cli.JSONOutput
 }
 
 // userInviteResult is the JSON output for matrix user invite.
@@ -572,9 +565,6 @@ func userInviteCommand() *cli.Command {
 				Description: "Invite a user to a room by alias",
 				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("invite", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/invite"},
@@ -608,11 +598,11 @@ func userInviteCommand() *cli.Command {
 				return fmt.Errorf("invite user: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(userInviteResult{
-					UserID: targetUserID,
-					RoomID: roomID,
-				})
+			if done, err := params.EmitJSON(userInviteResult{
+				UserID: targetUserID,
+				RoomID: roomID,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "Invited %s to %s\n", targetUserID, params.Room)
@@ -624,9 +614,9 @@ func userInviteCommand() *cli.Command {
 // userKickParams holds the parameters for the matrix user kick command.
 type userKickParams struct {
 	cli.SessionConfig
-	Room       string `json:"room"   flag:"room"   desc:"room alias or ID to kick the user from (required)"`
-	Reason     string `json:"reason" flag:"reason" desc:"reason for the kick"`
-	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+	Room   string `json:"room"   flag:"room"   desc:"room alias or ID to kick the user from (required)"`
+	Reason string `json:"reason" flag:"reason" desc:"reason for the kick"`
+	cli.JSONOutput
 }
 
 // userKickResult is the JSON output for matrix user kick.
@@ -654,9 +644,6 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				Description: "Kick with a reason",
 				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machine:bureau.local' --reason 'decommissioned' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("kick", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/kick"},
@@ -690,11 +677,11 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				return fmt.Errorf("kick user: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(userKickResult{
-					UserID: targetUserID,
-					RoomID: roomID,
-				})
+			if done, err := params.EmitJSON(userKickResult{
+				UserID: targetUserID,
+				RoomID: roomID,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "Kicked %s from %s\n", targetUserID, params.Room)
@@ -706,7 +693,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 // userWhoAmIParams holds the parameters for the matrix user whoami command.
 type userWhoAmIParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // userWhoAmIResult is the JSON output for matrix user whoami.
@@ -731,9 +718,6 @@ account is in use.`,
 				Command:     "bureau matrix user whoami --credential-file ./creds",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("whoami", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/whoami"},
 		Run: func(args []string) error {
@@ -754,8 +738,8 @@ account is in use.`,
 				return fmt.Errorf("whoami: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(userWhoAmIResult{UserID: userID})
+			if done, err := params.EmitJSON(userWhoAmIResult{UserID: userID}); done {
+				return err
 			}
 
 			fmt.Fprintln(os.Stdout, userID)

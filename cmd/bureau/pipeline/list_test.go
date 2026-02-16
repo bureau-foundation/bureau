@@ -35,7 +35,7 @@ func TestListPipelines(t *testing.T) {
 	cmd := listCommand()
 	// The command writes to stdout; we verify it doesn't error.
 	// The --server-name flag must match the mock alias.
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	if err := cmd.Run([]string{"bureau/pipeline"}); err != nil {
@@ -57,7 +57,7 @@ func TestListPipelinesJSON(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := listCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local", "--json"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local", "--json"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	if err := cmd.Run([]string{"bureau/pipeline"}); err != nil {
@@ -73,7 +73,7 @@ func TestListPipelinesEmptyRoom(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := listCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	// No pipelines — command should still succeed (prints "no pipelines found").
@@ -88,7 +88,7 @@ func TestListPipelinesRoomNotFound(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := listCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"nonexistent/room"})

@@ -359,9 +359,9 @@ func defaultTmuxSocket() string {
 
 // listParams holds the parameters for the observe list command.
 type listParams struct {
+	cli.JSONOutput
 	Observable bool   `json:"observable"   flag:"observable"   desc:"show only targets that can be observed"`
 	SocketPath string `json:"-"            flag:"socket"       desc:"daemon observation socket path" default:"/run/bureau/observe.sock"`
-	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON"`
 }
 
 // ListCommand returns the "list" subcommand for querying observable targets.
@@ -409,9 +409,6 @@ Machine statuses:
 				Command:     "bureau list --json",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("list", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/observe/list"},
 		Run: func(args []string) error {
@@ -433,8 +430,8 @@ Machine statuses:
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			return formatListOutput(response)

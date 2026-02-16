@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -17,10 +15,10 @@ import (
 
 // pipelineExecuteParams holds the parameters for the pipeline execute command.
 type pipelineExecuteParams struct {
+	cli.JSONOutput
 	Machine    string   `json:"machine"     flag:"machine"     desc:"target machine localpart (required)"`
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
 	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	OutputJSON bool     `json:"-"           flag:"json"         desc:"output as JSON"`
 }
 
 // executeResult is the JSON output for pipeline execute.
@@ -62,9 +60,6 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				Description: "Run a project-specific deploy pipeline",
 				Command:     "bureau pipeline execute iree/pipeline:deploy --machine machine/builder",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("execute", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/execute"},
@@ -141,15 +136,15 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return fmt.Errorf("sending pipeline.execute command: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(executeResult{
-					Machine:      params.Machine,
-					PipelineRef:  pipelineRefString,
-					ConfigRoom:   configRoomAlias,
-					ConfigRoomID: configRoomID,
-					EventID:      eventID,
-					RequestID:    requestID,
-				})
+			if done, err := params.EmitJSON(executeResult{
+				Machine:      params.Machine,
+				PipelineRef:  pipelineRefString,
+				ConfigRoom:   configRoomAlias,
+				ConfigRoomID: configRoomID,
+				EventID:      eventID,
+				RequestID:    requestID,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "pipeline.execute sent to %s\n", params.Machine)

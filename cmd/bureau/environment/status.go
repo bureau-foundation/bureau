@@ -11,14 +11,12 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
 // environmentStatusParams holds the parameters for the environment status command.
 type environmentStatusParams struct {
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func statusCommand() *cli.Command {
@@ -35,10 +33,7 @@ for active profile deployments.
 Each entry shows the profile name and the Nix store path it resolves
 to. If two machines show the same store path, they have byte-identical
 environments.`,
-		Usage: "bureau environment status [flags]",
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("status", &params)
-		},
+		Usage:          "bureau environment status [flags]",
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/environment/status"},
 		Run: func(args []string) error {
@@ -63,18 +58,15 @@ environments.`,
 				}
 			}
 
+			if done, err := params.EmitJSON(entries); done {
+				return err
+			}
+
 			if len(entries) == 0 {
-				if params.OutputJSON {
-					return cli.WriteJSON([]statusEntry{})
-				}
 				fmt.Fprintln(os.Stderr, "No environment profiles deployed.")
 				fmt.Fprintln(os.Stderr, "")
 				fmt.Fprintln(os.Stderr, "Build one with: bureau environment build <profile>")
 				return nil
-			}
-
-			if params.OutputJSON {
-				return cli.WriteJSON(entries)
 			}
 
 			tw := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)

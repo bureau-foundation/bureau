@@ -10,8 +10,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -46,7 +44,7 @@ type roomCreateParams struct {
 	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
 	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field" default:"bureau.local"`
 	MemberStateEvents []string `json:"member_state_events" flag:"member-state-event" desc:"state event type that members can set (repeatable)"`
-	OutputJSON        bool     `json:"-"                  flag:"json"               desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // roomCreateResult is the JSON output for matrix room create.
@@ -81,9 +79,6 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				Description: "Create a room where members can publish machine keys",
 				Command:     "bureau matrix room create bureau/machine --space '#bureau:bureau.local' --name 'Bureau Machine' --member-state-event m.bureau.machine_key --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("room create", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/create"},
@@ -145,12 +140,12 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				return fmt.Errorf("add room as child of space %s: %w", spaceRoomID, err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(roomCreateResult{
-					RoomID:  response.RoomID,
-					Alias:   alias,
-					SpaceID: spaceRoomID,
-				})
+			if done, err := params.EmitJSON(roomCreateResult{
+				RoomID:  response.RoomID,
+				Alias:   alias,
+				SpaceID: spaceRoomID,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintln(os.Stdout, response.RoomID)
@@ -162,8 +157,8 @@ such as m.bureau.machine_key or m.bureau.service.`,
 // roomListParams holds the parameters for the matrix room list command.
 type roomListParams struct {
 	cli.SessionConfig
-	Space      string `json:"space"  flag:"space"  desc:"list only rooms that are children of this space (alias or room ID)"`
-	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+	Space string `json:"space" flag:"space" desc:"list only rooms that are children of this space (alias or room ID)"`
+	cli.JSONOutput
 }
 
 func roomListCommand() *cli.Command {
@@ -186,9 +181,6 @@ lists all joined rooms that are NOT spaces.`,
 				Command:     "bureau matrix room list --credential-file ./creds",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("room list", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/list"},
 		Run: func(args []string) error {
@@ -205,9 +197,9 @@ lists all joined rooms that are NOT spaces.`,
 			}
 
 			if params.Space != "" {
-				return listSpaceChildren(ctx, sess, params.Space, params.OutputJSON)
+				return listSpaceChildren(ctx, sess, params.Space, &params.JSONOutput)
 			}
-			return listAllRooms(ctx, sess, params.OutputJSON)
+			return listAllRooms(ctx, sess, &params.JSONOutput)
 		},
 	}
 }
@@ -222,7 +214,7 @@ type roomEntry struct {
 
 // listSpaceChildren lists rooms that are children of a space by reading
 // m.space.child state events from the space, then inspecting each child.
-func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string, outputJSON bool) error {
+func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string, jsonOutput *cli.JSONOutput) error {
 	spaceRoomID, err := resolveRoom(ctx, session, spaceTarget)
 	if err != nil {
 		return fmt.Errorf("resolve space: %w", err)
@@ -254,8 +246,8 @@ func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTar
 		})
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(rooms)
+	if done, err := jsonOutput.EmitJSON(rooms); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -267,7 +259,7 @@ func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTar
 }
 
 // listAllRooms lists all joined rooms that are not spaces.
-func listAllRooms(ctx context.Context, session *messaging.Session, outputJSON bool) error {
+func listAllRooms(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return fmt.Errorf("list joined rooms: %w", err)
@@ -288,8 +280,8 @@ func listAllRooms(ctx context.Context, session *messaging.Session, outputJSON bo
 		})
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(rooms)
+	if done, err := jsonOutput.EmitJSON(rooms); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -332,7 +324,7 @@ func inspectRoomState(ctx context.Context, session *messaging.Session, roomID st
 // roomDeleteParams holds the parameters for the matrix room delete command.
 type roomDeleteParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // roomDeleteResult is the JSON output for matrix room delete.
@@ -360,9 +352,6 @@ to clear the m.space.child event in the space.`,
 				Description: "Leave a room by alias",
 				Command:     "bureau matrix room delete '#iree/amdgpu/general:bureau.local' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("room delete", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/delete"},
@@ -392,8 +381,8 @@ to clear the m.space.child event in the space.`,
 				return fmt.Errorf("leave room: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(roomDeleteResult{RoomID: roomID})
+			if done, err := params.EmitJSON(roomDeleteResult{RoomID: roomID}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "Left room %s\n", roomID)
@@ -405,7 +394,7 @@ to clear the m.space.child event in the space.`,
 // roomMembersParams holds the parameters for the matrix room members command.
 type roomMembersParams struct {
 	cli.SessionConfig
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func roomMembersCommand() *cli.Command {
@@ -424,9 +413,6 @@ Displays a table of user ID, display name, and membership state
 				Description: "List room members",
 				Command:     "bureau matrix room members '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("room members", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/members"},
@@ -457,8 +443,8 @@ Displays a table of user ID, display name, and membership state
 				return fmt.Errorf("get room members: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(members)
+			if done, err := params.EmitJSON(members); done {
+				return err
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

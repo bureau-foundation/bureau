@@ -8,8 +8,6 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -19,9 +17,9 @@ import (
 // Room field is positional in CLI mode (args[0]) and a named property
 // in JSON/MCP mode.
 type listParams struct {
+	cli.JSONOutput
 	Room       string `json:"room"         desc:"room alias localpart (e.g. bureau/pipeline)" required:"true"`
 	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	OutputJSON bool   `json:"-"            flag:"json"         desc:"output as JSON instead of a table"`
 }
 
 // pipelineEntry is a single pipeline in the list output. Declared at
@@ -54,9 +52,6 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				Description: "List project pipelines as JSON",
 				Command:     "bureau pipeline list --json iree/pipeline",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("list", &params)
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]pipelineEntry{} },
@@ -116,11 +111,8 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				})
 			}
 
-			if params.OutputJSON {
-				if pipelines == nil {
-					pipelines = []pipelineEntry{}
-				}
-				return cli.WriteJSON(pipelines)
+			if done, err := params.EmitJSON(pipelines); done {
+				return err
 			}
 
 			if len(pipelines) == 0 {

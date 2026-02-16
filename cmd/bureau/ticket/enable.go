@@ -10,8 +10,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -22,11 +20,11 @@ import (
 // enableParams holds the parameters for the ticket enable command.
 type enableParams struct {
 	cli.SessionConfig
+	cli.JSONOutput
 	Space      string `json:"space"       flag:"space"       desc:"project space alias (e.g., iree) — scopes the ticket service to rooms in this space"`
 	Host       string `json:"host"        flag:"host"        desc:"machine localpart to run the ticket service on (e.g., machine/workstation; use 'local' to auto-detect)"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 	Prefix     string `json:"prefix"      flag:"prefix"      desc:"ticket ID prefix for rooms in this space" default:"tkt"`
-	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
 }
 
 func enableCommand() *cli.Command {
@@ -66,9 +64,6 @@ workstation's MachineConfig, and enables tickets in all rooms under
 				Description: "Enable tickets on the local machine (auto-detect)",
 				Command:     "bureau ticket enable --space iree --host local --credential-file ./creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("enable", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/enable"},
@@ -183,15 +178,15 @@ func runEnable(params *enableParams) error {
 		}
 	}
 
-	if params.OutputJSON {
-		return cli.WriteJSON(enableResult{
-			ServicePrincipal: servicePrincipal,
-			ServiceUserID:    serviceUserID,
-			Machine:          host,
-			SpaceAlias:       spaceAlias,
-			SpaceRoomID:      spaceRoomID,
-			RoomsConfigured:  configuredRooms,
-		})
+	if done, err := params.EmitJSON(enableResult{
+		ServicePrincipal: servicePrincipal,
+		ServiceUserID:    serviceUserID,
+		Machine:          host,
+		SpaceAlias:       spaceAlias,
+		SpaceRoomID:      spaceRoomID,
+		RoomsConfigured:  configuredRooms,
+	}); done {
+		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "\nTicket service enabled:\n")

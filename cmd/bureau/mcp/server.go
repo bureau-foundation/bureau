@@ -349,18 +349,12 @@ func (s *Server) executeTool(t *tool, arguments json.RawMessage) (string, error)
 	return captureRun(t.command.Run)
 }
 
-// enableJSONOutput sets the JSON output flag to true if the params
-// struct has a bool field tagged flag:"json". Commands with this
-// convention produce structured JSON instead of tabwriter tables.
+// enableJSONOutput forces JSON output mode on params structs that
+// embed [cli.JSONOutput]. Commands produce structured JSON instead
+// of tabwriter tables when invoked as MCP tools.
 func enableJSONOutput(params any) {
-	value := reflect.ValueOf(params).Elem()
-	structType := value.Type()
-	for i := range structType.NumField() {
-		field := structType.Field(i)
-		if field.Tag.Get("flag") == "json" && field.Type.Kind() == reflect.Bool {
-			value.Field(i).SetBool(true)
-			return
-		}
+	if j, ok := params.(cli.JSONOutputter); ok {
+		j.SetJSONOutput(true)
 	}
 }
 

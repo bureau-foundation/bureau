@@ -23,7 +23,6 @@ go_library(
         "//lib/schema",
         "//lib/template",
         "//messaging",
-        "@com_github_spf13_pflag//:pflag",
         "@com_github_tidwall_jsonc//:jsonc",
     ],
 )

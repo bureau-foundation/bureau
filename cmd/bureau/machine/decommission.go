@@ -10,8 +10,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -47,9 +45,6 @@ homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
 				Description: "Remove a worker machine",
 				Command:     "bureau machine decommission machine/worker-01 --credential-file ./bureau-creds",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("decommission", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/decommission"},

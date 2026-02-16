@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -26,9 +24,9 @@ import (
 type doctorParams struct {
 	cli.SessionConfig
 	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for constructing aliases" default:"bureau.local"`
-	OutputJSON bool   `json:"-"            flag:"json"         desc:"machine-readable JSON output"`
-	Fix        bool   `json:"fix"          flag:"fix"          desc:"automatically repair fixable issues"`
-	DryRun     bool   `json:"dry_run"      flag:"dry-run"      desc:"preview repairs without executing (requires --fix)"`
+	cli.JSONOutput
+	Fix    bool `json:"fix"    flag:"fix"     desc:"automatically repair fixable issues"`
+	DryRun bool `json:"dry_run" flag:"dry-run" desc:"preview repairs without executing (requires --fix)"`
 }
 
 // DoctorCommand returns the "doctor" subcommand for checking Bureau Matrix
@@ -67,9 +65,6 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				Description: "Machine-readable output",
 				Command:     "bureau matrix doctor --credential-file ./creds --json",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("doctor", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/doctor"},
@@ -167,8 +162,16 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				}
 			}
 
-			if params.OutputJSON {
-				return printDoctorJSON(results, params.Fix, params.DryRun)
+			if done, err := params.EmitJSON(doctorJSON(results, params.DryRun)); done {
+				if err != nil {
+					return err
+				}
+				for _, result := range results {
+					if result.Status == statusFail {
+						return &cli.ExitError{Code: 1}
+					}
+				}
+				return nil
 			}
 			return printChecklist(results, params.Fix, params.DryRun)
 		},
@@ -972,9 +975,15 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 	return nil
 }
 
-// printDoctorJSON prints check results as JSON. Named differently from
-// printJSON in state.go to avoid a collision within the same package.
-func printDoctorJSON(results []checkResult, fixMode, dryRun bool) error {
+// doctorJSONOutput is the JSON output structure for the doctor command.
+type doctorJSONOutput struct {
+	Checks []checkResult `json:"checks"`
+	OK     bool          `json:"ok"`
+	DryRun bool          `json:"dry_run,omitempty"`
+}
+
+// doctorJSON builds the JSON output struct for doctor results.
+func doctorJSON(results []checkResult, dryRun bool) doctorJSONOutput {
 	anyFailed := false
 	for _, result := range results {
 		if result.Status == statusFail {
@@ -982,23 +991,9 @@ func printDoctorJSON(results []checkResult, fixMode, dryRun bool) error {
 			break
 		}
 	}
-
-	output := struct {
-		Checks []checkResult `json:"checks"`
-		OK     bool          `json:"ok"`
-		DryRun bool          `json:"dry_run,omitempty"`
-	}{
+	return doctorJSONOutput{
 		Checks: results,
 		OK:     !anyFailed,
 		DryRun: dryRun,
 	}
-
-	if err := cli.WriteJSON(output); err != nil {
-		return err
-	}
-
-	if anyFailed {
-		return &cli.ExitError{Code: 1}
-	}
-	return nil
 }

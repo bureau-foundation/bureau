@@ -11,8 +11,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -63,9 +61,6 @@ is immediately rotated.`,
 				Description: "Provision and pipe config to scp",
 				Command:     "bureau machine provision machine/gpu-box --credential-file ./bureau-creds | ssh user@host 'cat > /tmp/bootstrap.json'",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("provision", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},

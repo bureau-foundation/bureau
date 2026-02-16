@@ -17,10 +17,10 @@ const defaultOutDir = "/var/bureau/environment"
 
 // buildParams holds the parameters for the environment build command.
 type buildParams struct {
+	cli.JSONOutput
 	FlakeRef      string   `json:"flake_ref"       flag:"flake"          desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
 	OutLink       string   `json:"-"               flag:"out-link"       desc:"output symlink path (default: /var/bureau/environment/<profile>)"`
 	OverrideInput []string `json:"override_input"  flag:"override-input" desc:"override a flake input (format: name=flakeref)"`
-	OutputJSON    bool     `json:"-"               flag:"json"           desc:"output as JSON"`
 }
 
 // buildResult is the JSON output for environment build.
@@ -88,12 +88,12 @@ with symlinks into /nix/store for all packages in the profile.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(buildResult{
-					Profile:   profile,
-					StorePath: storePath,
-					OutLink:   outLink,
-				})
+			if done, err := params.EmitJSON(buildResult{
+				Profile:   profile,
+				StorePath: storePath,
+				OutLink:   outLink,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "Built %s\n", storePath)

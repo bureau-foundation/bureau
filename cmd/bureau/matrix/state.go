@@ -11,8 +11,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
@@ -70,9 +68,6 @@ or machine ID as the state key.`,
 				Command:     "bureau matrix state get --credential-file ./creds --key '@machine/work:bureau.local' '!room:bureau.local' m.bureau.machine_config",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("state get", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/get"},
 		Run: func(args []string) error {
@@ -122,9 +117,9 @@ or machine ID as the state key.`,
 // stateSetParams holds the parameters for the matrix state set command.
 type stateSetParams struct {
 	cli.SessionConfig
-	StateKey   string `json:"state_key" flag:"key"   desc:"state key for the event (default: empty string)"`
-	UseStdin   bool   `json:"use_stdin" flag:"stdin"  desc:"read JSON body from stdin instead of positional argument"`
-	OutputJSON bool   `json:"-"         flag:"json"   desc:"output as JSON"`
+	StateKey string `json:"state_key" flag:"key"   desc:"state key for the event (default: empty string)"`
+	UseStdin bool   `json:"use_stdin" flag:"stdin"  desc:"read JSON body from stdin instead of positional argument"`
+	cli.JSONOutput
 }
 
 // stateSetResult is the JSON output for matrix state set.
@@ -159,9 +154,6 @@ specific state key.`,
 				Description: "Set state from stdin",
 				Command:     `echo '{"topic":"Piped topic"}' | bureau matrix state set --credential-file ./creds --stdin '!room:bureau.local' m.room.topic`,
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("state set", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/set"},
@@ -217,8 +209,8 @@ specific state key.`,
 				return fmt.Errorf("set state event: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(stateSetResult{EventID: eventID})
+			if done, err := params.EmitJSON(stateSetResult{EventID: eventID}); done {
+				return err
 			}
 
 			fmt.Fprintln(os.Stdout, eventID)

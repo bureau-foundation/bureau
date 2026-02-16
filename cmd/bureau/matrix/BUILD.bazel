@@ -24,7 +24,6 @@ go_library(
         "//lib/schema",
         "//lib/secret",
         "//messaging",
-        "@com_github_spf13_pflag//:pflag",
         "@org_golang_x_term//:term",
     ],
 )

@@ -21,7 +21,6 @@ go_library(
         "//lib/pipeline",
         "//lib/principal",
         "//lib/schema",
-        "@com_github_spf13_pflag//:pflag",
     ],
 )
 

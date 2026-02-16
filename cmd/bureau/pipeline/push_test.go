@@ -26,7 +26,7 @@ func TestPushPipeline(t *testing.T) {
 }`)
 
 	cmd := pushCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	if err := cmd.Run([]string{"bureau/pipeline:deploy", path}); err != nil {
@@ -76,7 +76,7 @@ func TestPushPipelineDryRun(t *testing.T) {
 }`)
 
 	cmd := pushCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local", "--dry-run"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local", "--dry-run"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	if err := cmd.Run([]string{"bureau/pipeline:test", path}); err != nil {
@@ -149,7 +149,7 @@ func TestPushPipelineRoomNotFound(t *testing.T) {
 }`)
 
 	cmd := pushCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"bureau/pipeline:test", path})

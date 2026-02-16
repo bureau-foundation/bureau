@@ -9,8 +9,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -19,6 +17,7 @@ import (
 
 type listParams struct {
 	TicketConnection
+	cli.JSONOutput
 	Room     string `json:"room"     flag:"room,r"    desc:"room ID (e.g. !abc123:bureau.local)" required:"true"`
 	Status   string `json:"status"   flag:"status,s"   desc:"filter by status (open, in_progress, blocked, closed)"`
 	Priority int    `json:"priority" flag:"priority,p"  desc:"filter by priority (0-4, -1 for all)" default:"-1"`
@@ -26,8 +25,6 @@ type listParams struct {
 	Assignee string `json:"assignee" flag:"assignee"   desc:"filter by assignee (Matrix user ID)"`
 	Type     string `json:"type"     flag:"type,t"     desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
 	Parent   string `json:"parent"   flag:"parent"     desc:"filter by parent ticket ID"`
-
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
 func listCommand() *cli.Command {
@@ -56,7 +53,6 @@ time (oldest first).`,
 				Command:     "bureau ticket list --room '!abc:bureau.local' --assignee '@iree/amdgpu/pm:bureau.local'",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("list", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/list"},
 		Run: func(args []string) error {
@@ -97,11 +93,8 @@ time (oldest first).`,
 				return err
 			}
 
-			if params.OutputJSON {
-				if entries == nil {
-					entries = []ticketEntry{}
-				}
-				return cli.WriteJSON(entries)
+			if done, err := params.EmitJSON(entries); done {
+				return err
 			}
 
 			if len(entries) == 0 {
@@ -118,8 +111,8 @@ time (oldest first).`,
 
 type showParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"ticket ID" required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 }
 
 func showCommand() *cli.Command {
@@ -144,7 +137,6 @@ The ticket is looked up across all rooms tracked by the service.`,
 				Command:     "bureau ticket show tkt-a3f9 --json",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("show", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/show"},
 		Run: func(args []string) error {
@@ -170,8 +162,8 @@ The ticket is looked up across all rooms tracked by the service.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			return writeShowDetail(result)
@@ -183,8 +175,8 @@ The ticket is looked up across all rooms tracked by the service.`,
 
 type readyParams struct {
 	TicketConnection
-	Room       string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
-	OutputJSON bool   `json:"-"    flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Room string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
 }
 
 func readyCommand() *cli.Command {
@@ -204,11 +196,10 @@ Sorted by priority (most urgent first), then creation time.`,
 				Command:     "bureau ticket ready --room '!abc:bureau.local'",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("ready", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/ready"},
 		Run: func(args []string) error {
-			return roomScopedQuery(params.TicketConnection, params.Room, "ready", "ticket/ready", params.OutputJSON)
+			return roomScopedQuery(params.TicketConnection, params.Room, "ready", "ticket/ready", &params.JSONOutput)
 		},
 	}
 }
@@ -217,8 +208,8 @@ Sorted by priority (most urgent first), then creation time.`,
 
 type blockedParams struct {
 	TicketConnection
-	Room       string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
-	OutputJSON bool   `json:"-"    flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Room string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
 }
 
 func blockedCommand() *cli.Command {
@@ -230,11 +221,10 @@ func blockedCommand() *cli.Command {
 		Description: `Show tickets that cannot be started: they have at least one
 non-closed blocker or unsatisfied gate.`,
 		Usage:          "bureau ticket blocked --room ROOM [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("blocked", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/blocked"},
 		Run: func(args []string) error {
-			return roomScopedQuery(params.TicketConnection, params.Room, "blocked", "ticket/blocked", params.OutputJSON)
+			return roomScopedQuery(params.TicketConnection, params.Room, "blocked", "ticket/blocked", &params.JSONOutput)
 		},
 	}
 }
@@ -243,8 +233,8 @@ non-closed blocker or unsatisfied gate.`,
 
 type rankedParams struct {
 	TicketConnection
-	Room       string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
-	OutputJSON bool   `json:"-"    flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Room string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
 }
 
 func rankedCommand() *cli.Command {
@@ -259,7 +249,6 @@ staleness (how long it's been actionable), and effort (note count).
 
 This is the primary query for PM agents deciding what to assign next.`,
 		Usage:          "bureau ticket ranked --room ROOM [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("ranked", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/ranked"},
 		Run: func(args []string) error {
@@ -280,11 +269,8 @@ This is the primary query for PM agents deciding what to assign next.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				if entries == nil {
-					entries = []rankedEntry{}
-				}
-				return cli.WriteJSON(entries)
+			if done, err := params.EmitJSON(entries); done {
+				return err
 			}
 
 			if len(entries) == 0 {
@@ -313,9 +299,9 @@ This is the primary query for PM agents deciding what to assign next.`,
 
 type grepParams struct {
 	TicketConnection
-	Pattern    string `json:"pattern" desc:"regex search pattern" required:"true"`
-	Room       string `json:"room"    flag:"room,r" desc:"room ID (optional, searches all rooms if omitted)"`
-	OutputJSON bool   `json:"-"       flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Pattern string `json:"pattern" desc:"regex search pattern" required:"true"`
+	Room    string `json:"room"    flag:"room,r" desc:"room ID (optional, searches all rooms if omitted)"`
 }
 
 func grepCommand() *cli.Command {
@@ -338,7 +324,6 @@ all rooms and includes the room ID in results.`,
 				Command:     "bureau ticket grep 'memory leak' --room '!abc:bureau.local'",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("grep", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/grep"},
 		Run: func(args []string) error {
@@ -369,11 +354,8 @@ all rooms and includes the room ID in results.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				if entries == nil {
-					entries = []ticketEntry{}
-				}
-				return cli.WriteJSON(entries)
+			if done, err := params.EmitJSON(entries); done {
+				return err
 			}
 
 			if len(entries) == 0 {
@@ -390,8 +372,8 @@ all rooms and includes the room ID in results.`,
 
 type statsParams struct {
 	TicketConnection
-	Room       string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
-	OutputJSON bool   `json:"-"    flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Room string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
 }
 
 func statsCommand() *cli.Command {
@@ -403,7 +385,6 @@ func statsCommand() *cli.Command {
 		Description: `Display ticket counts broken down by status, priority, and type
 for a room.`,
 		Usage:          "bureau ticket stats --room ROOM [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("stats", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/stats"},
 		Run: func(args []string) error {
@@ -424,8 +405,8 @@ for a room.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(stats)
+			if done, err := params.EmitJSON(stats); done {
+				return err
 			}
 
 			fmt.Printf("Total: %d\n\n", stats.Total)
@@ -468,7 +449,7 @@ for a room.`,
 
 type infoParams struct {
 	TicketConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func infoCommand() *cli.Command {
@@ -480,7 +461,6 @@ func infoCommand() *cli.Command {
 		Description: `Display service diagnostics: uptime, number of tracked rooms,
 total tickets, and per-room summaries. Requires authentication.`,
 		Usage:          "bureau ticket info [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("info", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/info"},
 		Run: func(args []string) error {
@@ -497,8 +477,8 @@ total tickets, and per-room summaries. Requires authentication.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(info)
+			if done, err := params.EmitJSON(info); done {
+				return err
 			}
 
 			fmt.Printf("Uptime:  %.0fs\n", info.UptimeSeconds)
@@ -531,8 +511,8 @@ total tickets, and per-room summaries. Requires authentication.`,
 
 type depsParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"ticket ID" required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 }
 
 func depsCommand() *cli.Command {
@@ -544,7 +524,6 @@ func depsCommand() *cli.Command {
 		Description: `Display all tickets that must be completed before this ticket
 becomes ready, including indirect (transitive) dependencies.`,
 		Usage:          "bureau ticket deps <ticket-id> [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("deps", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/deps"},
 		Run: func(args []string) error {
@@ -570,8 +549,8 @@ becomes ready, including indirect (transitive) dependencies.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			if len(result.Deps) == 0 {
@@ -592,8 +571,8 @@ becomes ready, including indirect (transitive) dependencies.`,
 
 type childrenParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"parent ticket ID" required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"parent ticket ID" required:"true"`
 }
 
 func childrenCommand() *cli.Command {
@@ -605,7 +584,6 @@ func childrenCommand() *cli.Command {
 		Description: `Display direct children of a parent ticket with a progress summary
 showing how many are closed out of the total.`,
 		Usage:          "bureau ticket children <ticket-id> [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("children", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/children"},
 		Run: func(args []string) error {
@@ -631,8 +609,8 @@ showing how many are closed out of the total.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Printf("Children of %s: %d/%d closed\n\n", result.Parent, result.ChildClosed, result.ChildTotal)
@@ -650,8 +628,8 @@ showing how many are closed out of the total.`,
 
 type epicHealthParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"epic ticket ID" required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"epic ticket ID" required:"true"`
 }
 
 func epicHealthCommand() *cli.Command {
@@ -665,7 +643,6 @@ func epicHealthCommand() *cli.Command {
 portion of remaining work is actionable), and critical dependency
 depth (irreducible sequential steps).`,
 		Usage:          "bureau ticket epic-health <ticket-id> [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("epic-health", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/epic-health"},
 		Run: func(args []string) error {
@@ -691,8 +668,8 @@ depth (irreducible sequential steps).`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			health := result.Health
@@ -711,7 +688,7 @@ depth (irreducible sequential steps).`,
 // roomScopedQuery handles the common pattern for room-scoped queries
 // that return a list of ticket entries: check room, call service,
 // output as JSON or table.
-func roomScopedQuery(connection TicketConnection, room, action, grant string, outputJSON bool) error {
+func roomScopedQuery(connection TicketConnection, room, action, grant string, jsonOutput *cli.JSONOutput) error {
 	if room == "" {
 		return fmt.Errorf("--room is required")
 	}
@@ -729,11 +706,8 @@ func roomScopedQuery(connection TicketConnection, room, action, grant string, ou
 		return err
 	}
 
-	if outputJSON {
-		if entries == nil {
-			entries = []ticketEntry{}
-		}
-		return cli.WriteJSON(entries)
+	if done, err := jsonOutput.EmitJSON(entries); done {
+		return err
 	}
 
 	if len(entries) == 0 {

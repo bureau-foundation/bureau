@@ -137,6 +137,7 @@ func formatSize(bytes int64) string {
 
 type storeParams struct {
 	ArtifactConnection
+	cli.JSONOutput
 	ContentType string   `json:"content_type" flag:"content-type" desc:"MIME content type (guessed from filename if omitted)"`
 	Description string   `json:"description"  flag:"description"  desc:"human-readable description"`
 	Tag         string   `json:"tag"          flag:"tag"          desc:"tag the artifact after storing"`
@@ -144,7 +145,6 @@ type storeParams struct {
 	Visibility  string   `json:"visibility"   flag:"visibility"   desc:"visibility level"`
 	TTL         string   `json:"ttl"          flag:"ttl"          desc:"time-to-live (e.g. 72h, 7d)"`
 	Labels      []string `json:"labels"       flag:"label"        desc:"labels (repeatable)"`
-	OutputJSON  bool     `json:"-"            flag:"json"         desc:"output result as JSON"`
 }
 
 func storeCommand() *cli.Command {
@@ -175,9 +175,6 @@ unrecognized extensions.`,
 				Description: "Store with a tag and labels",
 				Command:     "bureau artifact store weights.pt --tag model/latest --label training --label v2",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("store", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/store"},
@@ -248,8 +245,8 @@ unrecognized extensions.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			fmt.Println(response.Ref)
@@ -285,9 +282,6 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 				Description: "Fetch by tag name to stdout",
 				Command:     "bureau artifact fetch model/latest > model.bin",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("fetch", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/fetch"},
@@ -332,7 +326,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 
 type showParams struct {
 	ArtifactConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func showCommand() *cli.Command {
@@ -356,9 +350,6 @@ storage details.`,
 				Command:     "bureau artifact show model/latest --json",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("show", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
@@ -377,8 +368,8 @@ storage details.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(meta)
+			if done, err := params.EmitJSON(meta); done {
+				return err
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -418,7 +409,7 @@ storage details.`,
 
 type existsParams struct {
 	ArtifactConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func existsCommand() *cli.Command {
@@ -430,9 +421,6 @@ func existsCommand() *cli.Command {
 		Usage:   "bureau artifact exists <ref> [flags]",
 		Description: `Check if an artifact exists in the store. Exits 0 if it exists,
 1 if it does not. With --json, outputs the exists response.`,
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("exists", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
@@ -451,8 +439,8 @@ func existsCommand() *cli.Command {
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			if response.Exists {
@@ -470,6 +458,7 @@ func existsCommand() *cli.Command {
 
 type listParams struct {
 	ArtifactConnection
+	cli.JSONOutput
 	ContentType string `json:"content_type" flag:"content-type" desc:"filter by content type"`
 	Label       string `json:"label"        flag:"label"        desc:"filter by label"`
 	CachePolicy string `json:"cache_policy" flag:"cache-policy" desc:"filter by cache policy"`
@@ -478,7 +467,6 @@ type listParams struct {
 	MaxSize     int64  `json:"max_size"     flag:"max-size"     desc:"maximum size in bytes"`
 	Limit       int    `json:"limit"        flag:"limit"        desc:"maximum results (default: server decides)"`
 	Offset      int    `json:"offset"       flag:"offset"       desc:"skip this many results"`
-	OutputJSON  bool   `json:"-"            flag:"json"         desc:"output as JSON"`
 }
 
 func listCommand() *cli.Command {
@@ -509,9 +497,6 @@ are sorted by storage time (newest first).`,
 				Command:     "bureau artifact list --limit 10 --offset 10",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("list", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/list"},
 		Run: func(args []string) error {
@@ -535,8 +520,8 @@ are sorted by storage time (newest first).`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			if len(response.Artifacts) == 0 {
@@ -569,9 +554,9 @@ are sorted by storage time (newest first).`,
 
 type tagParams struct {
 	ArtifactConnection
+	cli.JSONOutput
 	Optimistic       bool   `json:"optimistic" flag:"optimistic" desc:"overwrite existing tag without CAS check"`
 	ExpectedPrevious string `json:"expected"   flag:"expected"   desc:"expected current target hash (for CAS update)"`
-	OutputJSON       bool   `json:"-"          flag:"json"       desc:"output as JSON"`
 }
 
 func tagCommand() *cli.Command {
@@ -601,9 +586,6 @@ specify the previous target hash for CAS updates.`,
 				Command:     "bureau artifact tag model/latest art-new --expected art-old-hash",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("tag", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
@@ -622,8 +604,8 @@ specify the previous target hash for CAS updates.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			fmt.Printf("%s → %s\n", response.Name, response.Ref)
@@ -636,7 +618,7 @@ specify the previous target hash for CAS updates.`,
 
 type resolveParams struct {
 	ArtifactConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func resolveCommand() *cli.Command {
@@ -649,9 +631,6 @@ func resolveCommand() *cli.Command {
 		Description: `Resolve a short ref (art-<hex>), tag name, or full hash to the
 canonical artifact reference. Useful for scripting: the output is
 always the full ref.`,
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("resolve", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
@@ -670,8 +649,8 @@ always the full ref.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			fmt.Println(response.Ref)
@@ -684,8 +663,8 @@ always the full ref.`,
 
 type tagsParams struct {
 	ArtifactConnection
-	Prefix     string `json:"prefix" flag:"prefix" desc:"filter tags by name prefix"`
-	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Prefix string `json:"prefix" flag:"prefix" desc:"filter tags by name prefix"`
 }
 
 func tagsCommand() *cli.Command {
@@ -706,9 +685,6 @@ func tagsCommand() *cli.Command {
 				Command:     "bureau artifact tags --prefix model/",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("tags", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/tags"},
 		Run: func(args []string) error {
@@ -723,8 +699,8 @@ func tagsCommand() *cli.Command {
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			if len(response.Tags) == 0 {
@@ -753,12 +729,9 @@ func deleteTagCommand() *cli.Command {
 	var params deleteTagParams
 
 	return &cli.Command{
-		Name:    "delete-tag",
-		Summary: "Delete a tag",
-		Usage:   "bureau artifact delete-tag <name> [flags]",
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("delete-tag", &params)
-		},
+		Name:           "delete-tag",
+		Summary:        "Delete a tag",
+		Usage:          "bureau artifact delete-tag <name> [flags]",
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/delete-tag"},
 		Run: func(args []string) error {
@@ -787,7 +760,7 @@ func deleteTagCommand() *cli.Command {
 
 type pinParams struct {
 	ArtifactConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // pinToggleCommand builds either "pin" or "unpin" — the two commands
@@ -802,12 +775,9 @@ func pinToggleCommand(
 	usage := fmt.Sprintf("bureau artifact %s <ref> [flags]", name)
 
 	return &cli.Command{
-		Name:    name,
-		Summary: summary,
-		Usage:   usage,
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams(name, &params)
-		},
+		Name:           name,
+		Summary:        summary,
+		Usage:          usage,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
@@ -826,8 +796,8 @@ func pinToggleCommand(
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			fmt.Printf("%s: %s\n", verb, response.Ref)
@@ -850,8 +820,8 @@ func unpinCommand() *cli.Command {
 
 type gcParams struct {
 	ArtifactConnection
-	DryRun     bool `json:"dry_run" flag:"dry-run" desc:"report what would be collected without deleting"`
-	OutputJSON bool `json:"-"       flag:"json"    desc:"output as JSON"`
+	cli.JSONOutput
+	DryRun bool `json:"dry_run" flag:"dry-run" desc:"report what would be collected without deleting"`
 }
 
 func gcCommand() *cli.Command {
@@ -875,9 +845,6 @@ Use --dry-run to see what would be removed without actually deleting.`,
 				Command:     "bureau artifact gc",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("gc", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/gc"},
 		Run: func(args []string) error {
@@ -892,8 +859,8 @@ Use --dry-run to see what would be removed without actually deleting.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			prefix := ""
@@ -915,7 +882,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 
 type statusParams struct {
 	ArtifactConnection
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func statusCommand() *cli.Command {
@@ -927,9 +894,6 @@ func statusCommand() *cli.Command {
 		Usage:   "bureau artifact status [flags]",
 		Description: `Show service liveness information. This action does not require
 authentication — it is a health check.`,
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("status", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/artifact/status"},
 		Run: func(args []string) error {
@@ -946,8 +910,8 @@ authentication — it is a health check.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(response)
+			if done, err := params.EmitJSON(response); done {
+				return err
 			}
 
 			writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

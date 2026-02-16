@@ -8,8 +8,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
@@ -36,9 +34,9 @@ dependency cycles are created.`,
 
 type depAddParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket"     desc:"ticket ID to modify"          required:"true"`
-	DependsOn  string `json:"depends_on" desc:"ticket ID that blocks this one" required:"true"`
-	OutputJSON bool   `json:"-"          flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket    string `json:"ticket"     desc:"ticket ID to modify"          required:"true"`
+	DependsOn string `json:"depends_on" desc:"ticket ID that blocks this one" required:"true"`
 }
 
 func depAddCommand() *cli.Command {
@@ -59,7 +57,6 @@ cycle.`,
 				Command:     "bureau ticket dep add tkt-a3f9 tkt-b2c1",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("dep-add", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/dep/add"},
 		Run: func(args []string) error {
@@ -110,8 +107,8 @@ cycle.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "%s now depends on %s\n", params.Ticket, params.DependsOn)
@@ -124,9 +121,9 @@ cycle.`,
 
 type depRemoveParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket"     desc:"ticket ID to modify"                  required:"true"`
-	DependsOn  string `json:"depends_on" desc:"ticket ID to remove from blocked_by"  required:"true"`
-	OutputJSON bool   `json:"-"          flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket    string `json:"ticket"     desc:"ticket ID to modify"                  required:"true"`
+	DependsOn string `json:"depends_on" desc:"ticket ID to remove from blocked_by"  required:"true"`
 }
 
 func depRemoveCommand() *cli.Command {
@@ -143,7 +140,6 @@ func depRemoveCommand() *cli.Command {
 				Command:     "bureau ticket dep remove tkt-a3f9 tkt-b2c1",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("dep-remove", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/dep/remove"},
 		Run: func(args []string) error {
@@ -194,8 +190,8 @@ func depRemoveCommand() *cli.Command {
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "%s no longer depends on %s\n", params.Ticket, params.DependsOn)

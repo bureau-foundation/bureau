@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -56,7 +54,6 @@ Use --status to export only tickets in a particular state (e.g.
 				Command:     "bureau ticket export --room '!old:bureau.local' | bureau ticket import --room '!new:bureau.local' --file -",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("export", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/export"},
 		Run: func(args []string) error {
@@ -167,7 +164,6 @@ invalid, none are imported.`,
 				Command:     "bureau ticket import --room '!abc:bureau.local' --file tickets.jsonl --reset-status",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("import", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/import"},
 		Run: func(args []string) error {

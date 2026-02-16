@@ -7,15 +7,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
 )
 
 // pipelineValidateParams holds the parameters for the pipeline validate command.
 type pipelineValidateParams struct {
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // validationResult is the JSON output for pipeline validate.
@@ -51,9 +49,6 @@ before validation.`,
 				Command:     "bureau pipeline validate my-pipeline.jsonc",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("validate", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/validate"},
 		Run: func(args []string) error {
@@ -69,12 +64,12 @@ before validation.`,
 
 			issues := libpipeline.Validate(content)
 
-			if params.OutputJSON {
-				return cli.WriteJSON(validationResult{
-					File:   path,
-					Valid:  len(issues) == 0,
-					Issues: issues,
-				})
+			if done, err := params.EmitJSON(validationResult{
+				File:   path,
+				Valid:  len(issues) == 0,
+				Issues: issues,
+			}); done {
+				return err
 			}
 
 			if len(issues) > 0 {

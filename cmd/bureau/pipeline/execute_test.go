@@ -21,7 +21,7 @@ func TestExecutePipeline(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{
+	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "machine/workstation",
 		"--param", "PROJECT=iree",
 		"--param", "BRANCH=main",
@@ -90,7 +90,7 @@ func TestExecuteBadPipelineRef(t *testing.T) {
 	t.Parallel()
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{"--machine", "machine/workstation"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--machine", "machine/workstation"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"no-colon-here"})
@@ -111,7 +111,7 @@ func TestExecuteBadParamFormat(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{
+	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "machine/workstation",
 		"--param", "no-equals-sign",
 		"--server-name", "test.local",
@@ -136,7 +136,7 @@ func TestExecuteEmptyParamKey(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{
+	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "machine/workstation",
 		"--param", "=value-without-key",
 		"--server-name", "test.local",
@@ -156,7 +156,7 @@ func TestExecuteInvalidMachineName(t *testing.T) {
 	t.Parallel()
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{"--machine", "../escape/attempt"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--machine", "../escape/attempt"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"bureau/pipeline:test"})
@@ -175,7 +175,7 @@ func TestExecuteConfigRoomNotFound(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := executeCommand()
-	if err := cmd.Flags().Parse([]string{
+	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "machine/workstation",
 		"--server-name", "test.local",
 	}); err != nil {

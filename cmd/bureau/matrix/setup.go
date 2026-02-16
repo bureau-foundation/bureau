@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -71,9 +69,6 @@ Standard rooms created:
 				Description: "Bootstrap and invite a user to all rooms",
 				Command:     "bureau matrix setup --registration-token-file ./token --credential-file ./creds --invite @alice:bureau.local",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("setup", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/setup"},

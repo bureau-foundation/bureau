@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -61,12 +59,12 @@ func testCommandTree() *cli.Command {
 		Reason string `json:"reason" flag:"reason" desc:"failure reason" default:"boom"`
 	}
 	type formatParams struct {
-		Value      string `json:"value" flag:"value" desc:"value to print"`
-		OutputJSON bool   `json:"-" flag:"json" desc:"output as JSON"`
+		cli.JSONOutput
+		Value string `json:"value" flag:"value" desc:"value to print"`
 	}
 	type listParams struct {
-		Prefix     string `json:"prefix" flag:"prefix" desc:"filter prefix" default:""`
-		OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+		cli.JSONOutput
+		Prefix string `json:"prefix" flag:"prefix" desc:"filter prefix" default:""`
 	}
 
 	var echoP echoParams
@@ -81,7 +79,6 @@ func testCommandTree() *cli.Command {
 				Name:           "echo",
 				Summary:        "Echo a message",
 				Description:    "Echo the provided message to stdout.",
-				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("echo", &echoP) },
 				Params:         func() any { return &echoP },
 				RequiredGrants: []string{"command/test/echo"},
 				Run: func(args []string) error {
@@ -92,7 +89,6 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "fail",
 				Summary:        "Always fails with a reason",
-				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("fail", &failP) },
 				Params:         func() any { return &failP },
 				RequiredGrants: []string{"command/test/fail"},
 				Run: func(args []string) error {
@@ -103,7 +99,6 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "format",
 				Summary:        "Conditional JSON output",
-				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("format", &formatP) },
 				Params:         func() any { return &formatP },
 				Output:         func() any { return &formatOutput{} },
 				RequiredGrants: []string{"command/test/format"},
@@ -114,8 +109,8 @@ func testCommandTree() *cli.Command {
 					},
 				},
 				Run: func(args []string) error {
-					if formatP.OutputJSON {
-						return cli.WriteJSON(formatOutput{Value: formatP.Value})
+					if done, err := formatP.EmitJSON(formatOutput{Value: formatP.Value}); done {
+						return err
 					}
 					fmt.Printf("VALUE: %s", formatP.Value)
 					return nil
@@ -124,7 +119,6 @@ func testCommandTree() *cli.Command {
 			{
 				Name:           "list",
 				Summary:        "List items",
-				Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("list", &listP) },
 				Params:         func() any { return &listP },
 				Output:         func() any { return &[]listItem{} },
 				RequiredGrants: []string{"command/test/list"},
@@ -133,8 +127,8 @@ func testCommandTree() *cli.Command {
 						{Name: "alpha"},
 						{Name: "beta"},
 					}
-					if listP.OutputJSON {
-						return cli.WriteJSON(items)
+					if done, err := listP.EmitJSON(items); done {
+						return err
 					}
 					for _, item := range items {
 						fmt.Println(item.Name)
@@ -690,8 +684,8 @@ func TestServer_ToolsCallUnknownTool(t *testing.T) {
 
 func TestEnableJSONOutput(t *testing.T) {
 	type params struct {
-		Name       string `json:"name" flag:"name" desc:"name"`
-		OutputJSON bool   `json:"-" flag:"json" desc:"JSON output"`
+		cli.JSONOutput
+		Name string `json:"name" flag:"name" desc:"name"`
 	}
 
 	p := &params{Name: "test"}
@@ -707,7 +701,7 @@ func TestEnableJSONOutput_NoFlag(t *testing.T) {
 	}
 
 	p := &params{Name: "test"}
-	// Should not panic when there's no json flag field.
+	// Should not panic when the struct doesn't implement JSONOutputter.
 	enableJSONOutput(p)
 }
 
@@ -841,7 +835,6 @@ func TestServer_GrantFiltering_DefaultDenyNoRequiredGrants(t *testing.T) {
 			{
 				Name:    "ungated",
 				Summary: "No required grants declared",
-				Flags:   func() *pflag.FlagSet { return cli.FlagsFromParams("ungated", &params) },
 				Params:  func() any { return &params },
 				Run:     func(args []string) error { return nil },
 			},

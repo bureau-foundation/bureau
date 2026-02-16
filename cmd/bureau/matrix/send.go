@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -19,9 +17,9 @@ import (
 // sendParams holds the parameters for the matrix send command.
 type sendParams struct {
 	cli.SessionConfig
-	ThreadID   string `json:"thread_id"  flag:"thread"     desc:"event ID of thread root to reply within"`
-	EventType  string `json:"event_type" flag:"event-type" desc:"custom event type (default: m.room.message)"`
-	OutputJSON bool   `json:"-"          flag:"json"        desc:"output as JSON"`
+	ThreadID  string `json:"thread_id"  flag:"thread"     desc:"event ID of thread root to reply within"`
+	EventType string `json:"event_type" flag:"event-type" desc:"custom event type (default: m.room.message)"`
+	cli.JSONOutput
 }
 
 // sendResult is the JSON output for matrix send.
@@ -58,9 +56,6 @@ Bureau protocol events).`,
 				Description: "Send a custom event type",
 				Command:     "bureau matrix send --credential-file ./creds --event-type m.bureau.status '!room:bureau.local' '{\"status\":\"active\"}'",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("send", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/send"},
@@ -103,8 +98,8 @@ Bureau protocol events).`,
 				return fmt.Errorf("send message: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(sendResult{EventID: eventID})
+			if done, err := params.EmitJSON(sendResult{EventID: eventID}); done {
+				return err
 			}
 
 			fmt.Fprintln(os.Stdout, eventID)

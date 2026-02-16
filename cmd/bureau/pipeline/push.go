@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -17,9 +15,9 @@ import (
 
 // pipelinePushParams holds the parameters for the pipeline push command.
 type pipelinePushParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
-	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
 }
 
 // pushResult is the JSON output for pipeline push.
@@ -57,9 +55,6 @@ without actually publishing.`,
 				Description: "Dry-run: validate and check target room without publishing",
 				Command:     "bureau pipeline push --dry-run bureau/pipeline:my-pipeline my-pipeline.jsonc",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("push", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/push"},
@@ -106,15 +101,15 @@ without actually publishing.`,
 			}
 
 			if params.DryRun {
-				if params.OutputJSON {
-					return cli.WriteJSON(pushResult{
-						Ref:          ref.String(),
-						File:         filePath,
-						RoomAlias:    roomAlias,
-						RoomID:       roomID,
-						PipelineName: ref.Pipeline,
-						DryRun:       true,
-					})
+				if done, err := params.EmitJSON(pushResult{
+					Ref:          ref.String(),
+					File:         filePath,
+					RoomAlias:    roomAlias,
+					RoomID:       roomID,
+					PipelineName: ref.Pipeline,
+					DryRun:       true,
+				}); done {
+					return err
 				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
@@ -128,16 +123,16 @@ without actually publishing.`,
 				return fmt.Errorf("publishing pipeline: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(pushResult{
-					Ref:          ref.String(),
-					File:         filePath,
-					RoomAlias:    roomAlias,
-					RoomID:       roomID,
-					PipelineName: ref.Pipeline,
-					EventID:      eventID,
-					DryRun:       false,
-				})
+			if done, err := params.EmitJSON(pushResult{
+				Ref:          ref.String(),
+				File:         filePath,
+				RoomAlias:    roomAlias,
+				RoomID:       roomID,
+				PipelineName: ref.Pipeline,
+				EventID:      eventID,
+				DryRun:       false,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)

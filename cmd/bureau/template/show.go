@@ -6,8 +6,6 @@ package template
 import (
 	"fmt"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
@@ -15,6 +13,7 @@ import (
 
 // templateShowParams holds the parameters for the template show command.
 type templateShowParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 	Raw        bool   `json:"raw"         flag:"raw"         desc:"show the template as stored, without resolving inheritance"`
 }
@@ -42,9 +41,6 @@ template overrides versus what it inherits.`,
 				Description: "Show the raw template (without inheritance resolution)",
 				Command:     "bureau template show --raw bureau/template:base-networked",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("show", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/show"},

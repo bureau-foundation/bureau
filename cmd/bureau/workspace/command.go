@@ -196,7 +196,7 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 
 // workspaceListParams holds the parameters for the workspace list command.
 type workspaceListParams struct {
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 func listCommand() *cli.Command {
@@ -213,7 +213,7 @@ access to the workspace filesystem.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/workspace/list"},
 		Run: func(args []string) error {
-			return runList(args, params.OutputJSON)
+			return runList(args, &params.JSONOutput)
 		},
 	}
 }
@@ -227,7 +227,7 @@ type workspaceInfo struct {
 	Status     string `json:"status"`
 }
 
-func runList(args []string, outputJSON bool) error {
+func runList(args []string, jsonOutput *cli.JSONOutput) error {
 	// Use a 60-second timeout — this scans all joined rooms, issuing
 	// one GetRoomState call per room. For a fleet with many rooms this
 	// can take a while.
@@ -259,16 +259,13 @@ func runList(args []string, outputJSON bool) error {
 		}
 	}
 
-	if len(workspaces) == 0 {
-		if outputJSON {
-			return cli.WriteJSON([]workspaceInfo{})
-		}
-		fmt.Println("No workspaces found.")
-		return nil
+	if done, err := jsonOutput.EmitJSON(workspaces); done {
+		return err
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(workspaces)
+	if len(workspaces) == 0 {
+		fmt.Println("No workspaces found.")
+		return nil
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -358,13 +355,13 @@ func extractWorkspaceInfo(ctx context.Context, session *messaging.Session, roomI
 // workspaceAliasParams holds common parameters for workspace commands that take
 // a single positional alias argument and a server name.
 type workspaceAliasParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
-	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
 }
 
 // aliasRunFunc is the signature for workspace commands that operate on
 // a single alias with the standard server-name and json flags.
-type aliasRunFunc func(alias, serverName string, outputJSON bool) error
+type aliasRunFunc func(alias, serverName string, jsonOutput *cli.JSONOutput) error
 
 // aliasCommand constructs a workspace subcommand that takes a single
 // positional alias argument and the standard workspaceAliasParams flags.
@@ -384,7 +381,7 @@ func aliasCommand(name, summary, description, usage, grant string, run aliasRunF
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			return run(args[0], params.ServerName, params.OutputJSON)
+			return run(args[0], params.ServerName, &params.JSONOutput)
 		},
 	}
 }
@@ -403,7 +400,7 @@ it and replies via Matrix.`,
 		runStatus)
 }
 
-func runStatus(alias, serverName string, outputJSON bool) error {
+func runStatus(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -430,8 +427,8 @@ func runStatus(alias, serverName string, outputJSON bool) error {
 		return fmt.Errorf("daemon error: %s", result.Error)
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(result.Result)
+	if done, err := jsonOutput.EmitJSON(result.Result); done {
+		return err
 	}
 
 	// Display the result.
@@ -461,7 +458,7 @@ each worktree, .shared/ (virtualenvs, build caches), and .cache/
 		runDu)
 }
 
-func runDu(alias, serverName string, outputJSON bool) error {
+func runDu(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -488,8 +485,8 @@ func runDu(alias, serverName string, outputJSON bool) error {
 		return fmt.Errorf("daemon error: %s", result.Error)
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(result.Result)
+	if done, err := jsonOutput.EmitJSON(result.Result); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -534,9 +531,9 @@ the parent workspace automatically by walking up the alias path.`,
 
 // worktreeAddParams holds the parameters for the workspace worktree add command.
 type worktreeAddParams struct {
+	cli.JSONOutput
 	Branch     string `json:"branch"      flag:"branch"      desc:"git branch or commit to check out (empty for detached HEAD)"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
-	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
 }
 
 // worktreeAddResult is the JSON output for workspace worktree add.
@@ -572,12 +569,12 @@ an "accepted" status.`,
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
 			}
-			return runWorktreeAdd(args[0], params.Branch, params.ServerName, params.OutputJSON)
+			return runWorktreeAdd(args[0], params.Branch, params.ServerName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeAdd(alias, branch, serverName string, outputJSON bool) error {
+func runWorktreeAdd(alias, branch, serverName string, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return fmt.Errorf("invalid worktree alias: %w", err)
 	}
@@ -638,14 +635,14 @@ func runWorktreeAdd(alias, branch, serverName string, outputJSON bool) error {
 
 	principalName, _ := result.Result["principal"].(string)
 
-	if outputJSON {
-		return cli.WriteJSON(worktreeAddResult{
-			Alias:         alias,
-			Workspace:     workspaceAlias,
-			Subpath:       worktreeSubpath,
-			Branch:        branch,
-			PrincipalName: principalName,
-		})
+	if done, err := jsonOutput.EmitJSON(worktreeAddResult{
+		Alias:         alias,
+		Workspace:     workspaceAlias,
+		Subpath:       worktreeSubpath,
+		Branch:        branch,
+		PrincipalName: principalName,
+	}); done {
+		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "Worktree add accepted for %s\n", alias)
@@ -663,9 +660,9 @@ func runWorktreeAdd(alias, branch, serverName string, outputJSON bool) error {
 
 // worktreeRemoveParams holds the parameters for the workspace worktree remove command.
 type worktreeRemoveParams struct {
+	cli.JSONOutput
 	Mode       string `json:"mode"        flag:"mode"        desc:"removal mode: archive (preserve uncommitted work) or delete" default:"archive"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
-	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
 }
 
 // worktreeRemoveResult is the JSON output for workspace worktree remove.
@@ -703,12 +700,12 @@ an async operation — the command returns immediately.`,
 			if params.Mode != "archive" && params.Mode != "delete" {
 				return fmt.Errorf("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
-			return runWorktreeRemove(args[0], params.Mode, params.ServerName, params.OutputJSON)
+			return runWorktreeRemove(args[0], params.Mode, params.ServerName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeRemove(alias, mode, serverName string, outputJSON bool) error {
+func runWorktreeRemove(alias, mode, serverName string, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return fmt.Errorf("invalid worktree alias: %w", err)
 	}
@@ -756,14 +753,14 @@ func runWorktreeRemove(alias, mode, serverName string, outputJSON bool) error {
 
 	principalName, _ := result.Result["principal"].(string)
 
-	if outputJSON {
-		return cli.WriteJSON(worktreeRemoveResult{
-			Alias:         alias,
-			Workspace:     workspaceAlias,
-			Subpath:       worktreeSubpath,
-			Mode:          mode,
-			PrincipalName: principalName,
-		})
+	if done, err := jsonOutput.EmitJSON(worktreeRemoveResult{
+		Alias:         alias,
+		Workspace:     workspaceAlias,
+		Subpath:       worktreeSubpath,
+		Mode:          mode,
+		PrincipalName: principalName,
+	}); done {
+		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
@@ -791,7 +788,7 @@ timeout is extended to 5 minutes.`,
 		runFetch)
 }
 
-func runFetch(alias, serverName string, outputJSON bool) error {
+func runFetch(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -826,8 +823,8 @@ func runFetch(alias, serverName string, outputJSON bool) error {
 		return fmt.Errorf("daemon error: %s", result.Error)
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(result.Result)
+	if done, err := jsonOutput.EmitJSON(result.Result); done {
+		return err
 	}
 
 	output, _ := result.Result["output"].(string)
@@ -848,7 +845,7 @@ raw git worktree list output including paths and branch information.`,
 		runWorktreeList)
 }
 
-func runWorktreeList(alias, serverName string, outputJSON bool) error {
+func runWorktreeList(alias, serverName string, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -875,8 +872,8 @@ func runWorktreeList(alias, serverName string, outputJSON bool) error {
 		return fmt.Errorf("daemon error: %s", result.Error)
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(result.Result)
+	if done, err := jsonOutput.EmitJSON(result.Result); done {
+		return err
 	}
 
 	worktrees, _ := result.Result["worktrees"].([]any)

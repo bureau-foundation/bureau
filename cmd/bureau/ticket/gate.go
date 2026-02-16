@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
@@ -35,9 +33,9 @@ ticket closure), and timer (time-based).`,
 
 type gateResolveParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"ticket ID" required:"true"`
-	Gate       string `json:"gate"   desc:"gate ID"   required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
+	Gate   string `json:"gate"   desc:"gate ID"   required:"true"`
 }
 
 func gateResolveCommand() *cli.Command {
@@ -59,7 +57,6 @@ The gate is identified by its ID within the ticket.`,
 				Command:     "bureau ticket gate resolve tkt-a3f9 review-gate",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("gate-resolve", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/gate/resolve"},
 		Run: func(args []string) error {
@@ -95,8 +92,8 @@ The gate is identified by its ID within the ticket.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "gate %q on %s resolved\n", params.Gate, result.ID)
@@ -109,11 +106,11 @@ The gate is identified by its ID within the ticket.`,
 
 type gateUpdateParams struct {
 	TicketConnection
+	cli.JSONOutput
 	Ticket      string `json:"ticket"       desc:"ticket ID" required:"true"`
 	Gate        string `json:"gate"         desc:"gate ID"   required:"true"`
 	Status      string `json:"status"       flag:"status,s"     desc:"new gate status (pending or satisfied)" required:"true"`
 	SatisfiedBy string `json:"satisfied_by" flag:"satisfied-by"  desc:"what satisfied the gate (event ID, user ID, etc.)"`
-	OutputJSON  bool   `json:"-"            flag:"json"         desc:"output as JSON"`
 }
 
 func gateUpdateCommand() *cli.Command {
@@ -133,7 +130,6 @@ gate satisfaction.`,
 				Command:     "bureau ticket gate update tkt-a3f9 ci-gate --status satisfied --satisfied-by 'pipeline/build:123'",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("gate-update", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/gate/update"},
 		Run: func(args []string) error {
@@ -178,8 +174,8 @@ gate satisfaction.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "gate %q on %s updated to %s\n", params.Gate, result.ID, params.Status)

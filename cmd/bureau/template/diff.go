@@ -9,8 +9,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
@@ -18,8 +16,8 @@ import (
 
 // templateDiffParams holds the parameters for the template diff command.
 type templateDiffParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
 }
 
 // diffResult is the JSON output for template diff.
@@ -51,9 +49,6 @@ content, not the resolved inheritance chain — use "bureau template show
 				Description: "Compare the Matrix version of a template against a local file",
 				Command:     "bureau template diff iree/template:amdgpu-developer agent.json",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("diff", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/diff"},
@@ -106,13 +101,13 @@ content, not the resolved inheritance chain — use "bureau template show
 			// small JSON objects), this is sufficient to highlight changes.
 			differences := lineDiff(remoteLines, localLines)
 
-			if params.OutputJSON {
-				return cli.WriteJSON(diffResult{
-					TemplateRef: templateRefString,
-					File:        filePath,
-					Identical:   len(differences) == 0,
-					Differences: differences,
-				})
+			if done, err := params.EmitJSON(diffResult{
+				TemplateRef: templateRefString,
+				File:        filePath,
+				Identical:   len(differences) == 0,
+				Differences: differences,
+			}); done {
+				return err
 			}
 
 			if len(differences) == 0 {

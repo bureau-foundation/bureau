@@ -5,7 +5,6 @@ package mcp
 
 import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/spf13/pflag"
 )
 
 // Command returns the "mcp" command group. The root parameter is the
@@ -71,7 +70,6 @@ This command is intended to be launched by MCP-capable clients
 				Command:     "bureau mcp serve --progressive",
 			},
 		},
-		Flags:  func() *pflag.FlagSet { return cli.FlagsFromParams("serve", &params) },
 		Params: func() any { return &params },
 		Run: func(args []string) error {
 			grants, err := fetchGrants()

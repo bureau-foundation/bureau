@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -18,6 +16,7 @@ import (
 
 type createParams struct {
 	TicketConnection
+	cli.JSONOutput
 	Room      string   `json:"room"       flag:"room,r"      desc:"room ID" required:"true"`
 	Title     string   `json:"title"      flag:"title"       desc:"ticket title" required:"true"`
 	Body      string   `json:"body"       flag:"body"        desc:"full description (markdown)"`
@@ -26,8 +25,6 @@ type createParams struct {
 	Labels    []string `json:"labels"     flag:"label,l"     desc:"labels (repeatable)"`
 	Parent    string   `json:"parent"     flag:"parent"      desc:"parent ticket ID"`
 	BlockedBy []string `json:"blocked_by" flag:"blocked-by"  desc:"blocking ticket IDs (repeatable)"`
-
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
 func createCommand() *cli.Command {
@@ -56,7 +53,6 @@ Required fields: --room, --title, --type. Priority defaults to P2
 				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Implement login flow' --type task --parent tkt-epic1",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("create", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/create"},
 		Run: func(args []string) error {
@@ -102,8 +98,8 @@ Required fields: --room, --title, --type. Priority defaults to P2
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Println(result.ID)
@@ -116,6 +112,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 
 type updateParams struct {
 	TicketConnection
+	cli.JSONOutput
 	Ticket   string   `json:"ticket"   desc:"ticket ID" required:"true"`
 	Title    string   `json:"title"    flag:"title"      desc:"new title"`
 	Body     string   `json:"body"     flag:"body"       desc:"new body"`
@@ -125,8 +122,6 @@ type updateParams struct {
 	Labels   []string `json:"labels"   flag:"label,l"    desc:"replace labels (repeatable)"`
 	Assignee string   `json:"assignee" flag:"assignee"   desc:"assign to Matrix user ID (requires in_progress status)"`
 	Parent   string   `json:"parent"   flag:"parent"     desc:"set parent ticket ID"`
-
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
 }
 
 func updateCommand() *cli.Command {
@@ -157,7 +152,6 @@ assignee.`,
 				Command:     "bureau ticket update tkt-a3f9 --label auth --label urgent",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("update", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/update"},
 		Run: func(args []string) error {
@@ -212,8 +206,8 @@ assignee.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "%s updated (status=%s)\n", result.ID, result.Content.Status)
@@ -226,9 +220,9 @@ assignee.`,
 
 type closeParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"ticket ID" required:"true"`
-	Reason     string `json:"reason" flag:"reason" desc:"close reason"`
-	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
+	Reason string `json:"reason" flag:"reason" desc:"close reason"`
 }
 
 func closeCommand() *cli.Command {
@@ -250,7 +244,6 @@ ticket was in_progress, the assignee is auto-cleared.`,
 				Command:     "bureau ticket close tkt-a3f9 --reason 'Fixed in commit abc123'",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("close", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/close"},
 		Run: func(args []string) error {
@@ -281,8 +274,8 @@ ticket was in_progress, the assignee is auto-cleared.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "%s closed\n", result.ID)
@@ -295,8 +288,8 @@ ticket was in_progress, the assignee is auto-cleared.`,
 
 type reopenParams struct {
 	TicketConnection
-	Ticket     string `json:"ticket" desc:"ticket ID" required:"true"`
-	OutputJSON bool   `json:"-"      flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 }
 
 func reopenCommand() *cli.Command {
@@ -308,7 +301,6 @@ func reopenCommand() *cli.Command {
 		Description: `Transition a ticket from "closed" back to "open", clearing the
 close timestamp and reason.`,
 		Usage:          "bureau ticket reopen <ticket-id> [flags]",
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("reopen", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/reopen"},
 		Run: func(args []string) error {
@@ -334,8 +326,8 @@ close timestamp and reason.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "%s reopened\n", result.ID)
@@ -348,9 +340,9 @@ close timestamp and reason.`,
 
 type batchParams struct {
 	TicketConnection
-	File       string `json:"-" flag:"file,f" desc:"path to JSON file containing batch ticket definitions"`
-	Room       string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
-	OutputJSON bool   `json:"-"    flag:"json"   desc:"output as JSON"`
+	cli.JSONOutput
+	File string `json:"-" flag:"file,f" desc:"path to JSON file containing batch ticket definitions"`
+	Room string `json:"room" flag:"room,r" desc:"room ID" required:"true"`
 }
 
 // batchTicket is a single ticket definition in a batch file. The
@@ -388,7 +380,6 @@ created.`,
 				Command:     "bureau ticket batch --room '!abc:bureau.local' --file tickets.json",
 			},
 		},
-		Flags:          func() *pflag.FlagSet { return cli.FlagsFromParams("batch", &params) },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/ticket/batch"},
 		Run: func(args []string) error {
@@ -432,8 +423,8 @@ created.`,
 				return err
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(result)
+			if done, err := params.EmitJSON(result); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "created %d tickets in %s\n", len(result.Refs), result.Room)

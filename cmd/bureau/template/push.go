@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -17,9 +15,9 @@ import (
 
 // templatePushParams holds the parameters for the template push command.
 type templatePushParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
-	OutputJSON bool   `json:"-"           flag:"json"         desc:"output as JSON"`
 }
 
 // templatePushResult is the JSON output for template push.
@@ -61,9 +59,6 @@ exist without actually publishing.`,
 				Description: "Dry-run: validate and check inheritance without publishing",
 				Command:     "bureau template push --dry-run iree/template:amdgpu-developer agent.json",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("push", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/push"},
@@ -122,15 +117,15 @@ exist without actually publishing.`,
 			}
 
 			if params.DryRun {
-				if params.OutputJSON {
-					return cli.WriteJSON(templatePushResult{
-						Ref:          ref.String(),
-						File:         filePath,
-						RoomAlias:    roomAlias,
-						RoomID:       roomID,
-						TemplateName: ref.Template,
-						DryRun:       true,
-					})
+				if done, err := params.EmitJSON(templatePushResult{
+					Ref:          ref.String(),
+					File:         filePath,
+					RoomAlias:    roomAlias,
+					RoomID:       roomID,
+					TemplateName: ref.Template,
+					DryRun:       true,
+				}); done {
+					return err
 				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
@@ -144,16 +139,16 @@ exist without actually publishing.`,
 				return fmt.Errorf("publishing template: %w", err)
 			}
 
-			if params.OutputJSON {
-				return cli.WriteJSON(templatePushResult{
-					Ref:          ref.String(),
-					File:         filePath,
-					RoomAlias:    roomAlias,
-					RoomID:       roomID,
-					TemplateName: ref.Template,
-					EventID:      eventID,
-					DryRun:       false,
-				})
+			if done, err := params.EmitJSON(templatePushResult{
+				Ref:          ref.String(),
+				File:         filePath,
+				RoomAlias:    roomAlias,
+				RoomID:       roomID,
+				TemplateName: ref.Template,
+				EventID:      eventID,
+				DryRun:       false,
+			}); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)

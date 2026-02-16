@@ -29,7 +29,7 @@ func TestShowPipeline(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := showCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	// The command prints JSON to stdout; we verify it doesn't error.
@@ -49,7 +49,7 @@ func TestShowPipelineNotFound(t *testing.T) {
 	startTestServer(t, state)
 
 	cmd := showCommand()
-	if err := cmd.Flags().Parse([]string{"--server-name", "test.local"}); err != nil {
+	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"bureau/pipeline:nonexistent"})

@@ -11,8 +11,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -22,8 +20,8 @@ import (
 // listParams holds the parameters for the machine list command.
 type listParams struct {
 	cli.SessionConfig
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
-	OutputJSON bool   `json:"-"           flag:"json"        desc:"output as JSON"`
 }
 
 func listCommand() *cli.Command {
@@ -36,10 +34,7 @@ func listCommand() *cli.Command {
 
 Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the #bureau/machine room state.`,
-		Usage: "bureau machine list [flags]",
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("list", &params)
-		},
+		Usage:          "bureau machine list [flags]",
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/list"},
 		Run: func(args []string) error {
@@ -56,7 +51,7 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, params.ServerName, params.OutputJSON)
+			return runList(ctx, matrixSession, params.ServerName, &params.JSONOutput)
 		},
 	}
 }
@@ -73,7 +68,7 @@ type machineEntry struct {
 	MemoryMB  int    `json:"memory_mb"`
 }
 
-func runList(ctx context.Context, session *messaging.Session, serverName string, outputJSON bool) error {
+func runList(ctx context.Context, session *messaging.Session, serverName string, jsonOutput *cli.JSONOutput) error {
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
@@ -163,8 +158,8 @@ func runList(ctx context.Context, session *messaging.Session, serverName string,
 		entries = append(entries, entry)
 	}
 
-	if outputJSON {
-		return cli.WriteJSON(entries)
+	if done, err := jsonOutput.EmitJSON(entries); done {
+		return err
 	}
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/pflag"
 	"github.com/tidwall/jsonc"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -17,7 +16,7 @@ import (
 
 // templateValidateParams holds the parameters for the template validate command.
 type templateValidateParams struct {
-	OutputJSON bool `json:"-" flag:"json" desc:"output as JSON"`
+	cli.JSONOutput
 }
 
 // templateValidationResult is the JSON output for template validate.
@@ -48,9 +47,6 @@ Use "bureau template show --raw" to export a template for editing.`,
 				Command:     "bureau template validate my-agent.json",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("validate", &params)
-		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/validate"},
 		Run: func(args []string) error {
@@ -66,12 +62,12 @@ Use "bureau template show --raw" to export a template for editing.`,
 
 			issues := validateTemplateContent(content)
 
-			if params.OutputJSON {
-				return cli.WriteJSON(templateValidationResult{
-					File:   path,
-					Valid:  len(issues) == 0,
-					Issues: issues,
-				})
+			if done, err := params.EmitJSON(templateValidationResult{
+				File:   path,
+				Valid:  len(issues) == 0,
+				Issues: issues,
+			}); done {
+				return err
 			}
 
 			if len(issues) > 0 {

@@ -9,15 +9,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // whoamiParams holds the parameters for the whoami command.
 type whoamiParams struct {
-	Verify     bool `json:"verify"  flag:"verify"  desc:"verify the session against the homeserver"`
-	OutputJSON bool `json:"-"       flag:"json"     desc:"output as JSON"`
+	JSONOutput
+	Verify bool `json:"verify"  flag:"verify"  desc:"verify the session against the homeserver"`
 }
 
 // whoamiOutput is the JSON output for the whoami command.
@@ -57,9 +55,6 @@ session file is read (no network access).`,
 				Command:     "bureau whoami --verify",
 			},
 		},
-		Flags: func() *pflag.FlagSet {
-			return FlagsFromParams("whoami", &params)
-		},
 		Params: func() any { return &params },
 		Run: func(args []string) error {
 			if len(args) > 0 {
@@ -98,8 +93,8 @@ session file is read (no network access).`,
 				verifiedUserID, err := matrixSession.WhoAmI(ctx)
 				if err != nil {
 					output.Status = "invalid"
-					if params.OutputJSON {
-						return WriteJSON(output)
+					if done, err := params.EmitJSON(output); done {
+						return err
 					}
 					fmt.Fprintf(os.Stdout, "User ID:      %s\n", output.UserID)
 					fmt.Fprintf(os.Stdout, "Homeserver:   %s\n", output.Homeserver)
@@ -111,8 +106,8 @@ session file is read (no network access).`,
 				output.Status = fmt.Sprintf("valid (verified as %s)", verifiedUserID)
 			}
 
-			if params.OutputJSON {
-				return WriteJSON(output)
+			if done, err := params.EmitJSON(output); done {
+				return err
 			}
 
 			fmt.Fprintf(os.Stdout, "User ID:      %s\n", output.UserID)

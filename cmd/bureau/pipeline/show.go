@@ -7,14 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/pflag"
-
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // pipelineShowParams holds the parameters for the pipeline show command.
 type pipelineShowParams struct {
+	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
 
@@ -37,9 +36,6 @@ see is what the executor runs.`,
 				Description: "Show the built-in workspace init pipeline",
 				Command:     "bureau pipeline show bureau/pipeline:dev-workspace-init",
 			},
-		},
-		Flags: func() *pflag.FlagSet {
-			return cli.FlagsFromParams("show", &params)
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/show"},

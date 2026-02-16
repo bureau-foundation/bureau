@@ -21,13 +21,11 @@ import (
 // Subsequent events in the batch see the post-satisfaction state because
 // the index is updated immediately after each PUT.
 //
-// Performance: this iterates all tickets with pending gates for each
-// event. For rooms with many pending gates, a watch map keyed by
-// (eventType, stateKey) would reduce this to O(matching gates) per
-// event. The current approach is correct and fast for the expected
-// scale (hundreds of tickets, single-digit pending gates per ticket).
-// The evaluator's interface (events in → gate matches out) is stable
-// regardless of the lookup strategy.
+// Uses the watch map index for O(1) per-event lookup of candidate
+// gates instead of scanning all tickets with pending gates. The watch
+// map returns candidates keyed by (eventType, stateKey); the full
+// match function (matchGateEvent) is still called for content-level
+// criteria (pipeline conclusion, content_match expressions).
 func (ts *TicketService) evaluateGatesForEvents(ctx context.Context, roomID string, state *roomState, events []messaging.Event) {
 	for _, event := range events {
 		// Only state events can satisfy gates. Timeline-only events
@@ -40,77 +38,69 @@ func (ts *TicketService) evaluateGatesForEvents(ctx context.Context, roomID stri
 	}
 }
 
-// evaluateGatesForEvent checks a single state event against all pending
-// gates in the room. Called per-event so that gate satisfaction from
-// earlier events in the batch is visible to later evaluations.
+// evaluateGatesForEvent checks a single state event against pending
+// gates that watch for its (eventType, stateKey). Called per-event so
+// that gate satisfaction from earlier events in the batch is visible to
+// later evaluations via the watch map update in satisfyGate → index.Put.
 func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID string, state *roomState, event messaging.Event) {
-	// Snapshot pending gates. We re-query after each satisfaction
-	// because satisfying a gate modifies the ticket in the index,
-	// which changes what PendingGates returns.
-	candidates := state.index.PendingGates()
+	// The watch map returns gates whose watch criteria match this
+	// event's type and state key. This is a snapshot slice — safe to
+	// iterate even though satisfyGate modifies the index (and thus
+	// the watch map) mid-loop.
+	watches := state.index.WatchedGates(event.Type, *event.StateKey)
 
-	for _, entry := range candidates {
-		for gateIndex := range entry.Content.Gates {
-			gate := &entry.Content.Gates[gateIndex]
-			if gate.Status != "pending" {
-				continue
-			}
-			if gate.Type == "human" || gate.Type == "timer" {
-				// Human gates are never auto-satisfied. Timer
-				// gates are evaluated by the timer ticker, not
-				// by incoming events.
-				continue
-			}
+	for _, watch := range watches {
+		// Re-read the ticket from the index to get the most
+		// current version (a prior iteration may have satisfied
+		// another gate on this same ticket).
+		current, exists := state.index.Get(watch.TicketID)
+		if !exists {
+			continue
+		}
+		if watch.GateIndex >= len(current.Gates) {
+			continue
+		}
+		gate := &current.Gates[watch.GateIndex]
+		if gate.Status != "pending" {
+			// Gate was already satisfied by a previous event
+			// in this batch, or the ticket was re-indexed
+			// with different gates.
+			continue
+		}
 
-			if !matchGateEvent(gate, event) {
-				continue
-			}
+		// The watch map narrows candidates by (eventType, stateKey)
+		// but content-level criteria (pipeline_ref, conclusion,
+		// content_match) still need full match verification.
+		if !matchGateEvent(gate, event) {
+			continue
+		}
 
-			// Re-read the ticket from the index to get the
-			// most current version (a prior iteration may have
-			// satisfied another gate on this same ticket).
-			current, exists := state.index.Get(entry.ID)
-			if !exists {
-				continue
+		satisfiedBy := event.EventID
+		if satisfiedBy == "" {
+			// Fallback: use event type + state key as an
+			// identifier when the event ID is missing
+			// (shouldn't happen in production, but defensive).
+			satisfiedBy = event.Type
+			if event.StateKey != nil {
+				satisfiedBy += "/" + *event.StateKey
 			}
-			if gateIndex >= len(current.Gates) {
-				continue
-			}
-			currentGate := &current.Gates[gateIndex]
-			if currentGate.ID != gate.ID || currentGate.Status != "pending" {
-				// Gate was already satisfied or the ticket
-				// was re-indexed with different gates.
-				continue
-			}
+		}
 
-			satisfiedBy := event.EventID
-			if satisfiedBy == "" {
-				// Fallback: use event type + state key as an
-				// identifier when the event ID is missing
-				// (shouldn't happen in production, but
-				// defensive).
-				satisfiedBy = event.Type
-				if event.StateKey != nil {
-					satisfiedBy += "/" + *event.StateKey
-				}
-			}
-
-			if err := ts.satisfyGate(ctx, roomID, state, entry.ID, current, gateIndex, satisfiedBy); err != nil {
-				ts.logger.Error("failed to satisfy gate",
-					"ticket_id", entry.ID,
-					"gate_id", gate.ID,
-					"gate_type", gate.Type,
-					"error", err,
-				)
-			} else {
-				ts.logger.Info("gate satisfied",
-					"ticket_id", entry.ID,
-					"gate_id", gate.ID,
-					"gate_type", gate.Type,
-					"satisfied_by", satisfiedBy,
-					"room_id", roomID,
-				)
-			}
+		if err := ts.satisfyGate(ctx, roomID, state, watch.TicketID, current, watch.GateIndex, satisfiedBy); err != nil {
+			ts.logger.Error("failed to satisfy gate",
+				"ticket_id", watch.TicketID,
+				"gate_id", gate.ID,
+				"gate_type", gate.Type,
+				"error", err,
+			)
+		} else {
+			ts.logger.Info("gate satisfied",
+				"ticket_id", watch.TicketID,
+				"gate_id", gate.ID,
+				"gate_type", gate.Type,
+				"satisfied_by", satisfiedBy,
+				"room_id", roomID,
+			)
 		}
 	}
 }

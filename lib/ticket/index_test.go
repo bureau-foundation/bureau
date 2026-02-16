@@ -856,6 +856,393 @@ func TestPendingGatesEmpty(t *testing.T) {
 	}
 }
 
+// --- WatchedGates ---
+
+func TestWatchedGatesPipelineGate(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Gated by pipeline")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build-check"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Pipeline gates register as wildcard watchers for EventTypePipelineResult.
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build-check")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for pipeline_result = %d, want 1", len(watches))
+	}
+	if watches[0].TicketID != "tkt-a" || watches[0].GateIndex != 0 {
+		t.Errorf("watch = %+v, want {tkt-a, 0}", watches[0])
+	}
+
+	// Pipeline gates match any state key, so a different state key
+	// should still return the watch.
+	watches = idx.WatchedGates(schema.EventTypePipelineResult, "other-pipeline")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for other state key = %d, want 1 (wildcard)", len(watches))
+	}
+
+	// Unrelated event type should return nothing.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-1")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for unrelated type = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesTicketGate(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Gated by ticket")
+	tc.Gates = []schema.TicketGate{
+		{ID: "blocker-done", Type: "ticket", Status: "pending", TicketID: "tkt-blocker"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Exact state key match.
+	watches := idx.WatchedGates(schema.EventTypeTicket, "tkt-blocker")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for ticket gate = %d, want 1", len(watches))
+	}
+	if watches[0].TicketID != "tkt-a" || watches[0].GateIndex != 0 {
+		t.Errorf("watch = %+v, want {tkt-a, 0}", watches[0])
+	}
+
+	// Different ticket ID should not match.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-other")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for wrong ticket ID = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesStateEventGateExactKey(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Gated by state event")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ws-ready", Type: "state_event", Status: "pending",
+			EventType: "m.bureau.workspace", StateKey: "/workspace/proj"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Exact match on both type and state key.
+	watches := idx.WatchedGates("m.bureau.workspace", "/workspace/proj")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates exact key = %d, want 1", len(watches))
+	}
+
+	// Wrong state key.
+	watches = idx.WatchedGates("m.bureau.workspace", "/workspace/other")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates wrong state key = %d, want 0", len(watches))
+	}
+
+	// Wrong event type.
+	watches = idx.WatchedGates("m.bureau.other", "/workspace/proj")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates wrong event type = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesStateEventGateWildcardKey(t *testing.T) {
+	idx := NewIndex()
+
+	// state_event gate with empty StateKey matches any state key.
+	tc := makeTicket("Gated by any workspace event")
+	tc.Gates = []schema.TicketGate{
+		{ID: "any-ws", Type: "state_event", Status: "pending",
+			EventType: "m.bureau.workspace"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Any state key should match via wildcard.
+	watches := idx.WatchedGates("m.bureau.workspace", "anything")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates wildcard = %d, want 1", len(watches))
+	}
+
+	watches = idx.WatchedGates("m.bureau.workspace", "something-else")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates wildcard different key = %d, want 1", len(watches))
+	}
+
+	// Wrong event type should still not match.
+	watches = idx.WatchedGates("m.bureau.other", "anything")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates wrong type with wildcard = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesExactAndWildcardCombined(t *testing.T) {
+	idx := NewIndex()
+
+	// One gate watches a specific state key, another watches any state key
+	// for the same event type.
+	tc1 := makeTicket("Specific workspace gate")
+	tc1.Gates = []schema.TicketGate{
+		{ID: "exact", Type: "state_event", Status: "pending",
+			EventType: "m.bureau.workspace", StateKey: "ws-1"},
+	}
+	idx.Put("tkt-exact", tc1)
+
+	tc2 := makeTicket("Any workspace gate")
+	tc2.Gates = []schema.TicketGate{
+		{ID: "wildcard", Type: "state_event", Status: "pending",
+			EventType: "m.bureau.workspace"},
+	}
+	idx.Put("tkt-wildcard", tc2)
+
+	// An event for "ws-1" should match both the exact and wildcard watchers.
+	watches := idx.WatchedGates("m.bureau.workspace", "ws-1")
+	if len(watches) != 2 {
+		t.Fatalf("WatchedGates exact+wildcard = %d, want 2", len(watches))
+	}
+
+	// An event for "ws-2" should match only the wildcard watcher.
+	watches = idx.WatchedGates("m.bureau.workspace", "ws-2")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates wildcard only = %d, want 1", len(watches))
+	}
+	if watches[0].TicketID != "tkt-wildcard" {
+		t.Errorf("watch = %+v, want {tkt-wildcard, 0}", watches[0])
+	}
+}
+
+func TestWatchedGatesSkipsCrossRoomGates(t *testing.T) {
+	idx := NewIndex()
+
+	// Cross-room state_event gates (RoomAlias set) should not appear
+	// in the watch map — they're evaluated by evaluateCrossRoomGates.
+	tc := makeTicket("Cross-room gated")
+	tc.Gates = []schema.TicketGate{
+		{ID: "cross", Type: "state_event", Status: "pending",
+			EventType: "m.bureau.workspace", RoomAlias: "#other:local"},
+	}
+	idx.Put("tkt-a", tc)
+
+	watches := idx.WatchedGates("m.bureau.workspace", "ws-1")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates should exclude cross-room gates, got %d", len(watches))
+	}
+}
+
+func TestWatchedGatesSkipsHumanAndTimerGates(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Human and timer gates")
+	tc.Gates = []schema.TicketGate{
+		{ID: "approval", Type: "human", Status: "pending"},
+		{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Human and timer gates are not event-driven, so no event type
+	// should match them.
+	watches := idx.WatchedGates("m.bureau.workspace", "")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates should exclude human/timer gates, got %d", len(watches))
+	}
+}
+
+func TestWatchedGatesSkipsSatisfiedGates(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Satisfied gate")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
+	}
+	idx.Put("tkt-a", tc)
+
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates should exclude satisfied gates, got %d", len(watches))
+	}
+}
+
+func TestWatchedGatesUpdatedOnPut(t *testing.T) {
+	idx := NewIndex()
+
+	// Insert a ticket with a pending pipeline gate.
+	tc := makeTicket("Pipeline gated")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+	}
+	idx.Put("tkt-a", tc)
+
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 1 {
+		t.Fatalf("before satisfaction: WatchedGates = %d, want 1", len(watches))
+	}
+
+	// Satisfy the gate and re-Put the ticket.
+	tc.Gates[0].Status = "satisfied"
+	idx.Put("tkt-a", tc)
+
+	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 0 {
+		t.Errorf("after satisfaction: WatchedGates = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesCleanedOnRemove(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Pipeline gated")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+	}
+	idx.Put("tkt-a", tc)
+
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 1 {
+		t.Fatalf("before remove: WatchedGates = %d, want 1", len(watches))
+	}
+
+	idx.Remove("tkt-a")
+
+	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 0 {
+		t.Errorf("after remove: WatchedGates = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesMultipleGatesOnOneTicket(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Multi-gated")
+	tc.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+		{ID: "blocker", Type: "ticket", Status: "pending", TicketID: "tkt-dep"},
+		{ID: "ws", Type: "state_event", Status: "pending", EventType: "m.bureau.workspace", StateKey: "ws-1"},
+		{ID: "approval", Type: "human", Status: "pending"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Pipeline gate should be in the watch map.
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 1 {
+		t.Errorf("pipeline watches = %d, want 1", len(watches))
+	}
+
+	// Ticket gate should be in the watch map.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-dep")
+	if len(watches) != 1 {
+		t.Errorf("ticket watches = %d, want 1", len(watches))
+	}
+
+	// State event gate should be in the watch map.
+	watches = idx.WatchedGates("m.bureau.workspace", "ws-1")
+	if len(watches) != 1 {
+		t.Errorf("state_event watches = %d, want 1", len(watches))
+	}
+
+	// Human gate should not be in any watch map.
+	// (Checked via unrelated event type — no way to look up human gates.)
+}
+
+func TestWatchedGatesMultipleTicketsSameWatchKey(t *testing.T) {
+	idx := NewIndex()
+
+	// Two tickets watching the same pipeline.
+	for _, id := range []string{"tkt-a", "tkt-b"} {
+		tc := makeTicket(id)
+		tc.Gates = []schema.TicketGate{
+			{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+		}
+		idx.Put(id, tc)
+	}
+
+	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 2 {
+		t.Fatalf("WatchedGates for shared key = %d, want 2", len(watches))
+	}
+
+	// After satisfying one, only one should remain.
+	tc, _ := idx.Get("tkt-a")
+	tc.Gates[0].Status = "satisfied"
+	idx.Put("tkt-a", tc)
+
+	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	if len(watches) != 1 {
+		t.Errorf("after satisfying one: WatchedGates = %d, want 1", len(watches))
+	}
+	if watches[0].TicketID != "tkt-b" {
+		t.Errorf("remaining watch = %+v, want {tkt-b, 0}", watches[0])
+	}
+}
+
+func TestWatchedGatesEmpty(t *testing.T) {
+	idx := NewIndex()
+	watches := idx.WatchedGates("m.bureau.workspace", "ws-1")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates on empty index = %d, want 0", len(watches))
+	}
+}
+
+func TestWatchedGatesGateWatchKeyConsistency(t *testing.T) {
+	// Verify that the watch map is consistent after a sequence of
+	// insertions, updates, and removals.
+	idx := NewIndex()
+
+	// Insert three tickets with various gate types.
+	tc1 := makeTicket("Pipeline")
+	tc1.Gates = []schema.TicketGate{
+		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+	}
+	idx.Put("tkt-1", tc1)
+
+	tc2 := makeTicket("Ticket dep")
+	tc2.Gates = []schema.TicketGate{
+		{ID: "dep", Type: "ticket", Status: "pending", TicketID: "tkt-blocker"},
+	}
+	idx.Put("tkt-2", tc2)
+
+	tc3 := makeTicket("State event")
+	tc3.Gates = []schema.TicketGate{
+		{ID: "ws", Type: "state_event", Status: "pending", EventType: "m.bureau.workspace"},
+	}
+	idx.Put("tkt-3", tc3)
+
+	// Verify all watches exist.
+	if len(idx.WatchedGates(schema.EventTypePipelineResult, "x")) != 1 {
+		t.Error("pipeline watch missing")
+	}
+	if len(idx.WatchedGates(schema.EventTypeTicket, "tkt-blocker")) != 1 {
+		t.Error("ticket watch missing")
+	}
+	if len(idx.WatchedGates("m.bureau.workspace", "y")) != 1 {
+		t.Error("state_event watch missing")
+	}
+
+	// Satisfy tc1's gate.
+	tc1.Gates[0].Status = "satisfied"
+	idx.Put("tkt-1", tc1)
+	if len(idx.WatchedGates(schema.EventTypePipelineResult, "x")) != 0 {
+		t.Error("pipeline watch should be removed after satisfaction")
+	}
+
+	// Remove tc2.
+	idx.Remove("tkt-2")
+	if len(idx.WatchedGates(schema.EventTypeTicket, "tkt-blocker")) != 0 {
+		t.Error("ticket watch should be removed after Remove")
+	}
+
+	// tc3 still present.
+	if len(idx.WatchedGates("m.bureau.workspace", "y")) != 1 {
+		t.Error("state_event watch should still exist")
+	}
+
+	// Change tc3's gate from state_event to a different event type.
+	tc3.Gates[0].EventType = "m.bureau.other"
+	idx.Put("tkt-3", tc3)
+	if len(idx.WatchedGates("m.bureau.workspace", "y")) != 0 {
+		t.Error("old watch key should be removed after update")
+	}
+	if len(idx.WatchedGates("m.bureau.other", "y")) != 1 {
+		t.Error("new watch key should exist after update")
+	}
+}
+
 // --- Stats ---
 
 func TestStats(t *testing.T) {

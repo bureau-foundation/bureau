@@ -160,6 +160,28 @@ type RankedEntry struct {
 	Score TicketScore
 }
 
+// gateWatchKey identifies the event criteria a pending gate watches for.
+// Used as a map key in the gate watch index for O(1) event-to-gate lookup.
+type gateWatchKey struct {
+	// eventType is the Matrix event type the gate watches
+	// (e.g., EventTypePipelineResult, EventTypeTicket).
+	eventType string
+
+	// stateKey is the Matrix state key the gate watches. Empty means
+	// "match any state key for this event type" — used by pipeline
+	// gates (which match on content, not state key) and state_event
+	// gates with no specific state key.
+	stateKey string
+}
+
+// GateWatch identifies a specific pending gate on a specific ticket.
+// Returned by [Index.WatchedGates] to allow direct gate access without
+// scanning all tickets.
+type GateWatch struct {
+	TicketID  string
+	GateIndex int
+}
+
 // Index is a per-room in-memory ticket index. It maintains secondary
 // indexes for filtered queries and a dependency graph for readiness
 // computation.
@@ -183,6 +205,18 @@ type Index struct {
 	// blocks: ticketID → set of ticket IDs that depend on it (reverse edges).
 	blockedBy map[string]map[string]struct{}
 	blocks    map[string]map[string]struct{}
+
+	// Gate watch index: maps event criteria to pending gates that
+	// watch for those events. Maintained by Put/Remove alongside
+	// other secondary indexes. Enables O(1) event-to-gate lookup
+	// instead of scanning all tickets with pending gates.
+	//
+	// Keys with empty stateKey are wildcard entries matching any
+	// state key for that event type (used by pipeline gates and
+	// state_event gates with no specific state key). Lookup checks
+	// both the exact (eventType, stateKey) key and the wildcard
+	// (eventType, "") key.
+	gateWatch map[gateWatchKey]map[GateWatch]struct{}
 }
 
 // NewIndex returns an empty index ready for use.
@@ -197,6 +231,7 @@ func NewIndex() *Index {
 		children:   make(map[string]map[string]struct{}),
 		blockedBy:  make(map[string]map[string]struct{}),
 		blocks:     make(map[string]map[string]struct{}),
+		gateWatch:  make(map[gateWatchKey]map[GateWatch]struct{}),
 	}
 }
 
@@ -216,9 +251,25 @@ func (idx *Index) Len() int {
 func (idx *Index) Put(ticketID string, content schema.TicketContent) {
 	if old, exists := idx.tickets[ticketID]; exists {
 		idx.updateIndexes(ticketID, &old, removeFromStringIndex, removeFromIntIndex)
+		idx.removeGateWatches(ticketID, &old)
 	}
+
+	// Clone the Gates slice to break backing-array aliasing between
+	// the stored content and the caller's copy. Without this, in-place
+	// modifications to the caller's Gates elements (e.g., setting
+	// Status to "satisfied" in satisfyGate) would alias through to
+	// the stored copy, causing removeGateWatches to see modified
+	// values instead of the original values it needs to compute
+	// correct watch keys for removal.
+	if len(content.Gates) > 0 {
+		cloned := make([]schema.TicketGate, len(content.Gates))
+		copy(cloned, content.Gates)
+		content.Gates = cloned
+	}
+
 	idx.tickets[ticketID] = content
 	idx.updateIndexes(ticketID, &content, addToStringIndex, addToIntIndex)
+	idx.addGateWatches(ticketID, &content)
 }
 
 // Remove deletes a ticket from the index and cleans up all secondary
@@ -229,6 +280,7 @@ func (idx *Index) Remove(ticketID string) {
 		return
 	}
 	idx.updateIndexes(ticketID, &old, removeFromStringIndex, removeFromIntIndex)
+	idx.removeGateWatches(ticketID, &old)
 	delete(idx.tickets, ticketID)
 }
 
@@ -346,9 +398,12 @@ func (idx *Index) ChildProgress(parentID string) (total, closed int) {
 }
 
 // PendingGates returns all tickets that have at least one gate with
-// status "pending". The gate evaluator in the ticket service uses
-// this to know which tickets to check when a state event arrives.
-// Results are not sorted (the caller iterates gates, not display).
+// status "pending". Used by timer gate evaluation and cross-room gate
+// evaluation, which need to scan all pending gates regardless of event
+// criteria. For same-room event-driven evaluation, prefer
+// [Index.WatchedGates] which provides O(1) lookup by event type and
+// state key. Results are not sorted (the caller iterates gates, not
+// display).
 func (idx *Index) PendingGates() []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
@@ -360,6 +415,127 @@ func (idx *Index) PendingGates() []Entry {
 		}
 	}
 	return result
+}
+
+// WatchedGates returns pending gates that could match an event with
+// the given type and state key. This is an O(1) lookup (per matching
+// gate) instead of scanning all tickets with pending gates.
+//
+// The result includes both exact matches on (eventType, stateKey) and
+// wildcard matches on (eventType, "") for gates that watch any state
+// key of that event type.
+//
+// Callers must still run the full match function (e.g., matchGateEvent)
+// on each result to verify content-level criteria (pipeline conclusion,
+// content_match expressions, etc.) that the watch key doesn't capture.
+//
+// The returned slice is a snapshot: modifying the index (via Put after
+// gate satisfaction) does not affect an in-progress iteration.
+func (idx *Index) WatchedGates(eventType, stateKey string) []GateWatch {
+	var result []GateWatch
+
+	// Exact match: gates watching for this specific (eventType, stateKey).
+	exactKey := gateWatchKey{eventType: eventType, stateKey: stateKey}
+	for watch := range idx.gateWatch[exactKey] {
+		result = append(result, watch)
+	}
+
+	// Wildcard match: gates watching for any state key of this event type.
+	// Only check the wildcard key if stateKey is non-empty; when stateKey
+	// is empty, the exact key IS the wildcard key and was already checked.
+	if stateKey != "" {
+		wildcardKey := gateWatchKey{eventType: eventType}
+		for watch := range idx.gateWatch[wildcardKey] {
+			result = append(result, watch)
+		}
+	}
+
+	return result
+}
+
+// watchKeysForGate computes the watch map keys for a gate. Returns nil
+// for gate types that are not event-driven (human, timer) or that are
+// handled by a separate evaluation path (cross-room state_event gates).
+func watchKeysForGate(gate *schema.TicketGate) []gateWatchKey {
+	switch gate.Type {
+	case "pipeline":
+		// Pipeline gates watch for pipeline_result events with any
+		// state key. The fine-grained match on pipeline_ref and
+		// conclusion is done by matchGateEvent after the watch map
+		// narrows candidates.
+		return []gateWatchKey{{eventType: schema.EventTypePipelineResult}}
+
+	case "ticket":
+		// Ticket gates watch for a specific ticket's state event to
+		// reach status "closed". The state key is the ticket ID.
+		if gate.TicketID == "" {
+			return nil
+		}
+		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: gate.TicketID}}
+
+	case "state_event":
+		// Cross-room gates (RoomAlias set) are evaluated separately
+		// by evaluateCrossRoomGates, not the per-event watch path.
+		if gate.RoomAlias != "" {
+			return nil
+		}
+		if gate.EventType == "" {
+			return nil
+		}
+		// When gate.StateKey is empty, the watch key is a wildcard
+		// entry matching any state key for gate.EventType.
+		return []gateWatchKey{{eventType: gate.EventType, stateKey: gate.StateKey}}
+
+	default:
+		// human, timer, and unknown types are not event-driven.
+		return nil
+	}
+}
+
+// addGateWatches registers watch entries for all pending gates on the
+// given ticket. Called by Put after inserting the ticket into the
+// primary map.
+func (idx *Index) addGateWatches(ticketID string, content *schema.TicketContent) {
+	for i := range content.Gates {
+		if content.Gates[i].Status != "pending" {
+			continue
+		}
+		for _, key := range watchKeysForGate(&content.Gates[i]) {
+			watch := GateWatch{TicketID: ticketID, GateIndex: i}
+			set, exists := idx.gateWatch[key]
+			if !exists {
+				set = make(map[GateWatch]struct{})
+				idx.gateWatch[key] = set
+			}
+			set[watch] = struct{}{}
+		}
+	}
+}
+
+// removeGateWatches unregisters watch entries for all gates on the
+// given ticket. Called by Put (before replacing) and Remove.
+//
+// This unconditionally attempts removal for every gate regardless of
+// status. When Put is called after modifying a gate's status in-place
+// (e.g., marking it "satisfied"), the old content read from the map
+// may already reflect the modification due to slice backing-array
+// aliasing. Skipping non-pending gates would leave orphaned watch
+// entries. Unconditional removal is safe: the delete is a no-op for
+// gates that were never in the watch map.
+func (idx *Index) removeGateWatches(ticketID string, content *schema.TicketContent) {
+	for i := range content.Gates {
+		for _, key := range watchKeysForGate(&content.Gates[i]) {
+			watch := GateWatch{TicketID: ticketID, GateIndex: i}
+			set, exists := idx.gateWatch[key]
+			if !exists {
+				continue
+			}
+			delete(set, watch)
+			if len(set) == 0 {
+				delete(idx.gateWatch, key)
+			}
+		}
+	}
 }
 
 // Stats returns aggregate counts across all tickets in the index.

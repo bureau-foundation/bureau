@@ -71,10 +71,6 @@ func newHAWatchdog(daemon *Daemon, logger *slog.Logger) *haWatchdog {
 // from the fleet room and updates the watchdog's cached state. Only services
 // with ha_class:"critical" are retained.
 func (w *haWatchdog) syncFleetState(ctx context.Context) {
-	if w.daemon.fleetRoomID == "" {
-		return
-	}
-
 	events, err := w.daemon.session.GetRoomState(ctx, w.daemon.fleetRoomID)
 	if err != nil {
 		w.logger.Error("fetching fleet room state for HA watchdog", "error", err)
@@ -133,10 +129,6 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 // this daemon should attempt acquisition. Called from the sync loop when
 // fleet room changes are detected.
 func (w *haWatchdog) evaluate(ctx context.Context) {
-	if w.daemon.fleetRoomID == "" {
-		return
-	}
-
 	w.mu.Lock()
 	// Snapshot the state under the lock so we can release it before
 	// doing I/O (Matrix calls, sleeps).

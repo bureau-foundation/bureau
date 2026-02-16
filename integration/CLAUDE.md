@@ -1,5 +1,48 @@
 # Integration Tests
 
+## Hard timing requirements
+
+No individual integration test may take more than 10 seconds. The full
+integration test suite must complete in under 40 seconds (wall clock, excluding
+Docker startup in TestMain). The Bazel timeout is set to 60 seconds as a hard
+kill — if the suite hits that, something is broken, not slow.
+
+These are not guidelines. There are no exceptions for "machine load", "CI
+variability", or "this test does a lot." If a test takes more than 10 seconds,
+the test has a bug — find it and fix it. Every wait in the test suite is either
+inotify (instant on event) or Matrix /sync long-poll (instant on event). There
+is no legitimate reason for any operation to take 10 seconds.
+
+When running integration tests from the CLI, never set `--test_timeout` to
+anything longer than 60 seconds. The correct response to a timeout is to
+diagnose why the test is slow, not to give it more time.
+
+## Diagnosing hangs
+
+When an integration test hangs, the first step is always to check the logs.
+Run with `--test_arg=-test.v --test_output=all` to see structured JSON logs
+from all daemon, launcher, and fleet controller processes interleaved with Go
+test output. The logs tell you exactly what happened and where the process
+stopped.
+
+Do NOT try to diagnose hangs by reading source code and guessing. The logs
+exist specifically so you don't have to do that. If the logs don't make the
+root cause obvious, then improving the logging is P0 — higher priority than
+fixing the hang itself. We must be able to diagnose hangs in production from
+logs alone, and integration tests are our proving ground for that.
+
+Concrete steps:
+
+1. Run the hanging test in isolation with verbose logging:
+   `bazel test //integration:integration_test --test_filter='TestName' --test_arg=-test.v --test_output=all`
+2. Read the logs from the bottom (timeout/panic) upward to find the last
+   successful operation.
+3. The gap between the last log line and the timeout IS the diagnosis — it
+   tells you exactly which operation is stuck.
+4. If step 3 doesn't point directly at the fix, add logging to the stuck
+   code path and re-run. This logging improvement is part of the fix, not
+   throwaway debug output.
+
 ## No direct time usage
 
 `time.Sleep`, polling loops with sleep intervals, and bare `time.After` are

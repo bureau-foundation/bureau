@@ -138,27 +138,6 @@ func TestHASyncFleetState(t *testing.T) {
 	}
 }
 
-// TestHASyncFleetState_EmptyFleetRoom verifies that syncFleetState is a
-// no-op when the fleet room ID is empty (fleet features disabled).
-func TestHASyncFleetState_EmptyFleetRoom(t *testing.T) {
-	t.Parallel()
-
-	daemon, _ := newHATestDaemon(t)
-	daemon.fleetRoomID = ""
-	daemon.haWatchdog = newHAWatchdog(daemon, daemon.logger)
-
-	// Should not panic or make any Matrix calls.
-	daemon.haWatchdog.syncFleetState(context.Background())
-
-	daemon.haWatchdog.mu.Lock()
-	count := len(daemon.haWatchdog.criticalServices)
-	daemon.haWatchdog.mu.Unlock()
-
-	if count != 0 {
-		t.Errorf("critical services = %d, want 0 (fleet disabled)", count)
-	}
-}
-
 // TestHAEligibilityCheck verifies that isEligible correctly evaluates
 // placement constraints against the daemon's machine.
 func TestHAEligibilityCheck(t *testing.T) {

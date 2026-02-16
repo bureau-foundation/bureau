@@ -100,8 +100,8 @@ func TestMachineJoinsFleet(t *testing.T) {
 	if level, ok := powerLevels.Users[adminUserID]; !ok || level != 100 {
 		t.Errorf("admin power level = %d (present=%v), want 100", level, ok)
 	}
-	if level, ok := powerLevels.Users[machine.UserID]; !ok || level != 50 {
-		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
+	if level, ok := powerLevels.Users[machine.UserID]; !ok || level != 100 {
+		t.Errorf("machine power level = %d (present=%v), want 100", level, ok)
 	}
 }
 

@@ -27,7 +27,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	adminUserID := "@bureau-admin:" + testServerName
 
 	// Register test users. These get default power level 0 in any room they
-	// join. The machine user will be promoted to PL 50 via room power levels.
+	// join. The machine user will be promoted to PL 100 via room power levels.
 	machineAccount := registerPrincipal(t, "test/pl-machine", "machine-test-pw")
 	agentAccount := registerPrincipal(t, "test/pl-agent", "agent-test-pw")
 	// A third user for invite tests — registered but never joined to rooms.
@@ -109,9 +109,9 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	}
 
 	// --- Config room tests ---
-	// Power levels: admin=100, machine=50, agent=0
+	// Power levels: admin=100, machine=100, agent=0
 	// events_default: 100, state_default: 100
-	// m.bureau.machine_config: 100, m.bureau.credentials: 100
+	// m.bureau.machine_config: 50, m.bureau.credentials: 100
 	// m.bureau.layout: 0, m.room.message: 0
 
 	t.Run("ConfigRoom", func(t *testing.T) {
@@ -125,12 +125,14 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			}
 		})
 
-		t.Run("MachineCannotSetConfig", func(t *testing.T) {
+		t.Run("MachineCanSetConfig", func(t *testing.T) {
 			_, err := machineSession.SendStateEvent(ctx, configRoom.RoomID,
 				schema.EventTypeMachineConfig, "test-key", map[string]any{
 					"principals": []any{},
 				})
-			assertForbidden(t, err, "machine (PL 50) setting m.bureau.machine_config (PL 100)")
+			if err != nil {
+				t.Fatalf("machine (PL 100) should be able to set machine config (PL 50): %v", err)
+			}
 		})
 
 		t.Run("AgentCannotSetConfig", func(t *testing.T) {
@@ -138,7 +140,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 				schema.EventTypeMachineConfig, "test-key", map[string]any{
 					"principals": []any{},
 				})
-			assertForbidden(t, err, "agent (PL 0) setting m.bureau.machine_config (PL 100)")
+			assertForbidden(t, err, "agent (PL 0) setting m.bureau.machine_config (PL 50)")
 		})
 
 		t.Run("AgentCanSendMessage", func(t *testing.T) {
@@ -224,7 +226,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 		t.Run("MachineCanInvite", func(t *testing.T) {
 			err := machineSession.InviteUser(ctx, workspaceRoom.RoomID, bystander.UserID)
 			if err != nil {
-				t.Fatalf("machine (PL 50) should be able to invite (invite: 50): %v", err)
+				t.Fatalf("machine (PL 100) should be able to invite (invite: 50): %v", err)
 			}
 		})
 

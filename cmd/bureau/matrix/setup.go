@@ -54,7 +54,9 @@ Standard rooms created:
   bureau/machine     Machine keys and status
   bureau/service     Service directory
   bureau/template    Sandbox templates (base, base-networked)
-  bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)`,
+  bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)
+  bureau/artifact    Artifact coordination
+  bureau/fleet       Fleet service definitions, HA leases, and alerts`,
 		Usage: "bureau matrix setup [flags]",
 		Examples: []cli.Example{
 			{

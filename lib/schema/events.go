@@ -1868,35 +1868,36 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 }
 
 // ConfigRoomPowerLevels returns power level content for a per-machine config
-// room. The admin has power level 100 (can set config and credentials). The
-// machine has power level 50, which is sufficient to invite and write layouts
-// (PL 0) but insufficient to modify config, credentials, or room metadata
-// (PL 100).
+// room. Three tiers:
 //
-// IMPORTANT: Do not use this as PowerLevelContentOverride when the machine is
-// the room creator. The override is merged into the m.room.power_levels event
-// BEFORE the preset's subsequent events (join_rules, history_visibility, etc.)
-// are authorized. Since the machine would be PL 50 but state_default is 100,
-// the homeserver rejects the preset events as unauthorized. Instead, create
-// the room without an override (letting the preset give the creator PL 100),
-// then send this as a separate m.room.power_levels state event.
+//   - Admin + Machine (100): credential writes, room metadata, power level
+//     management. The machine (daemon) is trusted infrastructure that needs
+//     PL 100 to write MachineConfig for HA hosting, invite fleet controllers
+//     to config rooms, and grant them PL 50.
+//   - Fleet controller (50): MachineConfig writes for service placement.
+//     Fleet controllers are granted PL 50 by the daemon when it detects
+//     them in the fleet room. PL 50 is sufficient for MachineConfig but
+//     not for credentials or room metadata.
+//   - Default (0): read-only (principals, other members).
 //
-// When the admin creates the room (bureau-credentials), the admin gets PL 100
-// in the override, which satisfies all event PL requirements — so using this
-// as PowerLevelContentOverride is safe in that path.
+// Both admin and machine creation paths are safe: the creator gets PL 100
+// from the private_chat preset, and ConfigRoomPowerLevels keeps the creator
+// at PL 100. When the daemon creates the room, it applies this as a
+// separate power_levels state event after creation. When the admin creates
+// the room (bureau-credentials), it can use this as PowerLevelContentOverride.
 func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 	users := map[string]any{
 		adminUserID: 100,
 	}
 	if machineUserID != "" && machineUserID != adminUserID {
-		users[machineUserID] = 50
+		users[machineUserID] = 100
 	}
 
 	events := AdminProtectedEvents()
-	events[EventTypeMachineConfig] = 100
-	events[EventTypeCredentials] = 100
-	events[EventTypeLayout] = 0        // daemon publishes layout state
-	events[MatrixEventTypeMessage] = 0 // daemon posts command results and pipeline results
+	events[EventTypeMachineConfig] = 50 // fleet controllers (PL 50) write placements
+	events[EventTypeCredentials] = 100  // admin and machine only
+	events[EventTypeLayout] = 0         // daemon publishes layout state
+	events[MatrixEventTypeMessage] = 0  // daemon posts command results and pipeline results
 
 	return map[string]any{
 		"users":          users,

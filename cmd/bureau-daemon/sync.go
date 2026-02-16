@@ -73,6 +73,7 @@ func buildSyncFilter() string {
 		schema.EventTypeTemporalGrant,
 		schema.EventTypeFleetService,
 		schema.EventTypeHALease,
+		schema.MatrixEventTypeRoomMember, // detect fleet controllers joining fleet room
 	}
 
 	timelineEventTypes := make([]string, len(stateEventTypes)+1)
@@ -276,9 +277,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		case d.serviceRoomID:
 			needsServiceSync = true
 		case d.fleetRoomID:
-			if d.fleetRoomID != "" {
-				needsHAEval = true
-			}
+			needsHAEval = true
 		case d.systemRoomID:
 			// The system room carries token signing keys and operational
 			// messages. State changes here don't require reconciliation.
@@ -346,10 +345,19 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		}
 	}
 
-	if needsHAEval && d.haWatchdog != nil {
-		d.logger.Info("fleet room state changed, evaluating HA leases")
-		d.haWatchdog.syncFleetState(ctx)
-		d.haWatchdog.evaluate(ctx)
+	if needsHAEval {
+		// Grant fleet controllers access to the config room. Fleet
+		// controllers need PL 50 in the config room to write
+		// MachineConfig for service placement. The daemon (PL 100)
+		// detects fleet controllers as non-machine members of the
+		// fleet room and grants them access.
+		d.grantFleetControllerConfigAccess(ctx)
+
+		if d.haWatchdog != nil {
+			d.logger.Info("fleet room state changed, evaluating HA leases")
+			d.haWatchdog.syncFleetState(ctx)
+			d.haWatchdog.evaluate(ctx)
+		}
 	}
 
 	// Process command messages from all rooms. Commands can arrive in

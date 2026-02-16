@@ -216,21 +216,14 @@ func run() error {
 		logger.Warn("failed to join service room (requires admin invitation)",
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
-	// Resolve and join the fleet room. Fleet features (including HA
-	// watchdog) are optional — the fleet room may not exist if fleet
-	// management has not been set up.
-	var fleetRoomID string
 	fleetRoomAlias := principal.RoomAlias(schema.RoomAliasFleet, serverName)
-	if resolvedFleetID, resolveErr := session.ResolveAlias(ctx, fleetRoomAlias); resolveErr != nil {
-		logger.Info("fleet room not available (fleet features disabled)",
-			"alias", fleetRoomAlias, "error", resolveErr)
-	} else {
-		fleetRoomID = resolvedFleetID
-		if _, joinErr := session.JoinRoom(ctx, fleetRoomID); joinErr != nil {
-			logger.Warn("failed to join fleet room",
-				"room_id", fleetRoomID, "alias", fleetRoomAlias, "error", joinErr)
-			fleetRoomID = "" // Cannot participate in fleet if not joined.
-		}
+	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
+	if err != nil {
+		return fmt.Errorf("resolving fleet room alias %q: %w", fleetRoomAlias, err)
+	}
+	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
+		logger.Warn("failed to join fleet room (requires admin invitation)",
+			"room_id", fleetRoomID, "alias", fleetRoomAlias, "error", err)
 	}
 
 	logger.Info("global rooms ready",
@@ -268,6 +261,7 @@ func run() error {
 		machineName:            machineName,
 		machineUserID:          machineUserID,
 		serverName:             serverName,
+		adminUser:              adminUser,
 		systemRoomID:           systemRoomID,
 		configRoomID:           configRoomID,
 		machineRoomID:          machineRoomID,
@@ -392,6 +386,12 @@ func run() error {
 		// token, which triggers a fresh initial sync.
 	}
 
+	// Grant fleet controllers access to the config room. Fleet
+	// controllers that joined the fleet room before this daemon started
+	// need to be invited and granted PL 50 in the config room so they
+	// can write MachineConfig for service placement.
+	daemon.grantFleetControllerConfigAccess(ctx)
+
 	// Start the incremental sync loop, status heartbeat loop, and
 	// token refresh loop.
 	go daemon.syncLoop(ctx, sinceToken)
@@ -464,11 +464,12 @@ type Daemon struct {
 	machineName    string
 	machineUserID  string
 	serverName     string
+	adminUser      string // admin account localpart (for fleet controller PL grants)
 	systemRoomID   string
 	configRoomID   string
 	machineRoomID  string
 	serviceRoomID  string
-	fleetRoomID    string // fleet room for HA lease protocol (empty if fleet room does not exist)
+	fleetRoomID    string // fleet room for HA leases, service definitions, and alerts
 	runDir         string // runtime directory for sockets (e.g., /run/bureau)
 	launcherSocket string
 	statusInterval time.Duration
@@ -1067,10 +1068,10 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 		return "", fmt.Errorf("creating config room: %w", err)
 	}
 
-	// Apply restrictive power levels now that the room exists. The machine
-	// (creator, PL 100 from preset) lowers itself to PL 50: sufficient to
-	// invite and write layouts, but insufficient to modify config or
-	// credentials (PL 100). The admin stays at PL 100.
+	// Apply power levels now that the room exists. The machine (creator,
+	// PL 100 from preset) stays at PL 100: trusted infrastructure that
+	// needs full room management for HA hosting and fleet controller
+	// access grants. The admin also gets PL 100.
 	_, err = session.SendStateEvent(ctx, response.RoomID, schema.MatrixEventTypePowerLevels, "",
 		schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 	if err != nil {
@@ -1083,4 +1084,107 @@ func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, ma
 		"admin", adminUserID,
 	)
 	return response.RoomID, nil
+}
+
+// grantFleetControllerConfigAccess reads the fleet room membership and
+// grants non-machine, non-admin members PL 50 in the config room. Fleet
+// controllers need PL 50 to write MachineConfig state events for service
+// placement. The daemon (PL 100 in the config room) performs this grant
+// whenever fleet room membership changes.
+//
+// The function is idempotent: members already at PL 50 are skipped. Members
+// not yet in the config room are invited first. The function logs and
+// continues on individual errors so that one unreachable fleet controller
+// does not block others.
+func (d *Daemon) grantFleetControllerConfigAccess(ctx context.Context) {
+	if d.fleetRoomID == "" || d.configRoomID == "" {
+		return
+	}
+
+	members, err := d.session.GetRoomMembers(ctx, d.fleetRoomID)
+	if err != nil {
+		d.logger.Error("reading fleet room members for config access grants", "error", err)
+		return
+	}
+
+	adminUserID := principal.MatrixUserID(d.adminUser, d.serverName)
+
+	var fleetControllers []string
+	for _, member := range members {
+		if member.Membership != "join" {
+			continue
+		}
+		// Skip the admin user.
+		if member.UserID == adminUserID {
+			continue
+		}
+		// Skip all non-service users. The fleet room contains every
+		// machine in the cluster, but only service/* principals are
+		// fleet controllers.
+		localpart, err := principal.LocalpartFromMatrixID(member.UserID)
+		if err != nil || !strings.HasPrefix(localpart, "service/") {
+			continue
+		}
+		fleetControllers = append(fleetControllers, member.UserID)
+	}
+
+	if len(fleetControllers) == 0 {
+		return
+	}
+
+	// Read current power levels from the config room.
+	currentPowerLevels, err := d.session.GetStateEvent(ctx, d.configRoomID,
+		schema.MatrixEventTypePowerLevels, "")
+	if err != nil {
+		d.logger.Error("reading config room power levels", "error", err)
+		return
+	}
+
+	var powerLevels map[string]any
+	if err := json.Unmarshal(currentPowerLevels, &powerLevels); err != nil {
+		d.logger.Error("parsing config room power levels", "error", err)
+		return
+	}
+
+	users, _ := powerLevels["users"].(map[string]any)
+	if users == nil {
+		users = make(map[string]any)
+		powerLevels["users"] = users
+	}
+
+	var updated bool
+	for _, controllerUserID := range fleetControllers {
+		// Skip if already at PL 50 or higher.
+		if existingPowerLevel, exists := users[controllerUserID]; exists {
+			if powerLevel, ok := existingPowerLevel.(float64); ok && powerLevel >= 50 {
+				continue
+			}
+		}
+
+		// Invite the fleet controller to the config room (idempotent —
+		// Matrix returns M_FORBIDDEN if already a member, which we ignore).
+		if err := d.session.InviteUser(ctx, d.configRoomID, controllerUserID); err != nil {
+			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+				d.logger.Error("inviting fleet controller to config room",
+					"user_id", controllerUserID, "error", err)
+				continue
+			}
+		}
+
+		users[controllerUserID] = 50
+		updated = true
+		d.logger.Info("granting fleet controller config room access",
+			"user_id", controllerUserID,
+			"power_level", 50,
+		)
+	}
+
+	if !updated {
+		return
+	}
+
+	if _, err := d.session.SendStateEvent(ctx, d.configRoomID,
+		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
+		d.logger.Error("updating config room power levels for fleet controllers", "error", err)
+	}
 }

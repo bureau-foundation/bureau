@@ -42,6 +42,7 @@ type mockDoctorServer struct {
 	templateID string
 	pipelineID string
 	artifactID string
+	fleetID    string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
@@ -72,6 +73,7 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		templateID:  "!template:local",
 		pipelineID:  "!pipeline:local",
 		artifactID:  "!artifact:local",
+		fleetID:     "!fleet:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -133,6 +135,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				"#bureau/template:local": m.templateID,
 				"#bureau/pipeline:local": m.pipelineID,
 				"#bureau/artifact:local": m.artifactID,
+				"#bureau/fleet:local":    m.fleetID,
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -206,7 +209,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID, m.artifactID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID, m.artifactID, m.fleetID))
 			return
 		}
 
@@ -295,6 +298,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 						m.templateID: true,
 						m.pipelineID: true,
 						m.artifactID: true,
+						m.fleetID:    true,
 					}
 				}
 				for childID := range childIDs {
@@ -332,7 +336,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, artifactID string) map[string]any {
+func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, artifactID, fleetID string) map[string]any {
 	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
@@ -359,6 +363,13 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, a
 		events[schema.EventTypeWebRTCAnswer] = 0
 	case serviceID:
 		events[schema.EventTypeService] = 0
+	case fleetID:
+		events[schema.EventTypeFleetService] = 0
+		events[schema.EventTypeMachineDefinition] = 0
+		events[schema.EventTypeFleetConfig] = 0
+		events[schema.EventTypeHALease] = 0
+		events[schema.EventTypeServiceStatus] = 0
+		events[schema.EventTypeFleetAlert] = 0
 	}
 
 	return map[string]any{
@@ -394,6 +405,9 @@ func extractRoomIDFromStatePath(path string) string {
 	}
 	if strings.Contains(path, "%21artifact%3Alocal") || strings.Contains(path, "!artifact:local") {
 		return "!artifact:local"
+	}
+	if strings.Contains(path, "%21fleet%3Alocal") || strings.Contains(path, "!fleet:local") {
+		return "!fleet:local"
 	}
 	return ""
 }
@@ -526,6 +540,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -560,6 +575,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -703,8 +719,8 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 			spaceChildCount++
 		}
 	}
-	if spaceChildCount != 6 {
-		t.Errorf("expected 6 m.space.child state events, got %d", spaceChildCount)
+	if spaceChildCount != len(standardRooms) {
+		t.Errorf("expected %d m.space.child state events, got %d", len(standardRooms), spaceChildCount)
 	}
 
 	// Verify results updated to fixed.
@@ -973,6 +989,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 	for key, expectedValue := range expectedRoomIDs {
 		if updatedCredentials[key] != expectedValue {

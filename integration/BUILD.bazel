@@ -16,9 +16,11 @@ load("@rules_go//go:def.bzl", "go_test")
 go_test(
     name = "integration_test",
     size = "medium",
+    timeout = "short",  # 60s hard limit — all integration tests must complete in under 40s
     srcs = [
         "bootstrap_test.go",
         "config_hotreload_test.go",
+        "fleet_controller_test.go",
         "fleet_test.go",
         "helpers_test.go",
         "inotify_test.go",
@@ -44,6 +46,7 @@ go_test(
         "//:MODULE.bazel",
         "//cmd/bureau",
         "//cmd/bureau-daemon",
+        "//cmd/bureau-fleet-controller",
         "//cmd/bureau-launcher",
         "//cmd/bureau-observe-relay",
         "//cmd/bureau-pipeline-executor",
@@ -54,6 +57,7 @@ go_test(
     env = {
         "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",
+        "FLEET_CONTROLLER_BINARY": "$(rlocationpath //cmd/bureau-fleet-controller:bureau-fleet-controller)",
         "LAUNCHER_BINARY": "$(rlocationpath //cmd/bureau-launcher:bureau-launcher)",
         "OBSERVE_RELAY_BINARY": "$(rlocationpath //cmd/bureau-observe-relay:bureau-observe-relay)",
         "PIPELINE_EXECUTOR_BINARY": "$(rlocationpath //cmd/bureau-pipeline-executor:bureau-pipeline-executor)",
@@ -72,6 +76,7 @@ go_test(
         "//lib/sealed",
         "//lib/secret",
         "//lib/service",
+        "//lib/servicetoken",
         "//lib/testutil",
         "//messaging",
         "//observe",

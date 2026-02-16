@@ -131,9 +131,10 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	}
 
 	// Resolve global rooms and invite the machine. The daemon joins all
-	// three rooms at startup (system for token signing keys, machine for
-	// status/config, service for service directory). All require an
-	// admin invitation because they are private rooms.
+	// rooms at startup (system for token signing keys, machine for
+	// status/config, service for service directory, fleet for HA leases
+	// and service definitions). All require an admin invitation because
+	// they are private rooms.
 	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
@@ -146,6 +147,10 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
+	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
+	if err != nil {
+		t.Fatalf("resolve fleet room: %v", err)
+	}
 	machine.MachineRoomID = machineRoomID
 
 	if err := admin.InviteUser(ctx, systemRoomID, machine.UserID); err != nil {
@@ -156,6 +161,9 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	}
 	if err := admin.InviteUser(ctx, serviceRoomID, machine.UserID); err != nil {
 		t.Fatalf("invite machine to service room: %v", err)
+	}
+	if err := admin.InviteUser(ctx, fleetRoomID, machine.UserID); err != nil {
+		t.Fatalf("invite machine to fleet room: %v", err)
 	}
 
 	// Start the launcher.
@@ -426,4 +434,66 @@ func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachi
 	}
 
 	return proxySockets
+}
+
+// grantTemplateAccess resolves the #bureau/template room and invites the
+// machine so the daemon can read templates during config reconciliation.
+// Returns the template room ID for tests that need to publish custom
+// templates.
+func grantTemplateAccess(t *testing.T, admin *messaging.Session, machine *testMachine) string {
+	t.Helper()
+
+	templateRoomID, err := admin.ResolveAlias(t.Context(),
+		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
+	if err != nil {
+		t.Fatalf("resolve template room: %v", err)
+	}
+	if err := admin.InviteUser(t.Context(), templateRoomID, machine.UserID); err != nil {
+		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			t.Fatalf("invite machine to template room: %v", err)
+		}
+	}
+	return templateRoomID
+}
+
+// publishTestAgentTemplate grants template room access and publishes a
+// minimal test-agent template suitable for sandbox creation. Returns the
+// template reference string (e.g., "bureau/template:fleet-test-agent")
+// for use in fleet service definitions or PrincipalAssignment templates.
+func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *testMachine, templateName string) string {
+	t.Helper()
+
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	templateRoomID := grantTemplateAccess(t, admin, machine)
+
+	_, err := admin.SendStateEvent(t.Context(), templateRoomID,
+		schema.EventTypeTemplate, templateName, schema.TemplateContent{
+			Description: "Test agent for " + templateName,
+			Command:     []string{testAgentBinary},
+			Namespaces: &schema.TemplateNamespaces{
+				PID: true,
+			},
+			Security: &schema.TemplateSecurity{
+				NewSession:    true,
+				DieWithParent: true,
+				NoNewPrivs:    true,
+			},
+			Filesystem: []schema.TemplateMount{
+				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+				{Dest: "/tmp", Type: "tmpfs"},
+			},
+			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+			EnvironmentVariables: map[string]string{
+				"HOME":                "/workspace",
+				"TERM":                "xterm-256color",
+				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+			},
+		})
+	if err != nil {
+		t.Fatalf("publish test agent template %q: %v", templateName, err)
+	}
+
+	return "bureau/template:" + templateName
 }

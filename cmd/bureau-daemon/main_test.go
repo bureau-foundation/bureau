@@ -74,13 +74,14 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("admin power level = %v, want 100", adminLevel)
 	}
 
-	// Machine should have power level 50 (invite capability, not config writes).
+	// Machine should have power level 100 (trusted infrastructure: writes
+	// MachineConfig for HA hosting, manages fleet controller access).
 	machineLevel, ok := users[machineUserID]
 	if !ok {
 		t.Fatalf("machine %q not in users map", machineUserID)
 	}
-	if machineLevel != 50 {
-		t.Errorf("machine power level = %v, want 50", machineLevel)
+	if machineLevel != 100 {
+		t.Errorf("machine power level = %v, want 100", machineLevel)
 	}
 
 	// Default user power level should be 0.
@@ -88,13 +89,14 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])
 	}
 
-	// Machine config and credentials events should require power level 100.
+	// MachineConfig requires PL 50 (fleet controllers can write placements).
+	// Credentials require PL 100 (admin and machine only).
 	events, ok := levels["events"].(map[string]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
-	if events[schema.EventTypeMachineConfig] != 100 {
-		t.Errorf("%s power level = %v, want 100", schema.EventTypeMachineConfig, events[schema.EventTypeMachineConfig])
+	if events[schema.EventTypeMachineConfig] != 50 {
+		t.Errorf("%s power level = %v, want 50", schema.EventTypeMachineConfig, events[schema.EventTypeMachineConfig])
 	}
 	if events[schema.EventTypeCredentials] != 100 {
 		t.Errorf("%s power level = %v, want 100", schema.EventTypeCredentials, events[schema.EventTypeCredentials])

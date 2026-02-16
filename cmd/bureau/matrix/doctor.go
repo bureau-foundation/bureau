@@ -304,6 +304,21 @@ var standardRooms = []standardRoom{
 		credentialKey:   "MATRIX_ARTIFACT_ROOM",
 		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
 	},
+	{
+		alias:         "bureau/fleet",
+		displayName:   "Bureau Fleet",
+		topic:         "Fleet service definitions, machine definitions, HA leases, and alerts",
+		name:          "fleet room",
+		credentialKey: "MATRIX_FLEET_ROOM",
+		memberSettableEventTypes: []string{
+			schema.EventTypeFleetService,
+			schema.EventTypeMachineDefinition,
+			schema.EventTypeFleetConfig,
+			schema.EventTypeHALease,
+			schema.EventTypeServiceStatus,
+			schema.EventTypeFleetAlert,
+		},
+	},
 }
 
 // runDoctor executes all health checks and returns the results. Fixable

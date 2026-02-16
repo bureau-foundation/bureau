@@ -273,9 +273,9 @@ func (a *impactAnalyzer) findAffected(targetRef string, configs []machineConfig)
 	return results, nil
 }
 
-// templateDependsOn checks whether templateRef's inheritance chain contains
-// targetRef. Returns true and the depth (0 = direct match) if found.
-// Uses chainCache to avoid redundant walks.
+// templateDependsOn checks whether templateRef's inheritance tree contains
+// targetRef. Returns true and the minimum depth (0 = direct match) if found.
+// Uses chainCache to avoid redundant walks across the multi-parent tree.
 func (a *impactAnalyzer) templateDependsOn(
 	templateRef, targetRef string,
 	chainCache map[string]struct {
@@ -287,52 +287,72 @@ func (a *impactAnalyzer) templateDependsOn(
 		return cached.depends, cached.depth, nil
 	}
 
-	ref, err := schema.ParseTemplateRef(templateRef)
+	depends, depth, err := a.templateDependsOnRecurse(templateRef, targetRef, chainCache, make(map[string]bool))
 	if err != nil {
-		return false, 0, cli.Validation("parsing %q: %w", templateRef, err)
-	}
-
-	depth := 0
-	current := ref
-	visited := make(map[string]bool)
-
-	for {
-		currentString := current.String()
-
-		if currentString == targetRef {
-			chainCache[templateRef] = struct {
-				depends bool
-				depth   int
-			}{true, depth}
-			return true, depth, nil
-		}
-
-		if visited[currentString] {
-			break // Cycle — doesn't reach target.
-		}
-		visited[currentString] = true
-
-		template, err := a.fetchCached(current)
-		if err != nil {
-			return false, 0, err
-		}
-
-		if template.Inherits == "" {
-			break // Root of chain — target not found.
-		}
-
-		parent, err := schema.ParseTemplateRef(template.Inherits)
-		if err != nil {
-			return false, 0, cli.Validation("parsing inherits %q in %q: %w", template.Inherits, currentString, err)
-		}
-		current = parent
-		depth++
+		return false, 0, err
 	}
 
 	chainCache[templateRef] = struct {
 		depends bool
 		depth   int
-	}{false, 0}
+	}{depends, depth}
+	return depends, depth, nil
+}
+
+// templateDependsOnRecurse is the recursive implementation of
+// templateDependsOn. The visited map tracks the current stack for
+// cycle detection.
+func (a *impactAnalyzer) templateDependsOnRecurse(
+	templateRef, targetRef string,
+	chainCache map[string]struct {
+		depends bool
+		depth   int
+	},
+	visited map[string]bool,
+) (bool, int, error) {
+	if templateRef == targetRef {
+		return true, 0, nil
+	}
+
+	if cached, ok := chainCache[templateRef]; ok {
+		if cached.depends {
+			return true, cached.depth + 1, nil
+		}
+		return false, 0, nil
+	}
+
+	if visited[templateRef] {
+		return false, 0, nil // Cycle — doesn't reach target.
+	}
+	visited[templateRef] = true
+	defer delete(visited, templateRef)
+
+	ref, err := schema.ParseTemplateRef(templateRef)
+	if err != nil {
+		return false, 0, cli.Validation("parsing %q: %w", templateRef, err)
+	}
+
+	template, err := a.fetchCached(ref)
+	if err != nil {
+		return false, 0, err
+	}
+
+	// Recurse into each parent. If any parent's tree contains the
+	// target, this template depends on it. Track the minimum depth.
+	for index, parentRefString := range template.Inherits {
+		if _, err := schema.ParseTemplateRef(parentRefString); err != nil {
+			return false, 0, cli.Validation("parsing inherits[%d] %q in %q: %w", index, parentRefString, templateRef, err)
+		}
+
+		depends, depth, err := a.templateDependsOnRecurse(parentRefString, targetRef, chainCache, visited)
+		if err != nil {
+			return false, 0, err
+		}
+		if depends {
+			return true, depth + 1, nil
+		}
+	}
+
 	return false, 0, nil
 }
 
@@ -374,55 +394,71 @@ func (a *impactAnalyzer) classifyChanges(results []*impactResult, targetRef stri
 	return nil
 }
 
-// resolveWithOverride resolves a template's inheritance chain, substituting
-// overrideContent for the template at overrideRef. If overrideContent is nil,
-// all templates come from Matrix (normal resolution).
+// resolveWithOverride resolves a template's multi-parent inheritance tree,
+// substituting overrideContent for the template at overrideRef. If
+// overrideContent is nil, all templates come from Matrix (normal resolution).
 func (a *impactAnalyzer) resolveWithOverride(templateRef, overrideRef string, overrideContent *schema.TemplateContent) (*schema.TemplateContent, error) {
+	cache := make(map[string]*schema.TemplateContent)
+	stack := make(map[string]bool)
+	return a.resolveWithOverrideRecurse(templateRef, overrideRef, overrideContent, cache, stack)
+}
+
+func (a *impactAnalyzer) resolveWithOverrideRecurse(templateRef, overrideRef string, overrideContent *schema.TemplateContent, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
+	if cached, ok := cache[templateRef]; ok {
+		return cached, nil
+	}
+
+	if stack[templateRef] {
+		return nil, cli.Validation("inheritance cycle at %q", templateRef)
+	}
+	stack[templateRef] = true
+	defer delete(stack, templateRef)
+
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
 		return nil, cli.Validation("parsing %q: %w", templateRef, err)
 	}
 
-	var chain []schema.TemplateContent
-	visited := make(map[string]bool)
-	current := ref
-
-	for {
-		currentString := current.String()
-		if visited[currentString] {
-			return nil, cli.Validation("inheritance cycle at %q", currentString)
-		}
-		visited[currentString] = true
-
-		var template *schema.TemplateContent
-		if overrideContent != nil && currentString == overrideRef {
-			template = overrideContent
-		} else {
-			template, err = a.fetchCached(current)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		chain = append(chain, *template)
-
-		if template.Inherits == "" {
-			break
-		}
-
-		parent, err := schema.ParseTemplateRef(template.Inherits)
+	var template *schema.TemplateContent
+	if overrideContent != nil && templateRef == overrideRef {
+		template = overrideContent
+	} else {
+		template, err = a.fetchCached(ref)
 		if err != nil {
-			return nil, cli.Validation("parsing inherits %q: %w", template.Inherits, err)
+			return nil, err
 		}
-		current = parent
 	}
 
-	// Merge from base (last) to leaf (first).
-	result := chain[len(chain)-1]
-	for i := len(chain) - 2; i >= 0; i-- {
-		result = libtmpl.Merge(&result, &chain[i])
+	// If no parents, this template is self-contained.
+	if len(template.Inherits) == 0 {
+		result := *template
+		result.Inherits = nil
+		cache[templateRef] = &result
+		return &result, nil
 	}
 
+	// Resolve each parent independently.
+	resolvedParents := make([]*schema.TemplateContent, 0, len(template.Inherits))
+	for index, parentRefString := range template.Inherits {
+		if _, err := schema.ParseTemplateRef(parentRefString); err != nil {
+			return nil, cli.Validation("parsing inherits[%d] %q: %w", index, parentRefString, err)
+		}
+
+		resolvedParent, err := a.resolveWithOverrideRecurse(parentRefString, overrideRef, overrideContent, cache, stack)
+		if err != nil {
+			return nil, err
+		}
+		resolvedParents = append(resolvedParents, resolvedParent)
+	}
+
+	// Merge resolved parents left-to-right, then child on top.
+	merged := *resolvedParents[0]
+	for i := 1; i < len(resolvedParents); i++ {
+		merged = libtmpl.Merge(&merged, resolvedParents[i])
+	}
+
+	result := libtmpl.Merge(&merged, template)
+	cache[templateRef] = &result
 	return &result, nil
 }
 

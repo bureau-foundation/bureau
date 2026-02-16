@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/pipeline"
+	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
@@ -59,10 +60,10 @@ func run() error {
 	if socketPath == "" {
 		socketPath = defaultProxySocket
 	}
-	proxy := newProxyClient(socketPath)
+	proxy := proxyclient.New(socketPath, "")
 
-	// Whoami — establishes the server name needed for alias construction.
-	if err := proxy.whoami(ctx); err != nil {
+	// Discover server name — needed for constructing room aliases.
+	if _, err := proxy.DiscoverServerName(ctx); err != nil {
 		return fmt.Errorf("proxy connection failed (is the proxy running at %s?): %w", socketPath, err)
 	}
 
@@ -263,7 +264,7 @@ func run() error {
 // output for the daemon; the state event is for cross-service coordination.
 func publishPipelineResult(
 	ctx context.Context,
-	proxy *proxyClient,
+	proxy *proxyclient.Client,
 	logger *threadLogger,
 	pipelineName string,
 	stepCount int,
@@ -293,7 +294,12 @@ func publishPipelineResult(
 		LogEventID:   logger.logEventID(),
 	}
 
-	if _, err := proxy.putState(ctx, roomID, schema.EventTypePipelineResult, pipelineName, result); err != nil {
+	if _, err := proxy.PutState(ctx, proxyclient.PutStateRequest{
+		Room:      roomID,
+		EventType: schema.EventTypePipelineResult,
+		StateKey:  pipelineName,
+		Content:   result,
+	}); err != nil {
 		fmt.Printf("[pipeline] warning: failed to publish pipeline result event: %v\n", err)
 	}
 }
@@ -317,7 +323,7 @@ func runOnFailureSteps(
 	variables map[string]string,
 	failedStepName string,
 	failedError error,
-	proxy *proxyClient,
+	proxy *proxyclient.Client,
 	logger *threadLogger,
 	results *resultLog,
 ) {
@@ -368,7 +374,7 @@ func runOnFailureSteps(
 //
 // Returns the pipeline name and parsed content. Returns an error if no
 // source provides a pipeline definition.
-func resolvePipeline(ctx context.Context, argument string, payloadPath string, proxy *proxyClient) (string, *schema.PipelineContent, error) {
+func resolvePipeline(ctx context.Context, argument string, payloadPath string, proxy *proxyclient.Client) (string, *schema.PipelineContent, error) {
 	// Tier 1: CLI argument.
 	if argument != "" {
 		if isFilePath(argument) {
@@ -419,19 +425,19 @@ func resolvePipeline(ctx context.Context, argument string, payloadPath string, p
 
 // resolvePipelineRef parses a pipeline ref string, constructs the room
 // alias, resolves it via the proxy, and reads the pipeline state event.
-func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyClient) (string, *schema.PipelineContent, error) {
+func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyclient.Client) (string, *schema.PipelineContent, error) {
 	templateRef, err := schema.ParseTemplateRef(ref)
 	if err != nil {
 		return "", nil, fmt.Errorf("parsing pipeline ref %q: %w", ref, err)
 	}
 
-	alias := templateRef.RoomAlias(proxy.serverName)
-	roomID, err := proxy.resolveAlias(ctx, alias)
+	alias := templateRef.RoomAlias(proxy.ServerName())
+	roomID, err := proxy.ResolveAlias(ctx, alias)
 	if err != nil {
 		return "", nil, fmt.Errorf("resolving pipeline room %q: %w", alias, err)
 	}
 
-	stateContent, err := proxy.getState(ctx, roomID, schema.EventTypePipeline, templateRef.Template)
+	stateContent, err := proxy.GetState(ctx, roomID, schema.EventTypePipeline, templateRef.Template)
 	if err != nil {
 		return "", nil, fmt.Errorf("reading pipeline %q from room %s: %w", templateRef.Template, roomID, err)
 	}

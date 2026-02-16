@@ -11,7 +11,7 @@ import (
 func TestTemplateContentRoundTrip(t *testing.T) {
 	original := TemplateContent{
 		Description: "GPU-accelerated LLM agent with IREE runtime",
-		Inherits:    "bureau/template:base",
+		Inherits:    []string{"bureau/template:base"},
 		Command:     []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
 		Environment: "/nix/store/abc123-bureau-agent-env",
 		EnvironmentVariables: map[string]string{
@@ -60,7 +60,14 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "description", "GPU-accelerated LLM agent with IREE runtime")
-	assertField(t, raw, "inherits", "bureau/template:base")
+	// Verify inherits is a JSON array.
+	inheritsRaw, ok := raw["inherits"].([]any)
+	if !ok {
+		t.Fatal("inherits field missing or wrong type (expected array)")
+	}
+	if len(inheritsRaw) != 1 || inheritsRaw[0] != "bureau/template:base" {
+		t.Errorf("inherits = %v, want [bureau/template:base]", inheritsRaw)
+	}
 	assertField(t, raw, "environment", "/nix/store/abc123-bureau-agent-env")
 
 	// Verify command is an array.
@@ -159,8 +166,8 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 	if decoded.Description != original.Description {
 		t.Errorf("Description: got %q, want %q", decoded.Description, original.Description)
 	}
-	if decoded.Inherits != original.Inherits {
-		t.Errorf("Inherits: got %q, want %q", decoded.Inherits, original.Inherits)
+	if len(decoded.Inherits) != 1 || decoded.Inherits[0] != "bureau/template:base" {
+		t.Errorf("Inherits: got %v, want [bureau/template:base]", decoded.Inherits)
 	}
 	if decoded.Environment != original.Environment {
 		t.Errorf("Environment: got %q, want %q", decoded.Environment, original.Environment)

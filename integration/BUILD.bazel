@@ -18,6 +18,7 @@ go_test(
     size = "medium",
     timeout = "short",  # 60s hard limit — all integration tests must complete in under 40s
     srcs = [
+        "agent_test.go",
         "bootstrap_test.go",
         "config_hotreload_test.go",
         "fleet_controller_test.go",
@@ -46,6 +47,7 @@ go_test(
     data = [
         "//:MODULE.bazel",
         "//cmd/bureau",
+        "//cmd/bureau-agent-mock",
         "//cmd/bureau-daemon",
         "//cmd/bureau-fleet-controller",
         "//cmd/bureau-launcher",
@@ -60,6 +62,7 @@ go_test(
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",
         "FLEET_CONTROLLER_BINARY": "$(rlocationpath //cmd/bureau-fleet-controller:bureau-fleet-controller)",
         "LAUNCHER_BINARY": "$(rlocationpath //cmd/bureau-launcher:bureau-launcher)",
+        "MOCK_AGENT_BINARY": "$(rlocationpath //cmd/bureau-agent-mock:bureau-agent-mock)",
         "OBSERVE_RELAY_BINARY": "$(rlocationpath //cmd/bureau-observe-relay:bureau-observe-relay)",
         "PIPELINE_EXECUTOR_BINARY": "$(rlocationpath //cmd/bureau-pipeline-executor:bureau-pipeline-executor)",
         "PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",

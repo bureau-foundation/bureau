@@ -317,7 +317,7 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	state.addTemplate(
 		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
-			Inherits:    "bureau/template:base",
+			Inherits:    []string{"bureau/template:base"},
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
 		},
@@ -327,7 +327,7 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	state.addTemplate(
 		"#bureau/template:test.local", "!template:test",
 		"llm-agent", schema.TemplateContent{
-			Inherits:    "bureau/template:agent",
+			Inherits:    []string{"bureau/template:agent"},
 			Description: "LLM agent template",
 			EnvironmentVariables: map[string]string{
 				"MODEL": "gpt-4",
@@ -851,7 +851,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 	state.addTemplate(
 		"#bureau/template:test.local", "!template:test",
 		"agent", schema.TemplateContent{
-			Inherits:    "bureau/template:base",
+			Inherits:    []string{"bureau/template:base"},
 			Description: "Agent template",
 			Command:     []string{"/usr/bin/agent"},
 			EnvironmentVariables: map[string]string{

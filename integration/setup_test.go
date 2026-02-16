@@ -138,9 +138,11 @@ func TestTemplatesPublished(t *testing.T) {
 		t.Fatalf("unmarshal base-networked template: %v", err)
 	}
 
-	inherits, ok := template["inherits"].(string)
-	if !ok || inherits != "bureau/template:base" {
-		t.Errorf("expected base-networked to inherit from bureau/template:base, got %q", inherits)
+	inheritsList, ok := template["inherits"].([]any)
+	if !ok || len(inheritsList) != 1 {
+		t.Errorf("expected base-networked to inherit [bureau/template:base], got %v", template["inherits"])
+	} else if first, _ := inheritsList[0].(string); first != "bureau/template:base" {
+		t.Errorf("expected base-networked to inherit from bureau/template:base, got %q", first)
 	}
 }
 

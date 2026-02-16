@@ -199,8 +199,8 @@ func TestResolveSimple(t *testing.T) {
 	if template.Description != "Base sandbox template" {
 		t.Errorf("Description = %q, want %q", template.Description, "Base sandbox template")
 	}
-	if template.Inherits != "" {
-		t.Errorf("Inherits should be cleared after resolution, got %q", template.Inherits)
+	if len(template.Inherits) != 0 {
+		t.Errorf("Inherits should be cleared after resolution, got %v", template.Inherits)
 	}
 }
 
@@ -222,7 +222,7 @@ func TestResolveSingleInheritance(t *testing.T) {
 
 	state.setTemplate("!template:test", "child", schema.TemplateContent{
 		Description: "Child template",
-		Inherits:    "bureau/template:base",
+		Inherits:    []string{"bureau/template:base"},
 		Command:     []string{"/usr/local/bin/agent"},
 		EnvironmentVariables: map[string]string{
 			"PATH":  "/usr/local/bin:/usr/bin:/bin",
@@ -279,7 +279,7 @@ func TestResolveCrossRoomInheritance(t *testing.T) {
 	})
 
 	state.setTemplate("!project-template:test", "custom", schema.TemplateContent{
-		Inherits:    "bureau/template:base",
+		Inherits:    []string{"bureau/template:base"},
 		Description: "Cross-room child",
 		DefaultPayload: map[string]any{
 			"project": "test-project",
@@ -312,11 +312,11 @@ func TestResolveCycleDetection(t *testing.T) {
 	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
 	state.setTemplate("!template:test", "a", schema.TemplateContent{
-		Inherits: "bureau/template:b",
+		Inherits: []string{"bureau/template:b"},
 		Command:  []string{"/bin/a"},
 	})
 	state.setTemplate("!template:test", "b", schema.TemplateContent{
-		Inherits: "bureau/template:a",
+		Inherits: []string{"bureau/template:a"},
 		Command:  []string{"/bin/b"},
 	})
 
@@ -339,7 +339,7 @@ func TestResolveMissingParent(t *testing.T) {
 	state.setRoomAlias("#bureau/template:test.local", "!template:test")
 
 	state.setTemplate("!template:test", "child", schema.TemplateContent{
-		Inherits: "bureau/template:nonexistent",
+		Inherits: []string{"bureau/template:nonexistent"},
 		Command:  []string{"/bin/child"},
 	})
 
@@ -573,17 +573,310 @@ func TestMergeClearsInherits(t *testing.T) {
 	t.Parallel()
 
 	parent := &schema.TemplateContent{
-		Inherits: "some/room:grandparent",
+		Inherits: []string{"some/room:grandparent"},
 		Command:  []string{"/bin/parent"},
 	}
 
 	child := &schema.TemplateContent{
-		Inherits: "some/room:parent",
+		Inherits: []string{"some/room:parent"},
 	}
 
 	result := Merge(parent, child)
 
-	if result.Inherits != "" {
-		t.Errorf("Inherits should be cleared after merge, got %q", result.Inherits)
+	if len(result.Inherits) != 0 {
+		t.Errorf("Inherits should be cleared after merge, got %v", result.Inherits)
+	}
+}
+
+func TestResolveMultipleParents(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Parent A: provides command and namespaces.
+	state.setTemplate("!template:test", "parent-a", schema.TemplateContent{
+		Description: "Parent A",
+		Command:     []string{"/bin/parent-a"},
+		Namespaces:  &schema.TemplateNamespaces{PID: true, Net: true},
+		EnvironmentVariables: map[string]string{
+			"FROM_A": "yes",
+			"SHARED": "from-a",
+		},
+	})
+
+	// Parent B: provides a different command and security settings.
+	// Later parent (B) should override earlier parent (A) on conflicts.
+	state.setTemplate("!template:test", "parent-b", schema.TemplateContent{
+		Description: "Parent B",
+		Command:     []string{"/bin/parent-b"},
+		Security:    &schema.TemplateSecurity{NoNewPrivs: true},
+		EnvironmentVariables: map[string]string{
+			"FROM_B": "yes",
+			"SHARED": "from-b",
+		},
+	})
+
+	// Child inherits from both parents, ordered [A, B].
+	state.setTemplate("!template:test", "child", schema.TemplateContent{
+		Description: "Multi-parent child",
+		Inherits:    []string{"bureau/template:parent-a", "bureau/template:parent-b"},
+		EnvironmentVariables: map[string]string{
+			"FROM_CHILD": "yes",
+		},
+	})
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	template, err := Resolve(ctx, session, "bureau/template:child", testServerName)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// Child description overrides everything.
+	if template.Description != "Multi-parent child" {
+		t.Errorf("Description = %q, want %q", template.Description, "Multi-parent child")
+	}
+
+	// Child has no command, so the last parent's command wins (parent-b).
+	if len(template.Command) != 1 || template.Command[0] != "/bin/parent-b" {
+		t.Errorf("Command = %v, want [/bin/parent-b] (later parent wins)", template.Command)
+	}
+
+	// Namespaces from parent-a should be present (parent-b had nil).
+	if template.Namespaces == nil || !template.Namespaces.PID {
+		t.Error("Namespaces.PID should be inherited from parent-a")
+	}
+
+	// Security from parent-b should be present (parent-a had nil).
+	if template.Security == nil || !template.Security.NoNewPrivs {
+		t.Error("Security.NoNewPrivs should be inherited from parent-b")
+	}
+
+	// Environment: parent-a provides FROM_A, parent-b provides FROM_B,
+	// both provide SHARED (parent-b wins), child provides FROM_CHILD.
+	if template.EnvironmentVariables["FROM_A"] != "yes" {
+		t.Error("FROM_A should be present from parent-a")
+	}
+	if template.EnvironmentVariables["FROM_B"] != "yes" {
+		t.Error("FROM_B should be present from parent-b")
+	}
+	if template.EnvironmentVariables["FROM_CHILD"] != "yes" {
+		t.Error("FROM_CHILD should be present from child")
+	}
+	if template.EnvironmentVariables["SHARED"] != "from-b" {
+		t.Errorf("SHARED = %q, want %q (later parent wins)", template.EnvironmentVariables["SHARED"], "from-b")
+	}
+
+	// Inherits should be cleared.
+	if len(template.Inherits) != 0 {
+		t.Errorf("Inherits should be cleared after resolution, got %v", template.Inherits)
+	}
+}
+
+func TestResolveMultipleParentsSliceMerge(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Parent A provides filesystem mounts and required services.
+	state.setTemplate("!template:test", "runtime", schema.TemplateContent{
+		Description: "Runtime parent",
+		Filesystem: []schema.TemplateMount{
+			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/lib", Dest: "/lib", Mode: "ro"},
+		},
+		RequiredServices:    []string{"proxy"},
+		RequiredCredentials: []string{"API_KEY"},
+		CreateDirs:          []string{"/run/bureau"},
+	})
+
+	// Parent B provides different filesystem mounts and required services.
+	state.setTemplate("!template:test", "networking", schema.TemplateContent{
+		Description: "Networking parent",
+		Filesystem: []schema.TemplateMount{
+			{Source: "/etc/resolv.conf", Dest: "/etc/resolv.conf", Mode: "ro"},
+		},
+		RequiredServices:    []string{"bridge"},
+		RequiredCredentials: []string{"TLS_CERT"},
+		CreateDirs:          []string{"/var/run"},
+	})
+
+	// Child inherits from both, adds its own mount.
+	state.setTemplate("!template:test", "agent", schema.TemplateContent{
+		Description: "Agent template",
+		Inherits:    []string{"bureau/template:runtime", "bureau/template:networking"},
+		Command:     []string{"/usr/bin/agent"},
+		Filesystem: []schema.TemplateMount{
+			{Type: "tmpfs", Dest: "/tmp"},
+		},
+	})
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	template, err := Resolve(ctx, session, "bureau/template:agent", testServerName)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// Filesystem: 2 from runtime + 1 from networking + 1 from child = 4.
+	if len(template.Filesystem) != 4 {
+		t.Errorf("Filesystem count = %d, want 4, mounts: %v", len(template.Filesystem), template.Filesystem)
+	}
+
+	// RequiredServices from both parents: proxy, bridge.
+	if len(template.RequiredServices) != 2 {
+		t.Errorf("RequiredServices = %v, want [proxy bridge]", template.RequiredServices)
+	}
+
+	// RequiredCredentials from both parents: API_KEY, TLS_CERT.
+	if len(template.RequiredCredentials) != 2 {
+		t.Errorf("RequiredCredentials = %v, want [API_KEY TLS_CERT]", template.RequiredCredentials)
+	}
+
+	// CreateDirs from both parents: /run/bureau, /var/run.
+	if len(template.CreateDirs) != 2 {
+		t.Errorf("CreateDirs = %v, want [/run/bureau /var/run]", template.CreateDirs)
+	}
+}
+
+func TestResolveDiamondInheritance(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Diamond shape:
+	//     base
+	//    /    \
+	//   A      B
+	//    \    /
+	//     child
+
+	state.setTemplate("!template:test", "base", schema.TemplateContent{
+		Description: "Shared base",
+		Command:     []string{"/bin/base"},
+		Namespaces:  &schema.TemplateNamespaces{PID: true},
+		EnvironmentVariables: map[string]string{
+			"BASE": "yes",
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+		},
+	})
+
+	state.setTemplate("!template:test", "left", schema.TemplateContent{
+		Description: "Left branch",
+		Inherits:    []string{"bureau/template:base"},
+		EnvironmentVariables: map[string]string{
+			"LEFT": "yes",
+		},
+	})
+
+	state.setTemplate("!template:test", "right", schema.TemplateContent{
+		Description: "Right branch",
+		Inherits:    []string{"bureau/template:base"},
+		Command:     []string{"/bin/right"},
+		EnvironmentVariables: map[string]string{
+			"RIGHT": "yes",
+		},
+	})
+
+	state.setTemplate("!template:test", "diamond-child", schema.TemplateContent{
+		Description: "Diamond child",
+		Inherits:    []string{"bureau/template:left", "bureau/template:right"},
+	})
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	// Diamond inheritance should not produce a cycle error.
+	template, err := Resolve(ctx, session, "bureau/template:diamond-child", testServerName)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if template.Description != "Diamond child" {
+		t.Errorf("Description = %q, want %q", template.Description, "Diamond child")
+	}
+
+	// Right branch resolves after left, so right's command wins.
+	if len(template.Command) != 1 || template.Command[0] != "/bin/right" {
+		t.Errorf("Command = %v, want [/bin/right] (right branch wins)", template.Command)
+	}
+
+	// Base environment should be present through both branches.
+	if template.EnvironmentVariables["BASE"] != "yes" {
+		t.Error("BASE should be inherited through branches")
+	}
+	if template.EnvironmentVariables["LEFT"] != "yes" {
+		t.Error("LEFT should be inherited from left branch")
+	}
+	if template.EnvironmentVariables["RIGHT"] != "yes" {
+		t.Error("RIGHT should be inherited from right branch")
+	}
+
+	// Base namespaces should be present.
+	if template.Namespaces == nil || !template.Namespaces.PID {
+		t.Error("Namespaces.PID should be inherited from base through branches")
+	}
+}
+
+func TestResolveMultipleParentsCycle(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Create an actual cycle via multi-parent inheritance:
+	// A inherits [B, C], B inherits [A] — direct cycle through multi-parent.
+	state.setTemplate("!template:test", "cycle-a", schema.TemplateContent{
+		Inherits: []string{"bureau/template:cycle-b", "bureau/template:cycle-c"},
+		Command:  []string{"/bin/a"},
+	})
+	state.setTemplate("!template:test", "cycle-b", schema.TemplateContent{
+		Inherits: []string{"bureau/template:cycle-a"},
+		Command:  []string{"/bin/b"},
+	})
+	state.setTemplate("!template:test", "cycle-c", schema.TemplateContent{
+		Command: []string{"/bin/c"},
+	})
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	_, err := Resolve(ctx, session, "bureau/template:cycle-a", testServerName)
+	if err == nil {
+		t.Fatal("expected cycle detection error for multi-parent cycle")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("error should mention cycle, got: %v", err)
+	}
+}
+
+func TestResolveSelfInheritance(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// A template that lists itself as a parent.
+	state.setTemplate("!template:test", "self-ref", schema.TemplateContent{
+		Inherits: []string{"bureau/template:self-ref"},
+		Command:  []string{"/bin/self"},
+	})
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	_, err := Resolve(ctx, session, "bureau/template:self-ref", testServerName)
+	if err == nil {
+		t.Fatal("expected cycle detection error for self-referencing template")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("error should mention cycle, got: %v", err)
 	}
 }

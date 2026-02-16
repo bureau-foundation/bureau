@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/proxyclient"
 )
 
 // threadLogger posts pipeline progress to a Matrix thread. A root message
@@ -16,7 +18,7 @@ import (
 // lets the executor call logging methods unconditionally without checking
 // whether thread logging is configured.
 type threadLogger struct {
-	proxy       *proxyClient
+	proxy       *proxyclient.Client
 	roomID      string
 	rootEventID string
 }
@@ -30,10 +32,10 @@ type threadLogger struct {
 // Returns an error if the thread cannot be created. The caller should
 // treat this as fatal when observation is configured — running a pipeline
 // with no record of what happened is worse than not running at all.
-func newThreadLogger(ctx context.Context, proxy *proxyClient, room string, pipelineName string, stepCount int) (*threadLogger, error) {
+func newThreadLogger(ctx context.Context, proxy *proxyclient.Client, room string, pipelineName string, stepCount int) (*threadLogger, error) {
 	roomID := room
 	if len(room) > 0 && room[0] == '#' {
-		resolved, err := proxy.resolveAlias(ctx, room)
+		resolved, err := proxy.ResolveAlias(ctx, room)
 		if err != nil {
 			return nil, fmt.Errorf("resolving log room %q: %w", room, err)
 		}
@@ -45,7 +47,7 @@ func newThreadLogger(ctx context.Context, proxy *proxyClient, room string, pipel
 		"body":    fmt.Sprintf("Pipeline %s started (%d steps)", pipelineName, stepCount),
 	}
 
-	rootEventID, err := proxy.sendMessage(ctx, roomID, rootMessage)
+	rootEventID, err := proxy.SendMessage(ctx, roomID, rootMessage)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline thread in %s: %w", roomID, err)
 	}
@@ -134,7 +136,7 @@ func (l *threadLogger) sendThreadReply(ctx context.Context, body string) {
 	// The root message creation (in newThreadLogger) is the mandatory
 	// check — if we can't create the thread at all, the pipeline doesn't
 	// start.
-	if _, err := l.proxy.sendMessage(ctx, l.roomID, content); err != nil {
+	if _, err := l.proxy.SendMessage(ctx, l.roomID, content); err != nil {
 		fmt.Printf("[pipeline] warning: failed to send thread reply: %v\n", err)
 	}
 }

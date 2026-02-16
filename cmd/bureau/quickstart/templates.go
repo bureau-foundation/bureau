@@ -18,7 +18,7 @@ func agentTemplates() map[string]schema.TemplateContent {
 	return map[string]schema.TemplateContent{
 		"sysadmin-test": {
 			Description: "Test agent for quickstart validation — verifies proxy identity, Matrix auth, and bidirectional messaging",
-			Inherits:    "bureau/template:base",
+			Inherits:    []string{"bureau/template:base"},
 			Command:     []string{"bureau-test-agent"},
 			EnvironmentVariables: map[string]string{
 				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
@@ -28,7 +28,7 @@ func agentTemplates() map[string]schema.TemplateContent {
 		},
 		"sysadmin-claude": {
 			Description: "Claude Code agent — interactive coding assistant in a sandboxed terminal",
-			Inherits:    "bureau/template:base-networked",
+			Inherits:    []string{"bureau/template:base-networked"},
 			Command:     []string{"claude", "--dangerously-skip-permissions"},
 			EnvironmentVariables: map[string]string{
 				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",

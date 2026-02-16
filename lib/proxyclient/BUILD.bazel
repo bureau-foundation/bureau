@@ -1,0 +1,22 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "proxyclient",
+    srcs = ["client.go"],
+    importpath = "github.com/bureau-foundation/bureau/lib/proxyclient",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/netutil",
+        "//lib/schema",
+    ],
+)
+
+go_test(
+    name = "proxyclient_test",
+    srcs = ["client_test.go"],
+    embed = [":proxyclient"],
+    deps = ["//lib/schema"],
+)

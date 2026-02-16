@@ -837,23 +837,31 @@ type MatrixPolicy struct {
 // resolving templates. The same pattern is used for LayoutContent vs
 // observe.Layout.
 //
-// Templates can inherit from other templates via the Inherits field. The
-// daemon walks the inheritance chain, merging fields at each step:
-// base template -> parent (via Inherits) -> child -> instance overrides.
-// Slices (Filesystem, CreateDirs) are appended; maps (EnvironmentVariables,
-// Roles, DefaultPayload) are merged with child values winning; scalars
-// (Command, Environment) are replaced if non-zero in the child.
+// Templates can inherit from multiple parents via the Inherits field. The
+// daemon resolves each parent independently and merges them left-to-right:
+// later parents override earlier parents for conflicting scalars and map
+// keys, slices are concatenated, and the child template is applied last
+// (overrides everything). Slices (Filesystem, CreateDirs) are appended;
+// maps (EnvironmentVariables, Roles, DefaultPayload) are merged with child
+// values winning; scalars (Command, Environment) are replaced if non-zero
+// in the child.
 type TemplateContent struct {
 	// Description is a human-readable summary of what this template
 	// provides (e.g., "GPU-accelerated LLM agent with IREE runtime").
 	Description string `json:"description,omitempty"`
 
-	// Inherits is a template reference identifying the parent template.
-	// The daemon resolves the full inheritance chain before producing a
-	// SandboxSpec. Cycles are detected and rejected. Format is the same
-	// as PrincipalAssignment.Template: "room-alias-localpart:template-name".
-	// Empty means no inheritance (this template is self-contained).
-	Inherits string `json:"inherits,omitempty"`
+	// Inherits is an ordered list of parent template references. The
+	// daemon resolves each parent independently and merges left-to-right:
+	// later parents override earlier parents for conflicting scalar
+	// fields and map keys. Slices are concatenated. The child template
+	// is applied last (overrides everything).
+	//
+	// Single-parent inheritance is a one-element list. Empty means no
+	// inheritance (self-contained template). Format for each entry is
+	// the same as PrincipalAssignment.Template:
+	// "room-alias-localpart:template-name". Cycles are detected and
+	// rejected.
+	Inherits []string `json:"inherits,omitempty"`
 
 	// Command is the entrypoint command and arguments to run inside the
 	// sandbox. The first element is the executable path; subsequent

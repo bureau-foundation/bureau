@@ -17,13 +17,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/proxyclient"
 )
 
 func main() {
@@ -51,11 +48,11 @@ func run() error {
 		return fmt.Errorf("BUREAU_SERVER_NAME not set")
 	}
 
-	client := proxyHTTPClient(proxySocket)
+	proxy := proxyclient.New(proxySocket, serverName)
 
 	// Step 1: Verify proxy identity.
 	log("checking proxy identity...")
-	identity, err := getIdentity(ctx, client)
+	identity, err := proxy.Identity(ctx)
 	if err != nil {
 		return fmt.Errorf("identity check: %w", err)
 	}
@@ -66,7 +63,7 @@ func run() error {
 
 	// Step 2: Verify Matrix authentication.
 	log("checking Matrix whoami...")
-	whoamiUserID, err := matrixWhoami(ctx, client)
+	whoamiUserID, err := proxy.Whoami(ctx)
 	if err != nil {
 		return fmt.Errorf("whoami: %w", err)
 	}
@@ -75,7 +72,7 @@ func run() error {
 	// Step 3: Resolve the config room.
 	configAlias := fmt.Sprintf("#bureau/config/%s:%s", machineName, serverName)
 	log("resolving config room %s...", configAlias)
-	configRoomID, err := matrixResolve(ctx, client, configAlias)
+	configRoomID, err := proxy.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		return fmt.Errorf("resolve config room %s: %w", configAlias, err)
 	}
@@ -91,18 +88,18 @@ func run() error {
 		log("no payload file found")
 	}
 	log("sending ready signal...")
-	if err := matrixSendMessage(ctx, client, configRoomID, readyMessage); err != nil {
+	if _, err := proxy.SendTextMessage(ctx, configRoomID, readyMessage); err != nil {
 		return fmt.Errorf("send ready message: %w", err)
 	}
 	log("ready signal sent")
 
-	// Step 5: Poll for an incoming message from an external user. Skip
-	// messages from self and from the machine daemon — the daemon posts
-	// operational messages (service directory updates, policy changes) to
-	// the config room that are not intended for the agent.
+	// Step 5: Wait for an incoming message from an external user via /sync
+	// long-polling. Skip messages from self and from the machine daemon —
+	// the daemon posts operational messages (service directory updates,
+	// policy changes) to the config room that are not intended for the agent.
 	machineUserID := fmt.Sprintf("@%s:%s", machineName, serverName)
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, client, configRoomID, whoamiUserID, machineUserID)
+	message, err := waitForMessage(ctx, proxy, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}
@@ -116,7 +113,7 @@ func run() error {
 		log("payload at ack: %s", currentPayload)
 	}
 	log("sending acknowledgment...")
-	if err := matrixSendMessage(ctx, client, configRoomID, ackBody); err != nil {
+	if _, err := proxy.SendTextMessage(ctx, configRoomID, ackBody); err != nil {
 		return fmt.Errorf("send ack message: %w", err)
 	}
 	log("acknowledgment sent")
@@ -153,199 +150,83 @@ func readPayloadJSON() string {
 	return string(compact)
 }
 
-// --- Proxy HTTP client ---
+// waitForMessage uses Matrix /sync long-polling to wait for a message from
+// an external user (someone other than the agent itself or the machine
+// daemon). The homeserver holds each /sync request for up to 30 seconds,
+// returning immediately when new events arrive. Returns the message body.
+func waitForMessage(ctx context.Context, proxy *proxyclient.Client, roomID, ownUserID, machineUserID string) (string, error) {
+	filter := buildRoomMessageFilter(roomID)
 
-func proxyHTTPClient(socketPath string) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
-			},
-		},
-		Timeout: 30 * time.Second,
+	// Initial /sync with timeout=0 to capture the stream position.
+	response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
+		Timeout: 0,
+		Filter:  filter,
+	})
+	if err != nil {
+		return "", fmt.Errorf("initial sync: %w", err)
 	}
-}
+	sinceToken := response.NextBatch
 
-// --- Proxy API calls ---
-
-type identityResponse struct {
-	UserID     string `json:"user_id"`
-	ServerName string `json:"server_name"`
-}
-
-func getIdentity(ctx context.Context, client *http.Client) (*identityResponse, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://proxy/v1/identity", nil)
-	if err != nil {
-		return nil, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", response.StatusCode, body)
-	}
-	var result identityResponse
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode identity: %w", err)
-	}
-	return &result, nil
-}
-
-func matrixWhoami(ctx context.Context, client *http.Client) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://proxy/v1/matrix/whoami", nil)
-	if err != nil {
-		return "", err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		return "", fmt.Errorf("HTTP %d: %s", response.StatusCode, body)
-	}
-	var result struct {
-		UserID string `json:"user_id"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode whoami: %w", err)
-	}
-	return result.UserID, nil
-}
-
-func matrixResolve(ctx context.Context, client *http.Client, alias string) (string, error) {
-	requestURL := "http://proxy/v1/matrix/resolve?alias=" + url.QueryEscape(alias)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return "", err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		return "", fmt.Errorf("HTTP %d: %s", response.StatusCode, body)
-	}
-	var result struct {
-		RoomID string `json:"room_id"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode resolve: %w", err)
-	}
-	if result.RoomID == "" {
-		return "", fmt.Errorf("resolve returned empty room_id")
-	}
-	return result.RoomID, nil
-}
-
-func matrixSendMessage(ctx context.Context, client *http.Client, roomID, body string) error {
-	payload := map[string]any{
-		"room": roomID,
-		"content": map[string]string{
-			"msgtype": "m.text",
-			"body":    body,
-		},
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal message: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"http://proxy/v1/matrix/message", strings.NewReader(string(payloadJSON)))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("HTTP %d: %s", response.StatusCode, responseBody)
-	}
-	return nil
-}
-
-// waitForMessage polls the room's timeline via the proxy's raw Matrix HTTP
-// endpoint, looking for a message from someone other than the agent itself
-// or the machine daemon. Returns the message body when found.
-func waitForMessage(ctx context.Context, client *http.Client, roomID, ownUserID, machineUserID string) (string, error) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
+	// Long-poll until a message from an external user arrives.
 	for {
-		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("timed out waiting for message in room %s", roomID)
-		case <-ticker.C:
-			body, found, err := pollForMessage(ctx, client, roomID, ownUserID, machineUserID)
-			if err != nil {
-				// Log but keep trying — the room might not be synced yet.
-				log("poll error (retrying): %v", err)
+		response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
+			Since:   sinceToken,
+			Timeout: 30000, // 30s server-side hold
+			Filter:  filter,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("timed out waiting for message in room %s", roomID)
+			}
+			log("sync error (retrying): %v", err)
+			continue
+		}
+		sinceToken = response.NextBatch
+
+		joined, ok := response.Rooms.Join[roomID]
+		if !ok {
+			continue
+		}
+
+		for _, event := range joined.Timeline.Events {
+			if event.Type != "m.room.message" {
 				continue
 			}
-			if found {
+			if event.Sender == ownUserID || event.Sender == machineUserID {
+				continue
+			}
+			msgtype, _ := event.Content["msgtype"].(string)
+			if msgtype != "m.text" {
+				continue
+			}
+			body, _ := event.Content["body"].(string)
+			if body != "" {
 				return body, nil
 			}
 		}
 	}
 }
 
-func pollForMessage(ctx context.Context, client *http.Client, roomID, ownUserID, machineUserID string) (string, bool, error) {
-	// Use a generous limit: concurrent tests generate many daemon
-	// operational messages (service directory updates) in the config room.
-	requestURL := fmt.Sprintf(
-		"http://proxy/http/matrix/_matrix/client/v3/rooms/%s/messages?dir=b&limit=200",
-		url.PathEscape(roomID))
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+// buildRoomMessageFilter builds an inline JSON filter for /sync that
+// restricts the response to m.room.message events in a single room.
+func buildRoomMessageFilter(roomID string) string {
+	filter := map[string]any{
+		"room": map[string]any{
+			"rooms": []string{roomID},
+			"timeline": map[string]any{
+				"types": []string{"m.room.message"},
+				"limit": 50,
+			},
+			"state":        map[string]any{"types": []string{}},
+			"ephemeral":    map[string]any{"types": []string{}},
+			"account_data": map[string]any{"types": []string{}},
+		},
+		"presence":     map[string]any{"types": []string{}},
+		"account_data": map[string]any{"types": []string{}},
+	}
+	data, err := json.Marshal(filter)
 	if err != nil {
-		return "", false, err
+		panic("building room message filter: " + err.Error())
 	}
-	response, err := client.Do(request)
-	if err != nil {
-		return "", false, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		return "", false, fmt.Errorf("HTTP %d: %s", response.StatusCode, responseBody)
-	}
-
-	var messagesResponse struct {
-		Chunk []struct {
-			Type    string         `json:"type"`
-			Sender  string         `json:"sender"`
-			Content map[string]any `json:"content"`
-		} `json:"chunk"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&messagesResponse); err != nil {
-		return "", false, fmt.Errorf("decode messages: %w", err)
-	}
-
-	for _, event := range messagesResponse.Chunk {
-		if event.Type != "m.room.message" {
-			continue
-		}
-		if event.Sender == ownUserID || event.Sender == machineUserID {
-			continue
-		}
-		msgtype, _ := event.Content["msgtype"].(string)
-		if msgtype != "m.text" {
-			continue
-		}
-		body, _ := event.Content["body"].(string)
-		if body != "" {
-			return body, true, nil
-		}
-	}
-
-	return "", false, nil
+	return string(data)
 }

@@ -4,15 +4,15 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
 go_library(
-    name = "bureau-test-agent_lib",
+    name = "bureau-agent-mock_lib",
     srcs = ["main.go"],
-    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-test-agent",
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent-mock",
     visibility = ["//visibility:private"],
-    deps = ["//lib/proxyclient"],
+    deps = ["//lib/agent"],
 )
 
 go_binary(
-    name = "bureau-test-agent",
-    embed = [":bureau-test-agent_lib"],
+    name = "bureau-agent-mock",
+    embed = [":bureau-agent-mock_lib"],
     visibility = ["//visibility:public"],
 )

@@ -6,6 +6,7 @@ package template
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -25,9 +26,9 @@ type listParams struct {
 // templateEntry is a single template in the list output. Declared at
 // package level so the MCP server can reflect its type for outputSchema.
 type templateEntry struct {
-	Name        string `json:"name"                desc:"template name (state key)"`
-	Description string `json:"description"         desc:"human-readable template description"`
-	Inherits    string `json:"inherits,omitempty"   desc:"parent template reference (e.g. bureau/template:base)"`
+	Name        string   `json:"name"                desc:"template name (state key)"`
+	Description string   `json:"description"         desc:"human-readable template description"`
+	Inherits    []string `json:"inherits,omitempty"   desc:"parent template references (e.g. bureau/template:base)"`
 }
 
 // listCommand returns the "list" subcommand for listing templates in a room.
@@ -99,7 +100,14 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 				// Extract description and inherits from the Content map.
 				description, _ := event.Content["description"].(string)
-				inherits, _ := event.Content["inherits"].(string)
+				var inherits []string
+				if inheritsRaw, ok := event.Content["inherits"].([]any); ok {
+					for _, item := range inheritsRaw {
+						if s, ok := item.(string); ok {
+							inherits = append(inherits, s)
+						}
+					}
+				}
 
 				templates = append(templates, templateEntry{
 					Name:        *event.StateKey,
@@ -120,7 +128,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			writer := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
 			fmt.Fprintf(writer, "NAME\tDESCRIPTION\tINHERITS\n")
 			for _, entry := range templates {
-				fmt.Fprintf(writer, "%s\t%s\t%s\n", entry.Name, entry.Description, entry.Inherits)
+				fmt.Fprintf(writer, "%s\t%s\t%s\n", entry.Name, entry.Description, strings.Join(entry.Inherits, ", "))
 			}
 			return writer.Flush()
 		},

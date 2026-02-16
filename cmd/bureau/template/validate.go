@@ -119,14 +119,16 @@ func validateTemplateContent(content *schema.TemplateContent) []string {
 	}
 
 	// If this template doesn't inherit, it should define enough to be usable.
-	if content.Inherits == "" {
+	if len(content.Inherits) == 0 {
 		if len(content.Command) == 0 {
 			issues = append(issues, "no command defined and no parent template to inherit from")
 		}
 	} else {
-		// Validate the inherits reference is parseable.
-		if _, err := schema.ParseTemplateRef(content.Inherits); err != nil {
-			issues = append(issues, fmt.Sprintf("inherits reference is invalid: %v", err))
+		// Validate each parent reference is parseable.
+		for index, parentRef := range content.Inherits {
+			if _, err := schema.ParseTemplateRef(parentRef); err != nil {
+				issues = append(issues, fmt.Sprintf("inherits[%d] reference %q is invalid: %v", index, parentRef, err))
+			}
 		}
 	}
 

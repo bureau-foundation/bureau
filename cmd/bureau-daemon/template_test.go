@@ -196,8 +196,8 @@ func TestResolveTemplateSimple(t *testing.T) {
 	if template.Namespaces == nil || !template.Namespaces.PID {
 		t.Error("Namespaces.PID should be true")
 	}
-	if template.Inherits != "" {
-		t.Errorf("Inherits should be empty after resolution, got %q", template.Inherits)
+	if len(template.Inherits) != 0 {
+		t.Errorf("Inherits should be empty after resolution, got %v", template.Inherits)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	// Child template: inherits from base, adds command, env, workspace mount.
 	state.setTemplate("!template:test", "llm-agent", schema.TemplateContent{
 		Description: "LLM agent template",
-		Inherits:    "bureau/template:base",
+		Inherits:    []string{"bureau/template:base"},
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc123-agent-env",
 		Filesystem: []schema.TemplateMount{
@@ -329,7 +329,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 
 	// Level 1: llm-agent inherits base
 	state.setTemplate("!template:test", "llm-agent", schema.TemplateContent{
-		Inherits:    "bureau/template:base",
+		Inherits:    []string{"bureau/template:base"},
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc-agent-env",
 		EnvironmentVariables: map[string]string{
@@ -341,7 +341,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	// Level 2: amdgpu-developer inherits llm-agent (cross-room!)
 	state.setTemplate("!iree-template:test", "amdgpu-developer", schema.TemplateContent{
 		Description: "AMDGPU developer agent",
-		Inherits:    "bureau/template:llm-agent",
+		Inherits:    []string{"bureau/template:llm-agent"},
 		Filesystem: []schema.TemplateMount{
 			{Source: "/dev/kfd", Dest: "/dev/kfd", Mode: "rw"},
 		},
@@ -415,11 +415,11 @@ func TestResolveTemplateCycleDetection(t *testing.T) {
 
 	// A inherits B, B inherits A.
 	state.setTemplate("!template:test", "a", schema.TemplateContent{
-		Inherits: "bureau/template:b",
+		Inherits: []string{"bureau/template:b"},
 		Command:  []string{"/bin/a"},
 	})
 	state.setTemplate("!template:test", "b", schema.TemplateContent{
-		Inherits: "bureau/template:a",
+		Inherits: []string{"bureau/template:a"},
 		Command:  []string{"/bin/b"},
 	})
 
@@ -442,7 +442,7 @@ func TestResolveTemplateMissingParent(t *testing.T) {
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), "!template:test")
 
 	state.setTemplate("!template:test", "child", schema.TemplateContent{
-		Inherits: "bureau/template:nonexistent",
+		Inherits: []string{"bureau/template:nonexistent"},
 		Command:  []string{"/bin/child"},
 	})
 

@@ -432,12 +432,24 @@ func baseTemplates() []namedTemplate {
 			name: "base-networked",
 			content: schema.TemplateContent{
 				Description: "Base sandbox with host network access (no network namespace isolation)",
-				Inherits:    "bureau/template:base",
+				Inherits:    []string{"bureau/template:base"},
 				Namespaces: &schema.TemplateNamespaces{
 					PID: true,
 					Net: false,
 					IPC: true,
 					UTS: true,
+				},
+			},
+		},
+		{
+			name: "agent-base",
+			content: schema.TemplateContent{
+				Description: "Base agent template with proxy socket, payload, and session log support",
+				Inherits:    []string{"bureau/template:base-networked"},
+				EnvironmentVariables: map[string]string{
+					"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+					"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+					"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
 				},
 			},
 		},

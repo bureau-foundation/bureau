@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -29,7 +30,7 @@ type stepResult struct {
 // executeStep runs a single pipeline step: evaluates the when guard, runs
 // the command or publishes a state event, and runs the check command.
 // Returns the step result.
-func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, proxy *proxyClient, logger *threadLogger) stepResult {
+func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, proxy *proxyclient.Client, logger *threadLogger) stepResult {
 	startTime := time.Now()
 
 	// Parse timeout.
@@ -131,7 +132,12 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 			}
 		}
 	} else if step.Publish != nil {
-		_, err := proxy.putState(stepContext, step.Publish.Room, step.Publish.EventType, step.Publish.StateKey, step.Publish.Content)
+		_, err := proxy.PutState(stepContext, proxyclient.PutStateRequest{
+			Room:      step.Publish.Room,
+			EventType: step.Publish.EventType,
+			StateKey:  step.Publish.StateKey,
+			Content:   step.Publish.Content,
+		})
 		if err != nil {
 			return stepResult{
 				status:   "failed",
@@ -168,9 +174,9 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 //
 // The "fail" status (default) means the assertion is a hard requirement that
 // was not met, and the pipeline should report failure.
-func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, proxy *proxyClient) stepResult {
+func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, proxy *proxyclient.Client) stepResult {
 	// Read the state event.
-	rawContent, err := proxy.getState(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
+	rawContent, err := proxy.GetState(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
 	if err != nil {
 		return stepResult{
 			status: "failed",

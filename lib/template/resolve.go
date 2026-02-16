@@ -12,57 +12,90 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// Resolve fetches a template from Matrix and walks its inheritance chain to
-// produce a fully-merged TemplateContent. The returned content has all
-// inherited fields merged (base → parent → child) with the Inherits field
-// cleared.
+// Resolve fetches a template from Matrix and recursively resolves its
+// multi-parent inheritance tree to produce a fully-merged TemplateContent.
+// The returned content has all inherited fields merged with the Inherits
+// field cleared.
+//
+// Parents are resolved independently and merged left-to-right: later
+// parents override earlier parents for conflicting scalars and map keys.
+// The child template is applied last (overrides everything).
 //
 // Cycle detection prevents infinite loops: if the same template reference
-// appears twice in the chain, an error is returned.
+// appears on the current resolution stack, an error is returned. Diamond
+// inheritance (two parents sharing a common ancestor) is valid and handled
+// efficiently via a resolution cache.
 func Resolve(ctx context.Context, session *messaging.Session, templateRef string, serverName string) (*schema.TemplateContent, error) {
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
 		return nil, fmt.Errorf("parsing template reference %q: %w", templateRef, err)
 	}
 
-	// Walk the inheritance chain, collecting templates from leaf to base.
-	// chain[0] is the leaf (the directly-referenced template); chain[last]
-	// is the root (the template with no Inherits).
-	var chain []schema.TemplateContent
-	visited := make(map[string]bool)
-	currentRef := ref
+	cache := make(map[string]*schema.TemplateContent)
+	stack := make(map[string]bool)
+	return resolve(ctx, session, ref, serverName, cache, stack)
+}
 
-	for {
-		refString := currentRef.String()
-		if visited[refString] {
-			return nil, fmt.Errorf("template inheritance cycle: %q appears twice in chain", refString)
-		}
-		visited[refString] = true
+// resolve is the recursive implementation of Resolve. It fetches a single
+// template, resolves each of its parents recursively, merges the resolved
+// parents left-to-right, then merges the child on top.
+//
+// cache stores already-resolved templates so diamond inheritance doesn't
+// re-fetch or re-resolve the same template. stack tracks the current
+// resolution path for cycle detection: a ref appearing in stack means
+// we are already resolving it (a cycle).
+func resolve(ctx context.Context, session *messaging.Session, ref schema.TemplateRef, serverName string, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
+	refString := ref.String()
 
-		template, err := Fetch(ctx, session, currentRef, serverName)
-		if err != nil {
-			return nil, err
-		}
-		chain = append(chain, *template)
-
-		if template.Inherits == "" {
-			break
-		}
-
-		parentRef, err := schema.ParseTemplateRef(template.Inherits)
-		if err != nil {
-			return nil, fmt.Errorf("parsing inherits reference %q in template %q: %w", template.Inherits, refString, err)
-		}
-		currentRef = parentRef
+	// Check resolution cache first (handles diamond inheritance).
+	if cached, ok := cache[refString]; ok {
+		return cached, nil
 	}
 
-	// Merge from base to leaf. chain[last] is the base, chain[0] is the leaf.
-	// Start with the base and merge each child on top.
-	result := chain[len(chain)-1]
-	for i := len(chain) - 2; i >= 0; i-- {
-		result = Merge(&result, &chain[i])
+	// Check for cycles on the current resolution stack.
+	if stack[refString] {
+		return nil, fmt.Errorf("template inheritance cycle: %q appears twice in resolution stack", refString)
+	}
+	stack[refString] = true
+	defer delete(stack, refString)
+
+	template, err := Fetch(ctx, session, ref, serverName)
+	if err != nil {
+		return nil, err
 	}
 
+	// If no parents, this template is self-contained.
+	if len(template.Inherits) == 0 {
+		result := *template
+		result.Inherits = nil
+		cache[refString] = &result
+		return &result, nil
+	}
+
+	// Resolve each parent independently.
+	resolvedParents := make([]*schema.TemplateContent, 0, len(template.Inherits))
+	for index, parentRefString := range template.Inherits {
+		parentRef, err := schema.ParseTemplateRef(parentRefString)
+		if err != nil {
+			return nil, fmt.Errorf("parsing inherits[%d] reference %q in template %q: %w", index, parentRefString, refString, err)
+		}
+
+		resolvedParent, err := resolve(ctx, session, parentRef, serverName, cache, stack)
+		if err != nil {
+			return nil, fmt.Errorf("resolving parent %q of template %q: %w", parentRefString, refString, err)
+		}
+		resolvedParents = append(resolvedParents, resolvedParent)
+	}
+
+	// Merge resolved parents left-to-right: later parents override earlier.
+	merged := *resolvedParents[0]
+	for i := 1; i < len(resolvedParents); i++ {
+		merged = Merge(&merged, resolvedParents[i])
+	}
+
+	// Merge child template on top (child overrides everything).
+	result := Merge(&merged, template)
+	cache[refString] = &result
 	return &result, nil
 }
 
@@ -102,7 +135,7 @@ func Fetch(ctx context.Context, session *messaging.Session, ref schema.TemplateR
 func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result := *parent
 	// Inherits is consumed during resolution; never carry it forward.
-	result.Inherits = ""
+	result.Inherits = nil
 
 	// Scalars: child wins if non-zero.
 	if child.Description != "" {

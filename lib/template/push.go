@@ -26,8 +26,8 @@ type PushResult struct {
 
 // Push publishes a template as an m.bureau.template state event. The template
 // reference determines which room and state key to use. If the template
-// inherits from a parent, the parent's existence in Matrix is verified before
-// publishing.
+// inherits from parent templates, each parent's existence in Matrix is
+// verified before publishing.
 //
 // The session must have permission to read the target room (for alias
 // resolution and parent verification) and write state events to it.
@@ -39,14 +39,14 @@ func Push(ctx context.Context, session *messaging.Session, ref schema.TemplateRe
 		return nil, fmt.Errorf("resolving target room %q: %w", roomAlias, err)
 	}
 
-	// Verify the parent template exists if inheritance is specified.
-	if content.Inherits != "" {
-		parentRef, err := schema.ParseTemplateRef(content.Inherits)
+	// Verify all parent templates exist if inheritance is specified.
+	for index, parentRefString := range content.Inherits {
+		parentRef, err := schema.ParseTemplateRef(parentRefString)
 		if err != nil {
-			return nil, fmt.Errorf("invalid inherits reference %q: %w", content.Inherits, err)
+			return nil, fmt.Errorf("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
 		}
 		if _, err := Fetch(ctx, session, parentRef, serverName); err != nil {
-			return nil, fmt.Errorf("parent template %q not found: %w", content.Inherits, err)
+			return nil, fmt.Errorf("parent template %q not found: %w", parentRefString, err)
 		}
 	}
 

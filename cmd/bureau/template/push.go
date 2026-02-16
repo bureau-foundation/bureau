@@ -111,15 +111,15 @@ exist without actually publishing.`,
 					return cli.NotFound("resolving target room %q: %w", roomAlias, err)
 				}
 
-				if content.Inherits != "" {
-					parentRef, err := schema.ParseTemplateRef(content.Inherits)
+				for index, parentRefString := range content.Inherits {
+					parentRef, err := schema.ParseTemplateRef(parentRefString)
 					if err != nil {
-						return cli.Validation("invalid inherits reference %q: %w", content.Inherits, err)
+						return cli.Validation("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
 					}
 					if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
-						return cli.NotFound("parent template %q not found in Matrix: %w", content.Inherits, err)
+						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err)
 					}
-					fmt.Fprintf(os.Stderr, "parent template %q: found\n", content.Inherits)
+					fmt.Fprintf(os.Stderr, "parent template %q: found\n", parentRefString)
 				}
 
 				if done, err := params.EmitJSON(templatePushResult{

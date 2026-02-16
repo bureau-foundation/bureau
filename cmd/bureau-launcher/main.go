@@ -1053,12 +1053,6 @@ func (l *Launcher) handleWaitProxy(ctx context.Context, conn net.Conn, encoder *
 // crash-safe — a launcher crash between truncate and write leaves an empty
 // file. This is acceptable because payloads are ephemeral: the sandbox is
 // gone if the launcher crashes, and the payload is recreated on restart.
-//
-// Limitation: if the initial deployment had no payload (len(spec.Payload)
-// == 0), no bind mount was created. A later config update that adds a
-// payload writes the file on the host but the sandbox has no mount point
-// — the agent cannot see it. Fixing this requires adding a bind mount to
-// a running namespace, which bwrap does not support.
 func (l *Launcher) handleUpdatePayload(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}
@@ -1260,18 +1254,26 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	}
 	profile = vars.ExpandProfile(profile)
 
-	// Handle payload: write to file and add a bind mount into the sandbox.
-	if len(spec.Payload) > 0 {
-		payloadPath, err := writePayloadFile(sb.configDir, spec.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("writing payload: %w", err)
-		}
-		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
-			Source: payloadPath,
-			Dest:   "/run/bureau/payload.json",
-			Mode:   sandbox.MountModeRO,
-		})
+	// Always create the payload file and bind mount, even when the
+	// initial deployment has no payload. This ensures that
+	// handleUpdatePayload's in-place write is always visible to the
+	// sandbox through the pre-existing bind mount. Without this, a
+	// later config update that adds a payload would write the file on
+	// the host, but the sandbox would have no mount point to see it
+	// (bwrap does not support adding bind mounts to a running namespace).
+	payloadContent := spec.Payload
+	if payloadContent == nil {
+		payloadContent = map[string]any{}
 	}
+	payloadPath, err := writePayloadFile(sb.configDir, payloadContent)
+	if err != nil {
+		return nil, fmt.Errorf("writing payload: %w", err)
+	}
+	profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+		Source: payloadPath,
+		Dest:   "/run/bureau/payload.json",
+		Mode:   sandbox.MountModeRO,
+	})
 
 	// Handle trigger content: when a StartCondition was satisfied, the
 	// daemon passes the matched event's content as raw JSON. Write it to

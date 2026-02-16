@@ -173,6 +173,7 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	// proxyRoutes for local services but not make any HTTP calls.
 	daemon.reconcileServices(
 		context.Background(),
+		nil, // no running consumers
 		[]string{"service/stt/whisper", "service/tts/piper"},
 		nil,
 		nil,
@@ -205,7 +206,7 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 	}
 
 	// reconcileServices with no changes should be a no-op.
-	daemon.reconcileServices(context.Background(), nil, nil, nil)
+	daemon.reconcileServices(context.Background(), nil, nil, nil, nil)
 
 	if !daemon.lastActivityAt.IsZero() {
 		t.Error("lastActivityAt should remain zero when no changes occur")
@@ -226,6 +227,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 	// Removing a service that was locally routed should clean up proxyRoutes.
 	daemon.reconcileServices(
 		context.Background(),
+		nil, // no running consumers
 		nil,
 		[]string{"service/stt/whisper"},
 		nil,
@@ -256,6 +258,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 	// local proxy route.
 	daemon.reconcileServices(
 		context.Background(),
+		nil, // no running consumers
 		nil,
 		nil,
 		[]string{"service/stt/whisper"},
@@ -335,6 +338,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 		daemon.reconcileServices(
 			context.Background(),
+			[]string{"agent/alice"},
 			[]string{"service/stt/whisper"},
 			nil,
 			nil,
@@ -386,6 +390,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 		daemon.reconcileServices(
 			context.Background(),
+			[]string{"agent/alice"},
 			nil,
 			[]string{"service/stt/whisper"},
 			nil,
@@ -510,6 +515,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 
 	daemon.reconcileServices(
 		context.Background(),
+		nil, // no running consumers
 		[]string{"service/stt/whisper", "service/tts/piper"},
 		nil,
 		nil,
@@ -758,7 +764,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
-	daemon.pushServiceDirectory(context.Background())
+	daemon.pushServiceDirectory(context.Background(), []string{"agent/alice", "agent/bob"})
 
 	// Verify both consumers received a push.
 	for _, consumer := range []string{"agent/alice", "agent/bob"} {
@@ -784,7 +790,7 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	}
 
 	// Should not panic or error — just return immediately.
-	daemon.pushServiceDirectory(context.Background())
+	daemon.pushServiceDirectory(context.Background(), nil)
 }
 
 func TestReconcileServices_MigrationWithRelay(t *testing.T) {
@@ -810,6 +816,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 
 	daemon.reconcileServices(
 		context.Background(),
+		nil, // no running consumers
 		nil,
 		nil,
 		[]string{"service/stt/whisper"},

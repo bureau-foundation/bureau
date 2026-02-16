@@ -574,7 +574,10 @@ type Daemon struct {
 	// in the registration. For local services, this is the provider's
 	// proxy socket. For remote services routed via transport, this is
 	// the relay socket. The value is used for logging; removal uses only
-	// the key (DELETE /v1/admin/services/{name}).
+	// the key (DELETE /v1/admin/services/{name}). Protected by
+	// reconcileMu — written by reconcileServices in the sync loop,
+	// read by configureConsumerProxy during reconcile and health
+	// rollback.
 	proxyRoutes map[string]string
 
 	// adminSocketPathFunc returns the admin socket path for a consumer

@@ -162,9 +162,32 @@ func (d *Daemon) remoteServices() map[string]*schema.Service {
 	return remote
 }
 
+// runningConsumers returns a snapshot of the currently running principal
+// localparts. The snapshot is taken under reconcileMu.RLock so callers
+// can iterate it without holding the lock during network I/O. Used by
+// service directory operations that push to proxy admin sockets — taking
+// a snapshot avoids concurrent map iteration with background goroutines
+// (watchSandboxExit, rollbackPrincipal) that modify d.running under
+// reconcileMu.Lock.
+func (d *Daemon) runningConsumers() []string {
+	d.reconcileMu.RLock()
+	defer d.reconcileMu.RUnlock()
+	consumers := make([]string, 0, len(d.running))
+	for localpart := range d.running {
+		consumers = append(consumers, localpart)
+	}
+	return consumers
+}
+
 // reconcileServices is called after syncServiceDirectory detects changes. For
-// each running principal, it determines which services should be reachable and
-// updates the principal's proxy configuration via the admin API.
+// each consumer in the provided snapshot, it determines which services should
+// be reachable and updates the consumer's proxy configuration via the admin
+// API.
+//
+// The consumers parameter is a snapshot of d.running taken under
+// reconcileMu.RLock by the caller. This avoids holding the lock during
+// proxy admin HTTP calls while preventing concurrent map iteration with
+// background goroutines that modify d.running.
 //
 // For local services (provider on the same machine): the daemon derives the
 // provider's proxy socket path from its localpart and registers a route on
@@ -174,7 +197,7 @@ func (d *Daemon) remoteServices() map[string]*schema.Service {
 // For remote services (provider on another machine): routes through the
 // relay socket when transport is configured. Consumer proxies send requests
 // to the relay, which forwards them to the correct peer daemon.
-func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated []string) {
+func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, removed, updated []string) {
 	if len(added) == 0 && len(removed) == 0 && len(updated) == 0 {
 		return
 	}
@@ -201,20 +224,24 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 				"service", localpart,
 				"proxy_name", serviceName,
 				"provider_socket", providerSocket,
-				"consumers", len(d.running),
+				"consumers", len(consumers),
 			)
-			d.configureProxyRoute(ctx, serviceName, providerSocket)
+			d.configureProxyRoute(ctx, consumers, serviceName, providerSocket)
+			d.reconcileMu.Lock()
 			d.proxyRoutes[serviceName] = providerSocket
+			d.reconcileMu.Unlock()
 		} else if d.relaySocketPath != "" {
 			// Remote service with transport enabled: route through relay.
 			d.logger.Info("remote service registered, configuring relay routes",
 				"service", localpart,
 				"proxy_name", serviceName,
 				"machine", service.Machine,
-				"consumers", len(d.running),
+				"consumers", len(consumers),
 			)
-			d.configureProxyRoute(ctx, serviceName, d.relaySocketPath)
+			d.configureProxyRoute(ctx, consumers, serviceName, d.relaySocketPath)
+			d.reconcileMu.Lock()
 			d.proxyRoutes[serviceName] = d.relaySocketPath
+			d.reconcileMu.Unlock()
 		} else {
 			d.logger.Warn("remote service registered but transport not configured",
 				"service", localpart,
@@ -226,14 +253,19 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 
 	for _, localpart := range removed {
 		serviceName := principal.ProxyServiceName(localpart)
-		if _, wasRouted := d.proxyRoutes[serviceName]; wasRouted {
+		d.reconcileMu.RLock()
+		_, wasRouted := d.proxyRoutes[serviceName]
+		d.reconcileMu.RUnlock()
+		if wasRouted {
 			d.logger.Info("service removed, cleaning up proxy routes",
 				"service", localpart,
 				"proxy_name", serviceName,
-				"consumers", len(d.running),
+				"consumers", len(consumers),
 			)
-			d.removeProxyRoute(ctx, serviceName)
+			d.removeProxyRoute(ctx, consumers, serviceName)
+			d.reconcileMu.Lock()
 			delete(d.proxyRoutes, serviceName)
+			d.reconcileMu.Unlock()
 		}
 	}
 
@@ -258,8 +290,10 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 				"proxy_name", serviceName,
 				"provider_socket", providerSocket,
 			)
-			d.configureProxyRoute(ctx, serviceName, providerSocket)
+			d.configureProxyRoute(ctx, consumers, serviceName, providerSocket)
+			d.reconcileMu.Lock()
 			d.proxyRoutes[serviceName] = providerSocket
+			d.reconcileMu.Unlock()
 		} else if d.relaySocketPath != "" {
 			// Remote service with transport: route through relay.
 			d.logger.Info("remote service updated, reconfiguring relay routes",
@@ -267,26 +301,37 @@ func (d *Daemon) reconcileServices(ctx context.Context, added, removed, updated 
 				"proxy_name", serviceName,
 				"machine", service.Machine,
 			)
-			d.configureProxyRoute(ctx, serviceName, d.relaySocketPath)
+			d.configureProxyRoute(ctx, consumers, serviceName, d.relaySocketPath)
+			d.reconcileMu.Lock()
 			d.proxyRoutes[serviceName] = d.relaySocketPath
-		} else if _, wasRouted := d.proxyRoutes[serviceName]; wasRouted {
-			// Service moved to remote machine, no transport: remove route.
-			d.logger.Info("service migrated to remote machine, removing route",
-				"service", localpart,
-				"proxy_name", serviceName,
-				"machine", service.Machine,
-			)
-			d.removeProxyRoute(ctx, serviceName)
-			delete(d.proxyRoutes, serviceName)
+			d.reconcileMu.Unlock()
+		} else {
+			d.reconcileMu.RLock()
+			_, wasRouted := d.proxyRoutes[serviceName]
+			d.reconcileMu.RUnlock()
+			if wasRouted {
+				// Service moved to remote machine, no transport: remove route.
+				d.logger.Info("service migrated to remote machine, removing route",
+					"service", localpart,
+					"proxy_name", serviceName,
+					"machine", service.Machine,
+				)
+				d.removeProxyRoute(ctx, consumers, serviceName)
+				d.reconcileMu.Lock()
+				delete(d.proxyRoutes, serviceName)
+				d.reconcileMu.Unlock()
+			}
 		}
 	}
 }
 
-// configureProxyRoute registers a service route on all running consumers'
-// proxies. Each consumer's proxy gets a PUT /v1/admin/services/{name} call
-// pointing at the provider's Unix socket.
-func (d *Daemon) configureProxyRoute(ctx context.Context, serviceName, providerSocket string) {
-	for consumerLocalpart := range d.running {
+// configureProxyRoute registers a service route on each consumer proxy in
+// the snapshot. Each consumer's proxy gets a PUT /v1/admin/services/{name}
+// call pointing at the provider's Unix socket. The consumers slice is a
+// snapshot of d.running taken under reconcileMu.RLock, so this function
+// does not need to hold the lock during the HTTP calls.
+func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []string, serviceName, providerSocket string) {
+	for _, consumerLocalpart := range consumers {
 		if err := d.registerProxyRoute(ctx, consumerLocalpart, serviceName, providerSocket); err != nil {
 			d.logger.Error("failed to register service on consumer proxy",
 				"service", serviceName,
@@ -297,9 +342,11 @@ func (d *Daemon) configureProxyRoute(ctx context.Context, serviceName, providerS
 	}
 }
 
-// removeProxyRoute unregisters a service from all running consumers' proxies.
-func (d *Daemon) removeProxyRoute(ctx context.Context, serviceName string) {
-	for consumerLocalpart := range d.running {
+// removeProxyRoute unregisters a service from each consumer proxy in the
+// snapshot. The consumers slice is a snapshot of d.running taken under
+// reconcileMu.RLock.
+func (d *Daemon) removeProxyRoute(ctx context.Context, consumers []string, serviceName string) {
+	for _, consumerLocalpart := range consumers {
 		if err := d.unregisterProxyRoute(ctx, consumerLocalpart, serviceName); err != nil {
 			d.logger.Error("failed to unregister service from consumer proxy",
 				"service", serviceName,
@@ -392,17 +439,20 @@ func (d *Daemon) registerProxyRoute(ctx context.Context, consumerLocalpart, serv
 	return nil
 }
 
-// pushServiceDirectory pushes the current service directory to all running
-// consumer proxies via the admin API (PUT /v1/admin/directory). Called after
-// syncServiceDirectory detects changes and after new consumers start.
-func (d *Daemon) pushServiceDirectory(ctx context.Context) {
-	if len(d.running) == 0 {
+// pushServiceDirectory pushes the current service directory to each consumer
+// proxy in the snapshot via the admin API (PUT /v1/admin/directory). The
+// consumers slice is a snapshot of d.running taken under reconcileMu.RLock,
+// so this function does not need to hold the lock during the HTTP calls.
+// Called after syncServiceDirectory detects changes and after new consumers
+// start.
+func (d *Daemon) pushServiceDirectory(ctx context.Context, consumers []string) {
+	if len(consumers) == 0 {
 		return
 	}
 
 	directory := d.buildServiceDirectory()
 
-	for consumerLocalpart := range d.running {
+	for _, consumerLocalpart := range consumers {
 		if err := d.pushDirectoryToProxy(ctx, consumerLocalpart, directory); err != nil {
 			d.logger.Error("failed to push service directory to consumer proxy",
 				"consumer", consumerLocalpart,

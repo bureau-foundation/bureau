@@ -297,8 +297,14 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 		return
 	}
 
-	// Check if the principal is running locally.
-	if d.running[request.Principal] {
+	// Check if the principal is running locally. Snapshot under RLock
+	// to avoid racing with background goroutines (watchSandboxExit,
+	// rollbackPrincipal) that modify d.running under Lock.
+	d.reconcileMu.RLock()
+	isLocallyRunning := d.running[request.Principal]
+	d.reconcileMu.RUnlock()
+
+	if isLocallyRunning {
 		// Authorize the observer against the principal's allowances.
 		// Only the hosting machine authorizes — this IS the host.
 		requestedMode := request.Mode
@@ -474,9 +480,13 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 		"observer", request.Observer,
 	)
 
+	// Snapshot d.running under RLock to avoid racing with background
+	// goroutines that modify the map.
+	runningSnapshot := d.runningConsumers()
+
 	// Collect running principals that the observer is authorized to see.
 	var authorizedPrincipals []string
-	for localpart := range d.running {
+	for _, localpart := range runningSnapshot {
 		if d.authorizeList(request.Observer, localpart) {
 			authorizedPrincipals = append(authorizedPrincipals, localpart)
 		}
@@ -525,13 +535,24 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		"observable", request.Observable,
 	)
 
-	// Collect principals. Use a map to deduplicate between d.running and
-	// d.services (a locally running service appears in both).
+	// Snapshot d.running under RLock to avoid racing with background
+	// goroutines that modify the map. Build a set for O(1) membership
+	// checks against service directory entries below.
+	d.reconcileMu.RLock()
+	runningSet := make(map[string]bool, len(d.running))
+	for localpart := range d.running {
+		runningSet[localpart] = true
+	}
+	d.reconcileMu.RUnlock()
+
+	// Collect principals. Use a map to deduplicate between running
+	// principals and d.services (a locally running service appears in
+	// both).
 	seen := make(map[string]bool)
 	var principals []observe.ListPrincipal
 
 	// Locally running principals — filtered by authorization.
-	for localpart := range d.running {
+	for localpart := range runningSet {
 		seen[localpart] = true
 
 		if !d.authorizeList(request.Observer, localpart) {
@@ -560,7 +581,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		}
 
 		isLocal := service.Machine == d.machineUserID
-		observable := isLocal && d.running[localpart]
+		observable := isLocal && runningSet[localpart]
 		if !isLocal {
 			// Remote principal is observable if we have a transport
 			// dialer and the peer machine has a known address.
@@ -893,7 +914,11 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		)
 	}
 
-	if !d.running[request.Principal] {
+	d.reconcileMu.RLock()
+	principalRunning := d.running[request.Principal]
+	d.reconcileMu.RUnlock()
+
+	if !principalRunning {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(observeResponse{

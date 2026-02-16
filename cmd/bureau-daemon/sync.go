@@ -162,8 +162,9 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 			"local", len(d.localServices()),
 			"remote", len(d.remoteServices()),
 		)
-		d.reconcileServices(ctx, added, removed, updated)
-		d.pushServiceDirectory(ctx)
+		consumers := d.runningConsumers()
+		d.reconcileServices(ctx, consumers, added, removed, updated)
+		d.pushServiceDirectory(ctx, consumers)
 		d.discoverSharedCache(ctx)
 		d.discoverPushTargets(ctx)
 	}
@@ -303,8 +304,9 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		if err != nil {
 			d.logger.Error("service directory sync failed", "error", err)
 		} else {
-			d.reconcileServices(ctx, added, removed, updated)
-			d.pushServiceDirectory(ctx)
+			consumers := d.runningConsumers()
+			d.reconcileServices(ctx, consumers, added, removed, updated)
+			d.pushServiceDirectory(ctx, consumers)
 			d.discoverSharedCache(ctx)
 			d.discoverPushTargets(ctx)
 

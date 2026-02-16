@@ -12,19 +12,19 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // configParams holds the parameters for the fleet config command.
 // Config management requires direct Matrix access to read/write
-// FleetConfigContent state events in #bureau/fleet, since the fleet
+// FleetConfigContent state events in the fleet room, since the fleet
 // controller's socket API does not have a config-write action.
 type configParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Name                     string `json:"name"                      flag:"name"                      desc:"fleet controller name (state key in #bureau/fleet, e.g., service/fleet/prod)"`
+	Name                     string `json:"name"                      flag:"name"                      desc:"fleet controller name (state key in the fleet room, e.g., service/fleet/prod)"`
+	FleetRoom                string `json:"fleet_room"                flag:"fleet-room"                desc:"fleet room ID (overrides MATRIX_FLEET_ROOM from credential file)"`
 	ServerName               string `json:"server_name"               flag:"server-name"               desc:"Matrix server name" default:"bureau.local"`
 	RebalancePolicy          string `json:"rebalance_policy"          flag:"rebalance-policy"          desc:"rebalance policy: auto or alert"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds" flag:"heartbeat-interval"       desc:"expected heartbeat interval in seconds"`
@@ -49,9 +49,9 @@ func configCommand() *cli.Command {
 		Summary: "View or update fleet controller configuration",
 		Description: `Read or write the FleetConfigContent for a fleet controller.
 
-Without any config flags, displays the current configuration from
-#bureau/fleet. With config flags (--rebalance-policy, --heartbeat-interval,
-etc.), performs a read-modify-write to update the configuration.
+Without any config flags, displays the current configuration. With
+config flags (--rebalance-policy, --heartbeat-interval, etc.), performs
+a read-modify-write to update the configuration.
 
 Requires direct Matrix access via --credential-file, since the fleet
 controller's socket API does not expose a config-write action.`,
@@ -107,11 +107,17 @@ func runConfig(params *configParams) error {
 	}
 	defer session.Close()
 
-	// Resolve #bureau/fleet room.
-	fleetAlias := principal.RoomAlias(schema.RoomAliasFleet, params.ServerName)
-	fleetRoomID, err := session.ResolveAlias(ctx, fleetAlias)
-	if err != nil {
-		return fmt.Errorf("resolving fleet room %s: %w", fleetAlias, err)
+	// Resolve fleet room ID from explicit flag or credential file.
+	fleetRoomID := params.FleetRoom
+	if fleetRoomID == "" && params.SessionConfig.CredentialFile != "" {
+		credentials, credErr := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
+		if credErr != nil {
+			return fmt.Errorf("reading credentials for fleet room: %w", credErr)
+		}
+		fleetRoomID = credentials["MATRIX_FLEET_ROOM"]
+	}
+	if fleetRoomID == "" {
+		return fmt.Errorf("--fleet-room is required (or set MATRIX_FLEET_ROOM in the credential file)")
 	}
 
 	// Read existing config.

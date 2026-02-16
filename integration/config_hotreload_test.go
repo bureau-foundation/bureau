@@ -46,11 +46,14 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/policy-hr")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy a proxy-only principal with no MatrixPolicy (default-deny).
@@ -179,11 +182,14 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/vis-hr")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy the consumer FIRST so the proxy exists when the daemon

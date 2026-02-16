@@ -205,8 +205,21 @@ desired state:
 - `m.bureau.credentials` — age-encrypted credential bundles, one per
   principal assigned to this machine
 
-Power levels: admin (100) for config and credentials. Machine daemon
-(50) for invites and layout events. Members (0) for messages.
+The daemon also posts operational messages to the config room: sandbox
+lifecycle notifications (start, exit with code, restart), service
+directory updates, and command results. For non-zero sandbox exits,
+the notification includes captured terminal output (last 50 lines of
+the tmux pane). This is the only path for post-mortem error capture
+from sandboxed processes — the config room audience (admin, machine
+daemon, fleet controllers) is the correct set of parties because they
+already control the sandbox's credentials and configuration. Captured
+output is never posted to workspace rooms or any room where sandbox
+principals are members.
+
+Power levels: admin and machine daemon (100) for credentials, config,
+room management, and fleet controller access grants. Fleet controllers
+(50) for MachineConfig writes for service placement. Default (0) for
+messages only.
 
 The config room has `events_default: 100` and `state_default: 100` —
 strict lockdown. Only the admin can set new state event types.
@@ -438,15 +451,27 @@ These Matrix-native event types are always locked to admin (100):
 
 Strict lockdown. `events_default: 100`, `state_default: 100`.
 
-- Admin (100): can set all state events, including `machine_config`
-  and `credentials`
-- Machine daemon (50): can invite principals and set layout events
-- Members (0): can send messages only
+- Admin and machine daemon (100): can set all state events, including
+  `machine_config` and `credentials`. The machine daemon needs PL 100
+  for HA hosting (writing MachineConfig), inviting fleet controllers
+  to the config room, and granting them PL 50.
+- Fleet controllers (50): can write `machine_config` for service
+  placement. Granted PL 50 by the daemon when it detects them in the
+  fleet room. Cannot write credentials or room metadata.
+- Default (0): messages only.
 
 No new state event types can be introduced without explicitly adding
 them to the power level overrides. This is deliberate: config rooms
 define security boundaries (credentials, policies, assignments), and
 unexpected state events could confuse the daemon's reconciliation.
+
+The config room membership model matters for security: the daemon posts
+sandbox exit notifications (including captured terminal output for
+non-zero exits) here. Command lines, error tracebacks, and environment
+details in crash output can contain sensitive information. The config
+room restricts this to parties who already have full access to the
+sandbox's credentials and configuration — no sandbox principals are
+ever invited to the config room.
 
 ### Workspace room power levels
 

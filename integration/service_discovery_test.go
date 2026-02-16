@@ -27,6 +27,7 @@ func TestServiceDiscovery(t *testing.T) {
 	defer admin.Close()
 
 	ctx := t.Context()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	// Boot two machines. The provider hosts the service principal. The
 	// consumer has principals that query for services through their proxies.
@@ -37,11 +38,13 @@ func TestServiceDiscovery(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 	startMachine(t, admin, consumer, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// --- Phase 1: Deploy all principals ---

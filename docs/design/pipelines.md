@@ -415,9 +415,13 @@ command (via Matrix), it:
    access.
 4. Sends `create-sandbox` to the launcher via IPC, passing the daemon's
    own Matrix token as `DirectCredentials` for the proxy.
-5. Waits for the sandbox to exit.
+5. Waits for the sandbox to exit. For non-zero exits, the launcher
+   returns captured terminal output from the executor's tmux pane.
 6. Reads the JSONL result file for structured step-level outcomes.
 7. Posts the result as a threaded Matrix reply to the original command.
+   When the executor crashes (non-zero exit without a result file),
+   the reply includes the captured terminal output so the operator
+   can diagnose the failure.
 8. Destroys the ephemeral sandbox.
 
 The executor sandbox is fully isolated: PID namespace, new session,

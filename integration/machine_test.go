@@ -47,11 +47,12 @@ func (m *testMachine) PrincipalSocketPath(localpart string) string {
 }
 
 // machineOptions configures process binaries and daemon settings for
-// startMachine. LauncherBinary and DaemonBinary are required; the rest
-// are optional and conditionally passed as CLI flags.
+// startMachine. LauncherBinary, DaemonBinary, and FleetRoomID are
+// required; the rest are optional and conditionally passed as CLI flags.
 type machineOptions struct {
 	LauncherBinary         string // required
 	DaemonBinary           string // required
+	FleetRoomID            string // required: fleet room ID passed as --fleet-room to daemon
 	ProxyBinary            string // optional: launcher --proxy-binary
 	ObserveRelayBinary     string // optional: daemon --observe-relay-binary
 	StatusInterval         string // optional: daemon --status-interval (default "2s")
@@ -121,6 +122,9 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	if options.DaemonBinary == "" {
 		t.Fatal("machineOptions.DaemonBinary is required")
 	}
+	if options.FleetRoomID == "" {
+		t.Fatal("machineOptions.FleetRoomID is required")
+	}
 
 	ctx := t.Context()
 
@@ -147,10 +151,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
 	}
-	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
-	if err != nil {
-		t.Fatalf("resolve fleet room: %v", err)
-	}
+	fleetRoomID := options.FleetRoomID
 	machine.MachineRoomID = machineRoomID
 
 	if err := admin.InviteUser(ctx, systemRoomID, machine.UserID); err != nil {
@@ -211,6 +212,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machine.Name,
 		"--server-name", testServerName,
+		"--fleet-room", fleetRoomID,
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,

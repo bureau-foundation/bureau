@@ -54,6 +54,7 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	ctx := t.Context()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	fleetRoomID := defaultFleetRoomID(t)
 
 	// --- Phase 0: Boot a machine ---
 	//
@@ -67,6 +68,7 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// --- Phase 1: Ticket service setup ---
@@ -405,6 +407,7 @@ func TestTicketLifecycle(t *testing.T) {
 	ctx := t.Context()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	fleetRoomID := defaultFleetRoomID(t)
 
 	// --- Phase 0: Boot a machine ---
 
@@ -413,6 +416,7 @@ func TestTicketLifecycle(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// --- Phase 1: Ticket service setup ---

@@ -165,6 +165,8 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// --- Phase 4: Normal startup (launcher + daemon from saved session) ---
 	// Use a subtest so we get clean process cleanup before Phase 6.
+	fleetRoomID := defaultFleetRoomID(t)
+
 	t.Run("RunningPhase", func(t *testing.T) {
 		startProcess(t, "launcher", launcherBinary,
 			"--homeserver", testHomeserverURL,
@@ -187,6 +189,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--state-dir", stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
+			"--fleet-room", fleetRoomID,
 		)
 
 		// Wait for MachineStatus heartbeat.
@@ -252,6 +255,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--state-dir", stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
+			"--fleet-room", fleetRoomID,
 		)
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
@@ -412,6 +416,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Start both launcher+daemon pairs ---
+	twoMachineFleetRoomID := defaultFleetRoomID(t)
+
 	startMachineProcesses := func(t *testing.T, machine machineSetup) {
 		t.Helper()
 		startProcess(t, machine.name+"-launcher", launcherBinary,
@@ -434,6 +440,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--state-dir", machine.stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
+			"--fleet-room", twoMachineFleetRoomID,
 		)
 	}
 

@@ -28,6 +28,8 @@ func TestWorkspaceCommands(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/ws-cmds")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -39,6 +41,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    findRunnerEnv(t),
+		FleetRoomID:            fleetRoomID,
 	})
 
 	ctx := t.Context()
@@ -307,6 +310,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/ws-worktree")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -318,6 +323,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    findRunnerEnv(t),
+		FleetRoomID:            fleetRoomID,
 	})
 
 	ctx := t.Context()

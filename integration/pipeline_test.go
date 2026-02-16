@@ -30,6 +30,8 @@ func TestPipelineExecution(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/pipeline")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -41,6 +43,7 @@ func TestPipelineExecution(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    findRunnerEnv(t),
+		FleetRoomID:            fleetRoomID,
 	})
 
 	ctx := t.Context()
@@ -144,6 +147,8 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/pipeline-fail")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -155,6 +160,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    findRunnerEnv(t),
+		FleetRoomID:            fleetRoomID,
 	})
 
 	ctx := t.Context()
@@ -248,6 +254,8 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/pipeline-params")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -259,6 +267,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    findRunnerEnv(t),
+		FleetRoomID:            fleetRoomID,
 	})
 
 	ctx := t.Context()

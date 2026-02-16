@@ -121,7 +121,7 @@ type fleetController struct {
 // Matrix account, writes session credentials, invites the service principal
 // to the required rooms (fleet, machine, service, system), and starts the
 // binary. Returns after the socket file appears on disk.
-func startFleetController(t *testing.T, admin *messaging.Session, machine *testMachine, controllerName string) *fleetController {
+func startFleetController(t *testing.T, admin *messaging.Session, machine *testMachine, controllerName, fleetRoomID string) *fleetController {
 	t.Helper()
 
 	ctx := t.Context()
@@ -152,10 +152,6 @@ func startFleetController(t *testing.T, admin *messaging.Session, machine *testM
 	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
 	if err != nil {
 		t.Fatalf("resolve service room: %v", err)
-	}
-	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
-	if err != nil {
-		t.Fatalf("resolve fleet room: %v", err)
 	}
 	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
@@ -197,6 +193,7 @@ func startFleetController(t *testing.T, admin *messaging.Session, machine *testM
 		"--machine-name", machine.Name,
 		"--principal-name", controllerName,
 		"--server-name", testServerName,
+		"--fleet-room", fleetRoomID,
 		"--run-dir", machine.RunDir,
 		"--state-dir", stateDir,
 	)
@@ -253,18 +250,11 @@ func fleetAllGrants() []servicetoken.Grant {
 }
 
 // publishFleetService publishes a FleetServiceContent state event to
-// #bureau/fleet. The state key is the service localpart.
-func publishFleetService(t *testing.T, admin *messaging.Session, serviceLocalpart string, definition schema.FleetServiceContent) {
+// the fleet room. The state key is the service localpart.
+func publishFleetService(t *testing.T, admin *messaging.Session, fleetRoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
 	t.Helper()
 
-	ctx := t.Context()
-
-	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
-	if err != nil {
-		t.Fatalf("resolve fleet room: %v", err)
-	}
-
-	_, err = admin.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
+	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
 	if err != nil {
 		t.Fatalf("publish fleet service %s: %v", serviceLocalpart, err)
 	}
@@ -440,17 +430,20 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// to #bureau/machine, and creates the per-machine config room.
 	// startMachine blocks until the first status heartbeat arrives, so
 	// the fleet controller's initial /sync will see this machine.
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/fleet-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Start the fleet controller. It performs initial /sync before
 	// opening the socket, so by the time we can call APIs the fleet
 	// model should already contain the machine.
 	controllerName := "service/fleet/lifecycle"
-	fc := startFleetController(t, admin, machine, controllerName)
+	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
 
 	// Load the daemon's token signing key. The daemon generated this
 	// keypair at startup and published the public key to #bureau/system.
@@ -548,12 +541,6 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		}
 	})
 
-	// Resolve the fleet room for watches used by service sub-tests.
-	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
-	if err != nil {
-		t.Fatalf("resolve fleet room for watch: %v", err)
-	}
-
 	// --- Sub-test: publish and discover a fleet service ---
 	t.Run("ServiceDiscovery", func(t *testing.T) {
 		serviceLocalpart := "service/stt/lifecycle"
@@ -562,7 +549,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		// event-wait for the state event to propagate via /sync.
 		fleetWatch := watchRoom(t, admin, fleetRoomID)
 
-		publishFleetService(t, admin, serviceLocalpart, schema.FleetServiceContent{
+		publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: schema.ReplicaSpec{Min: 0},
 			Failover: "migrate",
@@ -730,6 +717,8 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	// Boot a machine with proxy support. The daemon needs the proxy
 	// binary to create sandboxes when the fleet controller places a
 	// service.
@@ -738,6 +727,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Publish a test template so the daemon can create sandboxes when
@@ -787,7 +777,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// and grants it PL 50. The fleet controller then accepts the config
 	// room invite and processes the MachineConfig event.
 	controllerName := "service/fleet/place-test"
-	fc := startFleetController(t, admin, machine, controllerName)
+	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
 
 	signingKey := loadDaemonSigningKey(t, machine)
 	authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
@@ -799,17 +789,13 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 
 	// Create a fleet room watch before publishing the service so we
 	// can event-wait for the state event to propagate via /sync.
-	fleetRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasFleet, testServerName))
-	if err != nil {
-		t.Fatalf("resolve fleet room for watch: %v", err)
-	}
 	fleetWatch := watchRoom(t, admin, fleetRoomID)
 
 	// Publish a fleet service definition with Min=0 so the reconcile
 	// loop does not auto-place it. This test exercises explicit place
 	// and unplace calls; auto-placement is tested separately in
 	// TestFleetAutoPlacement.
-	publishFleetService(t, admin, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: schema.ReplicaSpec{Min: 0},
 		Failover: "migrate",

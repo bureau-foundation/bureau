@@ -54,6 +54,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
@@ -119,6 +121,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--state-dir", stateDir,
 		"--admin-user", "bureau-admin",
 		"--status-interval", "2s",
+		"--fleet-room", fleetRoomID,
 	)
 
 	// Wait for the daemon to come alive.

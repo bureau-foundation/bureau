@@ -52,6 +52,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
@@ -110,7 +112,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Start the first daemon as a manageable process (not via startProcess,
 	// since we need to kill it mid-test without subtest cleanup).
 	initialStatusWatch := watchRoom(t, admin, machineRoomID)
-	daemon1 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir)
+	daemon1 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleetRoomID)
 
 	// Wait for the daemon to come alive.
 	initialStatusWatch.WaitForStateEvent(t,
@@ -262,7 +264,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	recoveryWatch := watchRoom(t, admin, machineRoomID)
 
 	t.Log("starting new daemon")
-	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir)
+	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleetRoomID)
 	t.Cleanup(func() {
 		daemon2.Process.Signal(syscall.SIGTERM)
 		done := make(chan error, 1)
@@ -298,7 +300,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 // for manual lifecycle management. Unlike startProcess, the caller is
 // responsible for killing the process. This is needed for tests that kill
 // and restart the daemon mid-test.
-func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir string) *exec.Cmd {
+func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir, fleetRoomID string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(binary,
 		"--homeserver", testHomeserverURL,
@@ -308,6 +310,7 @@ func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir stri
 		"--state-dir", stateDir,
 		"--admin-user", "bureau-admin",
 		"--status-interval", "2s",
+		"--fleet-room", fleetRoomID,
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

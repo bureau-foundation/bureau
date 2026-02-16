@@ -30,11 +30,14 @@ func TestMCPServer(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	machine := newTestMachine(t, "machine/mcp")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy a principal with a targeted authorization policy: grant

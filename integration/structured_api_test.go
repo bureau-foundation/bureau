@@ -38,6 +38,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	defer admin.Close()
 
 	ctx := t.Context()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	// Boot a machine with a proxy binary so we can deploy a principal.
 	machine := newTestMachine(t, "machine/struct-api")
@@ -45,6 +46,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Register and deploy a principal. AllowJoin is needed so the agent

@@ -30,7 +30,9 @@ const (
 	// RoomAliasPipeline is the pipeline definitions room.
 	RoomAliasPipeline = "bureau/pipeline"
 
-	// RoomAliasFleet is the fleet service/machine definitions room.
+	// RoomAliasFleet is the default fleet room alias localpart, used by
+	// bureau matrix setup to create the initial fleet room. All runtime
+	// consumers receive the fleet room ID as an explicit parameter.
 	RoomAliasFleet = "bureau/fleet"
 
 	// RoomAliasArtifact is the artifact metadata room.

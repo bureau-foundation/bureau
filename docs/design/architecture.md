@@ -317,7 +317,8 @@ request-response: one request per connection, one response, then close
 - **list-sandboxes** — return all running sandboxes. Used by the daemon
   on restart to adopt pre-existing sandboxes.
 - **wait-sandbox** — block until a sandbox's tmux session exits. Returns
-  the exit code. Long-lived connection.
+  the exit code and, for non-zero exits, captured terminal output from
+  the tmux pane (last 500 lines). Long-lived connection.
 - **wait-proxy** — block until a sandbox's proxy process exits. Returns
   the exit code. Long-lived connection.
 - **update-proxy-binary** — validate a new proxy binary and use it for
@@ -337,10 +338,23 @@ exits or the context is cancelled.
 ### Sandbox lifecycle boundary
 
 The tmux session is the lifecycle boundary for a sandbox, not the
-command running inside it or the proxy. When the tmux session ends, the
-launcher detects it (polling every 250ms), cleans up the proxy, and
-writes the exit code to the state directory. The daemon's `wait-sandbox`
-call returns.
+command running inside it or the proxy. The tmux server is started with
+`remain-on-exit on` so that panes survive process exit — this allows
+the launcher to capture terminal output via `capture-pane` before
+destroying the session. When the sandboxed process exits, the launcher
+detects it via the exit-code file (polling every 250ms), captures the
+pane content for non-zero exits, kills the tmux session, cleans up
+the proxy, and returns the exit code and captured output to the
+daemon's `wait-sandbox` call.
+
+The daemon posts sandbox exit notifications to the config room. For
+non-zero exits, the notification includes the last 50 lines of
+captured terminal output (the full 500-line capture is in the daemon's
+structured log). The config room is the correct destination because its
+membership is restricted to the admin, machine daemon, and fleet
+controllers — parties who already have access to the sandbox's
+credentials and configuration. Captured output is never posted to
+workspace rooms or any room where sandbox principals are members.
 
 ---
 

@@ -181,6 +181,8 @@ func TestBootstrapScript(t *testing.T) {
 			t.Skip("bwrap not available in container (needs --privileged); skipping service test")
 		}
 
+		bootstrapFleetRoomID := defaultFleetRoomID(t)
+
 		// Start launcher in the background inside the container.
 		// The launcher reads its session from /var/lib/bureau/session.json
 		// (written during first boot) so no registration token is needed.
@@ -206,6 +208,7 @@ func TestBootstrapScript(t *testing.T) {
 			"--server-name", testServerName,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
+			"--fleet-room", bootstrapFleetRoomID,
 		)
 
 		// Wait for daemon heartbeat in Matrix.

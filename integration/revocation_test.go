@@ -109,12 +109,15 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
+
 	// Set up and start the machine.
 	machine := newTestMachine(t, machineName)
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
 		ProxyBinary:    proxyBinary,
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy a principal and verify the proxy is functional.
@@ -187,6 +190,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	fleetRoomID := defaultFleetRoomID(t)
 	machineUserID := "@" + machineName + ":" + testServerName
 
 	// Set up and start the machine.
@@ -195,6 +199,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
 		ProxyBinary:    proxyBinary,
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy two principals.

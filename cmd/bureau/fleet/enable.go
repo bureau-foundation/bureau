@@ -152,8 +152,8 @@ func runEnable(params *enableParams) error {
 	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", servicePrincipal, serviceUserID)
 	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", host)
 	fmt.Fprintf(os.Stderr, "\nThe daemon will start the fleet controller and register it in\n")
-	fmt.Fprintf(os.Stderr, "#bureau/service. The fleet controller will begin tracking machines\n")
-	fmt.Fprintf(os.Stderr, "and processing FleetServiceContent events from #bureau/fleet.\n")
+	fmt.Fprintf(os.Stderr, "the service room. The fleet controller will begin tracking machines\n")
+	fmt.Fprintf(os.Stderr, "and processing FleetServiceContent events from the fleet room.\n")
 
 	return nil
 }

@@ -101,6 +101,37 @@ On reconnect, the relay sends the ring buffer contents accumulated
 during the gap as a history message, filling the observer's scrollback
 with what they missed.
 
+### Post-mortem capture vs live observation
+
+Live observation requires authorization grants: the observer needs an
+`observe` (or `observe/read-write`) grant for the target principal, and
+the target needs an allowance permitting that observer. This is
+enforced by the daemon when the observation request arrives.
+
+Post-mortem crash capture is a separate mechanism that does not use
+the observation protocol. When a sandboxed process exits with a
+non-zero exit code, the launcher captures the tmux pane content via
+`capture-pane` (enabled by starting the tmux server with
+`remain-on-exit on`), then returns the captured output to the daemon
+through the `wait-sandbox` IPC response. The daemon posts the last
+50 lines to the machine's config room and logs the full capture
+(up to 500 lines) at WARN level.
+
+The two mechanisms have different access models:
+
+- **Live observation**: grant-controlled, per-principal. Only
+  authorized observers can attach.
+- **Post-mortem capture**: config room membership. Only the admin,
+  machine daemon, and fleet controllers see the output. No sandbox
+  principals are config room members.
+
+Both models are appropriate for their use case. Live observation is
+fine-grained because it gives interactive terminal access to a running
+process — a high-privilege operation. Post-mortem capture is
+machine-scoped because it serves operators diagnosing infrastructure
+failures, and the config room audience already controls the sandbox's
+credentials and configuration.
+
 ---
 
 ## Observation Protocol

@@ -36,6 +36,7 @@ func run() error {
 		machineName   string
 		principalName string
 		serverName    string
+		fleetRoom     string
 		runDir        string
 		stateDir      string
 		showVersion   bool
@@ -45,6 +46,7 @@ func run() error {
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&principalName, "principal-name", "", "service principal localpart (e.g., service/fleet/prod) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flag.StringVar(&fleetRoom, "fleet-room", "", "fleet room ID (e.g., !abc:server) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets")
 	flag.StringVar(&stateDir, "state-dir", "", "directory containing session.json (required)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -71,6 +73,10 @@ func run() error {
 
 	if stateDir == "" {
 		return fmt.Errorf("--state-dir is required")
+	}
+
+	if fleetRoom == "" {
+		return fmt.Errorf("--fleet-room is required")
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -109,9 +115,9 @@ func run() error {
 		return fmt.Errorf("resolving system room: %w", err)
 	}
 
-	fleetRoomID, err := resolveFleetRoom(ctx, session, serverName)
-	if err != nil {
-		return fmt.Errorf("resolving fleet room: %w", err)
+	fleetRoomID := fleetRoom
+	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
+		return fmt.Errorf("joining fleet room %s: %w", fleetRoomID, err)
 	}
 
 	machineRoomID, err := resolveMachineRoom(ctx, session, serverName)
@@ -259,27 +265,13 @@ type FleetController struct {
 	// Populated from room aliases during initial sync.
 	configRooms map[string]string
 
-	// fleetRoomID is the resolved room ID for #bureau/fleet.
+	// fleetRoomID is the fleet room ID, received via --fleet-room.
 	fleetRoomID string
 
 	// machineRoomID is the resolved room ID for #bureau/machine.
 	machineRoomID string
 
 	logger *slog.Logger
-}
-
-// resolveFleetRoom resolves the #bureau/fleet room alias and joins it.
-// Returns the room ID.
-func resolveFleetRoom(ctx context.Context, session *messaging.Session, serverName string) (string, error) {
-	alias := principal.RoomAlias(schema.RoomAliasFleet, serverName)
-	roomID, err := session.ResolveAlias(ctx, alias)
-	if err != nil {
-		return "", fmt.Errorf("resolving fleet room alias %q: %w", alias, err)
-	}
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return "", fmt.Errorf("joining fleet room %s: %w", roomID, err)
-	}
-	return roomID, nil
 }
 
 // resolveMachineRoom resolves the #bureau/machine room alias and joins

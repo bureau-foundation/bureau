@@ -105,7 +105,13 @@ fleet controller is safe by default.
 
 ## Data Model
 
-Fleet management uses state events in the `#bureau/fleet` room.
+Fleet management uses state events in a fleet room. Each fleet room is
+identified by room ID and passed as an explicit parameter to every
+consumer (daemon, fleet controller, CLI). `bureau matrix setup` creates
+a default fleet room with the alias `#bureau/fleet` and writes the room
+ID to the credential file as `MATRIX_FLEET_ROOM`; additional fleet rooms
+can be created for separate scopes (prod vs sandbox, per-team, per-GPU
+class).
 
 ### Fleet Service Definition
 
@@ -115,7 +121,7 @@ says what should exist without specifying which machine.
 
 - **Event type:** `m.bureau.fleet_service`
 - **State key:** service localpart (e.g., `service/stt/whisper`)
-- **Room:** `#bureau/fleet`
+- **Room:** the fleet room
 
 A fleet service carries:
 
@@ -170,7 +176,7 @@ for machines whose lifecycle is managed.
 - **Event type:** `m.bureau.machine_definition`
 - **State key:** pool name or machine localpart (e.g.,
   `gpu-cloud-pool` or `machine/spare-workstation`)
-- **Room:** `#bureau/fleet`
+- **Room:** the fleet room
 
 A machine definition carries:
 
@@ -201,7 +207,7 @@ Global settings for a fleet controller instance.
 
 - **Event type:** `m.bureau.fleet_config`
 - **State key:** fleet controller localpart
-- **Room:** `#bureau/fleet`
+- **Room:** the fleet room
 
 Controls rebalancing policy (`auto` vs `alert`), pressure thresholds
 for CPU, memory, and GPU, sustained duration before acting, rebalancing
@@ -214,7 +220,7 @@ Used by the daemon watchdog protocol for critical service failover.
 
 - **Event type:** `m.bureau.ha_lease`
 - **State key:** service localpart
-- **Room:** `#bureau/fleet`
+- **Room:** the fleet room
 
 Records which machine holds the lease, when it expires, and when it
 was acquired. Daemons compete to claim expired leases for critical
@@ -273,7 +279,7 @@ The fleet controller maintains:
 
 | Room | What it reads |
 |------|--------------|
-| `#bureau/fleet` | Fleet service definitions, machine definitions, fleet config, HA leases |
+| Fleet room | Fleet service definitions, machine definitions, fleet config, HA leases |
 | `#bureau/machine` | Machine keys, info (labels, hardware), status heartbeats |
 | `#bureau/service` | Service registrations, service status metrics |
 | `#bureau/config/*` | Current PrincipalAssignment events (to track what is already placed) |
@@ -350,7 +356,7 @@ with no update), the fleet controller:
 2. For each fleet-managed service on that machine:
    - `failover: "migrate"` — run placement algorithm, place on a new
      machine.
-   - `failover: "alert"` — publish an alert event in `#bureau/fleet`
+   - `failover: "alert"` — publish an alert event in the fleet room
      and (if the ticket service is available) create a ticket.
    - `failover: "none"` — do nothing (service stays unplaced until the
      machine returns).
@@ -454,7 +460,7 @@ machine satisfies constraints:
         injects cloud credentials). The request includes boot image,
         startup script (which runs bureau-launcher), and instance
         configuration.
-      - **Manual:** publish a capacity request event in `#bureau/fleet`
+      - **Manual:** publish a capacity request event in the fleet room
         and optionally create a ticket. Wait for a human or sysadmin
         agent.
    c. Wait for the machine to register (heartbeat appears in
@@ -569,7 +575,7 @@ A fleet controller's config lists which other controllers may preempt
 its services (via `preemptible_by`). When the prod controller needs to
 place a service and the best machine is loaded with sandbox services:
 
-1. Prod controller publishes a preemption request in `#bureau/fleet`.
+1. Prod controller publishes a preemption request in the fleet room.
 2. Sandbox controller reads the request (via /sync).
 3. Sandbox controller identifies its lowest-priority service on the
    target machine.
@@ -598,7 +604,7 @@ service is restarted on another machine if its host goes down.
 
 ### The Daemon Watchdog Protocol
 
-Every daemon syncs `#bureau/fleet`. For each `ha_class: "critical"`
+Every daemon syncs the fleet room. For each `ha_class: "critical"`
 fleet service definition, the daemon:
 
 1. **Monitors the service's machine.** Watches the heartbeat of the
@@ -900,9 +906,9 @@ demand drops.
 
 - **[information-architecture.md](information-architecture.md)** —
   fleet service definitions and machine definitions are room-level
-  state in `#bureau/fleet`. Machine status heartbeats are room-level
+  state in the fleet room. Machine status heartbeats are room-level
   state in `#bureau/machine`. Placement decisions are logged as
-  timeline messages in `#bureau/fleet` for audit.
+  timeline messages in the fleet room for audit.
 
 - **[tickets.md](tickets.md)** — the fleet controller creates tickets
   for decisions requiring judgment. Ticket-driven workflow is the

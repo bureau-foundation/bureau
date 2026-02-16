@@ -360,6 +360,21 @@ func loadCredentials(t *testing.T) map[string]string {
 
 // --- Fleet Test Helpers ---
 
+// defaultFleetRoomID reads the fleet room ID from the credential file
+// written by bureau matrix setup in TestMain. This is the shared fleet
+// room created during homeserver bootstrap. Tests that need fleet
+// isolation (e.g., fleet controller tests) should create their own
+// private fleet room instead of calling this helper.
+func defaultFleetRoomID(t *testing.T) string {
+	t.Helper()
+	credentials := loadCredentials(t)
+	fleetRoomID := credentials["MATRIX_FLEET_ROOM"]
+	if fleetRoomID == "" {
+		t.Fatal("MATRIX_FLEET_ROOM missing from credential file")
+	}
+	return fleetRoomID
+}
+
 // resolvedBinary resolves a binary path from a Bazel environment variable.
 // Skips the test if the binary is not available (allows running the Matrix
 // setup tests without the launcher/daemon binaries).
@@ -592,8 +607,8 @@ func initTestGitRepo(t *testing.T, ctx context.Context, directory string) {
 type roomWatch struct {
 	session   *messaging.Session
 	roomID    string
-	nextBatch string             // sync token capturing the stream position at watch creation
-	pending   []messaging.Event  // events received from sync but not yet consumed by a Wait call
+	nextBatch string            // sync token capturing the stream position at watch creation
+	pending   []messaging.Event // events received from sync but not yet consumed by a Wait call
 }
 
 // watchRoom captures the current position in the Matrix sync stream. The

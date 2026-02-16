@@ -34,6 +34,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	defer admin.Close()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	fleetRoomID := defaultFleetRoomID(t)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/quickstart-test")
@@ -41,6 +42,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Publish the sysadmin-test template. The template is defined inline

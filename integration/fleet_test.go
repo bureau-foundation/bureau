@@ -26,11 +26,13 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	machine := newTestMachine(t, "machine/test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// startMachine already proved: key published, status heartbeat received,
@@ -115,11 +117,13 @@ func TestPrincipalAssignment(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	machine := newTestMachine(t, "machine/sandbox")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
@@ -153,11 +157,13 @@ func TestOperatorFlow(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	machine := newTestMachine(t, "machine/observe")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:        fleetRoomID,
 		ProxyBinary:        resolvedBinary(t, "PROXY_BINARY"),
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
@@ -342,11 +348,13 @@ func TestCredentialRotation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	machine := newTestMachine(t, "machine/rotate")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
@@ -416,6 +424,7 @@ func TestCrossMachineObservation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	ctx := t.Context()
 
@@ -430,12 +439,14 @@ func TestCrossMachineObservation(t *testing.T) {
 	startMachine(t, admin, provider, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:        fleetRoomID,
 		ProxyBinary:        resolvedBinary(t, "PROXY_BINARY"),
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
 	startMachine(t, admin, consumer, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 	})
 
 	// Deploy a principal on the provider with observation allowances
@@ -609,11 +620,13 @@ func TestConfigReconciliation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
 
 	machine := newTestMachine(t, "machine/reconcile")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 

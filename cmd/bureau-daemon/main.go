@@ -49,6 +49,7 @@ func run() error {
 		homeserverURL          string
 		machineName            string
 		serverName             string
+		fleetRoom              string
 		runDir                 string
 		stateDir               string
 		adminUser              string
@@ -63,6 +64,7 @@ func run() error {
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flag.StringVar(&fleetRoom, "fleet-room", "", "fleet room ID (e.g., !abc:server) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (must match the launcher's --run-dir)")
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory containing session.json from the launcher")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
@@ -84,6 +86,10 @@ func run() error {
 	}
 	if err := principal.ValidateLocalpart(machineName); err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
+	}
+
+	if fleetRoom == "" {
+		return fmt.Errorf("--fleet-room is required")
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -216,14 +222,10 @@ func run() error {
 		logger.Warn("failed to join service room (requires admin invitation)",
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
-	fleetRoomAlias := principal.RoomAlias(schema.RoomAliasFleet, serverName)
-	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
-	if err != nil {
-		return fmt.Errorf("resolving fleet room alias %q: %w", fleetRoomAlias, err)
-	}
+	fleetRoomID := fleetRoom
 	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
 		logger.Warn("failed to join fleet room (requires admin invitation)",
-			"room_id", fleetRoomID, "alias", fleetRoomAlias, "error", err)
+			"room_id", fleetRoomID, "error", err)
 	}
 
 	logger.Info("global rooms ready",

@@ -266,7 +266,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			var chunk []messaging.RoomMemberEvent
 			for _, userID := range memberUserIDs {
 				chunk = append(chunk, messaging.RoomMemberEvent{
-					Type:     "m.room.member",
+					Type:     schema.MatrixEventTypeRoomMember,
 					StateKey: userID,
 					Content:  messaging.RoomMemberContent{Membership: "join"},
 				})
@@ -300,7 +300,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				for childID := range childIDs {
 					id := childID
 					events = append(events, messaging.Event{
-						Type: "m.space.child", StateKey: &id,
+						Type: schema.MatrixEventTypeSpaceChild, StateKey: &id,
 						Content: map[string]any{"via": []string{"local"}},
 					})
 				}
@@ -313,7 +313,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				for _, machineUser := range m.machineUsers {
 					user := machineUser
 					events = append(events, messaging.Event{
-						Type: "m.bureau.machine_key", StateKey: &user,
+						Type: schema.EventTypeMachineKey, StateKey: &user,
 						Content: map[string]any{"algorithm": "ed25519", "key": "test-key"},
 					})
 				}
@@ -344,21 +344,21 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, a
 	}
 
 	events := map[string]any{
-		"m.room.name":         100,
-		"m.room.topic":        100,
-		"m.room.power_levels": 100,
-		"m.space.child":       100,
+		schema.MatrixEventTypeRoomName:    100,
+		schema.MatrixEventTypeRoomTopic:   100,
+		schema.MatrixEventTypePowerLevels: 100,
+		schema.MatrixEventTypeSpaceChild:  100,
 	}
 
 	switch roomID {
 	case machineID:
-		events["m.bureau.machine_key"] = 0
-		events["m.bureau.machine_info"] = 0
-		events["m.bureau.machine_status"] = 0
-		events["m.bureau.webrtc_offer"] = 0
-		events["m.bureau.webrtc_answer"] = 0
+		events[schema.EventTypeMachineKey] = 0
+		events[schema.EventTypeMachineInfo] = 0
+		events[schema.EventTypeMachineStatus] = 0
+		events[schema.EventTypeWebRTCOffer] = 0
+		events[schema.EventTypeWebRTCAnswer] = 0
 	case serviceID:
-		events["m.bureau.service"] = 0
+		events[schema.EventTypeService] = 0
 	}
 
 	return map[string]any{
@@ -699,7 +699,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	spaceChildCount := 0
 	for _, event := range stateEvents {
-		if event.eventType == "m.space.child" {
+		if event.eventType == schema.MatrixEventTypeSpaceChild {
 			spaceChildCount++
 		}
 	}
@@ -773,7 +773,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	joinRulesFound := false
 	for _, event := range stateEvents {
-		if event.eventType == "m.room.join_rules" && event.roomID == "!system:local" {
+		if event.eventType == schema.MatrixEventTypeJoinRules && event.roomID == "!system:local" {
 			joinRulesFound = true
 		}
 	}
@@ -836,7 +836,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	powerLevelsFound := false
 	for _, event := range stateEvents {
-		if event.eventType == "m.room.power_levels" && event.roomID == "!system:local" {
+		if event.eventType == schema.MatrixEventTypePowerLevels && event.roomID == "!system:local" {
 			powerLevelsFound = true
 		}
 	}
@@ -1150,7 +1150,7 @@ func TestGetUserPowerLevel(t *testing.T) {
 
 func TestGetEventPowerLevel(t *testing.T) {
 	powerLevels := map[string]any{
-		"events":         map[string]any{"m.room.name": float64(100), "m.bureau.machine_key": float64(0)},
+		"events":         map[string]any{schema.MatrixEventTypeRoomName: float64(100), schema.EventTypeMachineKey: float64(0)},
 		"events_default": float64(50),
 	}
 
@@ -1158,8 +1158,8 @@ func TestGetEventPowerLevel(t *testing.T) {
 		eventType string
 		expected  float64
 	}{
-		{"m.room.name", 100},
-		{"m.bureau.machine_key", 0},
+		{schema.MatrixEventTypeRoomName, 100},
+		{schema.EventTypeMachineKey, 0},
 		{"m.unknown.type", 50},
 	}
 

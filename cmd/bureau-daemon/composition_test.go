@@ -1357,7 +1357,7 @@ func (m *mockMatrixState) handleGetRoomMembers(w http.ResponseWriter, roomID str
 	var chunk []map[string]any
 	for _, member := range members {
 		chunk = append(chunk, map[string]any{
-			"type":      schema.MatrixEventTypeMember,
+			"type":      schema.MatrixEventTypeRoomMember,
 			"state_key": member.UserID,
 			"sender":    member.UserID,
 			"content": map[string]any{

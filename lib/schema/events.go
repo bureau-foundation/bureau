@@ -255,16 +255,16 @@ const (
 	MatrixEventTypeMessage           = "m.room.message"
 	MatrixEventTypePowerLevels       = "m.room.power_levels"
 	MatrixEventTypeJoinRules         = "m.room.join_rules"
-	MatrixEventTypeName              = "m.room.name"
-	MatrixEventTypeTopic             = "m.room.topic"
+	MatrixEventTypeRoomName          = "m.room.name"
+	MatrixEventTypeRoomTopic         = "m.room.topic"
 	MatrixEventTypeSpaceChild        = "m.space.child"
 	MatrixEventTypeCanonicalAlias    = "m.room.canonical_alias"
 	MatrixEventTypeEncryption        = "m.room.encryption"
 	MatrixEventTypeServerACL         = "m.room.server_acl"
 	MatrixEventTypeTombstone         = "m.room.tombstone"
-	MatrixEventTypeAvatar            = "m.room.avatar"
+	MatrixEventTypeRoomAvatar        = "m.room.avatar"
 	MatrixEventTypeHistoryVisibility = "m.room.history_visibility"
-	MatrixEventTypeMember            = "m.room.member"
+	MatrixEventTypeRoomMember        = "m.room.member"
 )
 
 // Power level tiers for command authorization. The daemon checks the
@@ -1800,16 +1800,16 @@ type LayoutMemberFilter struct {
 // callers can safely merge their own entries.
 func AdminProtectedEvents() map[string]any {
 	return map[string]any{
-		MatrixEventTypeAvatar:            100,
+		MatrixEventTypeRoomAvatar:        100,
 		MatrixEventTypeCanonicalAlias:    100,
 		MatrixEventTypeEncryption:        100,
 		MatrixEventTypeHistoryVisibility: 100,
 		MatrixEventTypeJoinRules:         100,
-		MatrixEventTypeName:              100,
+		MatrixEventTypeRoomName:          100,
 		MatrixEventTypePowerLevels:       100,
 		MatrixEventTypeServerACL:         100,
 		MatrixEventTypeTombstone:         100,
-		MatrixEventTypeTopic:             100,
+		MatrixEventTypeRoomTopic:         100,
 		MatrixEventTypeSpaceChild:        100,
 	}
 }

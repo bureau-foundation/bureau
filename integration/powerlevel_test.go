@@ -267,7 +267,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			// regardless of state_default. Agents cannot rename, re-alias,
 			// or otherwise modify the room itself.
 			_, err := agentSession.SendStateEvent(ctx, workspaceRoom.RoomID,
-				schema.MatrixEventTypeName, "", map[string]any{
+				schema.MatrixEventTypeRoomName, "", map[string]any{
 					"name": "hijacked workspace name",
 				})
 			assertForbidden(t, err, "agent (PL 0) setting m.room.name (PL 100)")
@@ -304,7 +304,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 		t.Run("MemberCannotSetRoomName", func(t *testing.T) {
 			_, err := agentSession.SendStateEvent(ctx, machineRoomID,
-				schema.MatrixEventTypeName, "", map[string]any{
+				schema.MatrixEventTypeRoomName, "", map[string]any{
 					"name": "hijacked room name",
 				})
 			assertForbidden(t, err, "member (PL 0) setting m.room.name (PL 100)")
@@ -339,7 +339,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 		t.Run("MemberCannotSetRoomTopic", func(t *testing.T) {
 			_, err := agentSession.SendStateEvent(ctx, serviceRoomID,
-				schema.MatrixEventTypeTopic, "", map[string]any{
+				schema.MatrixEventTypeRoomTopic, "", map[string]any{
 					"topic": "hijacked topic",
 				})
 			assertForbidden(t, err, "member (PL 0) setting m.room.topic (PL 100)")

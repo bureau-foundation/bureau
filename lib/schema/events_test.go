@@ -395,15 +395,16 @@ func TestMatrixEventTypeConstants(t *testing.T) {
 		{"message", MatrixEventTypeMessage, "m.room.message"},
 		{"power_levels", MatrixEventTypePowerLevels, "m.room.power_levels"},
 		{"join_rules", MatrixEventTypeJoinRules, "m.room.join_rules"},
-		{"name", MatrixEventTypeName, "m.room.name"},
-		{"topic", MatrixEventTypeTopic, "m.room.topic"},
+		{"name", MatrixEventTypeRoomName, "m.room.name"},
+		{"topic", MatrixEventTypeRoomTopic, "m.room.topic"},
 		{"space_child", MatrixEventTypeSpaceChild, "m.space.child"},
 		{"canonical_alias", MatrixEventTypeCanonicalAlias, "m.room.canonical_alias"},
 		{"encryption", MatrixEventTypeEncryption, "m.room.encryption"},
 		{"server_acl", MatrixEventTypeServerACL, "m.room.server_acl"},
 		{"tombstone", MatrixEventTypeTombstone, "m.room.tombstone"},
-		{"avatar", MatrixEventTypeAvatar, "m.room.avatar"},
+		{"avatar", MatrixEventTypeRoomAvatar, "m.room.avatar"},
 		{"history_visibility", MatrixEventTypeHistoryVisibility, "m.room.history_visibility"},
+		{"member", MatrixEventTypeRoomMember, "m.room.member"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -743,16 +744,16 @@ func TestAdminProtectedEventsUsesConstants(t *testing.T) {
 
 	// Every entry should map to power level 100.
 	expectedTypes := []string{
-		MatrixEventTypeAvatar,
+		MatrixEventTypeRoomAvatar,
 		MatrixEventTypeCanonicalAlias,
 		MatrixEventTypeEncryption,
 		MatrixEventTypeHistoryVisibility,
 		MatrixEventTypeJoinRules,
-		MatrixEventTypeName,
+		MatrixEventTypeRoomName,
 		MatrixEventTypePowerLevels,
 		MatrixEventTypeServerACL,
 		MatrixEventTypeTombstone,
-		MatrixEventTypeTopic,
+		MatrixEventTypeRoomTopic,
 		MatrixEventTypeSpaceChild,
 	}
 	for _, eventType := range expectedTypes {

@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -104,4 +105,92 @@ func memoryUsedMB() int {
 		return 0
 	}
 	return int((totalBytes - freeBytes) / (1024 * 1024))
+}
+
+// cgroupCPUReading captures cumulative CPU time from a cgroup v2
+// cpu.stat file for delta computation across heartbeat intervals.
+type cgroupCPUReading struct {
+	usageUsec uint64
+}
+
+// readCgroupCPUStats reads usage_usec from a cgroup v2 cpu.stat file.
+// The cpu.stat format is a series of "key value" lines; this function
+// extracts the usage_usec field (total CPU time in microseconds).
+// Returns nil if the file doesn't exist or the usage_usec line is
+// absent or unparseable.
+func readCgroupCPUStats(cgroupPath string) *cgroupCPUReading {
+	data, err := os.ReadFile(filepath.Join(cgroupPath, "cpu.stat"))
+	if err != nil {
+		return nil
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && fields[0] == "usage_usec" {
+			value, err := strconv.ParseUint(fields[1], 10, 64)
+			if err != nil {
+				return nil
+			}
+			return &cgroupCPUReading{usageUsec: value}
+		}
+	}
+	return nil
+}
+
+// cgroupCPUPercent computes cgroup CPU utilization from two sequential
+// cpu.stat readings over the given interval. Returns the percentage
+// of one CPU core: a single-core fully utilized cgroup returns 100;
+// a cgroup using 2.5 cores returns 250. Returns 0 if either reading
+// is nil or the interval is zero.
+func cgroupCPUPercent(previous, current *cgroupCPUReading, intervalMicroseconds uint64) int {
+	if previous == nil || current == nil || intervalMicroseconds == 0 {
+		return 0
+	}
+	if current.usageUsec < previous.usageUsec {
+		return 0
+	}
+	deltaUsec := current.usageUsec - previous.usageUsec
+	return int(deltaUsec * 100 / intervalMicroseconds)
+}
+
+// readCgroupMemoryBytes reads memory.current from a cgroup v2 directory.
+// The file contains a single integer: the current memory usage in bytes.
+// Returns 0 if the file doesn't exist or can't be parsed.
+func readCgroupMemoryBytes(cgroupPath string) uint64 {
+	data, err := os.ReadFile(filepath.Join(cgroupPath, "memory.current"))
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// cgroupDefaultPath returns the default cgroup v2 path for a Bureau
+// sandbox. The launcher creates sandboxes in a dedicated cgroup
+// hierarchy under /sys/fs/cgroup/bureau/<localpart>/, with slashes
+// in the localpart replaced by dashes (e.g., "service/stt/whisper"
+// becomes "service-stt-whisper").
+func cgroupDefaultPath(localpart string) string {
+	return "/sys/fs/cgroup/bureau/" + strings.ReplaceAll(localpart, "/", "-")
+}
+
+// derivePrincipalStatus determines the lifecycle status of a principal
+// from its cgroup metrics.
+//   - "running" if CPU > 1% (actively working)
+//   - "idle" if CPU <= 1% and we have a previous reading (has been running
+//     long enough for a delta computation)
+//   - "starting" if no previous CPU reading exists (first heartbeat after
+//     sandbox creation, no baseline for delta)
+func derivePrincipalStatus(cpuPercent int, hasPreviousReading bool) string {
+	if !hasPreviousReading {
+		return "starting"
+	}
+	if cpuPercent > 1 {
+		return "running"
+	}
+	return "idle"
 }

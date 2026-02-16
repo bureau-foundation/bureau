@@ -255,6 +255,8 @@ func run() error {
 		daemonBinaryHash:       daemonBinaryHash,
 		daemonBinaryPath:       daemonBinaryPath,
 		stateDir:               stateDir,
+		previousCgroupCPU:      make(map[string]*cgroupCPUReading),
+		cgroupPathFunc:         cgroupDefaultPath,
 		failedExecPaths:        make(map[string]bool),
 		running:                make(map[string]bool),
 		exitWatchers:           make(map[string]context.CancelFunc),
@@ -558,6 +560,18 @@ type Daemon struct {
 	// delta computation. First heartbeat after startup reports 0%.
 	previousCPU *cpuReading
 
+	// previousCgroupCPU stores the last cgroup cpu.stat reading for each
+	// running principal. Keyed by localpart. Used for delta computation
+	// across heartbeat intervals. Accessed only by publishStatus in the
+	// statusLoop goroutine, so no mutex is needed (same pattern as
+	// previousCPU).
+	previousCgroupCPU map[string]*cgroupCPUReading
+
+	// cgroupPathFunc returns the cgroup v2 directory path for a
+	// principal's sandbox. Defaults to cgroupDefaultPath. Tests override
+	// this to use temp directories with synthetic cgroup files.
+	cgroupPathFunc func(localpart string) string
+
 	// gpuCollectors holds per-vendor GPU metric collectors. Each collector
 	// keeps render node file descriptors open for the daemon's lifetime
 	// to avoid per-heartbeat open/close overhead. Closed on shutdown.
@@ -744,8 +758,10 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 func (d *Daemon) publishStatus(ctx context.Context) {
 	d.reconcileMu.RLock()
 	runningCount := 0
-	for range d.running {
+	runningPrincipals := make([]string, 0, len(d.running))
+	for localpart := range d.running {
 		runningCount++
+		runningPrincipals = append(runningPrincipals, localpart)
 	}
 	var lastActivity string
 	if !d.lastActivityAt.IsZero() {
@@ -761,6 +777,9 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 	cpuUtilization := cpuPercent(d.previousCPU, currentCPU)
 	d.previousCPU = currentCPU
 
+	// Per-principal resource collection from cgroup v2.
+	principals := d.collectPrincipalResources(runningPrincipals)
+
 	status := schema.MachineStatus{
 		Principal: d.machineUserID,
 		Sandboxes: schema.SandboxCounts{
@@ -772,6 +791,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		UptimeSeconds:    uptimeSeconds(),
 		LastActivityAt:   lastActivity,
 		TransportAddress: transportAddress,
+		Principals:       principals,
 	}
 
 	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machineName, status)
@@ -780,6 +800,56 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		return
 	}
 	d.logger.Debug("published machine status", "running_sandboxes", runningCount)
+}
+
+// collectPrincipalResources reads cgroup v2 statistics for each running
+// principal and returns a map of resource usage. Called by publishStatus
+// in the status loop goroutine. The previousCgroupCPU map is accessed
+// without locking because publishStatus is the sole accessor (same
+// single-goroutine pattern as previousCPU).
+func (d *Daemon) collectPrincipalResources(principals []string) map[string]schema.PrincipalResourceUsage {
+	if len(principals) == 0 {
+		return nil
+	}
+
+	intervalMicroseconds := uint64(d.statusInterval / time.Microsecond)
+
+	result := make(map[string]schema.PrincipalResourceUsage, len(principals))
+	runningSet := make(map[string]bool, len(principals))
+
+	for _, localpart := range principals {
+		runningSet[localpart] = true
+		cgroupPath := d.cgroupPathFunc(localpart)
+
+		// CPU: read usage_usec and compute delta from previous reading.
+		currentCPU := readCgroupCPUStats(cgroupPath)
+		previousCPU := d.previousCgroupCPU[localpart]
+		cpuPercent := cgroupCPUPercent(previousCPU, currentCPU, intervalMicroseconds)
+		if currentCPU != nil {
+			d.previousCgroupCPU[localpart] = currentCPU
+		}
+
+		// Memory: read current usage.
+		memoryBytes := readCgroupMemoryBytes(cgroupPath)
+		memoryMB := int(memoryBytes / (1024 * 1024))
+
+		status := derivePrincipalStatus(cpuPercent, previousCPU != nil)
+
+		result[localpart] = schema.PrincipalResourceUsage{
+			CPUPercent: cpuPercent,
+			MemoryMB:   memoryMB,
+			Status:     status,
+		}
+	}
+
+	// Clean up stale readings for principals that are no longer running.
+	for localpart := range d.previousCgroupCPU {
+		if !runningSet[localpart] {
+			delete(d.previousCgroupCPU, localpart)
+		}
+	}
+
+	return result
 }
 
 // publishMachineInfo probes system hardware and publishes the static

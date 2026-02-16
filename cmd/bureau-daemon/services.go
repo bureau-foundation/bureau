@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -592,7 +593,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 
 	if binding.Principal == "" {
 		d.logger.Debug("artifact-cache binding has empty principal, clearing upstream")
-		d.stopTunnelSocket()
+		d.stopTunnel("upstream")
 		d.pushUpstreamConfig(ctx, "")
 		return
 	}
@@ -619,8 +620,8 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 
 	if cacheService.Machine == d.machineUserID {
 		// Local shared cache: derive socket path directly. Stop any
-		// existing tunnel socket from a previous remote cache.
-		d.stopTunnelSocket()
+		// existing tunnel from a previous remote cache.
+		d.stopTunnel("upstream")
 		socketPath := principal.RunDirSocketPath(d.runDir, cacheLocalpart)
 		d.logger.Info("discovered local shared cache",
 			"principal", binding.Principal,
@@ -648,7 +649,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		}
 
 		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "artifact-cache.sock")
-		if err := d.startTunnelSocket(cacheLocalpart, peerAddress, tunnelSocketPath); err != nil {
+		if err := d.startTunnel("upstream", cacheLocalpart, peerAddress, tunnelSocketPath); err != nil {
 			d.logger.Error("failed to start tunnel socket for shared cache",
 				"principal", binding.Principal,
 				"peer_address", peerAddress,
@@ -701,6 +702,41 @@ func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 		IssuedAt:       d.clock.Now().Unix(),
 	}
 
+	// For local upstream connections, mint a service token so the
+	// artifact service can authenticate against the upstream. For
+	// remote connections (via tunnel), leave nil — the tunnel
+	// handler on the remote machine injects a token signed by that
+	// machine's daemon.
+	if socketPath != "" && !d.isTunnelSocket(socketPath) {
+		tokenID, err := generateTokenID()
+		if err != nil {
+			d.logger.Error("failed to generate token ID for upstream token",
+				"error", err,
+			)
+			return
+		}
+
+		now := d.clock.Now()
+		token := &servicetoken.Token{
+			Subject:   d.machineName,
+			Machine:   d.machineName,
+			Audience:  "artifact",
+			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
+			ID:        tokenID,
+			IssuedAt:  now.Unix(),
+			ExpiresAt: now.Add(5 * time.Minute).Unix(),
+		}
+
+		tokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, token)
+		if err != nil {
+			d.logger.Error("failed to mint upstream service token",
+				"error", err,
+			)
+			return
+		}
+		config.ServiceToken = tokenBytes
+	}
+
 	signed, err := servicetoken.SignUpstreamConfig(d.tokenSigningPrivateKey, config)
 	if err != nil {
 		d.logger.Error("failed to sign upstream config",
@@ -726,6 +762,177 @@ func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 		"artifact_socket", artifactSocketPath,
 		"upstream_socket", socketPath,
 	)
+}
+
+// discoverPushTargets builds the push target directory for the local
+// artifact service. Each remote artifact service (content-addressed-store
+// capability, different machine) gets a tunnel socket for push-through
+// replication. Local artifact services on other instances get direct
+// socket paths with minted tokens.
+//
+// Tunnels are named "push/<machineLocalpart>" and stopped when the
+// remote service disappears from the directory.
+func (d *Daemon) discoverPushTargets(ctx context.Context) {
+	targets := make(map[string]servicetoken.PushTarget)
+
+	// Track which push tunnels should exist after this pass so we
+	// can stop tunnels for machines no longer in the directory.
+	activePushTunnels := make(map[string]bool)
+
+	for localpart, service := range d.services {
+		// Only consider artifact services.
+		hasCapability := false
+		for _, cap := range service.Capabilities {
+			if cap == "content-addressed-store" {
+				hasCapability = true
+				break
+			}
+		}
+		if !hasCapability {
+			continue
+		}
+
+		// Skip our own local artifact service — no point pushing
+		// to ourselves.
+		if service.Machine == d.machineUserID {
+			continue
+		}
+
+		// Extract the machine localpart from the machine user ID
+		// for use as the push target key.
+		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
+		if err != nil {
+			d.logger.Error("invalid machine in service entry",
+				"service", localpart,
+				"machine", service.Machine,
+				"error", err,
+			)
+			continue
+		}
+
+		peerAddress, ok := d.peerAddresses[service.Machine]
+		if !ok || peerAddress == "" {
+			d.logger.Debug("skipping push target: no transport address",
+				"service", localpart,
+				"machine", service.Machine,
+			)
+			continue
+		}
+
+		if d.transportDialer == nil {
+			d.logger.Debug("skipping push target: transport not configured",
+				"service", localpart,
+				"machine", service.Machine,
+			)
+			continue
+		}
+
+		// Create a tunnel for this remote artifact service.
+		tunnelName := "push/" + machineLocalpart
+		sanitized := strings.ReplaceAll(machineLocalpart, "/", "-")
+		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "push-"+sanitized+".sock")
+
+		if err := d.startTunnel(tunnelName, localpart, peerAddress, tunnelSocketPath); err != nil {
+			d.logger.Error("failed to start push tunnel",
+				"machine", machineLocalpart,
+				"peer_address", peerAddress,
+				"error", err,
+			)
+			continue
+		}
+
+		activePushTunnels[tunnelName] = true
+
+		// Remote targets: token is nil (tunnel handler injects it).
+		targets[machineLocalpart] = servicetoken.PushTarget{
+			SocketPath: tunnelSocketPath,
+		}
+
+		d.logger.Info("push target configured",
+			"machine", machineLocalpart,
+			"tunnel_socket", tunnelSocketPath,
+			"peer_address", peerAddress,
+		)
+	}
+
+	// Stop push tunnels for machines no longer in the directory.
+	for name := range d.tunnels {
+		if !strings.HasPrefix(name, "push/") {
+			continue
+		}
+		if !activePushTunnels[name] {
+			d.logger.Info("stopping stale push tunnel", "name", name)
+			d.stopTunnel(name)
+		}
+	}
+
+	// Push the configuration to the local artifact service.
+	d.pushPushTargetsConfig(ctx, targets)
+}
+
+// pushPushTargetsConfig signs a push targets configuration and pushes
+// it to the local artifact service via the set-push-targets action.
+func (d *Daemon) pushPushTargetsConfig(ctx context.Context, targets map[string]servicetoken.PushTarget) {
+	// Find the local artifact service socket.
+	var artifactSocketPath string
+	for localpart, service := range d.services {
+		if service.Machine != d.machineUserID {
+			continue
+		}
+		for _, cap := range service.Capabilities {
+			if cap == "content-addressed-store" {
+				artifactSocketPath = principal.RunDirSocketPath(d.runDir, localpart)
+				break
+			}
+		}
+		if artifactSocketPath != "" {
+			break
+		}
+	}
+	if artifactSocketPath == "" {
+		d.logger.Debug("no local artifact service found to push push-targets config to")
+		return
+	}
+
+	config := &servicetoken.PushTargetsConfig{
+		Targets:  targets,
+		IssuedAt: d.clock.Now().Unix(),
+	}
+
+	signed, err := servicetoken.SignPushTargetsConfig(d.tokenSigningPrivateKey, config)
+	if err != nil {
+		d.logger.Error("failed to sign push targets config", "error", err)
+		return
+	}
+
+	if err := artifactServiceCall(artifactSocketPath, map[string]any{
+		"action":        "set-push-targets",
+		"signed_config": signed,
+	}, nil); err != nil {
+		d.logger.Warn("failed to push push-targets config to artifact service",
+			"artifact_socket", artifactSocketPath,
+			"targets", len(targets),
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("pushed push-targets config to artifact service",
+		"artifact_socket", artifactSocketPath,
+		"targets", len(targets),
+	)
+}
+
+// isTunnelSocket returns true if the given socket path belongs to a
+// daemon-managed tunnel. Tunnel sockets live in the "tunnel"
+// subdirectory of the daemon's run directory.
+func (d *Daemon) isTunnelSocket(socketPath string) bool {
+	for _, tunnel := range d.tunnels {
+		if tunnel.socketPath == socketPath {
+			return true
+		}
+	}
+	return false
 }
 
 // artifactServiceCall sends a CBOR message to the artifact service

@@ -165,6 +165,7 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 		d.reconcileServices(ctx, added, removed, updated)
 		d.pushServiceDirectory(ctx)
 		d.discoverSharedCache(ctx)
+		d.discoverPushTargets(ctx)
 	}
 
 	return response.NextBatch, nil
@@ -305,6 +306,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.reconcileServices(ctx, added, removed, updated)
 			d.pushServiceDirectory(ctx)
 			d.discoverSharedCache(ctx)
+			d.discoverPushTargets(ctx)
 
 			// Post a message naming each changed service so that
 			// observers (tests, operators) can synchronize on specific

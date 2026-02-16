@@ -65,6 +65,14 @@ type StoreHeader struct {
 	CachePolicy string   `json:"cache_policy,omitempty"`
 	Visibility  string   `json:"visibility,omitempty"`
 	TTL         string   `json:"ttl,omitempty"`
+
+	// PushTargets is a list of machine localparts (e.g.,
+	// "machine/gpu-server-1") to push the artifact to after a
+	// successful local store. Each target must be known to the
+	// artifact service via the daemon-provisioned push targets
+	// directory. The store always succeeds locally; push failures
+	// are reported in StoreResponse.PushResults.
+	PushTargets []string `json:"push_targets,omitempty"`
 }
 
 // StoreResponse is the response after a store operation completes.
@@ -77,6 +85,25 @@ type StoreResponse struct {
 	Compression    string `json:"compression"`
 	BytesStored    int64  `json:"bytes_stored"`
 	BytesDeduped   int64  `json:"bytes_deduped"`
+
+	// PushResults reports the outcome of each push target
+	// specified in StoreHeader.PushTargets or triggered by the
+	// "replicate" cache policy. Nil when no pushes were attempted.
+	PushResults []PushResult `json:"push_results,omitempty"`
+}
+
+// PushResult reports the outcome of pushing an artifact to a single
+// target machine's artifact service.
+type PushResult struct {
+	// Target is the machine localpart that was pushed to, or
+	// "upstream" for replicate-policy pushes to the shared cache.
+	Target string `json:"target"`
+
+	// OK is true if the push succeeded.
+	OK bool `json:"ok"`
+
+	// Error describes why the push failed. Empty when OK is true.
+	Error string `json:"error,omitempty"`
 }
 
 // FetchRequest is the request sent by the client to download
@@ -381,6 +408,22 @@ func ReadRawMessage(r io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("reading message body: %w", err)
 	}
 	return data, nil
+}
+
+// WriteRawMessage writes pre-encoded CBOR bytes to w with the
+// standard 4-byte uint32 big-endian length prefix. This is the
+// write counterpart of ReadRawMessage — for forwarding or modifying
+// messages without an extra encode/decode round-trip.
+func WriteRawMessage(w io.Writer, data []byte) error {
+	var lengthPrefix [4]byte
+	binary.BigEndian.PutUint32(lengthPrefix[:], uint32(len(data)))
+	if _, err := w.Write(lengthPrefix[:]); err != nil {
+		return fmt.Errorf("writing message length: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("writing message body: %w", err)
+	}
+	return nil
 }
 
 // ErrorResponse is the error message sent when an action fails.

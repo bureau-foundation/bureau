@@ -27,6 +27,15 @@ type UpstreamConfig struct {
 	// IssuedAt is a Unix timestamp (seconds) of when the daemon
 	// created this configuration.
 	IssuedAt int64 `cbor:"2,keyasint"`
+
+	// ServiceToken is a daemon-minted service token that the
+	// artifact service includes when connecting to the upstream.
+	// For local upstream connections (same machine), this token is
+	// signed by the local daemon and verifiable by the upstream
+	// service. For remote upstream connections (via tunnel), this
+	// is nil — the tunnel handler on the remote machine injects a
+	// token signed by that machine's daemon.
+	ServiceToken []byte `cbor:"3,keyasint,omitempty"`
 }
 
 // Errors returned by VerifyUpstreamConfig.

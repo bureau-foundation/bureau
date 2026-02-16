@@ -138,13 +138,14 @@ func formatSize(bytes int64) string {
 type storeParams struct {
 	ArtifactConnection
 	cli.JSONOutput
-	ContentType string   `json:"content_type" flag:"content-type" desc:"MIME content type (guessed from filename if omitted)"`
-	Description string   `json:"description"  flag:"description"  desc:"human-readable description"`
-	Tag         string   `json:"tag"          flag:"tag"          desc:"tag the artifact after storing"`
-	CachePolicy string   `json:"cache_policy" flag:"cache-policy" desc:"cache policy (e.g. pin)"`
-	Visibility  string   `json:"visibility"   flag:"visibility"   desc:"visibility level"`
-	TTL         string   `json:"ttl"          flag:"ttl"          desc:"time-to-live (e.g. 72h, 7d)"`
-	Labels      []string `json:"labels"       flag:"label"        desc:"labels (repeatable)"`
+	ContentType string   `json:"content_type"  flag:"content-type" desc:"MIME content type (guessed from filename if omitted)"`
+	Description string   `json:"description"   flag:"description"  desc:"human-readable description"`
+	Tag         string   `json:"tag"           flag:"tag"          desc:"tag the artifact after storing"`
+	CachePolicy string   `json:"cache_policy"  flag:"cache-policy" desc:"cache policy (e.g. pin, replicate)"`
+	Visibility  string   `json:"visibility"    flag:"visibility"   desc:"visibility level"`
+	TTL         string   `json:"ttl"           flag:"ttl"          desc:"time-to-live (e.g. 72h, 7d)"`
+	Labels      []string `json:"labels"        flag:"label"        desc:"labels (repeatable)"`
+	PushTo      []string `json:"push_to"       flag:"push-to"      desc:"push artifact to machine(s) after storing (repeatable)"`
 }
 
 func storeCommand() *cli.Command {
@@ -174,6 +175,10 @@ unrecognized extensions.`,
 			{
 				Description: "Store with a tag and labels",
 				Command:     "bureau artifact store weights.pt --tag model/latest --label training --label v2",
+			},
+			{
+				Description: "Store and push to a remote machine",
+				Command:     "bureau artifact store model.bin --push-to machine/gpu-server-1",
 			},
 		},
 		Params:         func() any { return &params },
@@ -227,6 +232,7 @@ unrecognized extensions.`,
 				CachePolicy: params.CachePolicy,
 				Visibility:  params.Visibility,
 				TTL:         params.TTL,
+				PushTargets: params.PushTo,
 			}
 
 			// For small files, embed data in the header.
@@ -247,6 +253,16 @@ unrecognized extensions.`,
 
 			if done, err := params.EmitJSON(response); done {
 				return err
+			}
+
+			// Print push results to stderr so stdout remains
+			// just the ref (for composability with pipelines).
+			for _, result := range response.PushResults {
+				if result.OK {
+					fmt.Fprintf(os.Stderr, "pushed to %s\n", result.Target)
+				} else {
+					fmt.Fprintf(os.Stderr, "push to %s failed: %s\n", result.Target, result.Error)
+				}
 			}
 
 			fmt.Println(response.Ref)

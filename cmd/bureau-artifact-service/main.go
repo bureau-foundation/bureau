@@ -223,6 +223,7 @@ func run() error {
 		serviceRoomID:  serviceRoomID,
 		upstreamSocket: upstreamSocket,
 		startedAt:      clk.Now(),
+		pushTargets:    make(map[string]servicetoken.PushTarget),
 		rooms:          make(map[string]*artifactRoomState),
 		logger:         logger,
 	}
@@ -345,10 +346,28 @@ type ArtifactService struct {
 	// set-upstream action (daemon-signed reconfiguration).
 	upstreamSocket string
 
-	// upstreamMu protects reads and writes to upstreamSocket.
-	// Handlers read-lock when checking the upstream; the
-	// set-upstream action write-locks when changing it.
+	// upstreamToken is a daemon-minted service token included in
+	// requests to the upstream shared cache. For local upstream
+	// connections (same machine), the daemon mints this token with
+	// its signing key. For remote upstream connections (via tunnel),
+	// this is nil — the tunnel handler on the remote machine injects
+	// a token signed by that machine's daemon.
+	upstreamToken []byte
+
+	// upstreamMu protects reads and writes to upstreamSocket and
+	// upstreamToken. Handlers read-lock when checking the upstream;
+	// the set-upstream action write-locks when changing both fields.
 	upstreamMu sync.RWMutex
+
+	// pushTargets maps machine localparts to their push target
+	// configuration (socket path + optional token). Updated by the
+	// daemon via the set-push-targets action.
+	pushTargets map[string]servicetoken.PushTarget
+
+	// pushTargetsMu protects reads and writes to pushTargets.
+	// Handlers read-lock when resolving push targets during store;
+	// the set-push-targets action write-locks when replacing them.
+	pushTargetsMu sync.RWMutex
 
 	// writeMu serializes all write operations (Store.Write +
 	// MetadataStore.Write + RefIndex.Add as an atomic unit). The

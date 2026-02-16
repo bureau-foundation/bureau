@@ -18,9 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/transport"
 )
 
@@ -128,7 +131,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 // stopTransport shuts down the transport listener, relay socket, and
 // any active tunnel socket.
 func (d *Daemon) stopTransport() {
-	d.stopTunnelSocket()
+	d.stopAllTunnels()
 	if d.transportListener != nil {
 		d.transportListener.Close()
 	}
@@ -547,11 +550,29 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 		"socket", socketPath,
 	)
 
-	if err := netutil.BridgeConnections(transportConnection, serviceConnection); err != nil {
-		d.logger.Warn("tunnel: bridge error",
-			"localpart", serviceLocalpart,
-			"error", err,
-		)
+	// For artifact services, inject a daemon-minted token into the
+	// first message before forwarding. The remote client connects
+	// without a token (tunnel connections are daemon-to-daemon
+	// authenticated), so we mint one with the local daemon's signing
+	// key that the local artifact service can verify.
+	// Wrap the transport connection with the bufio.Reader to
+	// preserve any bytes the HTTP server read ahead during hijack.
+	transportReader := &bufferedConn{reader: transportBuffer.Reader, Conn: transportConnection}
+
+	if d.serviceHasCapability(serviceLocalpart, "content-addressed-store") {
+		if err := d.bridgeWithTokenInjection(transportReader, serviceConnection); err != nil {
+			d.logger.Warn("tunnel: bridge with token injection error",
+				"localpart", serviceLocalpart,
+				"error", err,
+			)
+		}
+	} else {
+		if err := netutil.BridgeConnections(transportReader, serviceConnection); err != nil {
+			d.logger.Warn("tunnel: bridge error",
+				"localpart", serviceLocalpart,
+				"error", err,
+			)
+		}
 	}
 
 	d.logger.Debug("tunnel: connection closed",
@@ -559,21 +580,111 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// startTunnelSocket creates a local Unix socket that bridges each accepted
-// connection to a remote service via the daemon-to-daemon transport. The
-// local artifact service connects to this socket as its "upstream"; each
-// connection is dialed through the transport to the remote peer's
-// /tunnel/<localpart> handler and bytes are bridged bidirectionally.
+// serviceHasCapability returns true if the named service (by localpart)
+// is in the service directory and has the specified capability string.
+func (d *Daemon) serviceHasCapability(localpart, capability string) bool {
+	service, exists := d.services[localpart]
+	if !exists {
+		return false
+	}
+	for _, cap := range service.Capabilities {
+		if cap == capability {
+			return true
+		}
+	}
+	return false
+}
+
+// bridgeWithTokenInjection reads the first length-prefixed CBOR
+// message from the transport side (the remote client's request),
+// injects a daemon-minted service token, writes the modified message
+// to the service socket, then bridges remaining bytes bidirectionally.
 //
-// Each artifact client connection (one per action: exists, fetch, etc.)
-// becomes one transport data channel. This maps naturally to the
-// transport's one-data-channel-per-dial model. No persistent tunnel, no
+// The artifact wire protocol uses 4-byte uint32 big-endian length
+// prefixes followed by CBOR message bytes. The first message is
+// always a request (store, fetch, exists, etc.) that includes a
+// "token" field for authentication. For tunnel connections, the
+// remote client sends no token — this function mints one with the
+// local daemon's signing key so the local artifact service can
+// verify the request.
+func (d *Daemon) bridgeWithTokenInjection(transportConn, serviceConn net.Conn) error {
+	// Read the first length-prefixed CBOR message from the remote client.
+	raw, err := artifact.ReadRawMessage(transportConn)
+	if err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("reading first message from transport: %w", err)
+	}
+
+	// Decode as a generic map to inject the token field.
+	var message map[string]any
+	if err := codec.Unmarshal(raw, &message); err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("decoding first message: %w", err)
+	}
+
+	// Mint a service token for the artifact audience.
+	tokenID, err := generateTokenID()
+	if err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("generating token ID for tunnel injection: %w", err)
+	}
+
+	now := d.clock.Now()
+	token := &servicetoken.Token{
+		Subject:   "tunnel",
+		Machine:   d.machineName,
+		Audience:  "artifact",
+		Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
+		ID:        tokenID,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(5 * time.Minute).Unix(),
+	}
+
+	tokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, token)
+	if err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("minting tunnel token: %w", err)
+	}
+
+	// Inject the token into the decoded message and re-encode.
+	message["token"] = tokenBytes
+	modifiedBytes, err := codec.Marshal(message)
+	if err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("re-encoding message with injected token: %w", err)
+	}
+
+	// Write the modified message to the local service socket.
+	if err := artifact.WriteRawMessage(serviceConn, modifiedBytes); err != nil {
+		serviceConn.Close()
+		return fmt.Errorf("writing modified message to service: %w", err)
+	}
+
+	// Bridge remaining bytes between transport and service.
+	return netutil.BridgeConnections(transportConn, serviceConn)
+}
+
+// tunnelInstance holds the state for a single outbound tunnel socket.
+// Each tunnel creates a local Unix socket that bridges accepted
+// connections to a remote service via the daemon-to-daemon transport.
+type tunnelInstance struct {
+	socketPath string
+	listener   net.Listener
+	cancel     context.CancelFunc
+}
+
+// startTunnel creates a named outbound tunnel socket that bridges each
+// accepted connection to a remote service via the daemon-to-daemon
+// transport. The tunnel is stored in d.tunnels[name], replacing any
+// existing tunnel with the same name.
+//
+// Each client connection (one per action: exists, fetch, etc.) becomes
+// one transport data channel. This maps naturally to the transport's
+// one-data-channel-per-dial model. No persistent tunnel, no
 // multiplexing.
-//
-// Stops any previously running tunnel socket before creating a new one.
-func (d *Daemon) startTunnelSocket(serviceLocalpart, peerAddress, tunnelSocketPath string) error {
-	// Stop any existing tunnel socket (idempotent).
-	d.stopTunnelSocket()
+func (d *Daemon) startTunnel(name, serviceLocalpart, peerAddress, tunnelSocketPath string) error {
+	// Stop any existing tunnel with this name (idempotent).
+	d.stopTunnel(name)
 
 	if err := os.MkdirAll(filepath.Dir(tunnelSocketPath), 0755); err != nil {
 		return fmt.Errorf("creating tunnel socket directory: %w", err)
@@ -594,13 +705,16 @@ func (d *Daemon) startTunnelSocket(serviceLocalpart, peerAddress, tunnelSocketPa
 	}
 
 	tunnelContext, tunnelCancel := context.WithCancel(context.Background())
-	d.tunnelListener = listener
-	d.tunnelSocketPath = tunnelSocketPath
-	d.tunnelCancel = tunnelCancel
+	d.tunnels[name] = &tunnelInstance{
+		socketPath: tunnelSocketPath,
+		listener:   listener,
+		cancel:     tunnelCancel,
+	}
 
 	go d.tunnelAcceptLoop(tunnelContext, listener, serviceLocalpart, peerAddress)
 
 	d.logger.Info("tunnel socket started",
+		"name", name,
 		"socket", tunnelSocketPath,
 		"remote_localpart", serviceLocalpart,
 		"peer_address", peerAddress,
@@ -709,20 +823,25 @@ func (d *Daemon) handleTunnelConnection(ctx context.Context, localConnection net
 	}
 }
 
-// stopTunnelSocket shuts down the tunnel accept loop and removes the
-// tunnel Unix socket. Safe to call when no tunnel is active.
-func (d *Daemon) stopTunnelSocket() {
-	if d.tunnelCancel != nil {
-		d.tunnelCancel()
-		d.tunnelCancel = nil
+// stopTunnel shuts down a named tunnel's accept loop and removes its
+// Unix socket. Safe to call when the named tunnel does not exist.
+func (d *Daemon) stopTunnel(name string) {
+	tunnel, exists := d.tunnels[name]
+	if !exists {
+		return
 	}
-	if d.tunnelListener != nil {
-		d.tunnelListener.Close()
-		d.tunnelListener = nil
-	}
-	if d.tunnelSocketPath != "" {
-		os.Remove(d.tunnelSocketPath)
-		d.tunnelSocketPath = ""
+
+	tunnel.cancel()
+	tunnel.listener.Close()
+	os.Remove(tunnel.socketPath)
+	delete(d.tunnels, name)
+}
+
+// stopAllTunnels shuts down all active tunnels. Called during
+// transport shutdown.
+func (d *Daemon) stopAllTunnels() {
+	for name := range d.tunnels {
+		d.stopTunnel(name)
 	}
 }
 

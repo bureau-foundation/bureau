@@ -273,6 +273,7 @@ func run() error {
 		proxyRoutes:            make(map[string]string),
 		peerAddresses:          make(map[string]string),
 		peerTransports:         make(map[string]http.RoundTripper),
+		tunnels:                make(map[string]*tunnelInstance),
 		adminSocketPathFunc: func(localpart string) string {
 			return principal.RunDirAdminSocketPath(runDir, localpart)
 		},
@@ -610,20 +611,13 @@ type Daemon struct {
 	// relayServer serves HTTP on the relay socket.
 	relayServer *http.Server
 
-	// tunnelSocketPath is the Unix socket where the tunnel listener
-	// accepts connections from the local artifact service and bridges
-	// them to a remote shared cache via the transport. Created by
-	// startTunnelSocket when a remote shared cache is discovered,
-	// removed by stopTunnelSocket on shutdown or cache change.
-	tunnelSocketPath string
-
-	// tunnelListener accepts connections on tunnelSocketPath. Each
-	// accepted connection is dialed through the transport to the
-	// remote peer's /tunnel/<localpart> handler and bridged.
-	tunnelListener net.Listener
-
-	// tunnelCancel stops the tunnel accept loop goroutine.
-	tunnelCancel context.CancelFunc
+	// tunnels tracks active outbound tunnel sockets, keyed by a
+	// logical name. Each tunnel creates a local Unix socket that
+	// bridges accepted connections to a remote service via the
+	// transport. Names follow a convention:
+	//   - "upstream": shared cache tunnel for artifact fallthrough
+	//   - "push/<machine-localpart>": push target tunnel
+	tunnels map[string]*tunnelInstance
 
 	// peerAddresses maps machine user IDs to their transport addresses,
 	// populated from MachineStatus state events in #bureau/machine.

@@ -194,6 +194,8 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 		as.handleCacheStatus(ctx, conn, raw)
 	case "set-upstream":
 		as.handleSetUpstream(conn, raw)
+	case "set-push-targets":
+		as.handleSetPushTargets(conn, raw)
 	case "revoke-tokens":
 		as.handleRevokeTokens(conn, raw)
 	case "status":
@@ -242,6 +244,52 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 		return
 	}
 
+	// Store the artifact locally. The write mutex serializes all
+	// writes to the store, metadata, ref index, and tag store.
+	storeResult, meta, err := as.storeLocally(ctx, conn, &header)
+	if err != nil {
+		// storeLocally already wrote the error response to conn.
+		return
+	}
+
+	// Resolve push targets and execute pushes outside the write
+	// lock. Push operations are read-only against the local store
+	// and can run concurrently with other writes.
+	targets := as.resolvePushTargets(&header)
+	var pushResults []artifact.PushResult
+	if len(targets) > 0 {
+		pushResults = as.executePushes(ctx, storeResult.FileHash, meta, targets)
+		for _, result := range pushResults {
+			if result.OK {
+				as.logger.Info("push succeeded", "target", result.Target)
+			} else {
+				as.logger.Warn("push failed", "target", result.Target, "error", result.Error)
+			}
+		}
+	}
+
+	// Send the store response.
+	response := &artifact.StoreResponse{
+		Ref:            storeResult.Ref,
+		Hash:           artifact.FormatHash(storeResult.FileHash),
+		Size:           storeResult.Size,
+		ChunkCount:     storeResult.ChunkCount,
+		ContainerCount: storeResult.ContainerCount,
+		Compression:    storeResult.Compression.String(),
+		BytesStored:    storeResult.CompressedSize,
+		PushResults:    pushResults,
+	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := artifact.WriteMessage(conn, response); err != nil {
+		as.logger.Debug("failed to write store response", "error", err)
+	}
+}
+
+// storeLocally writes the artifact to the local store, persists
+// metadata, updates indexes, and creates a tag if requested. Holds
+// the write mutex for the duration. On error, writes the error
+// response to conn and returns the error.
+func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, header *artifact.StoreHeader) (*artifact.StoreResult, *artifact.ArtifactMetadata, error) {
 	as.writeMu.Lock()
 	defer as.writeMu.Unlock()
 
@@ -261,7 +309,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 
 	if err != nil {
 		as.writeError(conn, fmt.Sprintf("store failed: %v", err))
-		return
+		return nil, nil, err
 	}
 
 	// Persist metadata.
@@ -283,7 +331,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 	}
 	if err := as.metadataStore.Write(meta); err != nil {
 		as.writeError(conn, fmt.Sprintf("persisting metadata: %v", err))
-		return
+		return nil, nil, err
 	}
 
 	// Update the ref index and artifact index.
@@ -297,7 +345,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 	if header.Tag != "" {
 		if err := as.tagStore.Set(header.Tag, storeResult.FileHash, nil, true, as.clock.Now()); err != nil {
 			as.writeError(conn, fmt.Sprintf("creating tag %q: %v", header.Tag, err))
-			return
+			return nil, nil, err
 		}
 		as.logger.Info("tag created via store",
 			"tag", header.Tag,
@@ -314,20 +362,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 		"content_type", header.ContentType,
 	)
 
-	// Send the store response.
-	response := &artifact.StoreResponse{
-		Ref:            storeResult.Ref,
-		Hash:           artifact.FormatHash(storeResult.FileHash),
-		Size:           storeResult.Size,
-		ChunkCount:     storeResult.ChunkCount,
-		ContainerCount: storeResult.ContainerCount,
-		Compression:    storeResult.Compression.String(),
-		BytesStored:    storeResult.CompressedSize,
-	}
-	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := artifact.WriteMessage(conn, response); err != nil {
-		as.logger.Debug("failed to write store response", "error", err)
-	}
+	return storeResult, meta, nil
 }
 
 // --- Fetch action ---
@@ -470,9 +505,9 @@ func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw 
 	if err != nil {
 		// Local miss. Check upstream if configured and ref is eligible.
 		if as.isUpstreamRef(request.Ref) {
-			upstreamSocket := as.getUpstreamSocket()
+			upstreamSocket, upstreamToken := as.getUpstream()
 			if upstreamSocket != "" {
-				upstream := artifact.NewClientFromToken(upstreamSocket, nil)
+				upstream := artifact.NewClientFromToken(upstreamSocket, upstreamToken)
 				upstreamResult, upstreamErr := upstream.Exists(ctx, request.Ref)
 				if upstreamErr == nil && upstreamResult.Exists {
 					as.writeResult(conn, *upstreamResult)
@@ -1170,6 +1205,7 @@ func (as *ArtifactService) handleSetUpstream(conn net.Conn, raw []byte) {
 	as.upstreamMu.Lock()
 	previousSocket := as.upstreamSocket
 	as.upstreamSocket = config.UpstreamSocket
+	as.upstreamToken = config.ServiceToken
 	as.upstreamMu.Unlock()
 
 	if config.UpstreamSocket == "" {
@@ -1193,6 +1229,236 @@ func (as *ArtifactService) getUpstreamSocket() string {
 	as.upstreamMu.RLock()
 	defer as.upstreamMu.RUnlock()
 	return as.upstreamSocket
+}
+
+// getUpstream returns the current upstream socket path and service
+// token atomically. Both values are set together by handleSetUpstream.
+// The token may be nil for remote upstream connections where the
+// tunnel handler injects authentication.
+func (as *ArtifactService) getUpstream() (string, []byte) {
+	as.upstreamMu.RLock()
+	defer as.upstreamMu.RUnlock()
+	return as.upstreamSocket, as.upstreamToken
+}
+
+// --- Push targets ---
+
+// handleSetPushTargets processes a signed push targets configuration
+// from the daemon. Verifies the signature and replaces the current
+// push target mapping. This is an unauthenticated action — the
+// signed configuration blob itself is the authentication.
+func (as *ArtifactService) handleSetPushTargets(conn net.Conn, raw []byte) {
+	if as.authConfig == nil {
+		as.writeError(conn, "set-push-targets requires auth config")
+		return
+	}
+
+	var envelope struct {
+		SignedConfig []byte `cbor:"signed_config"`
+	}
+	if err := codec.Unmarshal(raw, &envelope); err != nil {
+		as.writeError(conn, fmt.Sprintf("decoding set-push-targets envelope: %v", err))
+		return
+	}
+	if envelope.SignedConfig == nil {
+		as.writeError(conn, "missing required field: signed_config")
+		return
+	}
+
+	config, err := servicetoken.VerifyPushTargetsConfig(as.authConfig.PublicKey, envelope.SignedConfig)
+	if err != nil {
+		as.logger.Warn("push targets config verification failed", "error", err)
+		as.writeError(conn, "push targets config verification failed")
+		return
+	}
+
+	as.pushTargetsMu.Lock()
+	previous := as.pushTargets
+	as.pushTargets = config.Targets
+	if as.pushTargets == nil {
+		as.pushTargets = make(map[string]servicetoken.PushTarget)
+	}
+	as.pushTargetsMu.Unlock()
+
+	// Log the changes for operational visibility.
+	for machine := range config.Targets {
+		if _, existed := previous[machine]; !existed {
+			as.logger.Info("push target added", "machine", machine)
+		}
+	}
+	for machine := range previous {
+		if _, exists := config.Targets[machine]; !exists {
+			as.logger.Info("push target removed", "machine", machine)
+		}
+	}
+
+	as.logger.Info("push targets configured",
+		"targets", len(config.Targets),
+		"issued_at", config.IssuedAt,
+	)
+
+	as.writeResult(conn, map[string]bool{"ok": true})
+}
+
+// resolvedPushTarget holds the resolved socket, token, and name for
+// a single push destination.
+type resolvedPushTarget struct {
+	name       string
+	socketPath string
+	token      []byte
+}
+
+// resolvePushTargets determines which targets an artifact should be
+// pushed to based on the store request headers. Two sources of push
+// targets:
+//   - Explicit: header.PushTargets lists machine localparts
+//   - Implicit: header.CachePolicy == "replicate" triggers push to upstream
+//
+// Returns the resolved targets. Unknown machine localparts are
+// included with an empty socketPath so executePushes can report
+// the error in PushResult.
+func (as *ArtifactService) resolvePushTargets(header *artifact.StoreHeader) []resolvedPushTarget {
+	var targets []resolvedPushTarget
+
+	if len(header.PushTargets) > 0 {
+		as.pushTargetsMu.RLock()
+		for _, machine := range header.PushTargets {
+			target, exists := as.pushTargets[machine]
+			if exists {
+				targets = append(targets, resolvedPushTarget{
+					name:       machine,
+					socketPath: target.SocketPath,
+					token:      target.Token,
+				})
+			} else {
+				targets = append(targets, resolvedPushTarget{
+					name: machine,
+					// Empty socketPath signals an unknown target.
+				})
+			}
+		}
+		as.pushTargetsMu.RUnlock()
+	}
+
+	if header.CachePolicy == "replicate" {
+		upstreamSocket, upstreamToken := as.getUpstream()
+		if upstreamSocket != "" {
+			targets = append(targets, resolvedPushTarget{
+				name:       "upstream",
+				socketPath: upstreamSocket,
+				token:      upstreamToken,
+			})
+		}
+	}
+
+	return targets
+}
+
+// executePushes pushes an artifact to all resolved targets in
+// parallel. Returns a PushResult for each target.
+func (as *ArtifactService) executePushes(ctx context.Context, fileHash artifact.Hash, meta *artifact.ArtifactMetadata, targets []resolvedPushTarget) []artifact.PushResult {
+	results := make([]artifact.PushResult, len(targets))
+	var waitGroup sync.WaitGroup
+
+	for i, target := range targets {
+		waitGroup.Add(1)
+		go func(index int, pushTarget resolvedPushTarget) {
+			defer waitGroup.Done()
+			results[index] = as.pushToTarget(ctx, fileHash, meta, pushTarget)
+		}(i, target)
+	}
+
+	waitGroup.Wait()
+	return results
+}
+
+// pushToTarget pushes an artifact to a single target. If the target
+// has an empty socketPath (unknown machine), returns an error result
+// without attempting a connection. For known targets, reads the
+// artifact content and stores it on the remote service.
+func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.Hash, meta *artifact.ArtifactMetadata, target resolvedPushTarget) artifact.PushResult {
+	if target.socketPath == "" {
+		return artifact.PushResult{
+			Target: target.name,
+			OK:     false,
+			Error:  fmt.Sprintf("unknown push target %q", target.name),
+		}
+	}
+
+	client := artifact.NewClientFromToken(target.socketPath, target.token)
+
+	// Build the store header from the local artifact's metadata.
+	// No PushTargets (prevent recursive push) and no "replicate"
+	// cache policy (prevent recursive replication).
+	header := &artifact.StoreHeader{
+		ContentType: meta.ContentType,
+		Filename:    meta.Filename,
+		Description: meta.Description,
+		Labels:      meta.Labels,
+		Visibility:  meta.Visibility,
+		TTL:         meta.TTL,
+	}
+
+	record, err := as.store.Stat(fileHash)
+	if err != nil {
+		return artifact.PushResult{
+			Target: target.name,
+			OK:     false,
+			Error:  fmt.Sprintf("reading reconstruction record: %v", err),
+		}
+	}
+
+	if record.Size <= int64(artifact.SmallArtifactThreshold) {
+		// Small artifact: read content and embed in the header.
+		content, err := as.store.ReadContent(fileHash)
+		if err != nil {
+			return artifact.PushResult{
+				Target: target.name,
+				OK:     false,
+				Error:  fmt.Sprintf("reading content for push: %v", err),
+			}
+		}
+		header.Data = content
+
+		_, err = client.Store(ctx, header, nil)
+		if err != nil {
+			return artifact.PushResult{
+				Target: target.name,
+				OK:     false,
+				Error:  fmt.Sprintf("pushing artifact: %v", err),
+			}
+		}
+	} else {
+		// Large artifact: stream content via io.Pipe.
+		header.Size = record.Size
+
+		pipeReader, pipeWriter := io.Pipe()
+		go func() {
+			_, err := as.store.Read(fileHash, pipeWriter)
+			pipeWriter.CloseWithError(err)
+		}()
+
+		_, err = client.Store(ctx, header, pipeReader)
+		if err != nil {
+			pipeReader.Close()
+			return artifact.PushResult{
+				Target: target.name,
+				OK:     false,
+				Error:  fmt.Sprintf("pushing artifact: %v", err),
+			}
+		}
+	}
+
+	as.logger.Info("artifact pushed to target",
+		"target", target.name,
+		"ref", artifact.FormatRef(fileHash),
+		"size", record.Size,
+	)
+
+	return artifact.PushResult{
+		Target: target.name,
+		OK:     true,
+	}
 }
 
 // isUpstreamRef returns true if the ref format is eligible for upstream
@@ -1224,13 +1490,13 @@ func (as *ArtifactService) isUpstreamRef(ref string) bool {
 // the local store's normal CDC+compression pipeline. CDC is
 // deterministic, so identical containers are produced and deduplicated.
 func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn, ref string) (artifact.Hash, bool) {
-	upstreamSocket := as.getUpstreamSocket()
+	upstreamSocket, upstreamToken := as.getUpstream()
 	if upstreamSocket == "" {
 		as.writeError(conn, fmt.Sprintf("artifact %s not found", ref))
 		return artifact.Hash{}, false
 	}
 
-	upstream := artifact.NewClientFromToken(upstreamSocket, nil)
+	upstream := artifact.NewClientFromToken(upstreamSocket, upstreamToken)
 	result, err := upstream.Fetch(ctx, ref)
 	if err != nil {
 		as.writeError(conn, fmt.Sprintf("artifact %s not found locally; upstream fetch failed: %v", ref, err))

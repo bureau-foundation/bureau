@@ -2122,3 +2122,498 @@ func getStoredHash(t *testing.T, as *ArtifactService, content []byte) artifact.H
 	chunkHash := artifact.HashChunk(content)
 	return artifact.HashFile(chunkHash)
 }
+
+// --- Push target tests ---
+
+// startPushTargetService creates an ArtifactService listening on a Unix
+// socket, suitable as a push target. Unlike startUpstreamService, this
+// is named to clarify its role in push tests. Reuses the same pattern.
+func startPushTargetService(t *testing.T, socketPath string) *ArtifactService {
+	t.Helper()
+	return startUpstreamService(t, socketPath)
+}
+
+func TestSetPushTargets(t *testing.T) {
+	as, signingKey := testServiceWithAuth(t)
+
+	// Sign a push targets config with the same key the service
+	// verifies against.
+	config := &servicetoken.PushTargetsConfig{
+		Targets: map[string]servicetoken.PushTarget{
+			"machine/gpu-server-1": {
+				SocketPath: "/tmp/push-gpu.sock",
+			},
+			"machine/workstation": {
+				SocketPath: "/tmp/push-workstation.sock",
+				Token:      []byte("test-token"),
+			},
+		},
+		IssuedAt: testClockEpoch.Unix(),
+	}
+
+	signedConfig, err := servicetoken.SignPushTargetsConfig(signingKey, config)
+	if err != nil {
+		t.Fatalf("SignPushTargetsConfig: %v", err)
+	}
+
+	conn, wait := startHandler(t, as)
+
+	envelope := map[string]any{
+		"action":        "set-push-targets",
+		"signed_config": signedConfig,
+	}
+	if err := artifact.WriteMessage(conn, envelope); err != nil {
+		t.Fatal(err)
+	}
+
+	var response map[string]bool
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if !response["ok"] {
+		t.Error("expected ok response")
+	}
+
+	// Verify push targets were stored.
+	as.pushTargetsMu.RLock()
+	defer as.pushTargetsMu.RUnlock()
+
+	if len(as.pushTargets) != 2 {
+		t.Fatalf("pushTargets has %d entries, want 2", len(as.pushTargets))
+	}
+	gpu := as.pushTargets["machine/gpu-server-1"]
+	if gpu.SocketPath != "/tmp/push-gpu.sock" {
+		t.Errorf("gpu SocketPath = %q, want %q", gpu.SocketPath, "/tmp/push-gpu.sock")
+	}
+	if gpu.Token != nil {
+		t.Errorf("gpu Token = %v, want nil", gpu.Token)
+	}
+	workstation := as.pushTargets["machine/workstation"]
+	if workstation.SocketPath != "/tmp/push-workstation.sock" {
+		t.Errorf("workstation SocketPath = %q, want %q", workstation.SocketPath, "/tmp/push-workstation.sock")
+	}
+	if string(workstation.Token) != "test-token" {
+		t.Errorf("workstation Token = %q, want %q", string(workstation.Token), "test-token")
+	}
+}
+
+func TestStorePushToTarget(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	targetSocketPath := filepath.Join(socketDir, "target.sock")
+
+	// Start a target service that will receive the pushed artifact.
+	target := startPushTargetService(t, targetSocketPath)
+
+	// Create the local service and configure push targets.
+	local := testService(t)
+	local.pushTargets = map[string]servicetoken.PushTarget{
+		"machine/gpu-server-1": {
+			SocketPath: targetSocketPath,
+		},
+	}
+
+	// Store with push_targets set.
+	content := []byte("pushable artifact content")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		Description: "pushed artifact",
+		PushTargets: []string{"machine/gpu-server-1"},
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Verify local store succeeded.
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+
+	// Verify push results.
+	if len(response.PushResults) != 1 {
+		t.Fatalf("push_results has %d entries, want 1", len(response.PushResults))
+	}
+	if !response.PushResults[0].OK {
+		t.Errorf("push result not OK: %s", response.PushResults[0].Error)
+	}
+	if response.PushResults[0].Target != "machine/gpu-server-1" {
+		t.Errorf("push target = %q, want %q", response.PushResults[0].Target, "machine/gpu-server-1")
+	}
+
+	// Verify the artifact appears on the target service.
+	if target.refIndex.Len() != 1 {
+		t.Errorf("target refIndex.Len() = %d, want 1", target.refIndex.Len())
+	}
+
+	// Fetch from the target and verify content matches.
+	hash := getStoredHash(t, target, content)
+	targetContent, err := target.store.ReadContent(hash)
+	if err != nil {
+		t.Fatalf("reading content from target: %v", err)
+	}
+	if !bytes.Equal(targetContent, content) {
+		t.Error("target content does not match pushed content")
+	}
+}
+
+func TestStorePushToMultipleTargets(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	target1SocketPath := filepath.Join(socketDir, "target1.sock")
+	target2SocketPath := filepath.Join(socketDir, "target2.sock")
+
+	target1 := startPushTargetService(t, target1SocketPath)
+	target2 := startPushTargetService(t, target2SocketPath)
+
+	local := testService(t)
+	local.pushTargets = map[string]servicetoken.PushTarget{
+		"machine/gpu-1": {SocketPath: target1SocketPath},
+		"machine/gpu-2": {SocketPath: target2SocketPath},
+	}
+
+	content := []byte("multi-push artifact")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		PushTargets: []string{"machine/gpu-1", "machine/gpu-2"},
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Both pushes should succeed.
+	if len(response.PushResults) != 2 {
+		t.Fatalf("push_results has %d entries, want 2", len(response.PushResults))
+	}
+	for _, result := range response.PushResults {
+		if !result.OK {
+			t.Errorf("push to %q failed: %s", result.Target, result.Error)
+		}
+	}
+
+	// Verify both targets have the artifact.
+	if target1.refIndex.Len() != 1 {
+		t.Errorf("target1 refIndex.Len() = %d, want 1", target1.refIndex.Len())
+	}
+	if target2.refIndex.Len() != 1 {
+		t.Errorf("target2 refIndex.Len() = %d, want 1", target2.refIndex.Len())
+	}
+}
+
+func TestStorePushTargetUnreachable(t *testing.T) {
+	local := testService(t)
+	local.pushTargets = map[string]servicetoken.PushTarget{
+		"machine/reachable": {SocketPath: "/nonexistent/socket.sock"},
+	}
+
+	content := []byte("push to unreachable target")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		PushTargets: []string{"machine/reachable"},
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Local store should succeed.
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+
+	// Push should fail (socket doesn't exist).
+	if len(response.PushResults) != 1 {
+		t.Fatalf("push_results has %d entries, want 1", len(response.PushResults))
+	}
+	if response.PushResults[0].OK {
+		t.Error("expected push to fail for unreachable socket")
+	}
+	if response.PushResults[0].Error == "" {
+		t.Error("expected error message for unreachable push target")
+	}
+}
+
+func TestStorePushTargetUnknown(t *testing.T) {
+	local := testService(t)
+	// No push targets configured at all.
+
+	content := []byte("push to unknown target")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		PushTargets: []string{"machine/unknown"},
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Local store succeeds.
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+
+	// Push reports error for unknown target.
+	if len(response.PushResults) != 1 {
+		t.Fatalf("push_results has %d entries, want 1", len(response.PushResults))
+	}
+	if response.PushResults[0].OK {
+		t.Error("expected push to fail for unknown target")
+	}
+	if !strings.Contains(response.PushResults[0].Error, "unknown push target") {
+		t.Errorf("error = %q, want contains 'unknown push target'", response.PushResults[0].Error)
+	}
+}
+
+func TestStoreReplicatePolicy(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	upstreamSocketPath := filepath.Join(socketDir, "upstream.sock")
+
+	// Start an upstream service.
+	upstream := startUpstreamService(t, upstreamSocketPath)
+
+	local := testService(t)
+	local.upstreamSocket = upstreamSocketPath
+
+	// Store with cache_policy = "replicate". This should push to upstream.
+	content := []byte("replicated artifact content")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		CachePolicy: "replicate",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Local store should succeed.
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+
+	// Push to upstream should succeed.
+	if len(response.PushResults) != 1 {
+		t.Fatalf("push_results has %d entries, want 1", len(response.PushResults))
+	}
+	if !response.PushResults[0].OK {
+		t.Errorf("replicate push failed: %s", response.PushResults[0].Error)
+	}
+	if response.PushResults[0].Target != "upstream" {
+		t.Errorf("push target = %q, want %q", response.PushResults[0].Target, "upstream")
+	}
+
+	// Verify the artifact appears on the upstream.
+	if upstream.refIndex.Len() != 1 {
+		t.Errorf("upstream refIndex.Len() = %d, want 1", upstream.refIndex.Len())
+	}
+}
+
+func TestStoreReplicateNoUpstream(t *testing.T) {
+	local := testService(t)
+	// No upstream configured.
+
+	content := []byte("replicate without upstream")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+		CachePolicy: "replicate",
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Local store should succeed.
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+
+	// No push results since there's no upstream to replicate to.
+	if len(response.PushResults) != 0 {
+		t.Errorf("push_results has %d entries, want 0 (no upstream)", len(response.PushResults))
+	}
+}
+
+func TestStorePushLargeArtifact(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+	targetSocketPath := filepath.Join(socketDir, "target.sock")
+
+	target := startPushTargetService(t, targetSocketPath)
+
+	local := testService(t)
+	local.pushTargets = map[string]servicetoken.PushTarget{
+		"machine/gpu-server-1": {SocketPath: targetSocketPath},
+	}
+
+	// Content larger than SmallArtifactThreshold (256 KiB) to
+	// exercise the streaming push path via io.Pipe.
+	content := make([]byte, 300*1024)
+	rand.Read(content)
+
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "application/octet-stream",
+		Size:        int64(len(content)),
+		PushTargets: []string{"machine/gpu-server-1"},
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stream the content (large artifact, sized transfer).
+	if _, err := conn.Write(content); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	// Verify local store.
+	if response.Size != int64(len(content)) {
+		t.Errorf("size = %d, want %d", response.Size, len(content))
+	}
+
+	// Verify push succeeded.
+	if len(response.PushResults) != 1 {
+		t.Fatalf("push_results has %d entries, want 1", len(response.PushResults))
+	}
+	if !response.PushResults[0].OK {
+		t.Errorf("push failed: %s", response.PushResults[0].Error)
+	}
+
+	// Verify the artifact appears on the target. For large artifacts
+	// (which go through CDC), we verify via the ref index and fetch
+	// rather than computing the hash directly.
+	if target.refIndex.Len() != 1 {
+		t.Fatalf("target refIndex.Len() = %d, want 1", target.refIndex.Len())
+	}
+
+	// Fetch from the target via its handler to verify content matches.
+	targetConn, targetWait := startHandler(t, target)
+	fetchRequest := &artifact.FetchRequest{
+		Action: "fetch",
+		Ref:    response.Ref,
+	}
+	if err := artifact.WriteMessage(targetConn, fetchRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	var fetchResponse artifact.FetchResponse
+	if err := artifact.ReadMessage(targetConn, &fetchResponse); err != nil {
+		t.Fatal(err)
+	}
+
+	// Large artifact: read the binary stream following the header.
+	if fetchResponse.Data != nil {
+		// If the server embedded the data (shouldn't for 300 KiB but
+		// handle it gracefully).
+		if !bytes.Equal(fetchResponse.Data, content) {
+			t.Error("target embedded content does not match")
+		}
+	} else {
+		fetched := make([]byte, fetchResponse.Size)
+		if _, err := io.ReadFull(targetConn, fetched); err != nil {
+			t.Fatalf("reading stream from target: %v", err)
+		}
+		if !bytes.Equal(fetched, content) {
+			t.Error("target streamed content does not match")
+		}
+	}
+	targetWait()
+}
+
+func TestStoreNoPushTargets(t *testing.T) {
+	local := testService(t)
+
+	// Store without any push targets specified. Verify no push
+	// results in the response.
+	content := []byte("no push targets")
+	conn, wait := startHandler(t, local)
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: "text/plain",
+		Size:        int64(len(content)),
+		Data:        content,
+	}
+	if err := artifact.WriteMessage(conn, header); err != nil {
+		t.Fatal(err)
+	}
+
+	var response artifact.StoreResponse
+	if err := artifact.ReadMessage(conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+
+	if !strings.HasPrefix(response.Ref, "art-") {
+		t.Errorf("ref = %q, want art- prefix", response.Ref)
+	}
+	if len(response.PushResults) != 0 {
+		t.Errorf("push_results has %d entries, want 0", len(response.PushResults))
+	}
+}

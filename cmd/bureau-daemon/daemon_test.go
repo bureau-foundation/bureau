@@ -57,6 +57,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		peerAddresses:         make(map[string]string),
 		peerTransports:        make(map[string]http.RoundTripper),
 		layoutWatchers:        make(map[string]*layoutWatcher),
+		tunnels:               make(map[string]*tunnelInstance),
 	}
 	return daemon, fakeClock
 }

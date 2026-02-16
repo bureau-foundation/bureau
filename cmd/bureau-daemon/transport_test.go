@@ -618,10 +618,10 @@ func TestTransportTunnel(t *testing.T) {
 
 	// 4. Start the tunnel socket.
 	tunnelSocketPath := filepath.Join(socketDir, "tunnel.sock")
-	if err := consumerDaemon.startTunnelSocket(serviceLocalpart, peerAddress, tunnelSocketPath); err != nil {
-		t.Fatalf("startTunnelSocket: %v", err)
+	if err := consumerDaemon.startTunnel("upstream", serviceLocalpart, peerAddress, tunnelSocketPath); err != nil {
+		t.Fatalf("startTunnel: %v", err)
 	}
-	defer consumerDaemon.stopTunnelSocket()
+	defer consumerDaemon.stopTunnel("upstream")
 
 	// 5. Connect to the tunnel socket and verify echo.
 	tunnelConnection, err := net.DialTimeout("unix", tunnelSocketPath, 5*time.Second)
@@ -738,11 +738,243 @@ func TestTransportTunnel_ServiceNotFound(t *testing.T) {
 	}
 }
 
-func TestStopTunnelSocket_Idempotent(t *testing.T) {
+func TestStopTunnel_Idempotent(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Calling stopTunnelSocket when no tunnel is active should not panic.
-	daemon.stopTunnelSocket()
-	daemon.stopTunnelSocket()
+	// Calling stopTunnel when no tunnel with that name exists should not panic.
+	daemon.stopTunnel("upstream")
+	daemon.stopTunnel("upstream")
+}
+
+func TestMultipleTunnels(t *testing.T) {
+	// Start two named tunnels pointing at the same echo service.
+	// Verify they operate independently and can be stopped separately.
+
+	socketDir := testutil.SocketDir(t)
+
+	// Set up an echo service.
+	serviceLocalpart := "service/artifact/main"
+	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	serviceListener, err := net.Listen("unix", serviceSocketViaRunDir)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer serviceListener.Close()
+
+	go func() {
+		for {
+			conn, err := serviceListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(connection net.Conn) {
+				defer connection.Close()
+				io.Copy(connection, connection)
+			}(conn)
+		}
+	}()
+
+	// Start a transport server (provider side).
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	inboundMux := http.NewServeMux()
+	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
+
+	transportListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transportListener.Close()
+
+	transportServer := &http.Server{Handler: inboundMux}
+	go transportServer.Serve(transportListener)
+	defer transportServer.Close()
+
+	peerAddress := transportListener.Addr().String()
+
+	// Consumer daemon with two named tunnels.
+	consumerDaemon, _ := newTestDaemon(t)
+	consumerDaemon.runDir = socketDir
+	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	consumerDaemon.transportDialer = &testTCPDialer{}
+
+	tunnel1Path := filepath.Join(socketDir, "tunnel1.sock")
+	tunnel2Path := filepath.Join(socketDir, "tunnel2.sock")
+
+	if err := consumerDaemon.startTunnel("push/machine-a", serviceLocalpart, peerAddress, tunnel1Path); err != nil {
+		t.Fatalf("startTunnel push/machine-a: %v", err)
+	}
+	if err := consumerDaemon.startTunnel("push/machine-b", serviceLocalpart, peerAddress, tunnel2Path); err != nil {
+		t.Fatalf("startTunnel push/machine-b: %v", err)
+	}
+
+	// Verify both tunnels exist.
+	if len(consumerDaemon.tunnels) != 2 {
+		t.Fatalf("tunnels count = %d, want 2", len(consumerDaemon.tunnels))
+	}
+
+	// Test tunnel 1.
+	conn1, err := net.DialTimeout("unix", tunnel1Path, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel 1: %v", err)
+	}
+	defer conn1.Close()
+
+	message1 := []byte("tunnel one message")
+	if _, err := conn1.Write(message1); err != nil {
+		t.Fatalf("write to tunnel 1: %v", err)
+	}
+	echo1 := make([]byte, len(message1))
+	conn1.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+	if _, err := io.ReadFull(conn1, echo1); err != nil {
+		t.Fatalf("read from tunnel 1: %v", err)
+	}
+	if string(echo1) != string(message1) {
+		t.Errorf("tunnel 1 echo = %q, want %q", string(echo1), string(message1))
+	}
+	conn1.Close()
+
+	// Test tunnel 2.
+	conn2, err := net.DialTimeout("unix", tunnel2Path, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel 2: %v", err)
+	}
+	defer conn2.Close()
+
+	message2 := []byte("tunnel two message")
+	if _, err := conn2.Write(message2); err != nil {
+		t.Fatalf("write to tunnel 2: %v", err)
+	}
+	echo2 := make([]byte, len(message2))
+	conn2.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+	if _, err := io.ReadFull(conn2, echo2); err != nil {
+		t.Fatalf("read from tunnel 2: %v", err)
+	}
+	if string(echo2) != string(message2) {
+		t.Errorf("tunnel 2 echo = %q, want %q", string(echo2), string(message2))
+	}
+	conn2.Close()
+
+	// Stop tunnel 1, verify tunnel 2 still works.
+	consumerDaemon.stopTunnel("push/machine-a")
+	if len(consumerDaemon.tunnels) != 1 {
+		t.Errorf("tunnels after stop one = %d, want 1", len(consumerDaemon.tunnels))
+	}
+
+	conn3, err := net.DialTimeout("unix", tunnel2Path, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel 2 after stopping tunnel 1: %v", err)
+	}
+	defer conn3.Close()
+
+	message3 := []byte("still working")
+	if _, err := conn3.Write(message3); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	echo3 := make([]byte, len(message3))
+	conn3.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+	if _, err := io.ReadFull(conn3, echo3); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(echo3) != string(message3) {
+		t.Errorf("echo = %q, want %q", string(echo3), string(message3))
+	}
+	conn3.Close()
+
+	// Stop tunnel 2.
+	consumerDaemon.stopTunnel("push/machine-b")
+	if len(consumerDaemon.tunnels) != 0 {
+		t.Errorf("tunnels after stopping all = %d, want 0", len(consumerDaemon.tunnels))
+	}
+}
+
+func TestStopAllTunnels(t *testing.T) {
+	socketDir := testutil.SocketDir(t)
+
+	// Set up an echo service.
+	serviceLocalpart := "service/artifact/main"
+	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	serviceListener, err := net.Listen("unix", serviceSocketViaRunDir)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer serviceListener.Close()
+
+	go func() {
+		for {
+			conn, err := serviceListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(connection net.Conn) {
+				defer connection.Close()
+				io.Copy(connection, connection)
+			}(conn)
+		}
+	}()
+
+	// Transport server.
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	inboundMux := http.NewServeMux()
+	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
+
+	transportListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transportListener.Close()
+
+	transportServer := &http.Server{Handler: inboundMux}
+	go transportServer.Serve(transportListener)
+	defer transportServer.Close()
+
+	peerAddress := transportListener.Addr().String()
+
+	// Consumer with three tunnels.
+	consumerDaemon, _ := newTestDaemon(t)
+	consumerDaemon.runDir = socketDir
+	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	consumerDaemon.transportDialer = &testTCPDialer{}
+
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("push/machine-%d", i)
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("tunnel-%d.sock", i))
+		if err := consumerDaemon.startTunnel(name, serviceLocalpart, peerAddress, socketPath); err != nil {
+			t.Fatalf("startTunnel %s: %v", name, err)
+		}
+	}
+
+	if len(consumerDaemon.tunnels) != 3 {
+		t.Fatalf("tunnels = %d, want 3", len(consumerDaemon.tunnels))
+	}
+
+	consumerDaemon.stopAllTunnels()
+
+	if len(consumerDaemon.tunnels) != 0 {
+		t.Errorf("tunnels after stopAllTunnels = %d, want 0", len(consumerDaemon.tunnels))
+	}
+
+	// Verify tunnel sockets are no longer accepting connections.
+	for i := 0; i < 3; i++ {
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("tunnel-%d.sock", i))
+		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			t.Errorf("tunnel %d socket still accepting connections after stopAllTunnels", i)
+		}
+	}
 }

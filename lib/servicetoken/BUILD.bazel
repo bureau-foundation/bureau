@@ -9,6 +9,7 @@ go_library(
         "blacklist.go",
         "doc.go",
         "keypair.go",
+        "push_targets.go",
         "revocation.go",
         "token.go",
         "upstream.go",
@@ -26,6 +27,7 @@ go_test(
     srcs = [
         "blacklist_test.go",
         "keypair_test.go",
+        "push_targets_test.go",
         "revocation_test.go",
         "token_test.go",
         "upstream_test.go",

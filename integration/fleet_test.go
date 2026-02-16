@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
@@ -175,7 +174,7 @@ func TestOperatorFlow(t *testing.T) {
 	})
 
 	// Wait for the observe socket to be ready (separate from proxy sockets).
-	waitForFile(t, machine.ObserveSocket, 5*time.Second)
+	waitForFile(t, machine.ObserveSocket)
 
 	// Get the admin's access token for observe socket authentication.
 	credentials := loadCredentials(t)
@@ -478,7 +477,7 @@ func TestCrossMachineObservation(t *testing.T) {
 	}
 
 	// Wait for the observe socket on the consumer machine.
-	waitForFile(t, consumer.ObserveSocket, 5*time.Second)
+	waitForFile(t, consumer.ObserveSocket)
 
 	// Get admin credentials for observe socket authentication.
 	credentials := loadCredentials(t)
@@ -637,7 +636,7 @@ func TestConfigReconciliation(t *testing.T) {
 		pushMachineConfig(t, admin, machine, deploymentConfig{
 			Principals: []principalSpec{{Account: alpha}},
 		})
-		waitForFile(t, alphaSocket, 15*time.Second)
+		waitForFile(t, alphaSocket)
 
 		alphaClient := proxyHTTPClient(alphaSocket)
 		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID {
@@ -658,7 +657,7 @@ func TestConfigReconciliation(t *testing.T) {
 				{Account: beta},
 			},
 		})
-		waitForFile(t, betaSocket, 15*time.Second)
+		waitForFile(t, betaSocket)
 
 		// Beta should now be reachable with the correct identity.
 		betaClient := proxyHTTPClient(betaSocket)
@@ -681,7 +680,7 @@ func TestConfigReconciliation(t *testing.T) {
 
 		// Alpha's proxy should be torn down: launcher sends SIGTERM, proxy
 		// cleans up and removes its socket.
-		waitForFileGone(t, alphaSocket, 15*time.Second)
+		waitForFileGone(t, alphaSocket)
 
 		// Beta should still be running and unaffected.
 		betaClient := proxyHTTPClient(betaSocket)
@@ -694,7 +693,7 @@ func TestConfigReconciliation(t *testing.T) {
 	t.Run("RemoveAllPrincipals", func(t *testing.T) {
 		pushMachineConfig(t, admin, machine, deploymentConfig{})
 
-		waitForFileGone(t, betaSocket, 15*time.Second)
+		waitForFileGone(t, betaSocket)
 
 		// Verify MachineStatus reflects zero running sandboxes.
 		zeroWatch := watchRoom(t, admin, machine.MachineRoomID)

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -177,7 +176,7 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		"--state-dir", ticketStateDir,
 	)
 
-	waitForFile(t, ticketSocketPath, 15*time.Second)
+	waitForFile(t, ticketSocketPath)
 
 	// --- Phase 2: Daemon service discovery ---
 	//
@@ -292,7 +291,7 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	// mount from the project room's m.bureau.room_service binding,
 	// minted a service token, and the launcher created the sandbox.
 	consumerSocketPath := machine.PrincipalSocketPath(consumer.Localpart)
-	waitForFile(t, consumerSocketPath, 30*time.Second)
+	waitForFile(t, consumerSocketPath)
 	t.Logf("consumer sandbox created: proxy socket at %s", consumerSocketPath)
 
 	// --- Phase 4: Authenticated ticket creation using daemon-minted token ---

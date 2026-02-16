@@ -105,7 +105,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		"--cache-root", cacheRoot,
 		"--proxy-binary", proxyBinary,
 	)
-	waitForFile(t, launcherSocket, 15*time.Second)
+	waitForFile(t, launcherSocket)
 
 	// Start the first daemon as a manageable process (not via startProcess,
 	// since we need to kill it mid-test without subtest cleanup).
@@ -202,7 +202,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Wait for the proxy socket — proves the sandbox was created.
 	proxySocket := principal.RunDirSocketPath(runDir, principalLocalpart)
-	waitForFile(t, proxySocket, 15*time.Second)
+	waitForFile(t, proxySocket)
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before daemon restart.

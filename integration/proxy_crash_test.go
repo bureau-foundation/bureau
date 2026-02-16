@@ -107,7 +107,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--cache-root", cacheRoot,
 		"--proxy-binary", proxyBinary,
 	)
-	waitForFile(t, launcherSocket, 15*time.Second)
+	waitForFile(t, launcherSocket)
 
 	statusWatch := watchRoom(t, admin, machineRoomID)
 
@@ -211,7 +211,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 
 	// Wait for the proxy socket — proves the sandbox was created.
 	proxySocket := principal.RunDirSocketPath(runDir, principalLocalpart)
-	waitForFile(t, proxySocket, 15*time.Second)
+	waitForFile(t, proxySocket)
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before the crash.

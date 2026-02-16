@@ -428,24 +428,23 @@ func tempSocketDir(t *testing.T) string {
 }
 
 // waitForFile blocks until a file exists on disk. Uses inotify for
-// deterministic, event-driven detection instead of polling.
-func waitForFile(t *testing.T, path string, timeout time.Duration) {
+// deterministic, event-driven detection — zero CPU cost while waiting.
+// Bounded by t.Context() (the test's own deadline), not an arbitrary
+// intermediate timeout.
+func waitForFile(t *testing.T, path string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), timeout)
-	defer cancel()
-	if err := inotifyWaitCreate(ctx, path); err != nil {
-		t.Fatalf("waiting for file %s (timeout %s): %v", path, timeout, err)
+	if err := inotifyWaitCreate(t.Context(), path); err != nil {
+		t.Fatalf("waiting for file %s: %v", path, err)
 	}
 }
 
 // waitForFileGone blocks until a file no longer exists on disk. Uses
-// inotify for deterministic, event-driven detection instead of polling.
-func waitForFileGone(t *testing.T, path string, timeout time.Duration) {
+// inotify for deterministic, event-driven detection — zero CPU cost
+// while waiting. Bounded by t.Context().
+func waitForFileGone(t *testing.T, path string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), timeout)
-	defer cancel()
-	if err := inotifyWaitDelete(ctx, path); err != nil {
-		t.Fatalf("waiting for file to disappear %s (timeout %s): %v", path, timeout, err)
+	if err := inotifyWaitDelete(t.Context(), path); err != nil {
+		t.Fatalf("waiting for file to disappear %s: %v", path, err)
 	}
 }
 
@@ -593,7 +592,8 @@ func initTestGitRepo(t *testing.T, ctx context.Context, directory string) {
 type roomWatch struct {
 	session   *messaging.Session
 	roomID    string
-	nextBatch string // sync token capturing the stream position at watch creation
+	nextBatch string             // sync token capturing the stream position at watch creation
+	pending   []messaging.Event  // events received from sync but not yet consumed by a Wait call
 }
 
 // watchRoom captures the current position in the Matrix sync stream. The
@@ -615,14 +615,29 @@ func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatc
 }
 
 // WaitForEvent blocks until an event matching the predicate arrives in the
-// watched room. Checks both State.Events (gap-fill state changes when the
-// timeline is limited) and Timeline.Events (all live events including state)
-// from each sync response. The description appears in the fatal message if
-// the test context expires.
+// watched room. Events are buffered: when a /sync response delivers multiple
+// events, all are stored in w.pending. The predicate scans pending events
+// before issuing a new /sync, so events are never dropped when multiple
+// matching events arrive in the same sync batch.
+//
+// The description appears in the fatal message if the test context expires.
 func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) bool, description string) messaging.Event {
 	t.Helper()
 	ctx := t.Context()
 	for {
+		// Scan pending events from previous sync responses before
+		// issuing a new /sync. This is critical for correctness: when
+		// a sync response contains multiple matching events (e.g., two
+		// command_result messages in the same batch), the first
+		// WaitForEvent call consumes one and the second call must find
+		// the other here without needing another round-trip.
+		for i, event := range w.pending {
+			if predicate(event) {
+				w.pending = append(w.pending[:i], w.pending[i+1:]...)
+				return event
+			}
+		}
+
 		response, err := w.session.Sync(ctx, messaging.SyncOptions{
 			Since:      w.nextBatch,
 			SetTimeout: true,
@@ -638,18 +653,8 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 		w.nextBatch = response.NextBatch
 
 		if joined, ok := response.Rooms.Join[w.roomID]; ok {
-			// State events may appear in state.events (gap-fill when
-			// timeline is limited) or timeline.events (live). Check both.
-			for _, event := range joined.State.Events {
-				if predicate(event) {
-					return event
-				}
-			}
-			for _, event := range joined.Timeline.Events {
-				if predicate(event) {
-					return event
-				}
-			}
+			w.pending = append(w.pending, joined.State.Events...)
+			w.pending = append(w.pending, joined.Timeline.Events...)
 		}
 	}
 }

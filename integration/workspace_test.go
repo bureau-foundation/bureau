@@ -144,7 +144,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 
 	// --- Phase 1: Setup starts, agent and teardown are deferred ---
 	t.Log("phase 1: verifying setup starts with pending workspace status")
-	waitForFile(t, setupSocket, 30*time.Second)
+	waitForFile(t, setupSocket)
 
 	// The agent should NOT have started because the workspace status is
 	// "pending", not "active". No sleep needed: reconcile() evaluates all
@@ -171,7 +171,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 		t.Fatalf("publish active workspace state: %v", err)
 	}
 
-	waitForFile(t, agentSocket, 30*time.Second)
+	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
 
 	// Setup should still be running (its condition is nil — always true).
@@ -200,10 +200,10 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// Agent's condition (status == "active") is no longer satisfied, so
 	// the daemon should destroy its sandbox. Teardown's condition
 	// (status == "teardown") is now satisfied, so it should start.
-	waitForFileGone(t, agentSocket, 30*time.Second)
+	waitForFileGone(t, agentSocket)
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
-	waitForFile(t, teardownSocket, 30*time.Second)
+	waitForFile(t, teardownSocket)
 	t.Log("teardown proxy socket appeared after workspace entered teardown")
 
 	t.Log("workspace start condition lifecycle verified: pending → active → teardown drives principal lifecycle")
@@ -360,7 +360,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	// --- Phase 3: Verify agent started ---
 	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
-	waitForFile(t, agentSocket, 60*time.Second)
+	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
 
 	// --- Phase 4: Destroy workspace via CLI ---
@@ -372,7 +372,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	)
 
 	// Agent stops (condition "active" no longer matches "teardown").
-	waitForFileGone(t, agentSocket, 30*time.Second)
+	waitForFileGone(t, agentSocket)
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
 	// Teardown pipeline (dev-workspace-deinit) runs and publishes "archived".

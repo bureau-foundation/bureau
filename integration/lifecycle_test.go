@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -176,7 +175,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
 		)
-		waitForFile(t, launcherSocket, 15*time.Second)
+		waitForFile(t, launcherSocket)
 
 		statusWatch := watchRoom(t, admin, machineRoomID)
 
@@ -241,7 +240,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
 		)
-		waitForFile(t, launcherSocket, 15*time.Second)
+		waitForFile(t, launcherSocket)
 
 		statusWatch := watchRoom(t, admin, machineRoomID)
 
@@ -425,7 +424,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--cache-root", machine.cacheRoot,
 			"--proxy-binary", proxyBinary,
 		)
-		waitForFile(t, principal.LauncherSocketPath(machine.runDir), 15*time.Second)
+		waitForFile(t, principal.LauncherSocketPath(machine.runDir))
 
 		startProcess(t, machine.name+"-daemon", daemonBinary,
 			"--homeserver", testHomeserverURL,
@@ -588,8 +587,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	// --- Wait for both proxy sockets ---
 	proxySocketA := principal.RunDirSocketPath(machineA.runDir, principalALocalpart)
 	proxySocketB := principal.RunDirSocketPath(machineB.runDir, principalBLocalpart)
-	waitForFile(t, proxySocketA, 15*time.Second)
-	waitForFile(t, proxySocketB, 15*time.Second)
+	waitForFile(t, proxySocketA)
+	waitForFile(t, proxySocketB)
 	t.Log("both proxies spawned")
 
 	// Verify proxy identities.

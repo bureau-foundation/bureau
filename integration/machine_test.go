@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -179,7 +178,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	keyWatch := watchRoom(t, admin, machineRoomID)
 
 	startProcess(t, machine.Name+"-launcher", options.LauncherBinary, launcherArgs...)
-	waitForFile(t, machine.LauncherSocket, 15*time.Second)
+	waitForFile(t, machine.LauncherSocket)
 
 	// Retrieve the machine's public key from Matrix.
 	machineKeyJSON := keyWatch.WaitForStateEvent(t,
@@ -422,7 +421,7 @@ func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachi
 	proxySockets := make(map[string]string, len(config.Principals))
 	for _, spec := range config.Principals {
 		socketPath := machine.PrincipalSocketPath(spec.Account.Localpart)
-		waitForFile(t, socketPath, 15*time.Second)
+		waitForFile(t, socketPath)
 		proxySockets[spec.Account.Localpart] = socketPath
 	}
 

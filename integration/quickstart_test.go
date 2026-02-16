@@ -5,7 +5,6 @@ package integration_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -132,7 +131,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 
 	// Wait for the proxy socket to appear (proves sandbox creation worked).
 	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
-	waitForFile(t, proxySocketPath, 30*time.Second)
+	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
 	// Wait for "quickstart-test-ready" from the test agent. This proves:

@@ -6,7 +6,6 @@ package integration_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -124,7 +123,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 
 	// Wait for proxy socket (proves sandbox creation).
 	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
-	waitForFile(t, proxySocketPath, 30*time.Second)
+	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
 	// Wait for the agent's ready message containing the initial payload.

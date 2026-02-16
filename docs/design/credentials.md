@@ -173,6 +173,11 @@ This hierarchy means:
   credentials. The operator re-provisions affected principals on
   replacement hardware. The lost machine's Matrix account is
   deactivated to prevent stale state.
+- A compromised machine is revoked via `bureau machine revoke`, which
+  deactivates the account, tombstones the machine key and all
+  credential state events, kicks the machine from all rooms, and
+  publishes a fleet-wide revocation event. See the Attack Surface
+  Analysis section for the full defense sequence.
 
 ---
 
@@ -545,6 +550,14 @@ watches for principals being deactivated and cleans up the
 corresponding external identity and tokens. This ensures that
 deactivated principals leave no dangling access in external systems.
 
+**Emergency revocation** is triggered by `bureau machine revoke`,
+which publishes an `m.bureau.credential_revocation` event to
+`#bureau/machine`. Connectors watch for this event and revoke all
+external tokens associated with the affected principals. Unlike
+normal revocation (which handles one principal at a time), emergency
+revocation invalidates all principals on a compromised machine
+simultaneously.
+
 ### Signing Without the Operator's YubiKey
 
 Credential events published by connector services cannot carry the
@@ -761,6 +774,28 @@ to other principals via the scoped provisioning endpoint. They cannot
 access other connectors' credentials, the launcher's keyring, or
 other principals' non-connector credential bundles. The provisioning
 endpoint's key-name scoping prevents cross-contamination.
+
+**Compromised machine (detected by operator).** The operator runs
+`bureau machine revoke <machine>` which executes three defense layers:
+
+- **Layer 1 — Machine isolation (seconds):** The machine's Matrix
+  account is deactivated via admin API. The daemon detects the auth
+  failure (`M_UNKNOWN_TOKEN` from `/sync`), destroys all running
+  sandboxes via launcher IPC, and exits. No cooperation from the
+  compromised machine is needed — the homeserver enforces the
+  deactivation.
+- **Layer 2 — State cleanup (seconds):** Credential state events are
+  tombstoned (set to `{}`), machine key and status are cleared, and
+  the machine is kicked from all rooms. An
+  `m.bureau.credential_revocation` event is published to
+  `#bureau/machine` for fleet-wide notification.
+- **Layer 3 — Token expiry (≤5 minutes):** Outstanding service tokens
+  expire via natural TTL. The daemon's emergency shutdown also pushes
+  revocation notices to reachable services for faster invalidation.
+
+The attacker retains whatever credentials were in sandbox memory at
+the time of compromise, but all Matrix-side state is invalidated and
+the machine can no longer authenticate to any Bureau service.
 
 ### What the System Does Not Protect Against
 

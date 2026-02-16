@@ -263,6 +263,7 @@ below).
 | `m.bureau.machine_key` | machine localpart | `#bureau/machine` | age public key for credential encryption |
 | `m.bureau.machine_info` | machine localpart | `#bureau/machine` | static hardware inventory (CPU, RAM, GPUs, board) |
 | `m.bureau.machine_status` | machine localpart | `#bureau/machine` | periodic heartbeat (CPU%, memory, GPU stats, uptime) |
+| `m.bureau.credential_revocation` | machine localpart | `#bureau/machine` | fleet-wide notification of emergency credential revocation |
 
 `machine_info` is published once at startup (or when hardware changes).
 `machine_status` is published periodically. Both use the machine

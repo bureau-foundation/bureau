@@ -757,6 +757,7 @@ fleet controller's unix socket.
 | `bureau machine label <machine> <k>=<v> ...` | Add or update labels |
 | `bureau machine wake <machine>` | Send wake signal (WoL magic packet or cloud provision) |
 | `bureau machine suspend <machine>` | Send suspend/deprovision signal |
+| `bureau machine revoke <machine> [flags]` | Emergency credential revocation: deactivate account, clear state, publish revocation event |
 
 ### Service Commands
 

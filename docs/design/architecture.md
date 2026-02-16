@@ -649,8 +649,25 @@ response, it reconciles desired state (Matrix) against actual state
 
 ### Shutdown
 
-If the machine account is deactivated, the daemon detects the auth
-failure, shuts down all sandboxes, cleans up local state, and exits.
+Normal shutdown is via SIGTERM or SIGINT — the daemon destroys all
+running sandboxes, publishes a final status update, and exits cleanly.
+
+**Emergency shutdown** triggers when the daemon detects that its Matrix
+account has been deactivated or its access tokens invalidated. The sync
+loop receives `M_UNKNOWN_TOKEN` from `/sync`, at which point the daemon:
+
+1. Logs the auth failure at ERROR level
+2. Acquires the reconciliation lock
+3. Destroys every running sandbox via launcher IPC (best-effort — IPC
+   failures are logged but don't stop the shutdown)
+4. Cancels the daemon's top-level context, unblocking the main run loop
+5. Exits
+
+This is Layer 1 of the emergency credential revocation defense (see
+credentials.md). No cooperation from the compromised machine is needed —
+deactivating its Matrix account is sufficient to trigger sandbox
+destruction and daemon exit within one sync cycle.
+
 All local state is ephemeral: sandbox rootfs is built from Nix,
 persistent data lives in Matrix, credentials are in-memory only. A
 machine can be wiped and nothing is lost.

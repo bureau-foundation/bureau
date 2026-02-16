@@ -484,8 +484,11 @@ Three mechanisms, in order of speed:
 - **Emergency blacklist** (immediate): the daemon sends a revocation
   notice to the affected service via its admin channel. The service
   adds the token ID to a small in-memory blacklist. The blacklist
-  auto-cleans as tokens expire. Used for sandbox destruction or
-  policy changes requiring immediate effect.
+  auto-cleans as tokens expire. Used for sandbox destruction, policy
+  changes requiring immediate effect, or machine-level emergency
+  revocation (`bureau machine revoke`). During emergency shutdown the
+  daemon pushes revocations for all principals to every reachable
+  service before exiting.
 
 ### Service-side verification
 

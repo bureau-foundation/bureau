@@ -20,9 +20,11 @@ const (
 	containerHeaderSize = 12
 
 	// chunkIndexEntrySize is the size of each chunk index entry:
-	// 32-byte hash + 1-byte compression tag + 4-byte compressed size
-	// + 4-byte uncompressed size.
-	chunkIndexEntrySize = 41
+	// 32-byte hash + 1-byte compression tag + 3-byte reserved
+	// + 4-byte compressed size + 4-byte uncompressed size
+	// + 4-byte reserved. The reserved bytes ensure 4-byte alignment
+	// for the uint32 fields and an 8-byte stride for the entry.
+	chunkIndexEntrySize = 48
 )
 
 // containerMagic is the 8-byte container file signature.
@@ -130,6 +132,12 @@ func (b *ContainerBuilder) Flush(w io.Writer) (Hash, error) {
 			return Hash{}, fmt.Errorf("writing chunk %d compression tag: %w", i, err)
 		}
 
+		// 3 reserved bytes after compression tag for 4-byte alignment.
+		var reserved3 [3]byte
+		if _, err := w.Write(reserved3[:]); err != nil {
+			return Hash{}, fmt.Errorf("writing chunk %d reserved bytes: %w", i, err)
+		}
+
 		var sizeBytes [4]byte
 		binary.LittleEndian.PutUint32(sizeBytes[:], entry.CompressedSize)
 		if _, err := w.Write(sizeBytes[:]); err != nil {
@@ -139,6 +147,12 @@ func (b *ContainerBuilder) Flush(w io.Writer) (Hash, error) {
 		binary.LittleEndian.PutUint32(sizeBytes[:], entry.UncompressedSize)
 		if _, err := w.Write(sizeBytes[:]); err != nil {
 			return Hash{}, fmt.Errorf("writing chunk %d uncompressed size: %w", i, err)
+		}
+
+		// 4 reserved bytes for 8-byte entry stride.
+		var reserved4 [4]byte
+		if _, err := w.Write(reserved4[:]); err != nil {
+			return Hash{}, fmt.Errorf("writing chunk %d trailing reserved bytes: %w", i, err)
 		}
 	}
 
@@ -237,6 +251,15 @@ func ReadContainerIndex(r io.Reader) (*ContainerReader, error) {
 		}
 		index[i].Compression = tag
 
+		// 3 reserved bytes after compression tag (alignment padding).
+		var reserved3 [3]byte
+		if _, err := io.ReadFull(r, reserved3[:]); err != nil {
+			return nil, fmt.Errorf("reading chunk %d reserved bytes: %w", i, err)
+		}
+		if reserved3 != [3]byte{} {
+			return nil, fmt.Errorf("chunk %d has non-zero reserved bytes after compression tag: %x", i, reserved3)
+		}
+
 		var sizeBytes [4]byte
 		if _, err := io.ReadFull(r, sizeBytes[:]); err != nil {
 			return nil, fmt.Errorf("reading chunk %d compressed size: %w", i, err)
@@ -247,6 +270,15 @@ func ReadContainerIndex(r io.Reader) (*ContainerReader, error) {
 			return nil, fmt.Errorf("reading chunk %d uncompressed size: %w", i, err)
 		}
 		index[i].UncompressedSize = binary.LittleEndian.Uint32(sizeBytes[:])
+
+		// 4 trailing reserved bytes (entry stride padding).
+		var reserved4 [4]byte
+		if _, err := io.ReadFull(r, reserved4[:]); err != nil {
+			return nil, fmt.Errorf("reading chunk %d trailing reserved bytes: %w", i, err)
+		}
+		if reserved4 != [4]byte{} {
+			return nil, fmt.Errorf("chunk %d has non-zero trailing reserved bytes: %x", i, reserved4)
+		}
 	}
 
 	// Compute chunk data offsets.

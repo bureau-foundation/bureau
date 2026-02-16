@@ -44,43 +44,24 @@ func TestServiceDiscovery(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	// --- Phase 1: Register a service on the provider machine ---
+	// --- Phase 1: Deploy all principals ---
 
-	// Deploy a principal that represents the service. In production,
-	// services are principals running on a machine — deploying it creates
-	// the proxy socket and makes the daemon aware of the principal.
+	// Deploy a principal that represents the service on the provider.
 	serviceAgent := registerPrincipal(t, "service/stt/test", "svc-discovery-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
 		Principals: []principalSpec{{Account: serviceAgent}},
 	})
 
-	// Watch the consumer daemon's config room for service directory updates.
-	// Set up the watch BEFORE publishing the service event so the roomWatch
-	// captures the sync position before any directory change messages arrive.
-	serviceWatch := watchRoom(t, admin, consumer.ConfigRoomID)
-
-	// Publish a service event in #bureau/service advertising the service.
-	// The consumer daemon detects this via /sync and pushes the directory
-	// to its principals' proxies.
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
-		"service/stt/test", map[string]any{
-			"principal":    serviceAgent.UserID,
-			"machine":      provider.UserID,
-			"protocol":     "http",
-			"capabilities": []string{"streaming"},
-			"description":  "Test STT service",
-		})
-	if err != nil {
-		t.Fatalf("publish service event: %v", err)
-	}
-
-	// --- Phase 2: Deploy consumer principals with different visibility ---
-
+	// Deploy consumer principals BEFORE publishing the service event.
+	// The daemon's processSyncResponse runs reconcile (which creates
+	// sandboxes) before service sync (which pushes the directory and
+	// posts the "Service directory updated" message). If the service
+	// event arrives in an earlier sync batch than the config change,
+	// pushServiceDirectory iterates d.running — which won't include
+	// the consumer proxies yet. The message would be posted before
+	// the proxies exist, making WaitForMessage an unreliable signal.
+	// Deploying consumers first guarantees they're in d.running when
+	// the service event is processed.
 	consumerWide := registerPrincipal(t, "test/svc-wide", "svc-wide-password")
 	consumerNarrow := registerPrincipal(t, "test/svc-narrow", "svc-narrow-password")
 
@@ -100,15 +81,39 @@ func TestServiceDiscovery(t *testing.T) {
 	wideClient := proxyHTTPClient(consumerSockets[consumerWide.Localpart])
 	narrowClient := proxyHTTPClient(consumerSockets[consumerNarrow.Localpart])
 
+	// --- Phase 2: Register a service and verify propagation ---
+
+	// Watch the consumer daemon's config room BEFORE publishing the
+	// service event so the roomWatch captures the sync position before
+	// any directory change messages arrive.
+	serviceWatch := watchRoom(t, admin, consumer.ConfigRoomID)
+
+	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
+	if err != nil {
+		t.Fatalf("resolve service room: %v", err)
+	}
+
+	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+		"service/stt/test", map[string]any{
+			"principal":    serviceAgent.UserID,
+			"machine":      provider.UserID,
+			"protocol":     "http",
+			"capabilities": []string{"streaming"},
+			"description":  "Test STT service",
+		})
+	if err != nil {
+		t.Fatalf("publish service event: %v", err)
+	}
+
 	// Wait for the consumer daemon to process the service event. The
-	// daemon posts this message AFTER pushServiceDirectory completes, so
-	// all running consumer proxies are guaranteed to have the directory
-	// by the time this returns. Combined with deployPrincipals having
-	// returned (consumer sockets exist, directory pushed during reconcile),
-	// the proxy is ready to query.
+	// daemon posts this message AFTER pushServiceDirectory completes.
+	// Because consumer proxies were deployed before the service event
+	// was published, they are in d.running when pushServiceDirectory
+	// iterates — all consumer proxies have the updated directory by
+	// the time this returns.
 	serviceWatch.WaitForMessage(t, "added service/stt/test", consumer.UserID)
 
-	// --- Phase 3: Verify service propagation and visibility isolation ---
+	// --- Phase 3: Verify propagation and visibility isolation ---
 
 	t.Run("ServicePropagation", func(t *testing.T) {
 		entries := proxyServiceDiscovery(t, wideClient, "")
@@ -153,7 +158,7 @@ func TestServiceDiscovery(t *testing.T) {
 		}
 	})
 
-	// --- Phase 4: Query parameter filtering ---
+	// --- Phase 4: Query parameter filtering on the wide consumer ---
 
 	t.Run("QueryParameterFiltering", func(t *testing.T) {
 		// Protocol filter: http matches the STT service.

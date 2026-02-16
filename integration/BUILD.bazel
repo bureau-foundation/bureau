@@ -71,7 +71,6 @@ go_test(
         "//lib/sealed",
         "//lib/secret",
         "//lib/service",
-        "//lib/servicetoken",
         "//lib/testutil",
         "//messaging",
         "//observe",

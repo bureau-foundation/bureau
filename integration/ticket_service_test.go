@@ -13,7 +13,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -31,15 +30,22 @@ type ticketCreateResult struct {
 	Room string `json:"room"`
 }
 
-// TestTicketServiceEndToEnd exercises the full path from socket
-// connection through the ticket service to Matrix state event
-// verification:
+// TestTicketServiceEndToEnd exercises the full production path for the
+// ticket service: daemon service discovery, consumer sandbox creation
+// with service mount resolution, daemon-minted token authentication,
+// and ticket creation verified via Matrix state events.
 //
-//   - Boot a machine (launcher + daemon)
-//   - Start the ticket service binary with a registered Matrix account
-//   - Verify unauthenticated connectivity (status action)
-//   - Mint a service token and create a ticket (authenticated create action)
-//   - Verify the ticket appears as an m.bureau.ticket state event in Matrix
+// The test validates the entire daemon-mediated path:
+//
+//   - Ticket service starts externally, self-registers in #bureau/service
+//   - Daemon discovers the service via /sync of the service room
+//   - Consumer agent is deployed with a template declaring
+//     required_services: ["ticket"]
+//   - Daemon resolves the ticket service socket via m.bureau.room_service
+//     in the consumer's workspace room, mints a service token, and
+//     creates the sandbox with the service socket bind-mounted
+//   - The daemon-minted token authenticates to the ticket service
+//   - Ticket creation writes an m.bureau.ticket state event to Matrix
 func TestTicketServiceEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -48,26 +54,30 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 
 	ctx := t.Context()
 
-	// --- Setup: Boot a machine ---
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+
+	// --- Phase 0: Boot a machine ---
 	//
-	// The machine provides the run directory (where the ticket service
-	// creates its socket) and the token signing keypair (which the daemon
-	// publishes to #bureau/system for services to verify tokens).
+	// ProxyBinary is required because we deploy a consumer sandbox
+	// later. The machine provides the run directory (ticket service
+	// socket), token signing keypair (daemon publishes to #bureau/system
+	// for services to verify tokens), and the state directory (where
+	// the daemon writes minted service tokens).
 	machine := newTestMachine(t, "machine/ticket-e2e")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	// --- Setup: Register the ticket service Matrix account ---
+	// --- Phase 1: Ticket service setup ---
+
+	// Register the ticket service Matrix account.
 	ticketServiceLocalpart := "service/ticket/integ"
 	ticketServiceAccount := registerPrincipal(t, ticketServiceLocalpart, "ticket-svc-password")
 
-	// --- Setup: Write session.json for the ticket service ---
-	//
-	// The ticket service loads its Matrix credentials from session.json
-	// in its state directory. In production, the launcher writes this
-	// file; in tests, we create it directly from the registered account.
+	// Write session.json for the ticket service. The service loads its
+	// Matrix credentials from this file at startup.
 	ticketStateDir := t.TempDir()
 	sessionData := service.SessionData{
 		HomeserverURL: testHomeserverURL,
@@ -82,11 +92,9 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		t.Fatalf("write session.json: %v", err)
 	}
 
-	// --- Setup: Invite ticket service to global rooms ---
-	//
-	// The ticket service resolves and joins #bureau/system (to load the
-	// token signing key) and #bureau/service (to register itself). These
-	// are private rooms, so the admin must invite the service first.
+	// Invite ticket service to global rooms. The service needs
+	// #bureau/system (token signing key) and #bureau/service (to
+	// publish its registration).
 	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
@@ -103,16 +111,14 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		t.Fatalf("invite ticket service to service room: %v", err)
 	}
 
-	// --- Setup: Create a project room with ticket configuration ---
-	//
-	// The ticket service tracks rooms that have m.bureau.ticket_config.
-	// It discovers these during initial /sync. We also publish the
-	// m.bureau.room_service binding so the daemon knows which service
-	// principal handles the "ticket" role in this room.
+	// Create a project room with ticket configuration and room service
+	// binding. This simulates what "bureau ticket enable" configures in
+	// each workspace room. The machine is invited so the daemon can
+	// read the m.bureau.room_service binding during resolveServiceSocket.
 	adminUserID := "@bureau-admin:" + testServerName
 	projectRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:   "ticket-e2e-project",
-		Invite: []string{ticketServiceAccount.UserID},
+		Invite: []string{ticketServiceAccount.UserID, machine.UserID},
 		PowerLevelContentOverride: map[string]any{
 			"users": map[string]any{
 				adminUserID:                 100,
@@ -147,13 +153,17 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		t.Fatalf("publish room service binding: %v", err)
 	}
 
-	// --- Setup: Start the ticket service binary ---
-	//
-	// The launcher creates socket parent directories for principals it
-	// manages, but the ticket service is started directly (not through
-	// the launcher). Create the parent directory for the socket path.
-	socketPath := principal.RunDirSocketPath(machine.RunDir, ticketServiceLocalpart)
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+	// Set up a room watch BEFORE starting the ticket service. The
+	// ticket service publishes its m.bureau.service registration during
+	// startup, and the daemon posts a "Service directory updated" message
+	// to the config room after processing the registration.
+	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	// Start the ticket service binary. Service principals are externally
+	// managed (not started by the daemon/launcher) — this is the
+	// production pattern.
+	ticketSocketPath := principal.RunDirSocketPath(machine.RunDir, ticketServiceLocalpart)
+	if err := os.MkdirAll(filepath.Dir(ticketSocketPath), 0755); err != nil {
 		t.Fatalf("create socket parent directory: %v", err)
 	}
 
@@ -167,51 +177,139 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		"--state-dir", ticketStateDir,
 	)
 
-	// Wait for the ticket service socket to appear. The service creates
-	// the socket after completing initial sync, loading the signing key,
-	// and registering in #bureau/service.
-	waitForFile(t, socketPath, 15*time.Second)
+	waitForFile(t, ticketSocketPath, 15*time.Second)
 
-	// --- Phase 1: Unauthenticated connectivity ---
+	// --- Phase 2: Daemon service discovery ---
 	//
-	// The "status" action requires no authentication and returns only
-	// liveness information (uptime). This verifies the socket is
-	// reachable and the CBOR protocol is working.
-	t.Run("UnauthenticatedStatus", func(t *testing.T) {
-		unauthClient := service.NewServiceClientFromToken(socketPath, nil)
-		var status ticketStatusResult
-		if err := unauthClient.Call(ctx, "status", nil, &status); err != nil {
-			t.Fatalf("status call failed: %v", err)
-		}
-		if status.UptimeSeconds <= 0 {
-			t.Errorf("uptime = %f, want > 0", status.UptimeSeconds)
-		}
-	})
+	// The ticket service published an m.bureau.service state event to
+	// #bureau/service during startup. The daemon picks this up via /sync,
+	// runs syncServiceDirectory → reconcileServices, configures proxy
+	// routes for any running consumers, and posts to the config room.
+	serviceWatch.WaitForMessage(t, "added service/ticket/integ", machine.UserID)
 
-	// --- Phase 2: Authenticated ticket creation ---
-	//
-	// Load the daemon's token signing private key from the machine's
-	// state directory. In production, the daemon mints tokens at
-	// sandbox creation time. For this test, we mint one directly.
-	_, privateKey, err := servicetoken.LoadKeypair(machine.StateDir)
-	if err != nil {
-		t.Fatalf("load token signing keypair: %v", err)
+	// Verify unauthenticated connectivity. The "status" action requires
+	// no authentication and proves the socket is reachable and CBOR is working.
+	unauthClient := service.NewServiceClientFromToken(ticketSocketPath, nil)
+	var status ticketStatusResult
+	if err := unauthClient.Call(ctx, "status", nil, &status); err != nil {
+		t.Fatalf("status call failed: %v", err)
+	}
+	if status.UptimeSeconds <= 0 {
+		t.Errorf("uptime = %f, want > 0", status.UptimeSeconds)
 	}
 
-	tokenBytes, err := servicetoken.Mint(privateKey, &servicetoken.Token{
-		Subject:   "test/consumer",
-		Machine:   machine.Name,
-		Audience:  "ticket",
-		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/create"}}},
-		ID:        "integ-test-ticket-create",
-		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
-		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
-	})
+	// --- Phase 3: Deploy a consumer agent with required_services ---
+	//
+	// This exercises the daemon's resolveServiceMounts path: the template
+	// declares required_services: ["ticket"], so the daemon reads
+	// m.bureau.room_service in the consumer's workspace room to find the
+	// ticket service principal, derives the socket path, and passes it
+	// to the launcher as a ServiceMount. The launcher bind-mounts the
+	// socket at /run/bureau/service/ticket.sock in the sandbox.
+	//
+	// The daemon also mints a service token with audience="ticket" and
+	// the consumer's ticket-scoped grants, writing it to
+	// <stateDir>/tokens/<consumer>/ticket.
+
+	// Publish a template with RequiredServices: ["ticket"].
+	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
+	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
 	if err != nil {
-		t.Fatalf("mint service token: %v", err)
+		t.Fatalf("resolve template room: %v", err)
 	}
 
-	authedClient := service.NewServiceClientFromToken(socketPath, tokenBytes)
+	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
+		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			t.Fatalf("invite machine to template room: %v", err)
+		}
+	}
+
+	_, err = admin.SendStateEvent(ctx, templateRoomID,
+		schema.EventTypeTemplate, "ticket-consumer", schema.TemplateContent{
+			Description:      "Consumer agent requiring ticket service",
+			Command:          []string{testAgentBinary},
+			RequiredServices: []string{"ticket"},
+			Namespaces: &schema.TemplateNamespaces{
+				PID: true,
+			},
+			Security: &schema.TemplateSecurity{
+				NewSession:    true,
+				DieWithParent: true,
+				NoNewPrivs:    true,
+			},
+			Filesystem: []schema.TemplateMount{
+				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+				{Dest: "/tmp", Type: "tmpfs"},
+			},
+			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+			EnvironmentVariables: map[string]string{
+				"HOME":                "/workspace",
+				"TERM":                "xterm-256color",
+				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+			},
+		})
+	if err != nil {
+		t.Fatalf("publish ticket-consumer template: %v", err)
+	}
+
+	// Register the consumer agent and push credentials.
+	consumerLocalpart := "agent/ticket-consumer"
+	consumer := registerPrincipal(t, consumerLocalpart, "consumer-password")
+	pushCredentials(t, admin, machine, consumer)
+
+	// Deploy the consumer with a MachineConfig that references the
+	// template. WORKSPACE_ROOM_ID tells the daemon to resolve
+	// m.bureau.room_service from the project room (where the "ticket"
+	// binding lives). The authorization policy grants ticket/** actions
+	// so the daemon includes them in the minted service token.
+	templateRef := "bureau/template:ticket-consumer"
+	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
+				{
+					Localpart: consumer.Localpart,
+					Template:  templateRef,
+					AutoStart: true,
+					Payload: map[string]any{
+						"WORKSPACE_ROOM_ID": projectRoomID,
+					},
+					Authorization: &schema.AuthorizationPolicy{
+						Grants: []schema.Grant{
+							{Actions: []string{"ticket/**"}},
+						},
+					},
+				},
+			},
+		})
+	if err != nil {
+		t.Fatalf("push machine config: %v", err)
+	}
+
+	// Wait for the consumer's proxy socket. This proves the daemon
+	// successfully resolved the template, resolved the ticket service
+	// mount from the project room's m.bureau.room_service binding,
+	// minted a service token, and the launcher created the sandbox.
+	consumerSocketPath := machine.PrincipalSocketPath(consumer.Localpart)
+	waitForFile(t, consumerSocketPath, 30*time.Second)
+	t.Logf("consumer sandbox created: proxy socket at %s", consumerSocketPath)
+
+	// --- Phase 4: Authenticated ticket creation using daemon-minted token ---
+	//
+	// Read the service token that the daemon minted for the consumer.
+	// In production, the agent reads this from /run/bureau/tokens/ticket
+	// inside the sandbox (bind-mounted from the host-side token directory).
+	// Here we read it from the host side for verification.
+	tokenPath := filepath.Join(machine.StateDir, "tokens", consumerLocalpart, "ticket")
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("read daemon-minted service token: %v", err)
+	}
+	t.Logf("daemon-minted service token: %d bytes at %s", len(tokenBytes), tokenPath)
+
+	// Create a ticket using the daemon-minted token.
+	authedClient := service.NewServiceClientFromToken(ticketSocketPath, tokenBytes)
 
 	var createResult ticketCreateResult
 	err = authedClient.Call(ctx, "create", map[string]any{
@@ -232,12 +330,12 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	}
 	t.Logf("created ticket %s in room %s", createResult.ID, createResult.Room)
 
-	// --- Phase 3: Verify Matrix state event ---
+	// --- Phase 5: Verify Matrix state event ---
 	//
 	// The ticket service wrote the ticket as an m.bureau.ticket state
-	// event in the project room. The admin session reads it back via
-	// the Matrix client-server API to verify the full round-trip:
-	// socket request → ticket service → Matrix state event.
+	// event in the project room. Read it back via the Matrix client-server
+	// API to verify the full round-trip: daemon-minted token → socket
+	// request → ticket service → Matrix state event.
 	raw, err := admin.GetStateEvent(ctx, projectRoomID, schema.EventTypeTicket, createResult.ID)
 	if err != nil {
 		t.Fatalf("get ticket state event: %v", err)

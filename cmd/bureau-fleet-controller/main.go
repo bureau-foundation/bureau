@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -145,6 +146,7 @@ func run() error {
 
 	fleet := &FleetController{
 		session:       session,
+		configStore:   session,
 		clock:         clk,
 		principalName: principalName,
 		machineName:   machineName,
@@ -233,8 +235,11 @@ func run() error {
 
 // FleetController is the core service state for fleet management.
 type FleetController struct {
-	session *messaging.Session
-	clock   clock.Clock
+	mu sync.Mutex
+
+	session     *messaging.Session
+	configStore configStore
+	clock       clock.Clock
 
 	principalName string
 	machineName   string

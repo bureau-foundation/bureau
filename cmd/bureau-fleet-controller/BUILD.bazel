@@ -7,6 +7,7 @@ go_library(
     name = "bureau-fleet-controller_lib",
     srcs = [
         "doc.go",
+        "execute.go",
         "main.go",
         "placement.go",
         "socket.go",
@@ -35,6 +36,7 @@ go_binary(
 go_test(
     name = "bureau-fleet-controller_test",
     srcs = [
+        "execute_test.go",
         "placement_test.go",
         "socket_test.go",
         "sync_test.go",

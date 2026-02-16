@@ -178,8 +178,12 @@ func requireServiceError(t *testing.T, err error) *service.ServiceError {
 
 // sampleFleetController creates a FleetController populated with test
 // data for socket API tests: two machines, two services, one definition.
+// Uses a fakeConfigStore so mutation handlers (place/unplace) can read
+// and write machine configs without a real homeserver.
 func sampleFleetController() *FleetController {
 	fc := newTestFleetController()
+	fc.principalName = "service/fleet/prod"
+	fc.configStore = newFakeConfigStore()
 
 	// Machine 1: workstation with GPU, one fleet-managed assignment.
 	fc.machines["machine/workstation"] = &machineState{
@@ -672,5 +676,289 @@ func TestShowServiceDeniedWithoutGrant(t *testing.T) {
 	var response showServiceResponse
 	fields := map[string]any{"service": "service/stt/whisper"}
 	err := client.Call(context.Background(), "show-service", fields, &response)
+	requireServiceError(t, err)
+}
+
+// --- Place tests ---
+
+// sampleFleetControllerForMutation creates a fleet controller with
+// seeded config store data suitable for place/unplace tests. The
+// machines have configs in the fake store that the mutation handlers
+// will read and write.
+func sampleFleetControllerForMutation() *FleetController {
+	fc := sampleFleetController()
+	store := fc.configStore.(*fakeConfigStore)
+
+	// Seed the workstation config with its current assignment.
+	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/template:whisper-stt",
+				AutoStart: true,
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+
+	// Server config is empty (no assignments).
+	store.seedConfig("!config-srv:local", "machine/server", &schema.MachineConfig{})
+
+	return fc
+}
+
+func TestPlaceAutoSelectsMachine(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	// Place worker service — should auto-select a machine.
+	var response placeResponse
+	fields := map[string]any{"service": "service/batch/worker"}
+	if err := client.Call(context.Background(), "place", fields, &response); err != nil {
+		t.Fatalf("place call failed: %v", err)
+	}
+
+	if response.Service != "service/batch/worker" {
+		t.Errorf("service = %q, want service/batch/worker", response.Service)
+	}
+	if response.Machine == "" {
+		t.Error("machine should be set after auto-selection")
+	}
+	if response.Score < 0 {
+		t.Errorf("score should be non-negative for auto-selected machine, got %d", response.Score)
+	}
+
+	// Verify the service now has an instance.
+	var showResponse showServiceResponse
+	showFields := map[string]any{"service": "service/batch/worker"}
+	if err := client.Call(context.Background(), "show-service", showFields, &showResponse); err != nil {
+		t.Fatalf("show-service call failed: %v", err)
+	}
+	if len(showResponse.Instances) != 1 {
+		t.Errorf("expected 1 instance after place, got %d", len(showResponse.Instances))
+	}
+}
+
+func TestPlaceManualMachine(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response placeResponse
+	fields := map[string]any{
+		"service": "service/batch/worker",
+		"machine": "machine/server",
+	}
+	if err := client.Call(context.Background(), "place", fields, &response); err != nil {
+		t.Fatalf("place call failed: %v", err)
+	}
+
+	if response.Machine != "machine/server" {
+		t.Errorf("machine = %q, want machine/server", response.Machine)
+	}
+	// Manual placement doesn't run scoring, so score should be -1.
+	if response.Score != -1 {
+		t.Errorf("score for manual placement = %d, want -1", response.Score)
+	}
+}
+
+func TestPlaceNoEligibleMachine(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+
+	// Place whisper on both machines so no eligible machines remain.
+	// (workstation already has it via sampleFleetController)
+	fc.machines["machine/server"].assignments["service/stt/whisper"] = &schema.PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+	fc.services["service/stt/whisper"].instances["machine/server"] = fc.machines["machine/server"].assignments["service/stt/whisper"]
+
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response placeResponse
+	fields := map[string]any{"service": "service/stt/whisper"}
+	err := client.Call(context.Background(), "place", fields, &response)
+	requireServiceError(t, err)
+}
+
+func TestPlaceMissingServiceField(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response placeResponse
+	err := client.Call(context.Background(), "place", nil, &response)
+	requireServiceError(t, err)
+}
+
+func TestPlaceDeniedWithoutGrant(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServerNoGrants(t, fc)
+	defer cleanup()
+
+	var response placeResponse
+	fields := map[string]any{"service": "service/batch/worker"}
+	err := client.Call(context.Background(), "place", fields, &response)
+	requireServiceError(t, err)
+}
+
+// --- Unplace tests ---
+
+func TestUnplaceRemovesAssignment(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response unplaceResponse
+	fields := map[string]any{
+		"service": "service/stt/whisper",
+		"machine": "machine/workstation",
+	}
+	if err := client.Call(context.Background(), "unplace", fields, &response); err != nil {
+		t.Fatalf("unplace call failed: %v", err)
+	}
+
+	if response.Service != "service/stt/whisper" {
+		t.Errorf("service = %q, want service/stt/whisper", response.Service)
+	}
+	if response.Machine != "machine/workstation" {
+		t.Errorf("machine = %q, want machine/workstation", response.Machine)
+	}
+
+	// Verify the service now has 0 instances.
+	var showResponse showServiceResponse
+	showFields := map[string]any{"service": "service/stt/whisper"}
+	if err := client.Call(context.Background(), "show-service", showFields, &showResponse); err != nil {
+		t.Fatalf("show-service call failed: %v", err)
+	}
+	if len(showResponse.Instances) != 0 {
+		t.Errorf("expected 0 instances after unplace, got %d", len(showResponse.Instances))
+	}
+
+	// Verify machine has 0 assignments.
+	var machineResponse showMachineResponse
+	machineFields := map[string]any{"machine": "machine/workstation"}
+	if err := client.Call(context.Background(), "show-machine", machineFields, &machineResponse); err != nil {
+		t.Fatalf("show-machine call failed: %v", err)
+	}
+	if len(machineResponse.Assignments) != 0 {
+		t.Errorf("expected 0 assignments after unplace, got %d", len(machineResponse.Assignments))
+	}
+}
+
+func TestUnplaceNotPlacedReturnsError(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response unplaceResponse
+	fields := map[string]any{
+		"service": "service/batch/worker",
+		"machine": "machine/workstation",
+	}
+	err := client.Call(context.Background(), "unplace", fields, &response)
+	requireServiceError(t, err)
+}
+
+func TestUnplaceMissingFields(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	// Missing machine.
+	var response unplaceResponse
+	fields := map[string]any{"service": "service/stt/whisper"}
+	err := client.Call(context.Background(), "unplace", fields, &response)
+	requireServiceError(t, err)
+
+	// Missing service.
+	fields2 := map[string]any{"machine": "machine/workstation"}
+	err2 := client.Call(context.Background(), "unplace", fields2, &response)
+	requireServiceError(t, err2)
+}
+
+func TestUnplaceDeniedWithoutGrant(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServerNoGrants(t, fc)
+	defer cleanup()
+
+	var response unplaceResponse
+	fields := map[string]any{
+		"service": "service/stt/whisper",
+		"machine": "machine/workstation",
+	}
+	err := client.Call(context.Background(), "unplace", fields, &response)
+	requireServiceError(t, err)
+}
+
+// --- Plan tests ---
+
+func TestPlanReturnsScores(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response planResponse
+	fields := map[string]any{"service": "service/stt/whisper"}
+	if err := client.Call(context.Background(), "plan", fields, &response); err != nil {
+		t.Fatalf("plan call failed: %v", err)
+	}
+
+	if response.Service != "service/stt/whisper" {
+		t.Errorf("service = %q, want service/stt/whisper", response.Service)
+	}
+
+	// Should have candidates (at least the machines with GPU labels).
+	if len(response.Candidates) == 0 {
+		t.Error("expected at least one candidate")
+	}
+
+	// All candidates should have non-negative scores.
+	for _, candidate := range response.Candidates {
+		if candidate.Score < 0 {
+			t.Errorf("candidate %q has negative score %d", candidate.Machine, candidate.Score)
+		}
+	}
+
+	// Current machines should list where whisper is placed.
+	if len(response.CurrentMachines) != 1 {
+		t.Fatalf("expected 1 current machine, got %d", len(response.CurrentMachines))
+	}
+	if response.CurrentMachines[0] != "machine/workstation" {
+		t.Errorf("current machine = %q, want machine/workstation", response.CurrentMachines[0])
+	}
+}
+
+func TestPlanServiceNotFound(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response planResponse
+	fields := map[string]any{"service": "service/nonexistent"}
+	err := client.Call(context.Background(), "plan", fields, &response)
+	requireServiceError(t, err)
+}
+
+func TestPlanMissingField(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response planResponse
+	err := client.Call(context.Background(), "plan", nil, &response)
+	requireServiceError(t, err)
+}
+
+func TestPlanDeniedWithoutGrant(t *testing.T) {
+	fc := sampleFleetControllerForMutation()
+	client, cleanup := testServerNoGrants(t, fc)
+	defer cleanup()
+
+	var response planResponse
+	fields := map[string]any{"service": "service/stt/whisper"}
+	err := client.Call(context.Background(), "plan", fields, &response)
 	requireServiceError(t, err)
 }

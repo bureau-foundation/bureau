@@ -140,6 +140,15 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 		fc.processRoomState(roomID, events, nil)
 	}
 
+	// Cross-reference machine assignments with service definitions to
+	// populate service.instances. During initial sync, events from
+	// different rooms arrive in arbitrary order (fleet room with
+	// service definitions vs config rooms with assignments), so the
+	// incremental instance tracking in processMachineConfigEvent may
+	// miss services that haven't been defined yet. This full rebuild
+	// ensures consistency after all rooms are processed.
+	fc.rebuildServiceInstances()
+
 	fc.logger.Info("fleet model built",
 		"machines", len(fc.machines),
 		"services", len(fc.services),
@@ -371,8 +380,11 @@ func (fc *FleetController) processMachineConfigEvent(roomID string, event messag
 	}
 	machine.configRoomID = roomID
 
-	// Replace the assignments map with the current set of
-	// fleet-managed principals from this config event.
+	// Extract fleet-managed assignments from the config event and
+	// update the service instance index incrementally.
+	machineLocalpart := stateKey
+	oldAssignments := machine.assignments
+
 	fleetAssignments := make(map[string]*schema.PrincipalAssignment)
 	for index := range content.Principals {
 		assignment := &content.Principals[index]
@@ -380,6 +392,24 @@ func (fc *FleetController) processMachineConfigEvent(roomID string, event messag
 			fleetAssignments[assignment.Localpart] = assignment
 		}
 	}
+
+	// Remove stale service instance entries for assignments that
+	// are no longer on this machine.
+	for localpart := range oldAssignments {
+		if _, stillAssigned := fleetAssignments[localpart]; !stillAssigned {
+			if serviceState, exists := fc.services[localpart]; exists {
+				delete(serviceState.instances, machineLocalpart)
+			}
+		}
+	}
+
+	// Add or update service instance entries for current assignments.
+	for localpart, assignment := range fleetAssignments {
+		if serviceState, exists := fc.services[localpart]; exists {
+			serviceState.instances[machineLocalpart] = assignment
+		}
+	}
+
 	machine.assignments = fleetAssignments
 }
 
@@ -395,14 +425,21 @@ func isFleetManaged(assignment *schema.PrincipalAssignment) bool {
 
 // handleSync processes an incremental /sync response. Called by the
 // sync loop for each response.
+//
+// Invite acceptance runs without the lock (Matrix I/O). Model updates
+// and reconciliation run under fc.mu to prevent concurrent access from
+// socket handler goroutines.
 func (fc *FleetController) handleSync(ctx context.Context, response *messaging.SyncResponse) {
-	// Accept invites to new rooms (typically config rooms).
+	// Accept invites without holding the lock (Matrix I/O).
 	if len(response.Rooms.Invite) > 0 {
 		acceptedRooms := service.AcceptInvites(ctx, fc.session, response.Rooms.Invite, fc.logger)
 		if len(acceptedRooms) > 0 {
 			fc.logger.Info("accepted room invites", "count", len(acceptedRooms))
 		}
 	}
+
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
 
 	// Clean up state for rooms the fleet controller has been removed
 	// from. Process leaves before joins so that a leave+rejoin in the
@@ -415,6 +452,10 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	for roomID, room := range response.Rooms.Join {
 		fc.processRoomSync(roomID, room)
 	}
+
+	// Reconcile after processing all events: compare desired replica
+	// counts with actual instance counts and place/unplace as needed.
+	fc.reconcile(ctx)
 }
 
 // processLeave handles a room leave event. If the room was a known
@@ -432,6 +473,11 @@ func (fc *FleetController) processLeave(roomID string) {
 			"machine", machineLocalpart,
 		)
 		if machine, exists := fc.machines[machineLocalpart]; exists {
+			for localpart := range machine.assignments {
+				if serviceState, exists := fc.services[localpart]; exists {
+					delete(serviceState.instances, machineLocalpart)
+				}
+			}
 			machine.assignments = make(map[string]*schema.PrincipalAssignment)
 			machine.configRoomID = ""
 		}
@@ -444,8 +490,12 @@ func (fc *FleetController) processLeave(roomID string) {
 		fc.logger.Warn("left machine room", "room_id", roomID)
 		// Clean up all machine state since we can no longer
 		// receive heartbeats. Replace with a fresh map rather
-		// than deleting during iteration.
+		// than deleting during iteration. Also clear all service
+		// instances since they reference machines.
 		fc.machines = make(map[string]*machineState)
+		for _, serviceState := range fc.services {
+			serviceState.instances = make(map[string]*schema.PrincipalAssignment)
+		}
 		return
 	}
 
@@ -480,6 +530,29 @@ func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
 		}
 	}
 	return events
+}
+
+// rebuildServiceInstances does a full cross-reference of machine
+// assignments against service definitions to populate
+// fleetServiceState.instances. Called after initial sync where events
+// from different rooms arrive in arbitrary order (fleet room service
+// definitions vs config room assignments), so incremental tracking
+// in processMachineConfigEvent may have missed services that hadn't
+// been defined yet.
+func (fc *FleetController) rebuildServiceInstances() {
+	// Clear all existing instance tracking.
+	for _, serviceState := range fc.services {
+		serviceState.instances = make(map[string]*schema.PrincipalAssignment)
+	}
+
+	// Rebuild from machine assignments.
+	for machineLocalpart, machine := range fc.machines {
+		for localpart, assignment := range machine.assignments {
+			if serviceState, exists := fc.services[localpart]; exists {
+				serviceState.instances[machineLocalpart] = assignment
+			}
+		}
+	}
 }
 
 // parseEventContent parses a Matrix event's Content map into a typed

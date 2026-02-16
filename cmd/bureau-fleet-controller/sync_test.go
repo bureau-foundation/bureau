@@ -377,6 +377,200 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 	}
 }
 
+func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
+	fc := newTestFleetController()
+
+	assignment := &schema.PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/template:whisper-stt",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+
+	fc.machines["machine/workstation"] = &machineState{
+		info:   &schema.MachineInfo{Hostname: "workstation"},
+		status: &schema.MachineStatus{CPUPercent: 42},
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/stt/whisper": assignment,
+		},
+		configRoomID: "!config-ws:local",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{
+			Template: "bureau/template:whisper-stt",
+			Replicas: schema.ReplicaSpec{Min: 1},
+		},
+		instances: map[string]*schema.PrincipalAssignment{
+			"machine/workstation": assignment,
+		},
+	}
+
+	response := &messaging.SyncResponse{
+		Rooms: messaging.RoomsSection{
+			Leave: map[string]messaging.LeftRoom{
+				"!config-ws:local": {},
+			},
+		},
+	}
+
+	fc.handleSync(context.Background(), response)
+
+	// Service instances should be cleaned up.
+	serviceState := fc.services["service/stt/whisper"]
+	if len(serviceState.instances) != 0 {
+		t.Errorf("expected 0 service instances after config room leave, got %d", len(serviceState.instances))
+	}
+}
+
+func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
+	fc := newTestFleetController()
+
+	assignment := &schema.PrincipalAssignment{
+		Localpart: "service/worker",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+
+	fc.machines["machine/alpha"] = &machineState{
+		info:   &schema.MachineInfo{Hostname: "alpha"},
+		status: &schema.MachineStatus{},
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/worker": assignment,
+		},
+	}
+	fc.machines["machine/beta"] = &machineState{
+		info:        &schema.MachineInfo{Hostname: "beta"},
+		status:      &schema.MachineStatus{},
+		assignments: make(map[string]*schema.PrincipalAssignment),
+	}
+
+	fc.services["service/worker"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances: map[string]*schema.PrincipalAssignment{
+			"machine/alpha": assignment,
+		},
+	}
+
+	response := &messaging.SyncResponse{
+		Rooms: messaging.RoomsSection{
+			Leave: map[string]messaging.LeftRoom{
+				"!machine:local": {},
+			},
+		},
+	}
+
+	fc.handleSync(context.Background(), response)
+
+	if len(fc.machines) != 0 {
+		t.Errorf("expected 0 machines after machine room leave, got %d", len(fc.machines))
+	}
+	if len(fc.services["service/worker"].instances) != 0 {
+		t.Errorf("expected 0 service instances after machine room leave, got %d",
+			len(fc.services["service/worker"].instances))
+	}
+}
+
+func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
+	fc := newTestFleetController()
+
+	// Pre-populate a service definition so instance tracking works.
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{
+			Template: "bureau/template:whisper-stt",
+			Replicas: schema.ReplicaSpec{Min: 1},
+		},
+		instances: make(map[string]*schema.PrincipalAssignment),
+	}
+
+	// Process a machine config with a fleet-managed assignment.
+	machineConfigContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/template:whisper-stt",
+				AutoStart: true,
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+
+	stateEvents := []messaging.Event{
+		{
+			Type:     schema.EventTypeMachineConfig,
+			StateKey: stringPtr("machine/workstation"),
+			Content:  machineConfigContent,
+		},
+	}
+
+	fc.processRoomState("!config-ws:local", stateEvents, nil)
+
+	// The service should now track an instance on this machine.
+	serviceState := fc.services["service/stt/whisper"]
+	if len(serviceState.instances) != 1 {
+		t.Fatalf("expected 1 service instance, got %d", len(serviceState.instances))
+	}
+	if _, exists := serviceState.instances["machine/workstation"]; !exists {
+		t.Error("service should have instance on machine/workstation")
+	}
+}
+
+func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
+	fc := newTestFleetController()
+
+	oldAssignment := &schema.PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/template:whisper-stt",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+
+	// Pre-populate machine with an existing assignment.
+	fc.machines["machine/workstation"] = &machineState{
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/stt/whisper": oldAssignment,
+		},
+		configRoomID: "!config-ws:local",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	// Pre-populate service instances.
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances: map[string]*schema.PrincipalAssignment{
+			"machine/workstation": oldAssignment,
+		},
+	}
+
+	// Process an updated config that removes the whisper assignment.
+	machineConfigContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			// No fleet-managed assignments left.
+			{
+				Localpart: "agent/coding/main",
+				Template:  "bureau/template:coding-agent",
+			},
+		},
+	})
+
+	event := messaging.Event{
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  machineConfigContent,
+	}
+	fc.processMachineConfigEvent("!config-ws:local", event)
+
+	// Service instance should be removed.
+	serviceState := fc.services["service/stt/whisper"]
+	if len(serviceState.instances) != 0 {
+		t.Errorf("expected 0 instances after assignment removal, got %d", len(serviceState.instances))
+	}
+
+	// Machine should have no fleet-managed assignments.
+	machine := fc.machines["machine/workstation"]
+	if len(machine.assignments) != 0 {
+		t.Errorf("expected 0 fleet-managed assignments, got %d", len(machine.assignments))
+	}
+}
+
 func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 	fc := newTestFleetController()
 

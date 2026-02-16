@@ -196,8 +196,9 @@ func runEnable(params *enableParams) error {
 	fmt.Fprintf(os.Stderr, "  Space:    %s (%s)\n", spaceAlias, spaceRoomID)
 	fmt.Fprintf(os.Stderr, "  Rooms:    %d configured\n", len(configuredRooms))
 	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
-	fmt.Fprintf(os.Stderr, "  1. Provision credentials: bureau-credentials provision --principal %s --machine %s ...\n", servicePrincipal, host)
-	fmt.Fprintf(os.Stderr, "  2. The daemon will start the ticket service on the next reconcile cycle.\n")
+	fmt.Fprintf(os.Stderr, "  1. Deploy the ticket service binary to %s\n", host)
+	fmt.Fprintf(os.Stderr, "  2. Configure it with Matrix session credentials (session.json)\n")
+	fmt.Fprintf(os.Stderr, "  3. Start the ticket service — it will self-register via #bureau/service\n")
 
 	return nil
 }
@@ -279,10 +280,16 @@ func getSpaceChildren(ctx context.Context, session *messaging.Session, spaceRoom
 }
 
 // publishPrincipalAssignment adds the ticket service to the machine's
-// MachineConfig via read-modify-write. The service principal uses no
-// template (proxy-only mode — the ticket service binary is managed
-// externally or via a separate deployment mechanism). AutoStart is true
-// so the daemon creates the proxy immediately.
+// MachineConfig via read-modify-write. AutoStart is false because the
+// ticket service binary is externally managed — it runs its own Matrix
+// session and binds its CBOR socket directly to RunDirSocketPath. If
+// AutoStart were true, the daemon would create a proxy at the same
+// socket path, conflicting with the service binary.
+//
+// The PrincipalAssignment still serves a purpose with AutoStart=false:
+// rebuildAuthorizationIndex processes ALL principals regardless of
+// AutoStart, so the service appears in the authorization index for
+// grant resolution and service token minting.
 func publishPrincipalAssignment(ctx context.Context, session *messaging.Session, host, servicePrincipal, space, serverName string) error {
 	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
@@ -309,13 +316,9 @@ func publishPrincipalAssignment(ctx context.Context, session *messaging.Session,
 		}
 	}
 
-	// The ticket service is a proxy-only principal (no Template). It connects
-	// to Matrix directly, registers itself in #bureau/service, and listens
-	// on a Unix socket. The daemon creates a proxy for credential injection
-	// and service routing.
 	config.Principals = append(config.Principals, schema.PrincipalAssignment{
 		Localpart: servicePrincipal,
-		AutoStart: true,
+		AutoStart: false,
 		Labels: map[string]string{
 			"role":    "service",
 			"service": "ticket",

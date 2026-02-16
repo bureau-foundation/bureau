@@ -262,7 +262,7 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID, commandEventID s
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command result",
 			"room_id", roomID,
 			"command", command.Command,
@@ -292,7 +292,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID, commandEventID st
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command error",
 			"room_id", roomID,
 			"command", command.Command,

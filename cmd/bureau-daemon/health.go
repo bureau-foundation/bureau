@@ -287,8 +287,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
-		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s health check failed, no previous working configuration. Principal destroyed.", localpart)))
+		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("CRITICAL: %s health check failed, no previous working configuration. Principal destroyed.", localpart))); err != nil {
+			d.logger.Error("failed to post health rollback notification",
+				"principal", localpart, "error", err)
+		}
 		return
 	}
 
@@ -299,8 +302,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart, "error", err)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
-		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s health rollback failed (cannot read credentials: %v). Principal destroyed.", localpart, err)))
+		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("CRITICAL: %s health rollback failed (cannot read credentials: %v). Principal destroyed.", localpart, err))); err != nil {
+			d.logger.Error("failed to post health rollback notification",
+				"principal", localpart, "error", err)
+		}
 		return
 	}
 
@@ -345,8 +351,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart, "error", err)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
-		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s rollback create-sandbox failed. Principal destroyed.", localpart)))
+		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("CRITICAL: %s rollback create-sandbox failed. Principal destroyed.", localpart))); err != nil {
+			d.logger.Error("failed to post health rollback notification",
+				"principal", localpart, "error", err)
+		}
 		return
 	}
 	if !response.OK {
@@ -354,8 +363,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 			"principal", localpart, "error", response.Error)
 		delete(d.previousSpecs, localpart)
 		delete(d.lastTemplates, localpart)
-		d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s rollback create-sandbox rejected: %s. Principal destroyed.", localpart, response.Error)))
+		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
+			fmt.Sprintf("CRITICAL: %s rollback create-sandbox rejected: %s. Principal destroyed.", localpart, response.Error))); err != nil {
+			d.logger.Error("failed to post health rollback notification",
+				"principal", localpart, "error", err)
+		}
 		return
 	}
 
@@ -395,8 +407,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		go d.watchProxyExit(proxyCtx, localpart)
 	}
 
-	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Rolled back %s to previous working configuration after health check failure.", localpart)))
+	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
+		fmt.Sprintf("Rolled back %s to previous working configuration after health check failure.", localpart))); err != nil {
+		d.logger.Error("failed to post health rollback notification",
+			"principal", localpart, "error", err)
+	}
 
 	d.notifyReconcile()
 }

@@ -154,10 +154,12 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 	// Report to Matrix before exec. If the exec succeeds, this is the
 	// last message from the old process. The new process reports success
 	// via checkDaemonWatchdog on startup.
-	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 		fmt.Sprintf("Daemon self-updating: exec() %s (was %s)",
 			newBinaryPath, d.daemonBinaryPath),
-	))
+	)); err != nil {
+		d.logger.Error("failed to post exec notification", "error", err)
+	}
 
 	execFunction := d.execFunc
 	if execFunction == nil {
@@ -185,10 +187,12 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 	d.failedExecPaths[newBinaryPath] = true
 
 	// Report the failure.
-	d.session.SendMessage(ctx, d.configRoomID, messaging.NewTextMessage(
+	if _, sendErr := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 		fmt.Sprintf("Daemon self-update failed: exec() %s: %v (continuing with %s)",
 			newBinaryPath, err, d.daemonBinaryPath),
-	))
+	)); sendErr != nil {
+		d.logger.Error("failed to post exec failure notification", "error", sendErr)
+	}
 
 	return fmt.Errorf("exec %s: %w", newBinaryPath, err)
 }

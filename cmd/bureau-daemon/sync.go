@@ -332,7 +332,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 					parts = append(parts, "updated "+name)
 				}
 				message := "Service directory updated: " + strings.Join(parts, ", ")
-				if _, err := d.session.SendMessage(ctx, d.configRoomID,
+				if _, err := d.sendMessageRetry(ctx, d.configRoomID,
 					messaging.NewTextMessage(message)); err != nil {
 					d.logger.Error("failed to post service directory update", "error", err)
 				}

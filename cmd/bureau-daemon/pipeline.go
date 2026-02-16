@@ -450,7 +450,7 @@ func (d *Daemon) postPipelineResult(
 		message.LogEventID = terminalEntry.LogEventID
 	}
 
-	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post pipeline result",
 			"room_id", roomID,
 			"error", err,
@@ -485,7 +485,7 @@ func (d *Daemon) postPipelineError(
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post pipeline error",
 			"room_id", roomID,
 			"error", err,
@@ -511,7 +511,7 @@ func (d *Daemon) postPipelineAccepted(
 		RelatesTo: schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, sendError := d.session.SendEvent(ctx, roomID, schema.MatrixEventTypeMessage, message); sendError != nil {
+	if _, sendError := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); sendError != nil {
 		d.logger.Error("failed to post pipeline accepted message",
 			"room_id", roomID,
 			"error", sendError,

@@ -21,6 +21,7 @@ go_library(
         "pipeline.go",
         "prefetch.go",
         "reconcile.go",
+        "retry.go",
         "services.go",
         "sync.go",
         "template.go",

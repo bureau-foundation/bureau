@@ -3,8 +3,8 @@
 
 // Package artifact implements the core content-addressable storage (CAS)
 // engine for Bureau's artifact system. It provides chunking, hashing,
-// compression, and container management — the pure data pipeline that
-// the artifact service, FUSE mount, and CLI build on.
+// compression, encryption, and container management — the pure data
+// pipeline that the artifact service, FUSE mount, and CLI build on.
 //
 // The package is organized in layers, each usable independently:
 //
@@ -34,6 +34,13 @@
 //     reference to the ordered list of containers and chunk ranges
 //     needed to reassemble the original content. Range-based segments
 //     for compactness when chunks are contiguous (the common case).
+//
+//   - Encryption: XChaCha20-Poly1305 AEAD with HKDF-SHA256 key
+//     derivation from a deployment-scoped master key. Encrypts
+//     containers and reconstruction records for external storage.
+//     BLAKE3-keyed reference obscuring produces opaque, deployment-
+//     specific external storage keys. Local storage is always
+//     plaintext — encryption wraps the external transfer boundary.
 //
 //   - Store: Local filesystem operations. Write path streams content
 //     through chunker → compressor → container builder → disk. Read

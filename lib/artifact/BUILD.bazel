@@ -15,6 +15,7 @@ go_library(
         "compress.go",
         "container.go",
         "doc.go",
+        "encrypt.go",
         "hash.go",
         "index.go",
         "metadata.go",
@@ -28,9 +29,12 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/codec",
+        "//lib/secret",
         "@com_github_klauspost_compress//zstd",
         "@com_github_pierrec_lz4_v4//:lz4",
         "@com_github_zeebo_blake3//:blake3",
+        "@org_golang_x_crypto//chacha20poly1305",
+        "@org_golang_x_crypto//hkdf",
     ] + select({
         "@rules_go//go/platform:android": [
             "@org_golang_x_sys//unix",
@@ -55,6 +59,7 @@ go_test(
         "chunker_test.go",
         "compress_test.go",
         "container_test.go",
+        "encrypt_test.go",
         "hash_test.go",
         "index_test.go",
         "metadata_test.go",
@@ -65,5 +70,8 @@ go_test(
         "transfer_test.go",
     ],
     embed = [":artifact"],
-    deps = ["//lib/codec"],
+    deps = [
+        "//lib/codec",
+        "//lib/secret",
+    ],
 )

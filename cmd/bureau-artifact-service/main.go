@@ -19,6 +19,7 @@ import (
 	artifactfuse "github.com/bureau-foundation/bureau/lib/artifact/fuse"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -34,18 +35,19 @@ func main() {
 
 func run() error {
 	var (
-		homeserverURL  string
-		machineName    string
-		principalName  string
-		serverName     string
-		runDir         string
-		stateDir       string
-		storeDir       string
-		cacheDir       string
-		cacheSize      int64
-		mountpoint     string
-		upstreamSocket string
-		showVersion    bool
+		homeserverURL      string
+		machineName        string
+		principalName      string
+		serverName         string
+		runDir             string
+		stateDir           string
+		storeDir           string
+		cacheDir           string
+		cacheSize          int64
+		mountpoint         string
+		upstreamSocket     string
+		encryptionKeyStdin bool
+		showVersion        bool
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
@@ -59,6 +61,7 @@ func run() error {
 	flag.Int64Var(&cacheSize, "cache-size", 0, "cache device size in bytes (required if --cache-dir is set)")
 	flag.StringVar(&mountpoint, "mountpoint", "", "FUSE mount directory for read-only artifact access (optional)")
 	flag.StringVar(&upstreamSocket, "upstream-socket", "", "Unix socket path for upstream shared cache (optional)")
+	flag.BoolVar(&encryptionKeyStdin, "encryption-key-stdin", false, "read 32-byte artifact encryption key from stdin")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -97,6 +100,28 @@ func run() error {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	// Read the artifact encryption key from stdin if requested.
+	// This must happen before any other stdin consumers and before
+	// the signal context is created, so the key is available
+	// immediately. The key is held in guarded memory (mmap-backed,
+	// mlock'd, excluded from core dumps, zeroed on close).
+	var encryptionKeys *artifact.EncryptionKeySet
+	if encryptionKeyStdin {
+		keyBuffer, err := secret.NewFromReader(os.Stdin, artifact.KeySize)
+		if err != nil {
+			return fmt.Errorf("reading encryption key from stdin: %w", err)
+		}
+		os.Stdin.Close()
+
+		encryptionKeys, err = artifact.NewEncryptionKeySet(keyBuffer)
+		if err != nil {
+			keyBuffer.Close()
+			return fmt.Errorf("initializing encryption key set: %w", err)
+		}
+		defer encryptionKeys.Close()
+		logger.Info("artifact encryption key loaded from stdin")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -214,6 +239,7 @@ func run() error {
 		artifactIndex:  artifactIndex,
 		cache:          cache,
 		authConfig:     authConfig,
+		encryptionKeys: encryptionKeys,
 		session:        session,
 		clock:          clk,
 		principalName:  principalName,
@@ -323,15 +349,16 @@ func run() error {
 
 // ArtifactService is the core service state.
 type ArtifactService struct {
-	store         *artifact.Store
-	metadataStore *artifact.MetadataStore
-	refIndex      *artifact.RefIndex
-	tagStore      *artifact.TagStore
-	artifactIndex *artifact.ArtifactIndex
-	cache         *artifact.Cache     // nil if no cache directory configured
-	authConfig    *service.AuthConfig // nil in tests that don't exercise auth
-	session       *messaging.Session
-	clock         clock.Clock
+	store          *artifact.Store
+	metadataStore  *artifact.MetadataStore
+	refIndex       *artifact.RefIndex
+	tagStore       *artifact.TagStore
+	artifactIndex  *artifact.ArtifactIndex
+	cache          *artifact.Cache            // nil if no cache directory configured
+	authConfig     *service.AuthConfig        // nil in tests that don't exercise auth
+	encryptionKeys *artifact.EncryptionKeySet // nil if no encryption key provided (local-only mode)
+	session        *messaging.Session
+	clock          clock.Clock
 
 	principalName string
 	machineName   string

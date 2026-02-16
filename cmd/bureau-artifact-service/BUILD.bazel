@@ -20,6 +20,7 @@ go_library(
         "//lib/codec",
         "//lib/principal",
         "//lib/schema",
+        "//lib/secret",
         "//lib/service",
         "//lib/servicetoken",
         "//lib/version",

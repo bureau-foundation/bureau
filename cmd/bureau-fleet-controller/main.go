@@ -263,30 +263,6 @@ type FleetController struct {
 	logger *slog.Logger
 }
 
-// statusResponse is the response to the "status" action. Contains
-// only liveness information — no machine counts, service counts, or
-// other data that could disclose what the fleet controller is tracking.
-type statusResponse struct {
-	// UptimeSeconds is how long the service has been running.
-	UptimeSeconds int `cbor:"uptime_seconds"`
-}
-
-// handleStatus returns a minimal liveness response. This is the only
-// unauthenticated action — it reveals nothing about the fleet
-// controller's state beyond "I am alive."
-func (fc *FleetController) handleStatus(ctx context.Context, raw []byte) (any, error) {
-	uptime := fc.clock.Now().Sub(fc.startedAt)
-	return statusResponse{
-		UptimeSeconds: int(uptime.Seconds()),
-	}, nil
-}
-
-// registerActions registers all socket API actions on the server.
-// The "status" action is unauthenticated (pure liveness check).
-func (fc *FleetController) registerActions(server *service.SocketServer) {
-	server.Handle("status", fc.handleStatus)
-}
-
 // resolveFleetRoom resolves the #bureau/fleet room alias and joins it.
 // Returns the room ID.
 func resolveFleetRoom(ctx context.Context, session *messaging.Session, serverName string) (string, error) {

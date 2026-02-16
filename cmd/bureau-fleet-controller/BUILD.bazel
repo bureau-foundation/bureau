@@ -1,0 +1,41 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-fleet-controller_lib",
+    srcs = [
+        "doc.go",
+        "main.go",
+        "sync.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-fleet-controller",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/clock",
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/service",
+        "//lib/servicetoken",
+        "//lib/version",
+        "//messaging",
+    ],
+)
+
+go_binary(
+    name = "bureau-fleet-controller",
+    embed = [":bureau-fleet-controller_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-fleet-controller_test",
+    srcs = ["sync_test.go"],
+    embed = [":bureau-fleet-controller_lib"],
+    deps = [
+        "//lib/clock",
+        "//lib/schema",
+        "//messaging",
+    ],
+)

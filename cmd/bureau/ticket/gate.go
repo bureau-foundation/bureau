@@ -34,6 +34,7 @@ ticket closure), and timer (time-based).`,
 type gateResolveParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 	Gate   string `json:"gate"   desc:"gate ID"   required:"true"`
 }
@@ -85,11 +86,15 @@ The gate is identified by its ID within the ticket.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
-			var result mutationResult
-			if err := client.Call(ctx, "resolve-gate", map[string]any{
+			fields := map[string]any{
 				"ticket": params.Ticket,
 				"gate":   params.Gate,
-			}, &result); err != nil {
+			}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
+			var result mutationResult
+			if err := client.Call(ctx, "resolve-gate", fields, &result); err != nil {
 				return err
 			}
 
@@ -108,6 +113,7 @@ The gate is identified by its ID within the ticket.`,
 type gateUpdateParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room        string `json:"room"         flag:"room,r"       desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket      string `json:"ticket"       desc:"ticket ID" required:"true"`
 	Gate        string `json:"gate"         desc:"gate ID"   required:"true"`
 	Status      string `json:"status"       flag:"status,s"     desc:"new gate status (pending or satisfied)" required:"true"`
@@ -166,6 +172,9 @@ gate satisfaction.`,
 				"ticket": params.Ticket,
 				"gate":   params.Gate,
 				"status": params.Status,
+			}
+			if params.Room != "" {
+				fields["room"] = params.Room
 			}
 			if params.SatisfiedBy != "" {
 				fields["satisfied_by"] = params.SatisfiedBy

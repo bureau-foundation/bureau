@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "doc.go",
         "index.go",
+        "ref.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/ticket",
     visibility = ["//visibility:public"],
@@ -16,7 +17,10 @@ go_library(
 
 go_test(
     name = "ticket_test",
-    srcs = ["index_test.go"],
+    srcs = [
+        "index_test.go",
+        "ref_test.go",
+    ],
     embed = [":ticket"],
     deps = ["//lib/schema"],
 )

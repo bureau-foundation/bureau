@@ -130,6 +130,104 @@ func (ts *TicketService) requireRoom(roomID string) (*roomState, error) {
 	return state, nil
 }
 
+// resolveTicket resolves a ticket reference to a room ID, room state,
+// bare ticket ID, and ticket content. The ticket reference may be:
+//
+//   - A bare ticket ID ("tkt-a3f9") with room context in requestRoom
+//   - A room-qualified reference ("iree/general/tkt-a3f9") with the
+//     room alias localpart embedded in the reference
+//
+// If requestRoom is a room ID (starts with "!"), it is used directly.
+// If requestRoom is a room alias localpart, it is matched against
+// tracked rooms' canonical aliases. If both the ticket reference and
+// requestRoom carry room context, they must agree.
+func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (string, *roomState, string, schema.TicketContent, error) {
+	ref := ticket.ParseTicketRef(ticketRefStr)
+
+	// Determine room context: from the reference, from the request, or both.
+	roomID, err := ts.resolveRoomContext(requestRoom, ref)
+	if err != nil {
+		return "", nil, "", schema.TicketContent{}, err
+	}
+
+	state, exists := ts.rooms[roomID]
+	if !exists {
+		return "", nil, "", schema.TicketContent{}, fmt.Errorf("room %s is not tracked by this service", roomID)
+	}
+
+	content, exists := state.index.Get(ref.Ticket)
+	if !exists {
+		return "", nil, "", schema.TicketContent{}, fmt.Errorf("ticket %s not found in room %s", ref.Ticket, roomID)
+	}
+
+	return roomID, state, ref.Ticket, content, nil
+}
+
+// resolveRoomContext determines the room ID from a combination of the
+// explicit Room field on the request and the room qualifier embedded
+// in a ticket reference. Returns an error if no room context is
+// available or if both sources disagree.
+func (ts *TicketService) resolveRoomContext(requestRoom string, ref ticket.TicketRef) (string, error) {
+	refRoomID := ts.resolveRoomRef(ref)
+	requestRoomID := ts.resolveRoomString(requestRoom)
+
+	switch {
+	case refRoomID != "" && requestRoomID != "":
+		if refRoomID != requestRoomID {
+			return "", fmt.Errorf("room mismatch: ticket reference implies %s but request specifies %s", refRoomID, requestRoomID)
+		}
+		return refRoomID, nil
+	case refRoomID != "":
+		return refRoomID, nil
+	case requestRoomID != "":
+		return requestRoomID, nil
+	default:
+		return "", errors.New("ticket reference requires room context: use a room-qualified ticket reference (e.g., iree/general/tkt-a3f9) or provide room in the request")
+	}
+}
+
+// resolveRoomRef resolves the room qualifier from a parsed ticket
+// reference to a room ID. Returns empty string if the reference is
+// bare or the room cannot be resolved.
+func (ts *TicketService) resolveRoomRef(ref ticket.TicketRef) string {
+	if ref.IsBare() {
+		return ""
+	}
+	return ts.matchRoomAlias(ref.RoomLocalpart, ref.ServerName)
+}
+
+// resolveRoomString resolves a room string (from the Room field on a
+// request) to a room ID. The string may be a room ID (starts with
+// "!"), a room alias localpart, or empty.
+func (ts *TicketService) resolveRoomString(room string) string {
+	if room == "" {
+		return ""
+	}
+	// Room IDs start with "!" and are used directly.
+	if len(room) > 0 && room[0] == '!' {
+		return room
+	}
+	// Otherwise treat as an alias localpart on this server.
+	return ts.matchRoomAlias(room, "")
+}
+
+// matchRoomAlias finds the room ID for a room alias localpart among
+// tracked rooms. If serverName is empty, matches against this
+// server's name. Returns empty string if no match is found.
+func (ts *TicketService) matchRoomAlias(localpart, serverName string) string {
+	if serverName == "" {
+		serverName = ts.serverName
+	}
+	// Build the expected canonical alias: "#localpart:server"
+	expectedAlias := "#" + localpart + ":" + serverName
+	for roomID, state := range ts.rooms {
+		if state.alias == expectedAlias {
+			return roomID
+		}
+	}
+	return ""
+}
+
 // --- Request types ---
 //
 // Each query action decodes its specific fields from the CBOR request.
@@ -152,8 +250,12 @@ type listRequest struct {
 	Parent   string `cbor:"parent,omitempty"`
 }
 
-// showRequest identifies a single ticket.
+// showRequest identifies a single ticket. Room provides the room
+// context for the ticket lookup. If Ticket is a room-qualified
+// reference (e.g., "iree/general/tkt-a3f9"), Room may be omitted.
+// Used by show, deps, and epic-health handlers.
 type showRequest struct {
+	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 }
 
@@ -163,13 +265,9 @@ type grepRequest struct {
 	Room    string `cbor:"room,omitempty"`
 }
 
-// depsRequest identifies the ticket for dependency traversal.
-type depsRequest struct {
-	Ticket string `cbor:"ticket"`
-}
-
-// childrenRequest identifies the parent ticket.
+// childrenRequest identifies the parent ticket and its room.
 type childrenRequest struct {
+	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 }
 
@@ -358,8 +456,9 @@ func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.T
 	return result, nil
 }
 
-// handleShow returns the full detail of a single ticket, looked up
-// across all rooms. The response includes computed fields from the
+// handleShow returns the full detail of a single ticket. The ticket
+// is resolved via the room context in the request or a room-qualified
+// ticket reference. The response includes computed fields from the
 // dependency graph (blocks, child progress) alongside the schema
 // content.
 func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -376,25 +475,25 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
-	blocks := state.index.Blocks(request.Ticket)
-	childTotal, childClosed := state.index.ChildProgress(request.Ticket)
+	blocks := state.index.Blocks(ticketID)
+	childTotal, childClosed := state.index.ChildProgress(ticketID)
 
 	// Compute score for non-closed tickets. Scoring a closed ticket
 	// is meaningless (it cannot be assigned) and would produce
 	// confusing results.
 	var score *ticket.TicketScore
 	if content.Status != "closed" {
-		ticketScore := state.index.Score(request.Ticket, ts.clock.Now(), ticket.DefaultRankWeights())
+		ticketScore := state.index.Score(ticketID, ts.clock.Now(), ticket.DefaultRankWeights())
 		score = &ticketScore
 	}
 
 	return showResponse{
-		ID:          request.Ticket,
+		ID:          ticketID,
 		Room:        roomID,
 		Content:     content,
 		Blocks:      blocks,
@@ -420,17 +519,16 @@ func (ts *TicketService) handleChildren(ctx context.Context, token *servicetoken
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	// Find which room the parent ticket lives in.
-	_, state, _, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	_, state, ticketID, _, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
-	children := state.index.Children(request.Ticket)
-	childTotal, childClosed := state.index.ChildProgress(request.Ticket)
+	children := state.index.Children(ticketID)
+	childTotal, childClosed := state.index.ChildProgress(ticketID)
 
 	return childrenResponse{
-		Parent:      request.Ticket,
+		Parent:      ticketID,
 		Children:    entriesFromIndex(children, ""),
 		ChildTotal:  childTotal,
 		ChildClosed: childClosed,
@@ -515,7 +613,7 @@ func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Tok
 		return nil, err
 	}
 
-	var request depsRequest
+	var request showRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
@@ -524,19 +622,18 @@ func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Tok
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	// Find which room the ticket lives in.
-	_, state, _, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	_, state, ticketID, _, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
-	deps := state.index.Deps(request.Ticket)
+	deps := state.index.Deps(ticketID)
 	if deps == nil {
 		deps = []string{}
 	}
 
 	return depsResponse{
-		Ticket: request.Ticket,
+		Ticket: ticketID,
 		Deps:   deps,
 	}, nil
 }
@@ -559,15 +656,15 @@ func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetok
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	_, state, _, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	_, state, ticketID, _, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
-	health := state.index.EpicHealth(request.Ticket)
+	health := state.index.EpicHealth(ticketID)
 
 	return epicHealthResponse{
-		Ticket: request.Ticket,
+		Ticket: ticketID,
 		Health: health,
 	}, nil
 }
@@ -698,6 +795,7 @@ type createRequest struct {
 // distinguish "not provided" (nil) from "set to zero value" (non-nil
 // pointing to the zero value). Only non-nil fields are applied.
 type updateRequest struct {
+	Room      string    `cbor:"room,omitempty"`
 	Ticket    string    `cbor:"ticket"`
 	Title     *string   `cbor:"title,omitempty"`
 	Body      *string   `cbor:"body,omitempty"`
@@ -712,12 +810,14 @@ type updateRequest struct {
 
 // closeRequest is the input for the "close" action.
 type closeRequest struct {
+	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 	Reason string `cbor:"reason,omitempty"`
 }
 
 // reopenRequest is the input for the "reopen" action.
 type reopenRequest struct {
+	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 }
 
@@ -766,12 +866,14 @@ type importResponse struct {
 
 // resolveGateRequest is the input for the "resolve-gate" action.
 type resolveGateRequest struct {
+	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 	Gate   string `cbor:"gate"`
 }
 
 // updateGateRequest is the input for the "update-gate" action.
 type updateGateRequest struct {
+	Room        string `cbor:"room,omitempty"`
 	Ticket      string `cbor:"ticket"`
 	Gate        string `cbor:"gate"`
 	Status      string `cbor:"status"`
@@ -899,9 +1001,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -984,7 +1086,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 	// Check for dependency cycles if blocked_by changed.
 	if request.BlockedBy != nil && len(content.BlockedBy) > 0 {
-		if state.index.WouldCycle(request.Ticket, content.BlockedBy) {
+		if state.index.WouldCycle(ticketID, content.BlockedBy) {
 			return nil, errors.New("blocked_by would create a dependency cycle")
 		}
 		for _, blockerID := range content.BlockedBy {
@@ -1007,13 +1109,13 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, request.Ticket, content); err != nil {
+	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(request.Ticket, content)
+	state.index.Put(ticketID, content)
 
 	return mutationResponse{
-		ID:      request.Ticket,
+		ID:      ticketID,
 		Room:    roomID,
 		Content: content,
 	}, nil
@@ -1036,9 +1138,9 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -1060,13 +1162,13 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, request.Ticket, content); err != nil {
+	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(request.Ticket, content)
+	state.index.Put(ticketID, content)
 
 	return mutationResponse{
-		ID:      request.Ticket,
+		ID:      ticketID,
 		Room:    roomID,
 		Content: content,
 	}, nil
@@ -1088,9 +1190,9 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 		return nil, errors.New("missing required field: ticket")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -1110,13 +1212,13 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, request.Ticket, content); err != nil {
+	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(request.Ticket, content)
+	state.index.Put(ticketID, content)
 
 	return mutationResponse{
-		ID:      request.Ticket,
+		ID:      ticketID,
 		Room:    roomID,
 		Content: content,
 	}, nil
@@ -1341,9 +1443,9 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 		return nil, errors.New("missing required field: gate")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -1352,7 +1454,7 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 
 	gateIndex := findGate(content.Gates, request.Gate)
 	if gateIndex < 0 {
-		return nil, fmt.Errorf("gate %q not found on ticket %s", request.Gate, request.Ticket)
+		return nil, fmt.Errorf("gate %q not found on ticket %s", request.Gate, ticketID)
 	}
 
 	gate := &content.Gates[gateIndex]
@@ -1373,13 +1475,13 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, request.Ticket, content); err != nil {
+	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(request.Ticket, content)
+	state.index.Put(ticketID, content)
 
 	return mutationResponse{
-		ID:      request.Ticket,
+		ID:      ticketID,
 		Room:    roomID,
 		Content: content,
 	}, nil
@@ -1409,9 +1511,9 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 		return nil, errors.New("missing required field: status")
 	}
 
-	roomID, state, content, found := ts.findTicket(request.Ticket)
-	if !found {
-		return nil, fmt.Errorf("ticket %s not found", request.Ticket)
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -1420,7 +1522,7 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 
 	gateIndex := findGate(content.Gates, request.Gate)
 	if gateIndex < 0 {
-		return nil, fmt.Errorf("gate %q not found on ticket %s", request.Gate, request.Ticket)
+		return nil, fmt.Errorf("gate %q not found on ticket %s", request.Gate, ticketID)
 	}
 
 	gate := &content.Gates[gateIndex]
@@ -1439,13 +1541,13 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, request.Ticket, content); err != nil {
+	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(request.Ticket, content)
+	state.index.Put(ticketID, content)
 
 	return mutationResponse{
-		ID:      request.Ticket,
+		ID:      ticketID,
 		Room:    roomID,
 		Content: content,
 	}, nil

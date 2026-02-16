@@ -113,7 +113,8 @@ time (oldest first).`,
 type showParams struct {
 	TicketConnection
 	cli.JSONOutput
-	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
+	Ticket string `json:"ticket" desc:"ticket ID (bare or room-qualified)" required:"true"`
 }
 
 func showCommand() *cli.Command {
@@ -126,7 +127,7 @@ func showCommand() *cli.Command {
 from the dependency graph (what it blocks, child progress) and
 scoring dimensions.
 
-The ticket is looked up across all rooms tracked by the service.`,
+The ticket is resolved via --room or a room-qualified ticket reference (e.g., iree/general/tkt-a3f9).`,
 		Usage: "bureau ticket show <ticket-id> [flags]",
 		Examples: []cli.Example{
 			{
@@ -159,8 +160,12 @@ The ticket is looked up across all rooms tracked by the service.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			var result showResult
-			if err := client.Call(ctx, "show", map[string]any{"ticket": params.Ticket}, &result); err != nil {
+			if err := client.Call(ctx, "show", fields, &result); err != nil {
 				return err
 			}
 
@@ -520,6 +525,7 @@ total tickets, and per-room summaries. Requires authentication.`,
 type depsParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 }
 
@@ -553,8 +559,12 @@ becomes ready, including indirect (transitive) dependencies.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			var result depsResult
-			if err := client.Call(ctx, "deps", map[string]any{"ticket": params.Ticket}, &result); err != nil {
+			if err := client.Call(ctx, "deps", fields, &result); err != nil {
 				return err
 			}
 
@@ -581,6 +591,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 type childrenParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"parent ticket ID" required:"true"`
 }
 
@@ -614,8 +625,12 @@ showing how many are closed out of the total.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			var result childrenResult
-			if err := client.Call(ctx, "children", map[string]any{"ticket": params.Ticket}, &result); err != nil {
+			if err := client.Call(ctx, "children", fields, &result); err != nil {
 				return err
 			}
 
@@ -639,6 +654,7 @@ showing how many are closed out of the total.`,
 type epicHealthParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"epic ticket ID" required:"true"`
 }
 
@@ -674,8 +690,12 @@ depth (irreducible sequential steps).`,
 			ctx, cancel := callContext()
 			defer cancel()
 
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			var result epicHealthResult
-			if err := client.Call(ctx, "epic-health", map[string]any{"ticket": params.Ticket}, &result); err != nil {
+			if err := client.Call(ctx, "epic-health", fields, &result); err != nil {
 				return err
 			}
 

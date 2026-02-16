@@ -114,6 +114,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 type updateParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room     string   `json:"room"     flag:"room,r"     desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket   string   `json:"ticket"   desc:"ticket ID" required:"true"`
 	Title    string   `json:"title"    flag:"title"      desc:"new title"`
 	Body     string   `json:"body"     flag:"body"       desc:"new body"`
@@ -178,6 +179,9 @@ assignee.`,
 			// fields that were explicitly set. The service interprets
 			// nil pointers as "not provided."
 			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			if params.Title != "" {
 				fields["title"] = params.Title
 			}
@@ -223,6 +227,7 @@ assignee.`,
 type closeParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 	Reason string `json:"reason" flag:"reason" desc:"close reason"`
 }
@@ -268,6 +273,9 @@ ticket was in_progress, the assignee is auto-cleared.`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			if params.Reason != "" {
 				fields["reason"] = params.Reason
 			}
@@ -292,6 +300,7 @@ ticket was in_progress, the assignee is auto-cleared.`,
 type reopenParams struct {
 	TicketConnection
 	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
 	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
 }
 
@@ -325,8 +334,12 @@ close timestamp and reason.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
 			var result mutationResult
-			if err := client.Call(ctx, "reopen", map[string]any{"ticket": params.Ticket}, &result); err != nil {
+			if err := client.Call(ctx, "reopen", fields, &result); err != nil {
 				return err
 			}
 

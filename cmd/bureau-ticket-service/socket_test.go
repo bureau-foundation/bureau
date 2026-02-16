@@ -447,6 +447,7 @@ func TestHandleShow(t *testing.T) {
 	var result showResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -479,6 +480,7 @@ func TestHandleShowComputedFields(t *testing.T) {
 	var result showResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -496,6 +498,7 @@ func TestHandleShowComputedFields(t *testing.T) {
 	var result2 showResponse
 	err = client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-2",
+		"room":   "!roomA:local",
 	}, &result2)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -532,6 +535,7 @@ func TestHandleChildren(t *testing.T) {
 	var result childrenResponse
 	err := client.Call(context.Background(), "children", map[string]any{
 		"ticket": "tkt-1",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -561,6 +565,7 @@ func TestHandleChildrenNoChildren(t *testing.T) {
 	var result childrenResponse
 	err := client.Call(context.Background(), "children", map[string]any{
 		"ticket": "tkt-2",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -708,6 +713,7 @@ func TestHandleDeps(t *testing.T) {
 	var result depsResponse
 	err := client.Call(context.Background(), "deps", map[string]any{
 		"ticket": "tkt-3",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -728,6 +734,7 @@ func TestHandleDepsNoDependencies(t *testing.T) {
 	var result depsResponse
 	err := client.Call(context.Background(), "deps", map[string]any{
 		"ticket": "tkt-1",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -912,6 +919,7 @@ func TestHandleEpicHealth(t *testing.T) {
 	var result epicHealthResponse
 	err := client.Call(context.Background(), "epic-health", map[string]any{
 		"ticket": "tkt-epic",
+		"room":   "!room:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -962,6 +970,7 @@ func TestHandleShowIncludesScore(t *testing.T) {
 	var result showResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -980,6 +989,7 @@ func TestHandleShowClosedTicketOmitsScore(t *testing.T) {
 	var result showResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-2",
+		"room":   "!roomA:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1000,6 +1010,7 @@ func TestHandleShowCrossRoom(t *testing.T) {
 	var result showResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-10",
+		"room":   "!roomB:local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1383,6 +1394,7 @@ func TestHandleUpdateTitle(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
 		"title":  "updated title",
 	}, &result)
 	if err != nil {
@@ -1407,6 +1419,7 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-open",
+		"room":     "!room:bureau.local",
 		"status":   "in_progress",
 		"assignee": "@agent/tester:bureau.local",
 	}, &result)
@@ -1445,6 +1458,7 @@ func TestHandleUpdateUnclaim(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
 		"status": "open",
 	}, &result)
 	if err != nil {
@@ -1503,6 +1517,7 @@ func TestHandleUpdateCloseViaUpdate(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
 		"status": "closed",
 	}, &result)
 	if err != nil {
@@ -1540,6 +1555,7 @@ func TestHandleClose(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
 		"reason": "done",
 	}, &result)
 	if err != nil {
@@ -1565,6 +1581,7 @@ func TestHandleCloseInProgress(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
 		"reason": "agent finished",
 	}, &result)
 	if err != nil {
@@ -1582,6 +1599,7 @@ func TestHandleCloseAlreadyClosed(t *testing.T) {
 
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
 		"reason": "duplicate",
 	}, nil)
 	// closed → closed is a no-op status transition, not an error.
@@ -1601,6 +1619,7 @@ func TestHandleReopen(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "reopen", map[string]any{
 		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1742,6 +1761,7 @@ func TestHandleResolveGate(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "resolve-gate", map[string]any{
 		"ticket": "tkt-gated",
+		"room":   "!room:bureau.local",
 		"gate":   "human-review",
 	}, &result)
 	if err != nil {
@@ -1789,6 +1809,7 @@ func TestHandleResolveGateAlreadySatisfied(t *testing.T) {
 	// First resolve succeeds.
 	err := env.client.Call(context.Background(), "resolve-gate", map[string]any{
 		"ticket": "tkt-gated",
+		"room":   "!room:bureau.local",
 		"gate":   "human-review",
 	}, nil)
 	if err != nil {
@@ -1798,6 +1819,7 @@ func TestHandleResolveGateAlreadySatisfied(t *testing.T) {
 	// Second resolve should fail.
 	err = env.client.Call(context.Background(), "resolve-gate", map[string]any{
 		"ticket": "tkt-gated",
+		"room":   "!room:bureau.local",
 		"gate":   "human-review",
 	}, nil)
 	requireServiceError(t, err)
@@ -1823,6 +1845,7 @@ func TestHandleUpdateGate(t *testing.T) {
 	var result mutationResponse
 	err := env.client.Call(context.Background(), "update-gate", map[string]any{
 		"ticket":       "tkt-gated",
+		"room":         "!room:bureau.local",
 		"gate":         "ci-pass",
 		"status":       "satisfied",
 		"satisfied_by": "$pipeline-event-123",

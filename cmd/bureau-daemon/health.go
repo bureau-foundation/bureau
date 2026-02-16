@@ -222,71 +222,35 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		return
 	}
 
+	// Save state needed for recreation. destroyPrincipal clears all tracking
+	// maps, so these must be captured before the call.
 	previousSpec := d.previousSpecs[localpart]
+	template := d.lastTemplates[localpart]
 
-	// Cancel exit watchers before destroying — the rollback destroy
-	// is intentional, not an unexpected exit.
-	d.cancelExitWatcher(localpart)
-	d.cancelProxyExitWatcher(localpart)
+	// Remove this monitor from the health monitors map before calling
+	// destroyPrincipal. destroyPrincipal calls stopHealthMonitor, which
+	// waits on the monitor's done channel — but this goroutine IS the
+	// monitor, so waiting would deadlock. Removing the map entry first
+	// makes stopHealthMonitor a no-op for this localpart.
+	d.healthMonitorsMu.Lock()
+	delete(d.healthMonitors, localpart)
+	d.healthMonitorsMu.Unlock()
 
-	// Stop the layout watcher before destroying the sandbox.
-	d.stopLayoutWatcher(localpart)
-
-	// Destroy the current sandbox.
-	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:    "destroy-sandbox",
-		Principal: localpart,
-	})
-	if err != nil {
-		d.logger.Error("health rollback: destroy-sandbox IPC failed",
+	if err := d.destroyPrincipal(ctx, localpart); err != nil {
+		d.logger.Error("health rollback: failed to destroy sandbox, sandbox may be orphaned",
 			"principal", localpart, "error", err)
-		// Clean up state even on IPC failure — the sandbox may be gone.
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastCredentials, localpart)
-		delete(d.lastObserveAllowances, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		return
 	}
-	if !response.OK {
-		d.logger.Error("health rollback: destroy-sandbox rejected",
-			"principal", localpart, "error", response.Error)
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastCredentials, localpart)
-		delete(d.lastObserveAllowances, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
-		return
-	}
-
-	d.revokeAndCleanupTokens(ctx, localpart)
-	delete(d.running, localpart)
-	delete(d.exitWatchers, localpart)
-	delete(d.proxyExitWatchers, localpart)
-	delete(d.lastCredentials, localpart)
-	delete(d.lastObserveAllowances, localpart)
-	delete(d.lastSpecs, localpart)
-	d.lastActivityAt = d.clock.Now()
 
 	d.logger.Info("health rollback: sandbox destroyed", "principal", localpart)
 
 	// If no previous spec exists, the principal was on its first-ever
 	// spec or the daemon restarted (previousSpecs is in-memory only).
-	// Destroy and report — the next reconcile cycle will recreate from
-	// the current config if the admin fixes the template.
+	// The next reconcile cycle will recreate from the current config
+	// if the admin fixes the template.
 	if previousSpec == nil {
 		d.logger.Error("health rollback: no previous spec to roll back to",
 			"principal", localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("CRITICAL: %s health check failed, no previous working configuration. Principal destroyed.", localpart))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
@@ -300,8 +264,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if err != nil {
 		d.logger.Error("health rollback: cannot read credentials",
 			"principal", localpart, "error", err)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("CRITICAL: %s health rollback failed (cannot read credentials: %v). Principal destroyed.", localpart, err))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
@@ -315,8 +277,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if err != nil {
 		d.logger.Error("health rollback: cannot read machine config",
 			"principal", localpart, "error", err)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		return
 	}
 
@@ -330,8 +290,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if assignment == nil {
 		d.logger.Info("health rollback: principal no longer in config, not recreating",
 			"principal", localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		return
 	}
 
@@ -339,7 +297,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	grants := d.resolveGrantsForProxy(localpart, *assignment, config)
 
 	// Recreate with the previous working spec.
-	response, err = d.launcherRequest(ctx, launcherIPCRequest{
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:               "create-sandbox",
 		Principal:            localpart,
 		EncryptedCredentials: credentials.Ciphertext,
@@ -349,8 +307,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if err != nil {
 		d.logger.Error("health rollback: create-sandbox IPC failed",
 			"principal", localpart, "error", err)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("CRITICAL: %s rollback create-sandbox failed. Principal destroyed.", localpart))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
@@ -361,8 +317,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if !response.OK {
 		d.logger.Error("health rollback: create-sandbox rejected",
 			"principal", localpart, "error", response.Error)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
 		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
 			fmt.Sprintf("CRITICAL: %s rollback create-sandbox rejected: %s. Principal destroyed.", localpart, response.Error))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
@@ -374,7 +328,6 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	d.running[localpart] = true
 	d.lastSpecs[localpart] = previousSpec
 	d.lastGrants[localpart] = grants
-	delete(d.previousSpecs, localpart)
 	d.lastActivityAt = d.clock.Now()
 
 	d.logger.Info("health rollback: sandbox recreated with previous spec",
@@ -390,9 +343,10 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	}
 
 	// Start a new health monitor with a fresh grace period for the
-	// rolled-back sandbox. Use the current template's health check
-	// config (the admin's latest intent).
-	if template := d.lastTemplates[localpart]; template != nil && template.HealthCheck != nil {
+	// rolled-back sandbox. Restore the template so the daemon's tracking
+	// state is consistent for future reconciles.
+	if template != nil && template.HealthCheck != nil {
+		d.lastTemplates[localpart] = template
 		d.startHealthMonitor(ctx, localpart, template.HealthCheck)
 	}
 

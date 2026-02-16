@@ -1,0 +1,286 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package machine
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// revokeParams holds the parameters for the machine revoke command.
+type revokeParams struct {
+	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
+	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	Reason         string `json:"reason"       flag:"reason"          desc:"reason for revocation (recorded in revocation event)"`
+}
+
+func revokeCommand() *cli.Command {
+	var params revokeParams
+
+	return &cli.Command{
+		Name:    "revoke",
+		Summary: "Emergency credential revocation for a compromised machine",
+		Description: `Immediately revoke all credentials for a machine and shut it down.
+
+This is the emergency response command for a compromised machine. It
+executes three layers of defense:
+
+  Layer 1 — Machine isolation (seconds): Deactivates the machine's Matrix
+  account. The daemon detects the auth failure, destroys all sandboxes,
+  and exits. No cooperation from the compromised machine is needed.
+
+  Layer 2 — State cleanup (seconds): Clears credential state events,
+  machine key, and machine status. Kicks the machine from all rooms.
+  Publishes a credential revocation event for fleet-wide notification.
+
+  Layer 3 — Token expiry (≤5 minutes): Outstanding service tokens expire
+  via natural TTL. The daemon's emergency shutdown also pushes revocations
+  to reachable services for faster invalidation.
+
+After revocation, the machine name can be re-provisioned with
+"bureau machine provision". Account deactivation may be permanent
+depending on the homeserver — this is by design for emergency revocation.`,
+		Usage: "bureau machine revoke <machine-name> [flags]",
+		Examples: []cli.Example{
+			{
+				Description: "Revoke a compromised machine",
+				Command:     "bureau machine revoke machine/worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
+			},
+		},
+		Params:         func() any { return &params },
+		RequiredGrants: []string{"command/machine/revoke"},
+		Annotations:    cli.Destructive(),
+		Run: func(args []string) error {
+			if len(args) < 1 {
+				return fmt.Errorf("machine name is required\n\nUsage: bureau machine revoke <machine-name> [flags]")
+			}
+			machineName := args[0]
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected argument: %s", args[1])
+			}
+			if params.CredentialFile == "" {
+				return fmt.Errorf("--credential-file is required")
+			}
+			if err := principal.ValidateLocalpart(machineName); err != nil {
+				return fmt.Errorf("invalid machine name: %w", err)
+			}
+
+			return runRevoke(machineName, params.CredentialFile, params.ServerName, params.Reason)
+		},
+	}
+}
+
+func runRevoke(machineName, credentialFile, serverName, reason string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	credentials, err := cli.ReadCredentialFile(credentialFile)
+	if err != nil {
+		return fmt.Errorf("read credential file: %w", err)
+	}
+
+	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+	if homeserverURL == "" {
+		return fmt.Errorf("credential file missing MATRIX_HOMESERVER_URL")
+	}
+	adminUserID := credentials["MATRIX_ADMIN_USER"]
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminUserID == "" || adminToken == "" {
+		return fmt.Errorf("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		return fmt.Errorf("create matrix client: %w", err)
+	}
+
+	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	if err != nil {
+		return fmt.Errorf("create admin session: %w", err)
+	}
+	defer adminSession.Close()
+
+	machineUserID := principal.MatrixUserID(machineName, serverName)
+	fmt.Fprintf(os.Stderr, "EMERGENCY REVOCATION: %s (%s)\n\n", machineName, machineUserID)
+
+	// Layer 1: Deactivate the Matrix account. This causes the daemon to
+	// detect an auth failure on its next /sync, triggering emergency
+	// shutdown (sandbox destruction + exit). No cooperation needed from
+	// the compromised machine.
+	//
+	// Try the deactivate endpoint first (Synapse). If the homeserver
+	// doesn't support it (Continuwuity returns M_UNRECOGNIZED), fall
+	// back to resetting the password with logout_devices=true. The
+	// password reset invalidates all access tokens, producing the same
+	// M_UNKNOWN_TOKEN auth failure on the daemon's next /sync.
+	accountDeactivated := true
+	fmt.Fprintf(os.Stderr, "Layer 1: Deactivating machine account...\n")
+	if err := adminSession.DeactivateUser(ctx, machineUserID, false); err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeUnrecognized) {
+			fmt.Fprintf(os.Stderr, "  Deactivate endpoint not supported, falling back to password reset...\n")
+			randomPassword, passwordErr := generateRandomPassword()
+			if passwordErr != nil {
+				accountDeactivated = false
+				fmt.Fprintf(os.Stderr, "  WARNING: could not generate random password: %v\n", passwordErr)
+			} else if resetErr := adminSession.ResetUserPassword(ctx, machineUserID, randomPassword, true); resetErr != nil {
+				accountDeactivated = false
+				fmt.Fprintf(os.Stderr, "  WARNING: password reset failed: %v\n", resetErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Password reset with token invalidation — daemon will self-destruct on next sync\n")
+			}
+		} else {
+			accountDeactivated = false
+			fmt.Fprintf(os.Stderr, "  WARNING: account deactivation failed: %v\n", err)
+		}
+		if !accountDeactivated {
+			fmt.Fprintf(os.Stderr, "  Continuing with state cleanup (Layer 2)...\n")
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  Account deactivated — daemon will self-destruct on next sync\n")
+	}
+
+	// Layer 2: Clean up state events and kick from rooms.
+	fmt.Fprintf(os.Stderr, "\nLayer 2: Clearing state and revoking access...\n")
+
+	// Resolve the machine room.
+	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
+	if err != nil {
+		return fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
+	}
+
+	// Clear machine_key and machine_status.
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
+	}
+
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineName, map[string]any{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
+	}
+
+	// Resolve the config room and collect affected principals.
+	var principals []string
+	var credentialKeys []string
+	configAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
+		} else {
+			return fmt.Errorf("resolve config room %q: %w", configAlias, err)
+		}
+	} else {
+		// Clear machine_config.
+		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName, map[string]any{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Cleared machine_config\n")
+		}
+
+		// Clear all credentials and collect the affected principal names.
+		cleared, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+		} else {
+			principals = cleared
+			credentialKeys = cleared
+		}
+
+		// Kick from config room.
+		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine credentials revoked")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Kicked from config room\n")
+		}
+	}
+
+	// Kick from global rooms.
+	err = adminSession.KickUser(ctx, machineRoomID, machineUserID, "machine credentials revoked")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not kick from machine room: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Kicked from %s\n", machineAlias)
+	}
+
+	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not resolve service room: %v\n", err)
+	} else {
+		err = adminSession.KickUser(ctx, serviceRoomID, machineUserID, "machine credentials revoked")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from service room: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", serviceAlias)
+		}
+	}
+
+	// Publish a credential revocation event for fleet-wide notification.
+	// Other machines and future connectors watch for this event to
+	// invalidate cached tokens and revoke external API keys.
+	revocationContent := schema.CredentialRevocationContent{
+		Machine:            machineName,
+		MachineUserID:      machineUserID,
+		Principals:         principals,
+		CredentialKeys:     credentialKeys,
+		InitiatedBy:        adminUserID,
+		InitiatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Reason:             reason,
+		AccountDeactivated: accountDeactivated,
+	}
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID,
+		schema.EventTypeCredentialRevocation, machineName, revocationContent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not publish revocation event: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Published credential revocation event to %s\n", machineAlias)
+	}
+
+	// Print summary.
+	fmt.Fprintf(os.Stderr, "\n--- Revocation Summary ---\n")
+	fmt.Fprintf(os.Stderr, "Machine:            %s\n", machineName)
+	fmt.Fprintf(os.Stderr, "Account deactivated: %v\n", accountDeactivated)
+	fmt.Fprintf(os.Stderr, "Principals affected: %d\n", len(principals))
+	for _, name := range principals {
+		fmt.Fprintf(os.Stderr, "  - %s\n", name)
+	}
+	if !accountDeactivated {
+		fmt.Fprintf(os.Stderr, "\nWARNING: Account deactivation failed. The daemon may still be\n")
+		fmt.Fprintf(os.Stderr, "running. Credentials have been cleared from state, but the\n")
+		fmt.Fprintf(os.Stderr, "daemon's in-memory copy persists until it restarts.\n")
+	}
+	fmt.Fprintf(os.Stderr, "\nOutstanding service tokens will expire within 5 minutes (TTL).\n")
+
+	return nil
+}
+
+// generateRandomPassword returns a 64-character hex string from 32 random
+// bytes. Used as the replacement password when falling back to password
+// reset for account invalidation.
+func generateRandomPassword() (string, error) {
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("generate random bytes: %w", err)
+	}
+	return hex.EncodeToString(randomBytes), nil
+}

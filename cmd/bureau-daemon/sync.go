@@ -207,6 +207,12 @@ func (d *Daemon) syncLoop(ctx context.Context, sinceToken string) {
 			if ctx.Err() != nil {
 				return
 			}
+			if isAuthError(err) {
+				d.logger.Error("machine account authentication failed, initiating emergency shutdown",
+					"error", err)
+				d.emergencyShutdown()
+				return
+			}
 			d.logger.Error("sync failed, retrying", "error", err, "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -448,6 +454,15 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 			}
 		}
 	}
+}
+
+// isAuthError returns true if the error indicates the daemon's Matrix
+// account has been deactivated or its access token is invalid. These are
+// unrecoverable: the daemon cannot sync or perform any Matrix operations,
+// so it must shut down.
+func isAuthError(err error) bool {
+	return messaging.IsMatrixError(err, messaging.ErrCodeUnknownToken) ||
+		messaging.IsMatrixError(err, messaging.ErrCodeForbidden)
 }
 
 // roomHasStateChanges returns true if the JoinedRoom contains any state

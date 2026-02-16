@@ -25,4 +25,9 @@
 //     removes credentials from its config room, and kicks the machine
 //     account from all Bureau rooms. The machine name can be
 //     re-provisioned afterward.
+//   - revoke: emergency credential revocation for a compromised machine.
+//     Deactivates the machine's Matrix account (causing the daemon to
+//     self-destruct), clears all state events, kicks from rooms, and
+//     publishes an m.bureau.credential_revocation event for fleet-wide
+//     notification. This is the panic button for security incidents.
 package machine

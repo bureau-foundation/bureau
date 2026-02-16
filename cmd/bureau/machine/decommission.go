@@ -145,7 +145,9 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 		}
 
 		// Find and clear all credentials state events in the config room.
-		clearConfigRoomCredentials(ctx, adminSession, configRoomID)
+		if _, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID); err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+		}
 
 		// Kick the machine from the config room.
 		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
@@ -184,15 +186,16 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 }
 
 // clearConfigRoomCredentials finds all m.bureau.credentials state events
-// in the config room and clears them by sending empty content.
-func clearConfigRoomCredentials(ctx context.Context, session *messaging.Session, roomID string) {
+// in the config room and clears them by sending empty content. Returns the
+// state keys (principal localparts) of credentials that were successfully
+// cleared, plus any errors encountered reading room state.
+func clearConfigRoomCredentials(ctx context.Context, session *messaging.Session, roomID string) ([]string, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not read config room state: %v\n", err)
-		return
+		return nil, fmt.Errorf("read config room state: %w", err)
 	}
 
-	credentialsCleared := 0
+	var cleared []string
 	for _, event := range events {
 		if event.Type != schema.EventTypeCredentials {
 			continue
@@ -214,11 +217,12 @@ func clearConfigRoomCredentials(ctx context.Context, session *messaging.Session,
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not clear credentials for %s: %v\n", *event.StateKey, err)
 		} else {
-			credentialsCleared++
+			cleared = append(cleared, *event.StateKey)
 		}
 	}
 
-	if credentialsCleared > 0 {
-		fmt.Fprintf(os.Stderr, "  Cleared %d credential(s) from config room\n", credentialsCleared)
+	if len(cleared) > 0 {
+		fmt.Fprintf(os.Stderr, "  Cleared %d credential(s) from config room\n", len(cleared))
 	}
+	return cleared, nil
 }

@@ -117,8 +117,13 @@ func run() error {
 		logger.Warn("failed to compute daemon binary hash", "error", hashErr)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Wrap the signal context so the daemon can self-cancel on
+	// unrecoverable errors (e.g., Matrix account deactivated).
+	ctx, daemonCancel := context.WithCancel(signalCtx)
+	defer daemonCancel()
 
 	// Load the Matrix session saved by the launcher. The client is also
 	// needed for the token verifier (creates temporary sessions for whoami).
@@ -306,6 +311,7 @@ func run() error {
 		pipelineExecutorBinary: pipelineExecutorBinary,
 		pipelineEnvironment:    pipelineEnvironment,
 		shutdownCtx:            ctx,
+		shutdownCancel:         daemonCancel,
 		logger:                 logger,
 	}
 
@@ -378,6 +384,9 @@ func run() error {
 	// baseline state (reconcile, peer addresses, service directory).
 	sinceToken, err := daemon.initialSync(ctx)
 	if err != nil {
+		if isAuthError(err) {
+			return fmt.Errorf("machine account authentication failed: %w", err)
+		}
 		logger.Error("initial sync failed", "error", err)
 		// Continue — the sync loop will start from scratch with an empty
 		// token, which triggers a fresh initial sync.
@@ -742,10 +751,16 @@ type Daemon struct {
 	pipelineEnvironment string
 
 	// shutdownCtx is the daemon's top-level context, cancelled on
-	// SIGINT/SIGTERM. Used by async operations (pipeline execution)
-	// that outlive a single sync cycle and need the daemon's lifecycle
-	// for cancellation.
+	// SIGINT/SIGTERM or when the daemon detects an unrecoverable
+	// condition (e.g., Matrix account deactivated). Used by async
+	// operations (pipeline execution) that outlive a single sync
+	// cycle and need the daemon's lifecycle for cancellation.
 	shutdownCtx context.Context
+
+	// shutdownCancel cancels shutdownCtx. Called by emergencyShutdown
+	// to trigger a daemon exit when the Matrix account is deactivated.
+	// Nil in unit tests that don't need self-cancellation.
+	shutdownCancel context.CancelFunc
 
 	// reconcileNotify receives a signal after each asynchronous
 	// reconcile completes (sandbox exit, proxy crash recovery, health

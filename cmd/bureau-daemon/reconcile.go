@@ -122,38 +122,12 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.logger.Info("credentials changed, restarting principal",
 			"principal", localpart)
 
-		d.cancelExitWatcher(localpart)
-		d.cancelProxyExitWatcher(localpart)
-		d.stopHealthMonitor(localpart)
-		d.stopLayoutWatcher(localpart)
-
-		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:    "destroy-sandbox",
-			Principal: localpart,
-		})
-		if err != nil {
-			d.logger.Error("destroy-sandbox IPC failed during credential rotation",
+		if err := d.destroyPrincipal(ctx, localpart); err != nil {
+			d.logger.Error("failed to destroy sandbox during credential rotation",
 				"principal", localpart, "error", err)
 			continue
 		}
-		if !response.OK {
-			d.logger.Error("destroy-sandbox rejected during credential rotation",
-				"principal", localpart, "error", response.Error)
-			continue
-		}
 
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
-		delete(d.lastCredentials, localpart)
-		delete(d.lastGrants, localpart)
-		delete(d.lastTokenMint, localpart)
-		delete(d.lastObserveAllowances, localpart)
-		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", localpart)
 		rotatedPrincipals = append(rotatedPrincipals, localpart)
@@ -514,42 +488,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.logger.Info("stopping principal", "principal", localpart)
 
-		// Cancel exit watchers before destroying — the destroy is
-		// intentional, not an unexpected exit.
-		d.cancelExitWatcher(localpart)
-		d.cancelProxyExitWatcher(localpart)
-
-		// Stop health monitoring and layout watching before destroying
-		// the sandbox. This ensures clean shutdown rather than having
-		// monitors see the sandbox disappear underneath them.
-		d.stopHealthMonitor(localpart)
-		d.stopLayoutWatcher(localpart)
-
-		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:    "destroy-sandbox",
-			Principal: localpart,
-		})
-		if err != nil {
-			d.logger.Error("destroy-sandbox IPC failed", "principal", localpart, "error", err)
+		if err := d.destroyPrincipal(ctx, localpart); err != nil {
+			d.logger.Error("failed to destroy sandbox", "principal", localpart, "error", err)
 			continue
 		}
-		if !response.OK {
-			d.logger.Error("destroy-sandbox rejected", "principal", localpart, "error", response.Error)
-			continue
-		}
-
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastCredentials, localpart)
-		delete(d.lastGrants, localpart)
-		delete(d.lastTokenMint, localpart)
-		delete(d.lastObserveAllowances, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
-		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("principal stopped", "principal", localpart)
 	}
 
@@ -607,41 +549,19 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 			"template", assignment.Template,
 		)
 
-		d.cancelExitWatcher(localpart)
-		d.cancelProxyExitWatcher(localpart)
-		d.stopHealthMonitor(localpart)
-		d.stopLayoutWatcher(localpart)
+		// Save the current spec as the rollback target before destroying.
+		// The "create missing" pass will recreate the sandbox with the new
+		// spec; if health checks fail, the daemon can roll back to this
+		// previous working configuration.
+		rollbackSpec := d.lastSpecs[localpart]
 
-		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:    "destroy-sandbox",
-			Principal: localpart,
-		})
-		if err != nil {
-			d.logger.Error("destroy-sandbox IPC failed during structural restart",
+		if err := d.destroyPrincipal(ctx, localpart); err != nil {
+			d.logger.Error("failed to destroy sandbox during structural restart",
 				"principal", localpart, "error", err)
 			return
 		}
-		if !response.OK {
-			d.logger.Error("destroy-sandbox rejected during structural restart",
-				"principal", localpart, "error", response.Error)
-			return
-		}
 
-		// Save the current spec as the rollback target before clearing
-		// it. The "create missing" pass will recreate the sandbox with
-		// the new spec; if health checks fail, the daemon can roll back
-		// to this previous working configuration.
-		d.previousSpecs[localpart] = d.lastSpecs[localpart]
-
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.lastGrants, localpart)
-		delete(d.lastTokenMint, localpart)
-		delete(d.lastObserveAllowances, localpart)
-		d.lastActivityAt = d.clock.Now()
+		d.previousSpecs[localpart] = rollbackSpec
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
 			"principal", localpart)
 
@@ -1326,6 +1246,48 @@ func (d *Daemon) cancelProxyExitWatcher(localpart string) {
 	}
 }
 
+// destroyPrincipal stops a running principal: cancels exit watchers, stops
+// monitors, destroys the sandbox via launcher IPC, revokes service tokens,
+// and clears all tracking state. Must be called with reconcileMu held.
+//
+// On launcher IPC failure, tracking maps are still cleaned up — the sandbox
+// is assumed orphaned (the launcher or OS will clean it up) and service
+// tokens will expire via their natural 5-minute TTL. The error is returned
+// so callers can log it and decide whether to continue (emergency shutdown
+// paths must continue past errors).
+func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
+	d.cancelExitWatcher(localpart)
+	d.cancelProxyExitWatcher(localpart)
+	d.stopHealthMonitor(localpart)
+	d.stopLayoutWatcher(localpart)
+
+	var destroyError error
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+	})
+	if err != nil {
+		destroyError = fmt.Errorf("destroy-sandbox IPC failed: %w", err)
+	} else if !response.OK {
+		destroyError = fmt.Errorf("destroy-sandbox rejected: %s", response.Error)
+	}
+
+	d.revokeAndCleanupTokens(ctx, localpart)
+	delete(d.running, localpart)
+	delete(d.exitWatchers, localpart)
+	delete(d.proxyExitWatchers, localpart)
+	delete(d.lastSpecs, localpart)
+	delete(d.previousSpecs, localpart)
+	delete(d.lastTemplates, localpart)
+	delete(d.lastCredentials, localpart)
+	delete(d.lastGrants, localpart)
+	delete(d.lastTokenMint, localpart)
+	delete(d.lastObserveAllowances, localpart)
+	d.lastActivityAt = d.clock.Now()
+
+	return destroyError
+}
+
 // watchSandboxExit blocks until the named sandbox's process exits, then clears
 // the daemon's running state and triggers re-reconciliation. This enables the
 // daemon to detect one-shot principals (setup/teardown) that complete their work
@@ -1776,41 +1738,17 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		return
 	}
 
-	// Cancel the sandbox exit watcher — the destroy below will kill the
-	// tmux session, which would trigger watchSandboxExit. We handle the
-	// full cleanup here.
-	d.cancelExitWatcher(localpart)
-	d.stopHealthMonitor(localpart)
-	d.stopLayoutWatcher(localpart)
-
-	// Destroy the sandbox. The proxy is dead but the tmux session may
-	// still be running. We must destroy before clearing state so that a
-	// concurrent reconcile doesn't attempt to recreate while the old
-	// session is alive.
-	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:    "destroy-sandbox",
-		Principal: localpart,
-	})
-	if err != nil {
-		d.logger.Error("proxy exit handler: destroy-sandbox IPC failed",
-			"principal", localpart, "error", err)
-	} else if !response.OK {
-		d.logger.Error("proxy exit handler: destroy-sandbox rejected",
-			"principal", localpart, "error", response.Error)
-	}
-
-	d.revokeAndCleanupTokens(ctx, localpart)
-	delete(d.running, localpart)
-	delete(d.exitWatchers, localpart)
+	// Remove our own cancel function from the map before calling
+	// destroyPrincipal. destroyPrincipal calls cancelProxyExitWatcher,
+	// which would cancel THIS goroutine's context — the same context
+	// passed to the launcher IPC call inside destroyPrincipal. Removing
+	// the entry first makes cancelProxyExitWatcher a no-op for us.
 	delete(d.proxyExitWatchers, localpart)
-	delete(d.lastSpecs, localpart)
-	delete(d.previousSpecs, localpart)
-	delete(d.lastTemplates, localpart)
-	delete(d.lastCredentials, localpart)
-	delete(d.lastGrants, localpart)
-	delete(d.lastTokenMint, localpart)
-	delete(d.lastObserveAllowances, localpart)
-	d.lastActivityAt = d.clock.Now()
+
+	if err := d.destroyPrincipal(ctx, localpart); err != nil {
+		d.logger.Error("proxy exit handler: failed to destroy sandbox",
+			"principal", localpart, "error", err)
+	}
 	d.reconcileMu.Unlock()
 
 	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(

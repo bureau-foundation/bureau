@@ -32,6 +32,7 @@ go_test(
         "proxy_crash_test.go",
         "quickstart_test.go",
         "restart_test.go",
+        "revocation_test.go",
         "service_discovery_test.go",
         "setup_test.go",
         "structured_api_test.go",

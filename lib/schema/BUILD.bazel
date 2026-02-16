@@ -10,6 +10,7 @@ go_library(
         "doc.go",
         "events.go",
         "events_fleet.go",
+        "events_revocation.go",
         "match.go",
         "pipeline_ref.go",
         "rooms.go",

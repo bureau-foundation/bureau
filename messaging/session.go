@@ -462,6 +462,75 @@ func (s *Session) ChangePassword(ctx context.Context, currentPassword, newPasswo
 	return nil
 }
 
+// DeactivateUser deactivates a Matrix account via the Synapse admin API.
+// The session must belong to a server administrator. The target user's
+// access tokens are invalidated immediately and the account can no longer
+// log in.
+//
+// When erase is true, the server also removes the user's display name,
+// avatar, and other profile data.
+//
+// Corresponds to POST /_synapse/admin/v1/deactivate/{user_id}.
+// Not all homeservers implement this endpoint — Continuwuity returns
+// M_UNRECOGNIZED. Callers should fall back to [Session.ResetUserPassword]
+// with logoutDevices=true when this method fails.
+func (s *Session) DeactivateUser(ctx context.Context, userID string, erase bool) error {
+	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID)
+	requestBody := map[string]any{
+		"erase": erase,
+	}
+
+	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, requestBody)
+	if err != nil {
+		return fmt.Errorf("messaging: deactivate user %q failed: %w", userID, err)
+	}
+	return nil
+}
+
+// ResetUserPassword changes a user's password via the Synapse admin API.
+// The session must belong to a server administrator.
+//
+// When logoutDevices is true, all of the user's access tokens are
+// invalidated immediately. This is the primary mechanism for forcing a
+// running daemon to detect an auth failure and trigger emergency shutdown:
+// the daemon's next /sync attempt receives M_UNKNOWN_TOKEN.
+//
+// Corresponds to POST /_synapse/admin/v1/reset_password/{user_id}.
+func (s *Session) ResetUserPassword(ctx context.Context, userID, newPassword string, logoutDevices bool) error {
+	path := "/_synapse/admin/v1/reset_password/" + url.PathEscape(userID)
+	requestBody := map[string]any{
+		"new_password":   newPassword,
+		"logout_devices": logoutDevices,
+	}
+
+	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, requestBody)
+	if err != nil {
+		return fmt.Errorf("messaging: reset password for %q failed: %w", userID, err)
+	}
+	return nil
+}
+
+// LogoutAll invalidates all access tokens for the session's user by calling
+// the Matrix client API POST /_matrix/client/v3/logout/all. After this
+// call, every session for this user (including the caller's own) is
+// invalidated.
+//
+// This is part of the core Matrix spec and supported by all homeservers,
+// unlike the Synapse admin API endpoints ([Session.DeactivateUser],
+// [Session.ResetUserPassword]) which are server-specific.
+//
+// In the revocation workflow, the admin reads the machine's saved session
+// file to obtain its access token, creates a session from it, and calls
+// LogoutAll. The daemon's next /sync attempt receives M_UNKNOWN_TOKEN and
+// triggers emergency shutdown.
+func (s *Session) LogoutAll(ctx context.Context) error {
+	_, err := s.client.doRequest(ctx, http.MethodPost, "/_matrix/client/v3/logout/all", s.accessToken, map[string]any{})
+	if err != nil {
+		return fmt.Errorf("messaging: logout all sessions failed: %w", err)
+	}
+	return nil
+}
+
 // nextTransactionID generates a unique transaction ID for idempotent event sending.
 // Format: "bureau-<timestamp_ms>-<counter>" to ensure uniqueness across restarts.
 func (s *Session) nextTransactionID() string {

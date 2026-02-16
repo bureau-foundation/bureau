@@ -931,6 +931,195 @@ func TestChangePassword(t *testing.T) {
 	})
 }
 
+func TestDeactivateUser(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+
+			expectedPath := "/_synapse/admin/v1/deactivate/@target:local"
+			if request.URL.Path != expectedPath {
+				t.Errorf("path = %q, want %q", request.URL.Path, expectedPath)
+			}
+			if request.Method != http.MethodPost {
+				t.Errorf("method = %s, want POST", request.Method)
+			}
+
+			body, _ := io.ReadAll(request.Body)
+			var parsed map[string]any
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				t.Fatalf("parsing request body: %v", err)
+			}
+			if erase, ok := parsed["erase"].(bool); !ok || erase {
+				t.Errorf("erase = %v, want false", parsed["erase"])
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		if err != nil {
+			t.Fatalf("DeactivateUser failed: %v", err)
+		}
+	})
+
+	t.Run("erase", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, _ := io.ReadAll(request.Body)
+			var parsed map[string]any
+			json.Unmarshal(body, &parsed)
+			if erase, ok := parsed["erase"].(bool); !ok || !erase {
+				t.Errorf("erase = %v, want true", parsed["erase"])
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.DeactivateUser(context.Background(), "@target:local", true)
+		if err != nil {
+			t.Fatalf("DeactivateUser with erase failed: %v", err)
+		}
+	})
+
+	t.Run("forbidden", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Not an admin"})
+		}))
+
+		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		if err == nil {
+			t.Fatal("expected error for non-admin session")
+		}
+		if !IsMatrixError(err, ErrCodeForbidden) {
+			t.Errorf("expected M_FORBIDDEN, got: %v", err)
+		}
+	})
+
+	t.Run("unrecognized endpoint", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeUnrecognized, Message: "Unrecognized request"})
+		}))
+
+		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		if err == nil {
+			t.Fatal("expected error for unrecognized endpoint")
+		}
+		if !IsMatrixError(err, ErrCodeUnrecognized) {
+			t.Errorf("expected M_UNRECOGNIZED, got: %v", err)
+		}
+	})
+}
+
+func TestResetUserPassword(t *testing.T) {
+	t.Run("success with logout", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+
+			expectedPath := "/_synapse/admin/v1/reset_password/@target:local"
+			if request.URL.Path != expectedPath {
+				t.Errorf("path = %q, want %q", request.URL.Path, expectedPath)
+			}
+			if request.Method != http.MethodPost {
+				t.Errorf("method = %s, want POST", request.Method)
+			}
+
+			body, _ := io.ReadAll(request.Body)
+			var parsed map[string]any
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				t.Fatalf("parsing request body: %v", err)
+			}
+			if password, ok := parsed["new_password"].(string); !ok || password != "new-random-password" {
+				t.Errorf("new_password = %v, want %q", parsed["new_password"], "new-random-password")
+			}
+			if logout, ok := parsed["logout_devices"].(bool); !ok || !logout {
+				t.Errorf("logout_devices = %v, want true", parsed["logout_devices"])
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.ResetUserPassword(context.Background(), "@target:local", "new-random-password", true)
+		if err != nil {
+			t.Fatalf("ResetUserPassword failed: %v", err)
+		}
+	})
+
+	t.Run("without logout", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, _ := io.ReadAll(request.Body)
+			var parsed map[string]any
+			json.Unmarshal(body, &parsed)
+			if logout, ok := parsed["logout_devices"].(bool); !ok || logout {
+				t.Errorf("logout_devices = %v, want false", parsed["logout_devices"])
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.ResetUserPassword(context.Background(), "@target:local", "new-password", false)
+		if err != nil {
+			t.Fatalf("ResetUserPassword failed: %v", err)
+		}
+	})
+
+	t.Run("forbidden", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Not an admin"})
+		}))
+
+		err := session.ResetUserPassword(context.Background(), "@target:local", "new-password", true)
+		if err == nil {
+			t.Fatal("expected error for non-admin session")
+		}
+		if !IsMatrixError(err, ErrCodeForbidden) {
+			t.Errorf("expected M_FORBIDDEN, got: %v", err)
+		}
+	})
+}
+
+func TestLogoutAll(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+
+			if request.URL.Path != "/_matrix/client/v3/logout/all" {
+				t.Errorf("path = %q, want %q", request.URL.Path, "/_matrix/client/v3/logout/all")
+			}
+			if request.Method != http.MethodPost {
+				t.Errorf("method = %s, want POST", request.Method)
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.LogoutAll(context.Background())
+		if err != nil {
+			t.Fatalf("LogoutAll failed: %v", err)
+		}
+	})
+
+	t.Run("unknown token", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeUnknownToken, Message: "Unknown token"})
+		}))
+
+		err := session.LogoutAll(context.Background())
+		if err == nil {
+			t.Fatal("expected error for invalid token")
+		}
+		if !IsMatrixError(err, ErrCodeUnknownToken) {
+			t.Errorf("expected M_UNKNOWN_TOKEN, got: %v", err)
+		}
+	})
+}
+
 // Test helpers.
 
 func assertAuth(t *testing.T, request *http.Request, expectedToken string) {

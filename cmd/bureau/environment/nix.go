@@ -105,9 +105,9 @@ func listProfiles(flakeRef string, options *nixOptions) ([]profileInfo, error) {
 
 // profileInfo describes an available environment profile.
 type profileInfo struct {
-	Name           string `json:"name"`
-	DerivationName string `json:"derivation_name"`
-	Description    string `json:"description,omitempty"`
+	Name           string `json:"name"                    desc:"profile name"`
+	DerivationName string `json:"derivation_name"         desc:"Nix derivation name"`
+	Description    string `json:"description,omitempty"   desc:"profile description"`
 }
 
 // buildProfile builds a profile from a flake and places the result

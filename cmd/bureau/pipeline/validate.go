@@ -18,9 +18,9 @@ type pipelineValidateParams struct {
 
 // validationResult is the JSON output for pipeline validate.
 type validationResult struct {
-	File   string   `json:"file"`
-	Valid  bool     `json:"valid"`
-	Issues []string `json:"issues,omitempty"`
+	File   string   `json:"file"             desc:"validated pipeline file path"`
+	Valid  bool     `json:"valid"            desc:"true if pipeline is valid"`
+	Issues []string `json:"issues,omitempty" desc:"validation issues found"`
 }
 
 // validateCommand returns the "validate" subcommand for validating pipeline files.
@@ -50,6 +50,7 @@ before validation.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &validationResult{} },
 		RequiredGrants: []string{"command/pipeline/validate"},
 		Run: func(args []string) error {
 			if len(args) != 1 {

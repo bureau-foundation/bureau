@@ -22,13 +22,13 @@ type pipelinePushParams struct {
 
 // pushResult is the JSON output for pipeline push.
 type pushResult struct {
-	Ref          string `json:"ref"`
-	File         string `json:"file"`
-	RoomAlias    string `json:"room_alias"`
-	RoomID       string `json:"room_id,omitempty"`
-	PipelineName string `json:"pipeline_name"`
-	EventID      string `json:"event_id,omitempty"`
-	DryRun       bool   `json:"dry_run"`
+	Ref          string `json:"ref"                    desc:"pipeline reference (state key)"`
+	File         string `json:"file"                   desc:"source pipeline file path"`
+	RoomAlias    string `json:"room_alias"             desc:"target room alias"`
+	RoomID       string `json:"room_id,omitempty"      desc:"target room Matrix ID"`
+	PipelineName string `json:"pipeline_name"          desc:"pipeline name"`
+	EventID      string `json:"event_id,omitempty"     desc:"created state event ID"`
+	DryRun       bool   `json:"dry_run"                desc:"true if push was simulated"`
 }
 
 // pushCommand returns the "push" subcommand for publishing a pipeline to Matrix.
@@ -57,6 +57,7 @@ without actually publishing.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &pushResult{} },
 		RequiredGrants: []string{"command/pipeline/push"},
 		Run: func(args []string) error {
 			if len(args) != 2 {

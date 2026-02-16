@@ -22,10 +22,10 @@ type templateDiffParams struct {
 
 // diffResult is the JSON output for template diff.
 type diffResult struct {
-	TemplateRef string   `json:"template_ref"`
-	File        string   `json:"file"`
-	Identical   bool     `json:"identical"`
-	Differences []string `json:"differences,omitempty"`
+	TemplateRef string   `json:"template_ref"          desc:"template reference (state key)"`
+	File        string   `json:"file"                  desc:"local file compared against"`
+	Identical   bool     `json:"identical"             desc:"true if template and file match"`
+	Differences []string `json:"differences,omitempty" desc:"list of differences found"`
 }
 
 // diffCommand returns the "diff" subcommand for comparing a Matrix template
@@ -51,6 +51,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &diffResult{} },
 		RequiredGrants: []string{"command/template/diff"},
 		Run: func(args []string) error {
 			if len(args) != 2 {

@@ -36,6 +36,7 @@ Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the #bureau/machine room state.`,
 		Usage:          "bureau machine list [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]machineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
@@ -58,14 +59,14 @@ Shows each machine's name, public key, and last status heartbeat
 
 // machineEntry collects the key, status, and hardware info for a single machine.
 type machineEntry struct {
-	Name      string `json:"name"`
-	PublicKey string `json:"public_key"`
-	Algorithm string `json:"algorithm"`
-	LastSeen  string `json:"last_seen,omitempty"`
-	GPUCount  int    `json:"gpu_count"`
-	GPUModel  string `json:"gpu_model,omitempty"`
-	CPUModel  string `json:"cpu_model,omitempty"`
-	MemoryMB  int    `json:"memory_mb"`
+	Name      string `json:"name"                  desc:"machine name"`
+	PublicKey string `json:"public_key"            desc:"SSH public key"`
+	Algorithm string `json:"algorithm"             desc:"key algorithm"`
+	LastSeen  string `json:"last_seen,omitempty"   desc:"last heartbeat timestamp"`
+	GPUCount  int    `json:"gpu_count"             desc:"number of GPUs"`
+	GPUModel  string `json:"gpu_model,omitempty"   desc:"GPU model name"`
+	CPUModel  string `json:"cpu_model,omitempty"   desc:"CPU model name"`
+	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
 }
 
 func runList(ctx context.Context, session *messaging.Session, serverName string, jsonOutput *cli.JSONOutput) error {

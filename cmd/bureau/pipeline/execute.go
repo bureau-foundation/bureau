@@ -23,12 +23,12 @@ type pipelineExecuteParams struct {
 
 // executeResult is the JSON output for pipeline execute.
 type executeResult struct {
-	Machine      string `json:"machine"`
-	PipelineRef  string `json:"pipeline_ref"`
-	ConfigRoom   string `json:"config_room"`
-	ConfigRoomID string `json:"config_room_id"`
-	EventID      string `json:"event_id"`
-	RequestID    string `json:"request_id"`
+	Machine      string `json:"machine"        desc:"target machine name"`
+	PipelineRef  string `json:"pipeline_ref"   desc:"pipeline reference"`
+	ConfigRoom   string `json:"config_room"    desc:"configuration room alias"`
+	ConfigRoomID string `json:"config_room_id" desc:"configuration room Matrix ID"`
+	EventID      string `json:"event_id"       desc:"execution request event ID"`
+	RequestID    string `json:"request_id"     desc:"unique request identifier"`
 }
 
 // executeCommand returns the "execute" subcommand for running a pipeline
@@ -62,6 +62,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &executeResult{} },
 		RequiredGrants: []string{"command/pipeline/execute"},
 		Run: func(args []string) error {
 			if len(args) != 1 {

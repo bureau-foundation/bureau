@@ -21,9 +21,9 @@ type templateValidateParams struct {
 
 // templateValidationResult is the JSON output for template validate.
 type templateValidationResult struct {
-	File   string   `json:"file"`
-	Valid  bool     `json:"valid"`
-	Issues []string `json:"issues,omitempty"`
+	File   string   `json:"file"             desc:"validated template file path"`
+	Valid  bool     `json:"valid"            desc:"true if template is valid"`
+	Issues []string `json:"issues,omitempty" desc:"validation issues found"`
 }
 
 // validateCommand returns the "validate" subcommand for validating template files.
@@ -48,6 +48,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &templateValidationResult{} },
 		RequiredGrants: []string{"command/template/validate"},
 		Run: func(args []string) error {
 			if len(args) != 1 {

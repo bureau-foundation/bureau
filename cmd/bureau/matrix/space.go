@@ -43,8 +43,8 @@ type spaceCreateParams struct {
 
 // spaceCreateResult is the JSON output for matrix space create.
 type spaceCreateResult struct {
-	RoomID string `json:"room_id"`
-	Alias  string `json:"alias"`
+	RoomID string `json:"room_id" desc:"created space's Matrix room ID"`
+	Alias  string `json:"alias"   desc:"space alias"`
 }
 
 func spaceCreateCommand() *cli.Command {
@@ -70,6 +70,7 @@ if not specified.`,
 				Command:     "bureau matrix space create research --topic 'Research coordination' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &spaceCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/create"},
 		Run: func(args []string) error {
@@ -129,9 +130,9 @@ type spaceListParams struct {
 
 // spaceEntry holds the JSON-serializable data for a single space.
 type spaceEntry struct {
-	RoomID string `json:"room_id"`
-	Alias  string `json:"alias,omitempty"`
-	Name   string `json:"name,omitempty"`
+	RoomID string `json:"room_id"         desc:"space's Matrix room ID"`
+	Alias  string `json:"alias,omitempty" desc:"space alias"`
+	Name   string `json:"name,omitempty"  desc:"space display name"`
 }
 
 func spaceListCommand() *cli.Command {
@@ -152,6 +153,7 @@ table of room ID, alias, and name.`,
 				Command:     "bureau matrix space list --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &[]spaceEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/list"},
 		Run: func(args []string) error {
@@ -207,7 +209,7 @@ type spaceDeleteParams struct {
 
 // spaceDeleteResult is the JSON output for matrix space delete.
 type spaceDeleteResult struct {
-	RoomID string `json:"room_id"`
+	RoomID string `json:"room_id" desc:"left space's Matrix room ID"`
 }
 
 func spaceDeleteCommand() *cli.Command {
@@ -232,6 +234,7 @@ reclaim the room.`,
 				Command:     "bureau matrix space delete '!abc123:bureau.local' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &spaceDeleteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/delete"},
 		Run: func(args []string) error {
@@ -293,6 +296,7 @@ Displays a table of user ID, display name, and membership state
 				Command:     "bureau matrix space members '#my-project:bureau.local' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &[]messaging.RoomMember{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/members"},
 		Run: func(args []string) error {

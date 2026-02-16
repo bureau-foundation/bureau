@@ -20,10 +20,10 @@ type whoamiParams struct {
 
 // whoamiOutput is the JSON output for the whoami command.
 type whoamiOutput struct {
-	UserID      string `json:"user_id"`
-	Homeserver  string `json:"homeserver"`
-	SessionFile string `json:"session_file"`
-	Status      string `json:"status,omitempty"`
+	UserID      string `json:"user_id"              desc:"Matrix user ID"`
+	Homeserver  string `json:"homeserver"           desc:"Matrix homeserver URL"`
+	SessionFile string `json:"session_file"         desc:"local session file path"`
+	Status      string `json:"status,omitempty"     desc:"session verification status"`
 }
 
 // WhoAmICommand returns the "whoami" command for displaying the current
@@ -56,6 +56,7 @@ session file is read (no network access).`,
 			},
 		},
 		Params: func() any { return &params },
+		Output: func() any { return &whoamiOutput{} },
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected argument: %s", args[0])

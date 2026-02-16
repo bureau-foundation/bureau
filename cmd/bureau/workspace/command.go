@@ -211,6 +211,7 @@ the workspace alias, project, repository, and status.
 This is a Matrix-only query — works from any machine without needing
 access to the workspace filesystem.`,
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]workspaceInfo{} },
 		RequiredGrants: []string{"command/workspace/list"},
 		Run: func(args []string) error {
 			return runList(args, &params.JSONOutput)
@@ -221,10 +222,10 @@ access to the workspace filesystem.`,
 // workspaceInfo holds the display data for a single workspace, extracted
 // from the Matrix room's state events.
 type workspaceInfo struct {
-	Alias      string `json:"alias"`
-	Project    string `json:"project"`
-	Repository string `json:"repository,omitempty"`
-	Status     string `json:"status"`
+	Alias      string `json:"alias"                desc:"workspace alias"`
+	Project    string `json:"project"              desc:"project name"`
+	Repository string `json:"repository,omitempty" desc:"git repository URL"`
+	Status     string `json:"status"               desc:"workspace lifecycle status"`
 }
 
 func runList(args []string, jsonOutput *cli.JSONOutput) error {
@@ -538,11 +539,11 @@ type worktreeAddParams struct {
 
 // worktreeAddResult is the JSON output for workspace worktree add.
 type worktreeAddResult struct {
-	Alias         string `json:"alias"`
-	Workspace     string `json:"workspace"`
-	Subpath       string `json:"subpath"`
-	Branch        string `json:"branch,omitempty"`
-	PrincipalName string `json:"principal_name,omitempty"`
+	Alias         string `json:"alias"                      desc:"worktree alias"`
+	Workspace     string `json:"workspace"                  desc:"parent workspace alias"`
+	Subpath       string `json:"subpath"                    desc:"worktree subpath within workspace"`
+	Branch        string `json:"branch,omitempty"           desc:"git branch or commit checked out"`
+	PrincipalName string `json:"principal_name,omitempty"   desc:"executor principal name"`
 }
 
 func worktreeAddCommand() *cli.Command {
@@ -561,6 +562,7 @@ This is an async operation — the command returns immediately with
 an "accepted" status.`,
 		Usage:          "bureau workspace worktree add <alias> [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &worktreeAddResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/add"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -667,11 +669,11 @@ type worktreeRemoveParams struct {
 
 // worktreeRemoveResult is the JSON output for workspace worktree remove.
 type worktreeRemoveResult struct {
-	Alias         string `json:"alias"`
-	Workspace     string `json:"workspace"`
-	Subpath       string `json:"subpath"`
-	Mode          string `json:"mode"`
-	PrincipalName string `json:"principal_name,omitempty"`
+	Alias         string `json:"alias"                      desc:"worktree alias"`
+	Workspace     string `json:"workspace"                  desc:"parent workspace alias"`
+	Subpath       string `json:"subpath"                    desc:"worktree subpath within workspace"`
+	Mode          string `json:"mode"                       desc:"removal mode (archive or delete)"`
+	PrincipalName string `json:"principal_name,omitempty"   desc:"executor principal name"`
 }
 
 func worktreeRemoveCommand() *cli.Command {
@@ -689,6 +691,7 @@ The daemon spawns a pipeline executor to perform the removal. This is
 an async operation — the command returns immediately.`,
 		Usage:          "bureau workspace worktree remove <alias> [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &worktreeRemoveResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/remove"},
 		Run: func(args []string) error {
 			if len(args) == 0 {

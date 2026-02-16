@@ -182,6 +182,7 @@ unrecognized extensions.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.StoreResponse{} },
 		RequiredGrants: []string{"command/artifact/store"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -367,6 +368,7 @@ storage details.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.ArtifactMetadata{} },
 		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -438,6 +440,7 @@ func existsCommand() *cli.Command {
 		Description: `Check if an artifact exists in the store. Exits 0 if it exists,
 1 if it does not. With --json, outputs the exists response.`,
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.ExistsResponse{} },
 		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -514,6 +517,7 @@ are sorted by storage time (newest first).`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.ListResponse{} },
 		RequiredGrants: []string{"command/artifact/list"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -603,6 +607,7 @@ specify the previous target hash for CAS updates.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.TagResponse{} },
 		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
 			if len(args) < 2 {
@@ -648,6 +653,7 @@ func resolveCommand() *cli.Command {
 canonical artifact reference. Useful for scripting: the output is
 always the full ref.`,
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.ResolveResponse{} },
 		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -702,6 +708,7 @@ func tagsCommand() *cli.Command {
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.TagsResponse{} },
 		RequiredGrants: []string{"command/artifact/tags"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -795,6 +802,7 @@ func pinToggleCommand(
 		Summary:        summary,
 		Usage:          usage,
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.PinResponse{} },
 		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
 			if len(args) == 0 {
@@ -862,6 +870,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.GCResponse{} },
 		RequiredGrants: []string{"command/artifact/gc"},
 		Run: func(args []string) error {
 			ctx := context.Background()
@@ -911,6 +920,7 @@ func statusCommand() *cli.Command {
 		Description: `Show service liveness information. This action does not require
 authentication — it is a health check.`,
 		Params:         func() any { return &params },
+		Output:         func() any { return &artifact.StatusResponse{} },
 		RequiredGrants: []string{"command/artifact/status"},
 		Run: func(args []string) error {
 			ctx := context.Background()

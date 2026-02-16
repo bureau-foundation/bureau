@@ -25,9 +25,9 @@ type buildParams struct {
 
 // buildResult is the JSON output for environment build.
 type buildResult struct {
-	Profile   string `json:"profile"`
-	StorePath string `json:"store_path"`
-	OutLink   string `json:"out_link"`
+	Profile   string `json:"profile"    desc:"Nix profile name"`
+	StorePath string `json:"store_path" desc:"Nix store path"`
+	OutLink   string `json:"out_link"   desc:"output symlink path"`
 }
 
 func buildCommand() *cli.Command {
@@ -49,6 +49,7 @@ The build output is a directory containing bin/, lib/, share/, etc.
 with symlinks into /nix/store for all packages in the profile.`,
 		Usage:          "bureau environment build <profile> [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &buildResult{} },
 		RequiredGrants: []string{"command/environment/build"},
 		Examples: []cli.Example{
 			{

@@ -35,6 +35,7 @@ to. If two machines show the same store path, they have byte-identical
 environments.`,
 		Usage:          "bureau environment status [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]statusEntry{} },
 		RequiredGrants: []string{"command/environment/status"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
@@ -80,8 +81,8 @@ environments.`,
 }
 
 type statusEntry struct {
-	Location  string `json:"location"`
-	StorePath string `json:"store_path"`
+	Location  string `json:"location"   desc:"profile symlink location"`
+	StorePath string `json:"store_path" desc:"resolved Nix store path"`
 }
 
 // scanDirectory reads symlinks in a directory, resolving each to its

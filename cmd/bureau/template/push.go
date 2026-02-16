@@ -22,13 +22,13 @@ type templatePushParams struct {
 
 // templatePushResult is the JSON output for template push.
 type templatePushResult struct {
-	Ref          string `json:"ref"`
-	File         string `json:"file"`
-	RoomAlias    string `json:"room_alias"`
-	RoomID       string `json:"room_id,omitempty"`
-	TemplateName string `json:"template_name"`
-	EventID      string `json:"event_id,omitempty"`
-	DryRun       bool   `json:"dry_run"`
+	Ref          string `json:"ref"                    desc:"template reference (state key)"`
+	File         string `json:"file"                   desc:"source template file path"`
+	RoomAlias    string `json:"room_alias"             desc:"target room alias"`
+	RoomID       string `json:"room_id,omitempty"      desc:"target room Matrix ID"`
+	TemplateName string `json:"template_name"          desc:"template name"`
+	EventID      string `json:"event_id,omitempty"     desc:"created state event ID"`
+	DryRun       bool   `json:"dry_run"                desc:"true if push was simulated"`
 }
 
 // pushCommand returns the "push" subcommand for publishing a template to Matrix.
@@ -61,6 +61,7 @@ exist without actually publishing.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &templatePushResult{} },
 		RequiredGrants: []string{"command/template/push"},
 		Run: func(args []string) error {
 			if len(args) != 2 {

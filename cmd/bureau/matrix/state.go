@@ -124,7 +124,7 @@ type stateSetParams struct {
 
 // stateSetResult is the JSON output for matrix state set.
 type stateSetResult struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"event_id" desc:"created state event's Matrix ID"`
 }
 
 // stateSetCommand returns the "set" subcommand under "state".
@@ -155,6 +155,7 @@ specific state key.`,
 				Command:     `echo '{"topic":"Piped topic"}' | bureau matrix state set --credential-file ./creds --stdin '!room:bureau.local' m.room.topic`,
 			},
 		},
+		Output:         func() any { return &stateSetResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/set"},
 		Run: func(args []string) error {

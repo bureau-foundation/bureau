@@ -49,9 +49,9 @@ type roomCreateParams struct {
 
 // roomCreateResult is the JSON output for matrix room create.
 type roomCreateResult struct {
-	RoomID  string `json:"room_id"`
-	Alias   string `json:"alias"`
-	SpaceID string `json:"space_id"`
+	RoomID  string `json:"room_id"  desc:"created room's Matrix ID"`
+	Alias   string `json:"alias"    desc:"room alias"`
+	SpaceID string `json:"space_id" desc:"parent space ID"`
 }
 
 func roomCreateCommand() *cli.Command {
@@ -80,6 +80,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				Command:     "bureau matrix room create bureau/machine --space '#bureau:bureau.local' --name 'Bureau Machine' --member-state-event m.bureau.machine_key --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &roomCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/create"},
 		Run: func(args []string) error {
@@ -181,6 +182,7 @@ lists all joined rooms that are NOT spaces.`,
 				Command:     "bureau matrix room list --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &[]roomEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/list"},
 		Run: func(args []string) error {
@@ -206,10 +208,10 @@ lists all joined rooms that are NOT spaces.`,
 
 // roomEntry holds the JSON-serializable data for a single room.
 type roomEntry struct {
-	RoomID string `json:"room_id"`
-	Alias  string `json:"alias,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Topic  string `json:"topic,omitempty"`
+	RoomID string `json:"room_id"         desc:"room's Matrix ID"`
+	Alias  string `json:"alias,omitempty" desc:"room alias"`
+	Name   string `json:"name,omitempty"  desc:"room display name"`
+	Topic  string `json:"topic,omitempty" desc:"room topic"`
 }
 
 // listSpaceChildren lists rooms that are children of a space by reading
@@ -329,7 +331,7 @@ type roomDeleteParams struct {
 
 // roomDeleteResult is the JSON output for matrix room delete.
 type roomDeleteResult struct {
-	RoomID string `json:"room_id"`
+	RoomID string `json:"room_id" desc:"left room's Matrix ID"`
 }
 
 func roomDeleteCommand() *cli.Command {
@@ -353,6 +355,7 @@ to clear the m.space.child event in the space.`,
 				Command:     "bureau matrix room delete '#iree/amdgpu/general:bureau.local' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &roomDeleteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/delete"},
 		Run: func(args []string) error {
@@ -414,6 +417,7 @@ Displays a table of user ID, display name, and membership state
 				Command:     "bureau matrix room members '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &[]messaging.RoomMember{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/members"},
 		Run: func(args []string) error {

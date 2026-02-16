@@ -34,6 +34,7 @@ By default, queries the Bureau environment repo
 different source.`,
 		Usage:          "bureau environment list [flags]",
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]profileInfo{} },
 		RequiredGrants: []string{"command/environment/list"},
 		Examples: []cli.Example{
 			{

@@ -12,9 +12,10 @@ import (
 	"time"
 )
 
-// Schema is a minimal JSON Schema representation covering the subset
-// needed for MCP tool input descriptions. It maps directly to the
-// JSON Schema object that MCP's inputSchema field expects.
+// Schema is a JSON Schema representation covering the subset needed
+// for MCP tool input and output descriptions. It maps directly to the
+// JSON Schema objects that MCP's inputSchema and outputSchema fields
+// expect.
 type Schema struct {
 	// Type is the JSON Schema type: "object", "string", "boolean",
 	// "integer", "number", or "array".
@@ -40,8 +41,14 @@ type Schema struct {
 	// Items describes the element type for array schemas.
 	Items *Schema `json:"items,omitempty"`
 
+	// AdditionalProperties describes the value type for map-typed
+	// object schemas (e.g., map[string]int produces
+	// {"type": "object", "additionalProperties": {"type": "integer"}}).
+	AdditionalProperties *Schema `json:"additionalProperties,omitempty"`
+
 	// Format is an optional format hint (e.g., "duration" for
-	// time.Duration fields serialized as strings like "30s").
+	// time.Duration fields serialized as strings like "30s",
+	// "date-time" for time.Time fields).
 	Format string `json:"format,omitempty"`
 }
 
@@ -168,45 +175,52 @@ func jsonPropertyName(field reflect.StructField) string {
 }
 
 // fieldSchema builds a JSON Schema for a single struct field based on
-// its Go type and struct tags.
+// its Go type and struct tags. Primitive types (string, bool, int,
+// float, []string, time.Duration) are handled directly with support
+// for desc and default tags. Compound types (nested structs, complex
+// slices, maps, pointers, arrays) delegate to [schemaForType] and
+// overlay the desc tag.
 func fieldSchema(field reflect.StructField) (*Schema, error) {
-	schema := &Schema{
-		Description: field.Tag.Get("desc"),
+	description := field.Tag.Get("desc")
+
+	fieldType := field.Type
+	if fieldType.Kind() == reflect.Ptr {
+		fieldType = fieldType.Elem()
 	}
 
-	// Set the schema type based on the Go type.
-	switch field.Type.Kind() {
+	// Primitive types support default values via struct tags.
+	switch fieldType.Kind() {
 	case reflect.String:
-		schema.Type = "string"
-		// time.Duration is a special case: it's an int64 in Go but
-		// serialized as a human-readable string like "30s" in JSON.
-		if field.Type == reflect.TypeOf(time.Duration(0)) {
-			schema.Format = "duration"
-		}
+		return fieldSchemaWithDefault(&Schema{Type: "string", Description: description}, field)
 	case reflect.Bool:
-		schema.Type = "boolean"
+		return fieldSchemaWithDefault(&Schema{Type: "boolean", Description: description}, field)
 	case reflect.Int, reflect.Int64:
-		// Distinguish time.Duration from plain integers.
-		if field.Type == reflect.TypeOf(time.Duration(0)) {
-			schema.Type = "string"
-			schema.Format = "duration"
-		} else {
-			schema.Type = "integer"
+		if fieldType == durationType {
+			return fieldSchemaWithDefault(&Schema{Type: "string", Format: "duration", Description: description}, field)
 		}
+		return fieldSchemaWithDefault(&Schema{Type: "integer", Description: description}, field)
 	case reflect.Float64:
-		schema.Type = "number"
+		return fieldSchemaWithDefault(&Schema{Type: "number", Description: description}, field)
 	case reflect.Slice:
-		if field.Type.Elem().Kind() == reflect.String {
-			schema.Type = "array"
-			schema.Items = &Schema{Type: "string"}
-		} else {
-			return nil, fmt.Errorf("unsupported slice element type %s", field.Type.Elem())
+		if fieldType.Elem().Kind() == reflect.String {
+			return fieldSchemaWithDefault(&Schema{Type: "array", Items: &Schema{Type: "string"}, Description: description}, field)
 		}
-	default:
-		return nil, fmt.Errorf("unsupported type %s", field.Type)
 	}
 
-	// Parse default value.
+	// Compound types (nested structs, complex slices, maps, arrays)
+	// delegate to schemaForType for recursive schema generation.
+	// Default values are not supported on compound types.
+	schema, err := schemaForType(fieldType)
+	if err != nil {
+		return nil, err
+	}
+	schema.Description = description
+	return schema, nil
+}
+
+// fieldSchemaWithDefault applies the default struct tag (if present)
+// to a primitive field schema.
+func fieldSchemaWithDefault(schema *Schema, field reflect.StructField) (*Schema, error) {
 	if defaultString := field.Tag.Get("default"); defaultString != "" {
 		defaultValue, err := parseDefault(field.Type, defaultString)
 		if err != nil {
@@ -214,7 +228,6 @@ func fieldSchema(field reflect.StructField) (*Schema, error) {
 		}
 		schema.Default = defaultValue
 	}
-
 	return schema, nil
 }
 
@@ -222,7 +235,7 @@ func fieldSchema(field reflect.StructField) (*Schema, error) {
 // so it marshals to the correct JSON type (number, boolean, etc.).
 func parseDefault(fieldType reflect.Type, value string) (any, error) {
 	// Handle time.Duration specially — it stays as a string in JSON.
-	if fieldType == reflect.TypeOf(time.Duration(0)) {
+	if fieldType == durationType {
 		// Validate it parses, but keep the string representation.
 		if _, err := time.ParseDuration(value); err != nil {
 			return nil, err
@@ -275,10 +288,36 @@ func OutputSchema(output any) (*Schema, error) {
 	return schemaForType(typ)
 }
 
+// Well-known types that require special JSON Schema handling because
+// their JSON representation differs from their Go structure.
+var (
+	timeType       = reflect.TypeOf(time.Time{})
+	durationType   = reflect.TypeOf(time.Duration(0))
+	rawMessageType = reflect.TypeOf(json.RawMessage{})
+	byteSliceType  = reflect.TypeOf([]byte{})
+)
+
 // schemaForType generates a JSON Schema from a reflect.Type. It
-// handles structs (via [buildObjectSchema]), slices (recursively),
-// maps with string keys, and Go primitives.
+// handles structs (via [buildObjectSchema]), slices, arrays, maps,
+// pointers, and Go primitives. Types with custom JSON marshaling
+// (time.Time, json.RawMessage, []byte) are special-cased to match
+// their serialized form rather than their Go structure.
 func schemaForType(typ reflect.Type) (*Schema, error) {
+	// Types with custom JSON marshaling produce schemas matching
+	// their serialized form, not their Go structure.
+	switch typ {
+	case timeType:
+		return &Schema{Type: "string", Format: "date-time"}, nil
+	case durationType:
+		return &Schema{Type: "string", Format: "duration"}, nil
+	case rawMessageType:
+		// json.RawMessage passes through arbitrary JSON.
+		return &Schema{}, nil
+	case byteSliceType:
+		// Go's json.Marshal encodes []byte as base64.
+		return &Schema{Type: "string", Format: "byte"}, nil
+	}
+
 	switch typ.Kind() {
 	case reflect.Struct:
 		return buildObjectSchema(typ)
@@ -288,24 +327,58 @@ func schemaForType(typ reflect.Type) (*Schema, error) {
 			return nil, fmt.Errorf("array element: %w", err)
 		}
 		return &Schema{Type: "array", Items: items}, nil
+	case reflect.Array:
+		items, err := schemaForType(typ.Elem())
+		if err != nil {
+			return nil, fmt.Errorf("array element: %w", err)
+		}
+		return &Schema{Type: "array", Items: items}, nil
+	case reflect.Ptr:
+		return schemaForType(typ.Elem())
 	case reflect.String:
 		return &Schema{Type: "string"}, nil
 	case reflect.Bool:
 		return &Schema{Type: "boolean"}, nil
-	case reflect.Int, reflect.Int64:
-		if typ == reflect.TypeOf(time.Duration(0)) {
-			return &Schema{Type: "string", Format: "duration"}, nil
-		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return &Schema{Type: "integer"}, nil
-	case reflect.Float64:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return &Schema{Type: "integer"}, nil
+	case reflect.Float32, reflect.Float64:
 		return &Schema{Type: "number"}, nil
 	case reflect.Map:
-		if typ.Key().Kind() == reflect.String {
+		if !mapKeyMarshalable(typ.Key().Kind()) {
+			return nil, fmt.Errorf("unsupported map key type %s", typ.Key())
+		}
+		// For map[K]any, the value type is interface{} which accepts
+		// any JSON value — produce a plain object without
+		// additionalProperties.
+		if typ.Elem().Kind() == reflect.Interface {
 			return &Schema{Type: "object"}, nil
 		}
-		return nil, fmt.Errorf("unsupported map key type %s (only string keys supported)", typ.Key())
+		valueSchema, err := schemaForType(typ.Elem())
+		if err != nil {
+			return &Schema{Type: "object"}, nil
+		}
+		return &Schema{Type: "object", AdditionalProperties: valueSchema}, nil
+	case reflect.Interface:
+		// interface{} / any — no type constraint.
+		return &Schema{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported output type %s", typ.Kind())
+		return nil, fmt.Errorf("unsupported type %s (%s)", typ, typ.Kind())
+	}
+}
+
+// mapKeyMarshalable returns true if the given kind can be used as a
+// JSON object key. Go's json.Marshal converts integer keys to decimal
+// strings and supports string keys directly.
+func mapKeyMarshalable(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	default:
+		return false
 	}
 }
 

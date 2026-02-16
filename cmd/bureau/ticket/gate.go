@@ -58,6 +58,7 @@ The gate is identified by its ID within the ticket.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &mutationResult{} },
 		RequiredGrants: []string{"command/ticket/gate/resolve"},
 		Run: func(args []string) error {
 			if len(args) >= 1 {
@@ -131,6 +132,7 @@ gate satisfaction.`,
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &mutationResult{} },
 		RequiredGrants: []string{"command/ticket/gate/update"},
 		Run: func(args []string) error {
 			if len(args) >= 1 {

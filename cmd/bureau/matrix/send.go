@@ -24,7 +24,7 @@ type sendParams struct {
 
 // sendResult is the JSON output for matrix send.
 type sendResult struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"event_id" desc:"sent event's Matrix ID"`
 }
 
 // SendCommand returns the "send" subcommand for sending messages to Matrix rooms.
@@ -57,6 +57,7 @@ Bureau protocol events).`,
 				Command:     "bureau matrix send --credential-file ./creds --event-type m.bureau.status '!room:bureau.local' '{\"status\":\"active\"}'",
 			},
 		},
+		Output:         func() any { return &sendResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/send"},
 		Run: func(args []string) error {

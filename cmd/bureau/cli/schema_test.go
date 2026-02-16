@@ -480,6 +480,324 @@ func TestOutputSchema_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// --- Compound type tests ---
+
+func TestOutputSchema_NestedStruct(t *testing.T) {
+	type inner struct {
+		Name  string `json:"name"  desc:"inner name"`
+		Count int    `json:"count" desc:"inner count"`
+	}
+	type outer struct {
+		ID    string `json:"id"    desc:"outer ID"`
+		Child inner  `json:"child" desc:"nested child object"`
+	}
+
+	schema, err := OutputSchema(&outer{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	if schema.Type != "object" {
+		t.Fatalf("Type = %q, want %q", schema.Type, "object")
+	}
+
+	childProp := schema.Properties["child"]
+	if childProp == nil {
+		t.Fatal("missing child property")
+	}
+	if childProp.Type != "object" {
+		t.Errorf("child.Type = %q, want %q", childProp.Type, "object")
+	}
+	if childProp.Description != "nested child object" {
+		t.Errorf("child.Description = %q, want %q", childProp.Description, "nested child object")
+	}
+	if childProp.Properties["name"] == nil {
+		t.Error("missing child.name property")
+	}
+	if childProp.Properties["count"] == nil {
+		t.Error("missing child.count property")
+	}
+	if childProp.Properties["name"].Type != "string" {
+		t.Errorf("child.name.Type = %q, want %q", childProp.Properties["name"].Type, "string")
+	}
+}
+
+func TestOutputSchema_SliceOfStructsField(t *testing.T) {
+	type item struct {
+		Value string `json:"value" desc:"item value"`
+	}
+	type container struct {
+		Items []item `json:"items" desc:"list of items"`
+	}
+
+	schema, err := OutputSchema(&container{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	itemsProp := schema.Properties["items"]
+	if itemsProp == nil {
+		t.Fatal("missing items property")
+	}
+	if itemsProp.Type != "array" {
+		t.Errorf("items.Type = %q, want %q", itemsProp.Type, "array")
+	}
+	if itemsProp.Description != "list of items" {
+		t.Errorf("items.Description = %q, want %q", itemsProp.Description, "list of items")
+	}
+	if itemsProp.Items == nil {
+		t.Fatal("items.Items is nil")
+	}
+	if itemsProp.Items.Type != "object" {
+		t.Errorf("items.Items.Type = %q, want %q", itemsProp.Items.Type, "object")
+	}
+	if itemsProp.Items.Properties["value"] == nil {
+		t.Error("missing items.Items.value property")
+	}
+}
+
+func TestOutputSchema_MapStringInt(t *testing.T) {
+	type stats struct {
+		ByStatus map[string]int `json:"by_status" desc:"count per status"`
+	}
+
+	schema, err := OutputSchema(&stats{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	prop := schema.Properties["by_status"]
+	if prop == nil {
+		t.Fatal("missing by_status property")
+	}
+	if prop.Type != "object" {
+		t.Errorf("by_status.Type = %q, want %q", prop.Type, "object")
+	}
+	if prop.Description != "count per status" {
+		t.Errorf("by_status.Description = %q, want %q", prop.Description, "count per status")
+	}
+	if prop.AdditionalProperties == nil {
+		t.Fatal("by_status.AdditionalProperties is nil")
+	}
+	if prop.AdditionalProperties.Type != "integer" {
+		t.Errorf("by_status.AdditionalProperties.Type = %q, want %q",
+			prop.AdditionalProperties.Type, "integer")
+	}
+}
+
+func TestOutputSchema_MapIntInt(t *testing.T) {
+	type stats struct {
+		ByPriority map[int]int `json:"by_priority" desc:"count per priority level"`
+	}
+
+	schema, err := OutputSchema(&stats{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	prop := schema.Properties["by_priority"]
+	if prop == nil {
+		t.Fatal("missing by_priority property")
+	}
+	if prop.Type != "object" {
+		t.Errorf("by_priority.Type = %q, want %q", prop.Type, "object")
+	}
+	if prop.AdditionalProperties == nil {
+		t.Fatal("by_priority.AdditionalProperties is nil")
+	}
+	if prop.AdditionalProperties.Type != "integer" {
+		t.Errorf("by_priority.AdditionalProperties.Type = %q, want %q",
+			prop.AdditionalProperties.Type, "integer")
+	}
+}
+
+func TestOutputSchema_PointerField(t *testing.T) {
+	type score struct {
+		Value int `json:"value" desc:"score value"`
+	}
+	type entry struct {
+		Score *score `json:"score" desc:"optional score"`
+	}
+
+	schema, err := OutputSchema(&entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	scoreProp := schema.Properties["score"]
+	if scoreProp == nil {
+		t.Fatal("missing score property")
+	}
+	if scoreProp.Type != "object" {
+		t.Errorf("score.Type = %q, want %q", scoreProp.Type, "object")
+	}
+	if scoreProp.Description != "optional score" {
+		t.Errorf("score.Description = %q, want %q", scoreProp.Description, "optional score")
+	}
+	if scoreProp.Properties["value"] == nil {
+		t.Error("missing score.value property")
+	}
+}
+
+func TestOutputSchema_TimeField(t *testing.T) {
+	type entry struct {
+		CreatedAt time.Time `json:"created_at" desc:"creation timestamp"`
+	}
+
+	schema, err := OutputSchema(&entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	prop := schema.Properties["created_at"]
+	if prop == nil {
+		t.Fatal("missing created_at property")
+	}
+	if prop.Type != "string" {
+		t.Errorf("created_at.Type = %q, want %q", prop.Type, "string")
+	}
+	if prop.Format != "date-time" {
+		t.Errorf("created_at.Format = %q, want %q", prop.Format, "date-time")
+	}
+	if prop.Description != "creation timestamp" {
+		t.Errorf("created_at.Description = %q, want %q", prop.Description, "creation timestamp")
+	}
+}
+
+func TestOutputSchema_ByteArray(t *testing.T) {
+	type hash [32]byte
+	type entry struct {
+		FileHash hash `json:"file_hash" desc:"content hash"`
+	}
+
+	schema, err := OutputSchema(&entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	prop := schema.Properties["file_hash"]
+	if prop == nil {
+		t.Fatal("missing file_hash property")
+	}
+	// [32]byte marshals as a JSON array of 32 integers.
+	if prop.Type != "array" {
+		t.Errorf("file_hash.Type = %q, want %q", prop.Type, "array")
+	}
+	if prop.Items == nil {
+		t.Fatal("file_hash.Items is nil")
+	}
+	if prop.Items.Type != "integer" {
+		t.Errorf("file_hash.Items.Type = %q, want %q", prop.Items.Type, "integer")
+	}
+}
+
+func TestOutputSchema_MapStringAny(t *testing.T) {
+	// map[string]any produces an untyped object schema (no
+	// additionalProperties since the value type is unknown).
+	schema, err := OutputSchema(&map[string]any{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+	if schema.Type != "object" {
+		t.Errorf("Type = %q, want %q", schema.Type, "object")
+	}
+	// No additionalProperties for any-valued maps.
+	if schema.AdditionalProperties != nil {
+		t.Errorf("AdditionalProperties should be nil for map[string]any")
+	}
+}
+
+func TestOutputSchema_ByteSlice(t *testing.T) {
+	type entry struct {
+		Data []byte `json:"data" desc:"binary data"`
+	}
+
+	schema, err := OutputSchema(&entry{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	prop := schema.Properties["data"]
+	if prop == nil {
+		t.Fatal("missing data property")
+	}
+	// []byte is base64-encoded in JSON.
+	if prop.Type != "string" {
+		t.Errorf("data.Type = %q, want %q", prop.Type, "string")
+	}
+	if prop.Format != "byte" {
+		t.Errorf("data.Format = %q, want %q", prop.Format, "byte")
+	}
+}
+
+func TestParamsSchema_NestedStructField(t *testing.T) {
+	// Verify that nested struct fields also work in params schemas,
+	// not just output schemas.
+	type options struct {
+		Verbose bool `json:"verbose" desc:"verbose output"`
+	}
+	type params struct {
+		Name    string  `json:"name"    desc:"the name"`
+		Options options `json:"options" desc:"command options"`
+	}
+
+	schema, err := ParamsSchema(&params{})
+	if err != nil {
+		t.Fatalf("ParamsSchema: %v", err)
+	}
+
+	optionsProp := schema.Properties["options"]
+	if optionsProp == nil {
+		t.Fatal("missing options property")
+	}
+	if optionsProp.Type != "object" {
+		t.Errorf("options.Type = %q, want %q", optionsProp.Type, "object")
+	}
+	if optionsProp.Properties["verbose"] == nil {
+		t.Error("missing options.verbose property")
+	}
+}
+
+func TestOutputSchema_DeeplyNested(t *testing.T) {
+	// Three levels of nesting: outer → middle → inner.
+	type inner struct {
+		Value string `json:"value" desc:"leaf value"`
+	}
+	type middle struct {
+		Items []inner `json:"items" desc:"inner items"`
+	}
+	type outer struct {
+		Child middle `json:"child" desc:"middle layer"`
+	}
+
+	schema, err := OutputSchema(&outer{})
+	if err != nil {
+		t.Fatalf("OutputSchema: %v", err)
+	}
+
+	child := schema.Properties["child"]
+	if child == nil {
+		t.Fatal("missing child")
+	}
+	items := child.Properties["items"]
+	if items == nil {
+		t.Fatal("missing child.items")
+	}
+	if items.Type != "array" {
+		t.Errorf("items.Type = %q, want %q", items.Type, "array")
+	}
+	if items.Items == nil {
+		t.Fatal("items.Items is nil")
+	}
+	if items.Items.Properties["value"] == nil {
+		t.Error("missing items.Items.value")
+	}
+	if items.Items.Properties["value"].Description != "leaf value" {
+		t.Errorf("leaf description = %q, want %q",
+			items.Items.Properties["value"].Description, "leaf value")
+	}
+}
+
 // defaultsEqual compares default values, handling []string specially
 // since reflect.DeepEqual is not available in this comparison context
 // and direct == comparison doesn't work for slices.

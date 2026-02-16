@@ -31,14 +31,14 @@ type createParams struct {
 
 // createResult is the JSON output for workspace create.
 type createResult struct {
-	Alias      string   `json:"alias"`
-	RoomAlias  string   `json:"room_alias"`
-	RoomID     string   `json:"room_id"`
-	Project    string   `json:"project"`
-	Repository string   `json:"repository,omitempty"`
-	Branch     string   `json:"branch,omitempty"`
-	Machine    string   `json:"machine"`
-	Principals []string `json:"principals"`
+	Alias      string   `json:"alias"                desc:"workspace alias"`
+	RoomAlias  string   `json:"room_alias"           desc:"full Matrix room alias"`
+	RoomID     string   `json:"room_id"              desc:"Matrix room ID"`
+	Project    string   `json:"project"              desc:"project name"`
+	Repository string   `json:"repository,omitempty" desc:"git repository URL"`
+	Branch     string   `json:"branch,omitempty"     desc:"git branch checked out"`
+	Machine    string   `json:"machine"              desc:"hosting machine name"`
+	Principals []string `json:"principals"           desc:"created principal localparts"`
 }
 
 func createCommand() *cli.Command {
@@ -87,6 +87,7 @@ All worktrees in a project share a single bare git object store at
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &createResult{} },
 		RequiredGrants: []string{"command/workspace/create"},
 		Run: func(args []string) error {
 			if len(args) == 0 {

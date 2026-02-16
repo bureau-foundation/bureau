@@ -52,9 +52,9 @@ type userCreateParams struct {
 
 // userCreateResult is the JSON output for matrix user create.
 type userCreateResult struct {
-	UserID        string `json:"user_id"`
-	AccessToken   string `json:"access_token,omitempty"`
-	AlreadyExists bool   `json:"already_exists"`
+	UserID        string `json:"user_id"                desc:"created user's Matrix ID"`
+	AccessToken   string `json:"access_token,omitempty" desc:"session access token"`
+	AlreadyExists bool   `json:"already_exists"         desc:"true if user already existed"`
 }
 
 // userCreateCommand returns the "user create" subcommand for registering a new
@@ -101,6 +101,7 @@ and proceeds directly to ensuring room membership.`,
 				Command:     "bureau matrix user create ben --registration-token-file .env-token --password-file -",
 			},
 		},
+		Output:         func() any { return &userCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/create"},
 		Run: func(args []string) error {
@@ -388,9 +389,9 @@ type userListParams struct {
 
 // userListEntry holds the JSON-serializable data for a single user listing.
 type userListEntry struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name,omitempty"`
-	Membership  string `json:"membership,omitempty"`
+	UserID      string `json:"user_id"                desc:"user's Matrix ID"`
+	DisplayName string `json:"display_name,omitempty" desc:"user's display name"`
+	Membership  string `json:"membership,omitempty"   desc:"membership state in room"`
 }
 
 // userListCommand returns the "user list" subcommand for listing Matrix users.
@@ -418,6 +419,7 @@ authenticated user has joined.`,
 				Command:     "bureau matrix user list --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &[]userListEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/list"},
 		Run: func(args []string) error {
@@ -546,8 +548,8 @@ type userInviteParams struct {
 
 // userInviteResult is the JSON output for matrix user invite.
 type userInviteResult struct {
-	UserID string `json:"user_id"`
-	RoomID string `json:"room_id"`
+	UserID string `json:"user_id" desc:"invited user's Matrix ID"`
+	RoomID string `json:"room_id" desc:"room the user was invited to"`
 }
 
 // userInviteCommand returns the "user invite" subcommand.
@@ -566,6 +568,7 @@ func userInviteCommand() *cli.Command {
 				Command:     "bureau matrix user invite @alice:bureau.local --room '#bureau/machine:bureau.local' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &userInviteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/invite"},
 		Run: func(args []string) error {
@@ -621,8 +624,8 @@ type userKickParams struct {
 
 // userKickResult is the JSON output for matrix user kick.
 type userKickResult struct {
-	UserID string `json:"user_id"`
-	RoomID string `json:"room_id"`
+	UserID string `json:"user_id" desc:"kicked user's Matrix ID"`
+	RoomID string `json:"room_id" desc:"room the user was kicked from"`
 }
 
 // userKickCommand returns the "user kick" subcommand.
@@ -645,6 +648,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				Command:     "bureau matrix user kick @bob:bureau.local --room '#bureau/machine:bureau.local' --reason 'decommissioned' --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &userKickResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/kick"},
 		Run: func(args []string) error {
@@ -698,7 +702,7 @@ type userWhoAmIParams struct {
 
 // userWhoAmIResult is the JSON output for matrix user whoami.
 type userWhoAmIResult struct {
-	UserID string `json:"user_id"`
+	UserID string `json:"user_id" desc:"authenticated user's Matrix ID"`
 }
 
 // userWhoAmICommand returns the "user whoami" subcommand.
@@ -718,6 +722,7 @@ account is in use.`,
 				Command:     "bureau matrix user whoami --credential-file ./creds",
 			},
 		},
+		Output:         func() any { return &userWhoAmIResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/whoami"},
 		Run: func(args []string) error {

@@ -66,6 +66,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &enableResult{} },
 		RequiredGrants: []string{"command/ticket/enable"},
 		Run: func(args []string) error {
 			if len(args) > 0 {
@@ -84,12 +85,12 @@ workstation's MachineConfig, and enables tickets in all rooms under
 
 // enableResult is the JSON output of the enable command.
 type enableResult struct {
-	ServicePrincipal string   `json:"service_principal"`
-	ServiceUserID    string   `json:"service_user_id"`
-	Machine          string   `json:"machine"`
-	SpaceAlias       string   `json:"space_alias"`
-	SpaceRoomID      string   `json:"space_room_id"`
-	RoomsConfigured  []string `json:"rooms_configured"`
+	ServicePrincipal string   `json:"service_principal" desc:"service principal localpart"`
+	ServiceUserID    string   `json:"service_user_id"   desc:"service Matrix user ID"`
+	Machine          string   `json:"machine"           desc:"machine hosting the service"`
+	SpaceAlias       string   `json:"space_alias"       desc:"Matrix space alias"`
+	SpaceRoomID      string   `json:"space_room_id"     desc:"Matrix space room ID"`
+	RoomsConfigured  []string `json:"rooms_configured"  desc:"room IDs configured for tickets"`
 }
 
 func runEnable(params *enableParams) error {

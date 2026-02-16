@@ -410,6 +410,7 @@ Machine statuses:
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &observe.ListResponse{} },
 		RequiredGrants: []string{"command/observe/list"},
 		Run: func(args []string) error {
 			if len(args) > 0 {

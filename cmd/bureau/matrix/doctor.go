@@ -66,6 +66,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				Command:     "bureau matrix doctor --credential-file ./creds --json",
 			},
 		},
+		Output:         func() any { return &doctorJSONOutput{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/doctor"},
 		Run: func(args []string) error {
@@ -195,10 +196,10 @@ const (
 // checkResult holds the outcome of a single health check. Fixable failures
 // carry a FixHint (human description) and an unexported fix function.
 type checkResult struct {
-	Name    string      `json:"name"`
-	Status  checkStatus `json:"status"`
-	Message string      `json:"message"`
-	FixHint string      `json:"fix_hint,omitempty"`
+	Name    string      `json:"name"              desc:"health check name"`
+	Status  checkStatus `json:"status"            desc:"check outcome: pass, fail, warn, skip, fixed"`
+	Message string      `json:"message"           desc:"human-readable check result"`
+	FixHint string      `json:"fix_hint,omitempty" desc:"suggested fix command"`
 	fix     fixAction
 }
 
@@ -977,9 +978,9 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 
 // doctorJSONOutput is the JSON output structure for the doctor command.
 type doctorJSONOutput struct {
-	Checks []checkResult `json:"checks"`
-	OK     bool          `json:"ok"`
-	DryRun bool          `json:"dry_run,omitempty"`
+	Checks []checkResult `json:"checks"            desc:"list of health check results"`
+	OK     bool          `json:"ok"                desc:"true if all checks passed"`
+	DryRun bool          `json:"dry_run,omitempty" desc:"true if fixes were simulated"`
 }
 
 // doctorJSON builds the JSON output struct for doctor results.

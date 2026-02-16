@@ -57,6 +57,7 @@ With a file argument, also classifies each change:
 			},
 		},
 		Params:         func() any { return &params },
+		Output:         func() any { return &[]impactResult{} },
 		RequiredGrants: []string{"command/template/impact"},
 		Run: func(args []string) error {
 			if len(args) < 1 || len(args) > 2 {
@@ -123,13 +124,13 @@ With a file argument, also classifies each change:
 
 // impactResult describes one affected principal.
 type impactResult struct {
-	Machine       string   `json:"machine"`
-	Principal     string   `json:"principal"`
-	Template      string   `json:"template"`
-	Depth         int      `json:"depth"`
-	Change        string   `json:"change,omitempty"`
-	ChangedFields []string `json:"changed_fields,omitempty"`
-	Overrides     []string `json:"overrides,omitempty"`
+	Machine       string   `json:"machine"                  desc:"affected machine name"`
+	Principal     string   `json:"principal"                desc:"affected principal"`
+	Template      string   `json:"template"                 desc:"template reference"`
+	Depth         int      `json:"depth"                    desc:"inheritance depth"`
+	Change        string   `json:"change,omitempty"         desc:"type of change"`
+	ChangedFields []string `json:"changed_fields,omitempty" desc:"fields that differ"`
+	Overrides     []string `json:"overrides,omitempty"      desc:"override sources"`
 }
 
 // impactAnalyzer holds state for the impact analysis.

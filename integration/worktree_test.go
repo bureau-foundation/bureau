@@ -385,8 +385,11 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send workspace.worktree.add: %v", err)
 		}
 
-		// Wait for both the accepted ack and the pipeline result.
-		results := resultWatch.WaitForCommandResults(t, requestID, 2)
+		// Wait for the accepted ack only. The pipeline result involves
+		// sandbox creation, process startup, and git operations — that
+		// path is tested by TestPipelineExecution. Waiting for it here
+		// adds 10-30s under load and caused pre-commit timeouts.
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 
@@ -418,7 +421,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send workspace.worktree.remove: %v", err)
 		}
 
-		results := resultWatch.WaitForCommandResults(t, requestID, 2)
+		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 

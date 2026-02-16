@@ -71,6 +71,8 @@ func buildSyncFilter() string {
 		schema.EventTypeWorktree,
 		schema.EventTypeAuthorization,
 		schema.EventTypeTemporalGrant,
+		schema.EventTypeFleetService,
+		schema.EventTypeHALease,
 	}
 
 	timelineEventTypes := make([]string, len(stateEventTypes)+1)
@@ -241,7 +243,7 @@ func (d *Daemon) syncLoop(ctx context.Context, sinceToken string) {
 // StartConditions. Handlers are called in dependency order: peer addresses
 // before services (so relay routing has up-to-date addresses).
 func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.SyncResponse) {
-	var needsReconcile, needsPeerSync, needsServiceSync bool
+	var needsReconcile, needsPeerSync, needsServiceSync, needsHAEval bool
 
 	// Accept any pending invites. The daemon is invited to workspace rooms
 	// by "bureau workspace create" and must join to read workspace state
@@ -267,6 +269,10 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			needsPeerSync = true
 		case d.serviceRoomID:
 			needsServiceSync = true
+		case d.fleetRoomID:
+			if d.fleetRoomID != "" {
+				needsHAEval = true
+			}
 		case d.systemRoomID:
 			// The system room carries token signing keys and operational
 			// messages. State changes here don't require reconciliation.
@@ -332,6 +338,12 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 				}
 			}
 		}
+	}
+
+	if needsHAEval && d.haWatchdog != nil {
+		d.logger.Info("fleet room state changed, evaluating HA leases")
+		d.haWatchdog.syncFleetState(ctx)
+		d.haWatchdog.evaluate(ctx)
 	}
 
 	// Process command messages from all rooms. Commands can arrive in

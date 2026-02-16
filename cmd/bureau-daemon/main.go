@@ -211,7 +211,25 @@ func run() error {
 		logger.Warn("failed to join service room (requires admin invitation)",
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
+	// Resolve and join the fleet room. Fleet features (including HA
+	// watchdog) are optional — the fleet room may not exist if fleet
+	// management has not been set up.
+	var fleetRoomID string
+	fleetRoomAlias := principal.RoomAlias(schema.RoomAliasFleet, serverName)
+	if resolvedFleetID, resolveErr := session.ResolveAlias(ctx, fleetRoomAlias); resolveErr != nil {
+		logger.Info("fleet room not available (fleet features disabled)",
+			"alias", fleetRoomAlias, "error", resolveErr)
+	} else {
+		fleetRoomID = resolvedFleetID
+		if _, joinErr := session.JoinRoom(ctx, fleetRoomID); joinErr != nil {
+			logger.Warn("failed to join fleet room",
+				"room_id", fleetRoomID, "alias", fleetRoomAlias, "error", joinErr)
+			fleetRoomID = "" // Cannot participate in fleet if not joined.
+		}
+	}
+
 	logger.Info("global rooms ready",
+		"fleet_room", fleetRoomID,
 		"system_room", systemRoomID,
 		"machine_room", machineRoomID,
 		"service_room", serviceRoomID,
@@ -249,6 +267,7 @@ func run() error {
 		configRoomID:           configRoomID,
 		machineRoomID:          machineRoomID,
 		serviceRoomID:          serviceRoomID,
+		fleetRoomID:            fleetRoomID,
 		runDir:                 runDir,
 		launcherSocket:         principal.LauncherSocketPath(runDir),
 		statusInterval:         statusInterval,
@@ -351,6 +370,10 @@ func run() error {
 		logger.Warn("failed to query launcher for pre-existing sandboxes", "error", err)
 	}
 
+	// Initialize the HA watchdog for daemon-level failover of
+	// ha_class:critical services.
+	daemon.haWatchdog = newHAWatchdog(daemon, logger)
+
 	// Perform the initial Matrix /sync to establish a since token and
 	// baseline state (reconcile, peer addresses, service directory).
 	sinceToken, err := daemon.initialSync(ctx)
@@ -365,6 +388,14 @@ func run() error {
 	go daemon.syncLoop(ctx, sinceToken)
 	go daemon.statusLoop(ctx)
 	go daemon.tokenRefreshLoop(ctx)
+
+	// Release any HA leases on shutdown so other daemons can take
+	// over quickly without waiting for the lease to expire.
+	defer func() {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		daemon.haWatchdog.releaseAllLeases(releaseCtx)
+	}()
 
 	// Wait for shutdown.
 	<-ctx.Done()
@@ -428,6 +459,7 @@ type Daemon struct {
 	configRoomID   string
 	machineRoomID  string
 	serviceRoomID  string
+	fleetRoomID    string // fleet room for HA lease protocol (empty if fleet room does not exist)
 	runDir         string // runtime directory for sockets (e.g., /run/bureau)
 	launcherSocket string
 	statusInterval time.Duration
@@ -719,6 +751,11 @@ type Daemon struct {
 	// reconcile completes (sandbox exit, proxy crash recovery, health
 	// rollback). Tests use this to wait for state changes without
 	// polling. Nil in production — notifications are skipped.
+	// haWatchdog manages HA lease acquisition and renewal for
+	// ha_class:critical services. Nil when the fleet room is not
+	// available (fleet features disabled).
+	haWatchdog *haWatchdog
+
 	reconcileNotify chan struct{}
 
 	logger *slog.Logger

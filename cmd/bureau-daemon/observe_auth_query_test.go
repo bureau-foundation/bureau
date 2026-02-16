@@ -310,6 +310,43 @@ func TestQueryGrantsReturnsPolicy(t *testing.T) {
 	}
 }
 
+// TestQueryGrantsSourceProvenance verifies that the Source field on grants
+// and denials is preserved through the observe wire protocol.
+func TestQueryGrantsSourceProvenance(t *testing.T) {
+	daemon, _ := newTestDaemonWithQuery(t)
+
+	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+		Grants: []schema.Grant{
+			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}, Source: schema.SourceMachineDefault},
+			{Actions: []string{"command/pipeline/list"}, Source: schema.SourcePrincipal},
+		},
+		Denials: []schema.Denial{
+			{Actions: []string{"interrupt/**"}, Source: schema.SourceMachineDefault},
+		},
+	})
+
+	response := sendGrantsQuery(t, daemon.observeSocketPath, "iree/amdgpu/pm")
+
+	if !response.OK {
+		t.Fatalf("expected OK, got error: %s", response.Error)
+	}
+	if len(response.Grants) != 2 {
+		t.Fatalf("grants = %d, want 2", len(response.Grants))
+	}
+	if response.Grants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("grants[0].Source = %q, want %q", response.Grants[0].Source, schema.SourceMachineDefault)
+	}
+	if response.Grants[1].Source != schema.SourcePrincipal {
+		t.Errorf("grants[1].Source = %q, want %q", response.Grants[1].Source, schema.SourcePrincipal)
+	}
+	if len(response.Denials) != 1 {
+		t.Fatalf("denials = %d, want 1", len(response.Denials))
+	}
+	if response.Denials[0].Source != schema.SourceMachineDefault {
+		t.Errorf("denials[0].Source = %q, want %q", response.Denials[0].Source, schema.SourceMachineDefault)
+	}
+}
+
 func TestQueryGrantsEmptyPrincipal(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 

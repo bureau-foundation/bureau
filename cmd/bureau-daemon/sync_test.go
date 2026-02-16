@@ -988,6 +988,9 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	if len(grants[0].Actions) != 1 || grants[0].Actions[0] != "service/register" {
 		t.Errorf("grant actions = %v, want [service/register]", grants[0].Actions)
 	}
+	if grants[0].Source != schema.SourceTemporal {
+		t.Errorf("grant source = %q, want %q", grants[0].Source, schema.SourceTemporal)
+	}
 }
 
 // TestProcessTemporalGrantEvents_RevokeGrant verifies that a tombstoned

@@ -34,6 +34,31 @@ const (
 	EventTypeTokenSigningKey = "m.bureau.token_signing_key"
 )
 
+// Authorization source constants identify where a policy entry came from
+// in the merge hierarchy. The daemon stamps these on each entry during
+// authorization index rebuild. They appear in the Source field of Grant,
+// Denial, Allowance, and AllowanceDenial.
+const (
+	// SourceMachineDefault marks entries from MachineConfig.DefaultPolicy.
+	SourceMachineDefault = "machine-default"
+
+	// SourcePrincipal marks entries from a principal's own
+	// PrincipalAssignment.Authorization policy.
+	SourcePrincipal = "principal"
+
+	// SourceTemporal marks entries from temporal grant state events.
+	// The grant's Ticket, GrantedBy, and GrantedAt fields provide
+	// further provenance.
+	SourceTemporal = "temporal"
+)
+
+// SourceRoom returns the source string for a room-level authorization
+// policy. The roomID is the Matrix room ID where the m.bureau.authorization
+// state event was found.
+func SourceRoom(roomID string) string {
+	return "room:" + roomID
+}
+
 // Grant gives a principal permission to perform actions on targets.
 // Grants are subject-side: they describe what the principal can do.
 //
@@ -76,6 +101,15 @@ type Grant struct {
 	// GrantedAt is an RFC 3339 timestamp of when this grant was created.
 	// Set automatically by the daemon. Omit for static grants.
 	GrantedAt string `json:"granted_at,omitempty" cbor:"6,keyasint,omitempty"`
+
+	// Source identifies where this grant came from in the policy merge
+	// hierarchy. Set by the daemon during authorization index rebuild,
+	// not by users in config files. Values: "machine-default" (from
+	// MachineConfig.DefaultPolicy), "principal" (from the principal's
+	// own PrincipalAssignment.Authorization), "temporal" (from a
+	// temporal grant state event), "room:<room_id>" (from a room-level
+	// authorization policy).
+	Source string `json:"source,omitempty" cbor:"7,keyasint,omitempty"`
 }
 
 // Denial explicitly blocks actions. Evaluated after grants — a matching
@@ -88,6 +122,9 @@ type Denial struct {
 	// Targets is a list of localpart patterns to deny the action
 	// against. Empty means deny self-service actions.
 	Targets []string `json:"targets,omitempty" cbor:"2,keyasint,omitempty"`
+
+	// Source identifies where this denial came from. See Grant.Source.
+	Source string `json:"source,omitempty" cbor:"3,keyasint,omitempty"`
 }
 
 // Allowance permits specific actors to perform specific actions on a
@@ -103,6 +140,9 @@ type Allowance struct {
 	// who can perform the allowed actions. The acting principal's
 	// localpart must match at least one pattern.
 	Actors []string `json:"actors" cbor:"2,keyasint"`
+
+	// Source identifies where this allowance came from. See Grant.Source.
+	Source string `json:"source,omitempty" cbor:"3,keyasint,omitempty"`
 }
 
 // AllowanceDenial explicitly blocks specific actors from specific
@@ -113,6 +153,10 @@ type AllowanceDenial struct {
 
 	// Actors is a list of localpart patterns to deny.
 	Actors []string `json:"actors" cbor:"2,keyasint"`
+
+	// Source identifies where this allowance denial came from. See
+	// Grant.Source.
+	Source string `json:"source,omitempty" cbor:"3,keyasint,omitempty"`
 }
 
 // AuthorizationPolicy defines what a principal can do (grants) and

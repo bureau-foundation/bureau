@@ -1134,8 +1134,84 @@ func TestMergeAuthorizationPolicy_DefaultBeforePrincipal(t *testing.T) {
 	if merged.Grants[0].Actions[0] != "default-action" {
 		t.Errorf("Grants[0].Actions[0] = %q, want %q", merged.Grants[0].Actions[0], "default-action")
 	}
+	if merged.Grants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("Grants[0].Source = %q, want %q", merged.Grants[0].Source, schema.SourceMachineDefault)
+	}
 	if merged.Grants[1].Actions[0] != "principal-action" {
 		t.Errorf("Grants[1].Actions[0] = %q, want %q", merged.Grants[1].Actions[0], "principal-action")
+	}
+	if merged.Grants[1].Source != schema.SourcePrincipal {
+		t.Errorf("Grants[1].Source = %q, want %q", merged.Grants[1].Source, schema.SourcePrincipal)
+	}
+}
+
+// TestMergeAuthorizationPolicy_SourceProvenance verifies that all four
+// policy types (grants, denials, allowances, allowance denials) are
+// stamped with the correct source during merge.
+func TestMergeAuthorizationPolicy_SourceProvenance(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeAuthorizationPolicy(
+		&schema.AuthorizationPolicy{
+			Grants:           []schema.Grant{{Actions: []string{"default-grant"}}},
+			Denials:          []schema.Denial{{Actions: []string{"default-denial"}}},
+			Allowances:       []schema.Allowance{{Actions: []string{"default-allowance"}, Actors: []string{"**"}}},
+			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"default-allow-denial"}, Actors: []string{"bad/**"}}},
+		},
+		&schema.AuthorizationPolicy{
+			Grants:           []schema.Grant{{Actions: []string{"principal-grant"}}},
+			Denials:          []schema.Denial{{Actions: []string{"principal-denial"}}},
+			Allowances:       []schema.Allowance{{Actions: []string{"principal-allowance"}, Actors: []string{"admin/**"}}},
+			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"principal-allow-denial"}, Actors: []string{"evil/**"}}},
+		},
+	)
+
+	// Grants.
+	if merged.Grants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("Grants[0].Source = %q, want %q", merged.Grants[0].Source, schema.SourceMachineDefault)
+	}
+	if merged.Grants[1].Source != schema.SourcePrincipal {
+		t.Errorf("Grants[1].Source = %q, want %q", merged.Grants[1].Source, schema.SourcePrincipal)
+	}
+
+	// Denials.
+	if merged.Denials[0].Source != schema.SourceMachineDefault {
+		t.Errorf("Denials[0].Source = %q, want %q", merged.Denials[0].Source, schema.SourceMachineDefault)
+	}
+	if merged.Denials[1].Source != schema.SourcePrincipal {
+		t.Errorf("Denials[1].Source = %q, want %q", merged.Denials[1].Source, schema.SourcePrincipal)
+	}
+
+	// Allowances.
+	if merged.Allowances[0].Source != schema.SourceMachineDefault {
+		t.Errorf("Allowances[0].Source = %q, want %q", merged.Allowances[0].Source, schema.SourceMachineDefault)
+	}
+	if merged.Allowances[1].Source != schema.SourcePrincipal {
+		t.Errorf("Allowances[1].Source = %q, want %q", merged.Allowances[1].Source, schema.SourcePrincipal)
+	}
+
+	// Allowance denials.
+	if merged.AllowanceDenials[0].Source != schema.SourceMachineDefault {
+		t.Errorf("AllowanceDenials[0].Source = %q, want %q", merged.AllowanceDenials[0].Source, schema.SourceMachineDefault)
+	}
+	if merged.AllowanceDenials[1].Source != schema.SourcePrincipal {
+		t.Errorf("AllowanceDenials[1].Source = %q, want %q", merged.AllowanceDenials[1].Source, schema.SourcePrincipal)
+	}
+}
+
+// TestMergeAuthorizationPolicy_DoesNotMutateInput verifies that the merge
+// stamps Source on copies, not on the original config data.
+func TestMergeAuthorizationPolicy_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+
+	original := &schema.AuthorizationPolicy{
+		Grants: []schema.Grant{{Actions: []string{"observe/*"}}},
+	}
+
+	_ = mergeAuthorizationPolicy(original, nil)
+
+	if original.Grants[0].Source != "" {
+		t.Errorf("merge mutated input: Source = %q, want empty", original.Grants[0].Source)
 	}
 }
 
@@ -1175,13 +1251,22 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 	// agent/alpha should have 2 grants (1 default + 1 per-principal).
 	alphaGrants := daemon.authorizationIndex.Grants("agent/alpha")
 	if len(alphaGrants) != 2 {
-		t.Errorf("agent/alpha grants = %d, want 2", len(alphaGrants))
+		t.Fatalf("agent/alpha grants = %d, want 2", len(alphaGrants))
+	}
+	if alphaGrants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("agent/alpha grants[0].Source = %q, want %q", alphaGrants[0].Source, schema.SourceMachineDefault)
+	}
+	if alphaGrants[1].Source != schema.SourcePrincipal {
+		t.Errorf("agent/alpha grants[1].Source = %q, want %q", alphaGrants[1].Source, schema.SourcePrincipal)
 	}
 
 	// agent/beta should have 1 grant (default only).
 	betaGrants := daemon.authorizationIndex.Grants("agent/beta")
 	if len(betaGrants) != 1 {
-		t.Errorf("agent/beta grants = %d, want 1", len(betaGrants))
+		t.Fatalf("agent/beta grants = %d, want 1", len(betaGrants))
+	}
+	if betaGrants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("agent/beta grants[0].Source = %q, want %q", betaGrants[0].Source, schema.SourceMachineDefault)
 	}
 }
 

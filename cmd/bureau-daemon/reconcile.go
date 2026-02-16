@@ -933,25 +933,61 @@ func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
 // mergeAuthorizationPolicy merges a machine-wide default policy with a
 // per-principal policy. Both may be nil. The result is always a valid
 // (possibly empty) AuthorizationPolicy. Per-principal entries are appended
-// after defaults so they are evaluated after machine-wide rules.
+// after defaults so they are evaluated after machine-wide rules. Each
+// entry is stamped with its Source to preserve provenance through the merge.
 func mergeAuthorizationPolicy(defaultPolicy, principalPolicy *schema.AuthorizationPolicy) schema.AuthorizationPolicy {
 	var merged schema.AuthorizationPolicy
 
 	if defaultPolicy != nil {
-		merged.Grants = append(merged.Grants, defaultPolicy.Grants...)
-		merged.Denials = append(merged.Denials, defaultPolicy.Denials...)
-		merged.Allowances = append(merged.Allowances, defaultPolicy.Allowances...)
-		merged.AllowanceDenials = append(merged.AllowanceDenials, defaultPolicy.AllowanceDenials...)
+		merged.Grants = appendGrantsWithSource(merged.Grants, defaultPolicy.Grants, schema.SourceMachineDefault)
+		merged.Denials = appendDenialsWithSource(merged.Denials, defaultPolicy.Denials, schema.SourceMachineDefault)
+		merged.Allowances = appendAllowancesWithSource(merged.Allowances, defaultPolicy.Allowances, schema.SourceMachineDefault)
+		merged.AllowanceDenials = appendAllowanceDenialsWithSource(merged.AllowanceDenials, defaultPolicy.AllowanceDenials, schema.SourceMachineDefault)
 	}
 
 	if principalPolicy != nil {
-		merged.Grants = append(merged.Grants, principalPolicy.Grants...)
-		merged.Denials = append(merged.Denials, principalPolicy.Denials...)
-		merged.Allowances = append(merged.Allowances, principalPolicy.Allowances...)
-		merged.AllowanceDenials = append(merged.AllowanceDenials, principalPolicy.AllowanceDenials...)
+		merged.Grants = appendGrantsWithSource(merged.Grants, principalPolicy.Grants, schema.SourcePrincipal)
+		merged.Denials = appendDenialsWithSource(merged.Denials, principalPolicy.Denials, schema.SourcePrincipal)
+		merged.Allowances = appendAllowancesWithSource(merged.Allowances, principalPolicy.Allowances, schema.SourcePrincipal)
+		merged.AllowanceDenials = appendAllowanceDenialsWithSource(merged.AllowanceDenials, principalPolicy.AllowanceDenials, schema.SourcePrincipal)
 	}
 
 	return merged
+}
+
+// Source-stamping helpers for the merge pipeline. Each copies the entry
+// and sets its Source field, so the original config data is not mutated.
+
+func appendGrantsWithSource(destination []schema.Grant, entries []schema.Grant, source string) []schema.Grant {
+	for _, entry := range entries {
+		entry.Source = source
+		destination = append(destination, entry)
+	}
+	return destination
+}
+
+func appendDenialsWithSource(destination []schema.Denial, entries []schema.Denial, source string) []schema.Denial {
+	for _, entry := range entries {
+		entry.Source = source
+		destination = append(destination, entry)
+	}
+	return destination
+}
+
+func appendAllowancesWithSource(destination []schema.Allowance, entries []schema.Allowance, source string) []schema.Allowance {
+	for _, entry := range entries {
+		entry.Source = source
+		destination = append(destination, entry)
+	}
+	return destination
+}
+
+func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entries []schema.AllowanceDenial, source string) []schema.AllowanceDenial {
+	for _, entry := range entries {
+		entry.Source = source
+		destination = append(destination, entry)
+	}
+	return destination
 }
 
 // ensurePrincipalRoomAccess invites a principal to a workspace room so it can

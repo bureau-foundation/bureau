@@ -251,6 +251,9 @@ func formatGrant(grant schema.Grant) string {
 	if grant.Ticket != "" {
 		parts = append(parts, fmt.Sprintf("ticket: %s", grant.Ticket))
 	}
+	if grant.Source != "" {
+		parts = append(parts, fmt.Sprintf("source: %s", grant.Source))
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -259,19 +262,30 @@ func formatDenial(denial schema.Denial) string {
 	if len(denial.Targets) > 0 {
 		parts = append(parts, fmt.Sprintf("targets: [%s]", strings.Join(denial.Targets, ", ")))
 	}
+	if denial.Source != "" {
+		parts = append(parts, fmt.Sprintf("source: %s", denial.Source))
+	}
 	return strings.Join(parts, ", ")
 }
 
 func formatAllowance(allowance schema.Allowance) string {
-	return fmt.Sprintf("actions: [%s], actors: [%s]",
+	parts := []string{fmt.Sprintf("actions: [%s], actors: [%s]",
 		strings.Join(allowance.Actions, ", "),
-		strings.Join(allowance.Actors, ", "))
+		strings.Join(allowance.Actors, ", "))}
+	if allowance.Source != "" {
+		parts = append(parts, fmt.Sprintf("source: %s", allowance.Source))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func formatAllowanceDenial(denial schema.AllowanceDenial) string {
-	return fmt.Sprintf("actions: [%s], actors: [%s]",
+	parts := []string{fmt.Sprintf("actions: [%s], actors: [%s]",
 		strings.Join(denial.Actions, ", "),
-		strings.Join(denial.Actors, ", "))
+		strings.Join(denial.Actors, ", "))}
+	if denial.Source != "" {
+		parts = append(parts, fmt.Sprintf("source: %s", denial.Source))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Equality helpers for marking matched rules. These compare the fields
@@ -282,22 +296,26 @@ func grantsEqual(a, b schema.Grant) bool {
 	return slicesEqual(a.Actions, b.Actions) &&
 		slicesEqual(a.Targets, b.Targets) &&
 		a.ExpiresAt == b.ExpiresAt &&
-		a.Ticket == b.Ticket
+		a.Ticket == b.Ticket &&
+		a.Source == b.Source
 }
 
 func denialsEqual(a, b schema.Denial) bool {
 	return slicesEqual(a.Actions, b.Actions) &&
-		slicesEqual(a.Targets, b.Targets)
+		slicesEqual(a.Targets, b.Targets) &&
+		a.Source == b.Source
 }
 
 func allowancesEqual(a, b schema.Allowance) bool {
 	return slicesEqual(a.Actions, b.Actions) &&
-		slicesEqual(a.Actors, b.Actors)
+		slicesEqual(a.Actors, b.Actors) &&
+		a.Source == b.Source
 }
 
 func allowanceDenialsEqual(a, b schema.AllowanceDenial) bool {
 	return slicesEqual(a.Actions, b.Actions) &&
-		slicesEqual(a.Actors, b.Actors)
+		slicesEqual(a.Actors, b.Actors) &&
+		a.Source == b.Source
 }
 
 func slicesEqual(a, b []string) bool {

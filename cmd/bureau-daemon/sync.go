@@ -446,6 +446,11 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 				content.Grant.Ticket = stateKey
 			}
 
+			// Stamp source provenance so the CLI can show where this grant
+			// came from. Temporal grants already carry Ticket, GrantedBy,
+			// and GrantedAt for detailed provenance.
+			content.Grant.Source = schema.SourceTemporal
+
 			if d.authorizationIndex.AddTemporalGrant(content.Principal, content.Grant) {
 				d.logger.Info("added temporal grant",
 					"principal", content.Principal,

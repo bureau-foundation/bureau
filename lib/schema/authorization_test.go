@@ -16,6 +16,7 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 		Ticket:    "tkt-a3f9",
 		GrantedBy: "@bureau/dev/pm:bureau.local",
 		GrantedAt: "2026-02-12T10:00:00Z",
+		Source:    SourceMachineDefault,
 	}
 
 	data, err := json.Marshal(original)
@@ -43,6 +44,9 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 	if decoded.GrantedBy != "@bureau/dev/pm:bureau.local" {
 		t.Errorf("GrantedBy = %q, want @bureau/dev/pm:bureau.local", decoded.GrantedBy)
 	}
+	if decoded.Source != SourceMachineDefault {
+		t.Errorf("Source = %q, want %q", decoded.Source, SourceMachineDefault)
+	}
 }
 
 func TestGrantJSONOmitsEmptyFields(t *testing.T) {
@@ -61,7 +65,7 @@ func TestGrantJSONOmitsEmptyFields(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	for _, field := range []string{"targets", "expires_at", "ticket", "granted_by", "granted_at"} {
+	for _, field := range []string{"targets", "expires_at", "ticket", "granted_by", "granted_at", "source"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("field %q should be omitted from JSON when empty", field)
 		}
@@ -76,6 +80,7 @@ func TestDenialJSONRoundTrip(t *testing.T) {
 	original := Denial{
 		Actions: []string{"ticket/close", "ticket/reopen"},
 		Targets: []string{"bureau/dev/workspace/**"},
+		Source:  SourcePrincipal,
 	}
 
 	data, err := json.Marshal(original)
@@ -94,12 +99,16 @@ func TestDenialJSONRoundTrip(t *testing.T) {
 	if len(decoded.Targets) != 1 || decoded.Targets[0] != "bureau/dev/workspace/**" {
 		t.Errorf("Targets = %v, want [bureau/dev/workspace/**]", decoded.Targets)
 	}
+	if decoded.Source != SourcePrincipal {
+		t.Errorf("Source = %q, want %q", decoded.Source, SourcePrincipal)
+	}
 }
 
 func TestAllowanceJSONRoundTrip(t *testing.T) {
 	original := Allowance{
 		Actions: []string{"observe", "observe/read-write"},
 		Actors:  []string{"bureau/dev/pm", "bureau-admin"},
+		Source:  SourceTemporal,
 	}
 
 	data, err := json.Marshal(original)
@@ -117,6 +126,17 @@ func TestAllowanceJSONRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Actors) != 2 || decoded.Actors[0] != "bureau/dev/pm" {
 		t.Errorf("Actors = %v, want [bureau/dev/pm bureau-admin]", decoded.Actors)
+	}
+	if decoded.Source != SourceTemporal {
+		t.Errorf("Source = %q, want %q", decoded.Source, SourceTemporal)
+	}
+}
+
+func TestSourceRoomHelper(t *testing.T) {
+	source := SourceRoom("!abc123:bureau.local")
+	want := "room:!abc123:bureau.local"
+	if source != want {
+		t.Errorf("SourceRoom() = %q, want %q", source, want)
 	}
 }
 

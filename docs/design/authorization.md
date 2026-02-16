@@ -161,6 +161,12 @@ scoped to specific targets:
   approval. Provides audit trail for temporary and escalated access.
 - **GrantedBy** and **GrantedAt** — provenance, set automatically by
   the daemon when processing grant requests.
+- **Source** — identifies where the grant came from in the policy merge
+  hierarchy. Set automatically by the daemon during authorization index
+  rebuild: `machine-default` (from DefaultPolicy), `principal` (from
+  PrincipalAssignment.Authorization), `temporal` (from a temporal grant
+  state event), or `room:<room_id>` (from a room-level authorization
+  policy). Denials, allowances, and allowance denials also carry Source.
 
 Examples:
 

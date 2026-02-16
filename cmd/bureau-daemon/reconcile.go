@@ -1300,7 +1300,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
 //
 // Must be called as a goroutine. Uses reconcileMu to safely modify shared state.
 func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
-	exitCode, exitDescription, err := d.launcherWaitSandbox(ctx, localpart)
+	exitCode, exitDescription, exitOutput, err := d.launcherWaitSandbox(ctx, localpart)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // Daemon shutting down.
@@ -1312,11 +1312,20 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		return
 	}
 
-	d.logger.Info("sandbox exited",
-		"principal", localpart,
-		"exit_code", exitCode,
-		"description", exitDescription,
-	)
+	if exitCode != 0 && exitOutput != "" {
+		d.logger.Warn("sandbox exited with captured output",
+			"principal", localpart,
+			"exit_code", exitCode,
+			"description", exitDescription,
+			"output", exitOutput,
+		)
+	} else {
+		d.logger.Info("sandbox exited",
+			"principal", localpart,
+			"exit_code", exitCode,
+			"description", exitDescription,
+		)
+	}
 
 	d.reconcileMu.Lock()
 	if d.running[localpart] {
@@ -1338,7 +1347,9 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	}
 	d.reconcileMu.Unlock()
 
-	// Post exit notification to config room.
+	// Post exit notification to config room. On failure, include the
+	// captured terminal output so operators can diagnose the problem
+	// from the Matrix room without needing to reproduce the failure.
 	status := "exited normally"
 	if exitCode != 0 {
 		status = fmt.Sprintf("exited with code %d", exitCode)
@@ -1346,9 +1357,14 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 			status += fmt.Sprintf(" (%s)", exitDescription)
 		}
 	}
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Sandbox %s %s", localpart, status),
-	)); err != nil {
+	message := fmt.Sprintf("Sandbox %s %s", localpart, status)
+	if exitCode != 0 && exitOutput != "" {
+		// Truncate to the last 50 lines for the Matrix message. The
+		// full captured output (up to 500 lines) is in the daemon log.
+		truncated := tailLines(exitOutput, maxMatrixOutputLines)
+		message += fmt.Sprintf("\n\nCaptured output (last %d lines):\n%s", countLines(truncated), truncated)
+	}
+	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(message)); err != nil {
 		d.logger.Error("failed to post sandbox exit notification",
 			"principal", localpart, "error", err)
 	}
@@ -1579,7 +1595,8 @@ func (d *Daemon) launcherRequest(ctx context.Context, request launcherIPCRequest
 // launcherWaitSandbox sends a "wait-sandbox" IPC request to the launcher
 // and blocks until the named sandbox's process exits. Returns the process
 // exit code (0 for success, non-zero for failure, -1 for abnormal
-// termination).
+// termination), an error description string, the captured terminal output
+// (populated only on non-zero exit), and any IPC-level error.
 //
 // Unlike launcherRequest, this method is designed for long-lived
 // connections. The context controls cancellation: when cancelled, the
@@ -1588,11 +1605,11 @@ func (d *Daemon) launcherRequest(ctx context.Context, request launcherIPCRequest
 // The error string in the response (if any) describes the process exit
 // condition (signal name, etc.) and is informational — the exit code is
 // the authoritative success/failure indicator.
-func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart string) (int, string, error) {
+func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart string) (int, string, string, error) {
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "unix", d.launcherSocket)
 	if err != nil {
-		return -1, "", fmt.Errorf("connecting to launcher at %s: %w", d.launcherSocket, err)
+		return -1, "", "", fmt.Errorf("connecting to launcher at %s: %w", d.launcherSocket, err)
 	}
 	defer conn.Close()
 
@@ -1617,7 +1634,7 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 		Principal: principalLocalpart,
 	}
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {
-		return -1, "", fmt.Errorf("sending wait-sandbox request: %w", err)
+		return -1, "", "", fmt.Errorf("sending wait-sandbox request: %w", err)
 	}
 
 	// Clear the write deadline and read without a deadline — the
@@ -1627,20 +1644,20 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 	var response launcherIPCResponse
 	if err := codec.NewDecoder(conn).Decode(&response); err != nil {
 		if ctx.Err() != nil {
-			return -1, "", ctx.Err()
+			return -1, "", "", ctx.Err()
 		}
-		return -1, "", fmt.Errorf("reading wait-sandbox response: %w", err)
+		return -1, "", "", fmt.Errorf("reading wait-sandbox response: %w", err)
 	}
 
 	if !response.OK {
-		return -1, "", fmt.Errorf("wait-sandbox: %s", response.Error)
+		return -1, "", "", fmt.Errorf("wait-sandbox: %s", response.Error)
 	}
 
 	exitCode := 0
 	if response.ExitCode != nil {
 		exitCode = *response.ExitCode
 	}
-	return exitCode, response.Error, nil
+	return exitCode, response.Error, response.Output, nil
 }
 
 // launcherWaitProxy opens a long-lived IPC connection to the launcher and
@@ -1787,4 +1804,54 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		}
 	}
 	d.notifyReconcile()
+}
+
+// maxMatrixOutputLines is the maximum number of lines of captured sandbox
+// output included in Matrix exit notifications. Keeps messages readable
+// while still providing enough context to diagnose most failures. The
+// full output (up to 500 lines from the launcher) is logged at WARN level
+// in the daemon's structured log.
+const maxMatrixOutputLines = 50
+
+// tailLines returns the last n lines of s, matching tail -n semantics:
+// a trailing newline terminates the last line (does not start a new one).
+// If s has n or fewer lines, it is returned unchanged.
+func tailLines(s string, n int) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	// A trailing newline terminates the last line — search from before it
+	// so it doesn't count as an extra line separator.
+	searchFrom := len(s) - 1
+	if s[searchFrom] == '\n' {
+		searchFrom--
+	}
+
+	// Walk backwards counting newline separators. For n lines we need
+	// n-1 separators between them, plus one more newline to find the
+	// cut point (the newline before the first of our n lines).
+	count := 0
+	for i := searchFrom; i >= 0; i-- {
+		if s[i] == '\n' {
+			count++
+			if count == n {
+				return s[i+1:]
+			}
+		}
+	}
+	return s
+}
+
+// countLines returns the number of lines in s. An empty string has zero
+// lines; a string with no trailing newline counts its last segment.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	count := strings.Count(s, "\n")
+	if s[len(s)-1] != '\n' {
+		count++
+	}
+	return count
 }

@@ -206,7 +206,7 @@ func (d *Daemon) executePipeline(
 
 	// Wait for the executor to finish. This blocks until the process
 	// exits or the context is cancelled (daemon shutdown).
-	exitCode, exitDescription, waitError := d.launcherWaitSandbox(ctx, localpart)
+	exitCode, exitDescription, exitOutput, waitError := d.launcherWaitSandbox(ctx, localpart)
 	if waitError != nil {
 		d.postPipelineError(ctx, roomID, commandEventID, command, start,
 			fmt.Sprintf("waiting for pipeline executor: %v", waitError))
@@ -214,11 +214,20 @@ func (d *Daemon) executePipeline(
 		return
 	}
 
-	d.logger.Info("pipeline executor exited",
-		"localpart", localpart,
-		"exit_code", exitCode,
-		"exit_description", exitDescription,
-	)
+	if exitCode != 0 && exitOutput != "" {
+		d.logger.Warn("pipeline executor exited with captured output",
+			"localpart", localpart,
+			"exit_code", exitCode,
+			"exit_description", exitDescription,
+			"output", exitOutput,
+		)
+	} else {
+		d.logger.Info("pipeline executor exited",
+			"localpart", localpart,
+			"exit_code", exitCode,
+			"exit_description", exitDescription,
+		)
+	}
 
 	// Read the JSONL result file.
 	entries, readError := readPipelineResultFile(resultFilePath)
@@ -233,7 +242,7 @@ func (d *Daemon) executePipeline(
 
 	// Post the structured result as a threaded reply.
 	d.postPipelineResult(ctx, roomID, commandEventID, command, start,
-		exitCode, exitDescription, entries)
+		exitCode, exitDescription, exitOutput, entries)
 
 	// Clean up the ephemeral sandbox.
 	d.destroyPipelineSandbox(ctx, localpart)
@@ -387,6 +396,7 @@ func (d *Daemon) postPipelineResult(
 	start time.Time,
 	exitCode int,
 	exitDescription string,
+	exitOutput string,
 	entries []pipelineResultEntry,
 ) {
 	durationMilliseconds := time.Since(start).Milliseconds()
@@ -427,6 +437,10 @@ func (d *Daemon) postPipelineResult(
 		body = fmt.Sprintf("pipeline.execute: executor exited with code %d", exitCode)
 		if exitDescription != "" {
 			body += fmt.Sprintf(" (%s)", exitDescription)
+		}
+		if exitOutput != "" {
+			truncated := tailLines(exitOutput, maxMatrixOutputLines)
+			body += fmt.Sprintf("\n\nCaptured output (last %d lines):\n%s", countLines(truncated), truncated)
 		}
 	} else {
 		// Exit code 0 but no terminal entry — executor produced no

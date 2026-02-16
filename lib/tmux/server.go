@@ -170,6 +170,59 @@ func (s *Server) Run(args ...string) (string, error) {
 	return string(output), nil
 }
 
+// CapturePane captures the full scrollback and visible content of a pane
+// in the named session. Returns the captured text. The pane must still
+// exist (e.g., the session has remain-on-exit enabled and the command has
+// exited but the session has not been killed).
+//
+// Uses capture-pane with -p (print to stdout), -S - (start of history),
+// and -E - (end of visible area) to get the complete pane content. The
+// output includes terminal control sequences if the process used them.
+//
+// maxLines limits the output to the last N lines. Pass 0 for no limit.
+func (s *Server) CapturePane(sessionName string, maxLines int) (string, error) {
+	output, err := s.Run("capture-pane", "-t", sessionName, "-p", "-S", "-", "-E", "-")
+	if err != nil {
+		return "", err
+	}
+
+	if maxLines <= 0 {
+		return output, nil
+	}
+
+	return tailString(output, maxLines), nil
+}
+
+// tailString returns the last n lines of s, matching tail -n semantics:
+// a trailing newline terminates the last line (does not start a new one).
+// If s has n or fewer lines, it is returned unchanged.
+func tailString(s string, n int) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	// A trailing newline terminates the last line — search from before it
+	// so it doesn't count as an extra line separator.
+	searchFrom := len(s) - 1
+	if s[searchFrom] == '\n' {
+		searchFrom--
+	}
+
+	// Walk backwards counting newline separators. For n lines we need
+	// n-1 separators between them, plus one more newline to find the
+	// cut point (the newline before the first of our n lines).
+	count := 0
+	for i := searchFrom; i >= 0; i-- {
+		if s[i] == '\n' {
+			count++
+			if count == n {
+				return s[i+1:]
+			}
+		}
+	}
+	return s
+}
+
 // Command returns an *exec.Cmd for a tmux subcommand without running it.
 // The caller gets full control over Stdin, Stdout, Stderr, and
 // SysProcAttr before starting the process.

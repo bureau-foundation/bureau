@@ -1956,3 +1956,84 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 		})
 	}
 }
+
+func TestTailLines(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		n     int
+		want  string
+	}{
+		{
+			name:  "fewer lines than limit",
+			input: "line1\nline2\nline3",
+			n:     10,
+			want:  "line1\nline2\nline3",
+		},
+		{
+			name:  "exact number of lines",
+			input: "line1\nline2\nline3",
+			n:     3,
+			want:  "line1\nline2\nline3",
+		},
+		{
+			name:  "more lines than limit",
+			input: "line1\nline2\nline3\nline4\nline5",
+			n:     2,
+			want:  "line4\nline5",
+		},
+		{
+			name:  "single line no newline",
+			input: "only line",
+			n:     5,
+			want:  "only line",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			n:     5,
+			want:  "",
+		},
+		{
+			name:  "trailing newline",
+			input: "line1\nline2\nline3\n",
+			n:     2,
+			want:  "line2\nline3\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := tailLines(test.input, test.n)
+			if got != test.want {
+				t.Errorf("tailLines(%q, %d) = %q, want %q",
+					test.input, test.n, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{name: "empty", input: "", want: 0},
+		{name: "single line no newline", input: "hello", want: 1},
+		{name: "single line with newline", input: "hello\n", want: 1},
+		{name: "two lines", input: "a\nb", want: 2},
+		{name: "two lines trailing newline", input: "a\nb\n", want: 2},
+		{name: "three lines", input: "a\nb\nc", want: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := countLines(test.input)
+			if got != test.want {
+				t.Errorf("countLines(%q) = %d, want %d",
+					test.input, got, test.want)
+			}
+		})
+	}
+}

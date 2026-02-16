@@ -147,6 +147,13 @@ type Response struct {
 	// "field not present" (non-wait-sandbox responses).
 	ExitCode *int `cbor:"exit_code,omitempty"`
 
+	// Output is the captured terminal output from the sandbox process,
+	// returned by "wait-sandbox" when the process exits with a non-zero
+	// exit code. Contains the tail of the tmux pane scrollback to aid
+	// debugging startup failures and crashes. Empty on success to avoid
+	// leaking sandbox activity into daemon logs during normal operation.
+	Output string `cbor:"output,omitempty"`
+
 	// Sandboxes lists running sandboxes. Returned by "list-sandboxes"
 	// so the daemon can discover principals that survived a daemon
 	// restart while the launcher continued running.

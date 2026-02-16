@@ -199,7 +199,7 @@ func run() error {
 		proxyBinaryPath: proxyBinaryPath,
 		workspaceRoot:   workspaceRoot,
 		cacheRoot:       cacheRoot,
-		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(runDir), "/dev/null"),
+		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(runDir), writeTmuxConfig(runDir)),
 		sandboxes:       make(map[string]*managedSandbox),
 		failedExecPaths: make(map[string]bool),
 		logger:          logger,
@@ -637,6 +637,7 @@ type managedSandbox struct {
 	doneOnce      sync.Once           // protects close(done) from concurrent callers
 	exitCode      int                 // command exit code (set before done is closed)
 	exitError     error               // descriptive exit error (set before done is closed)
+	exitOutput    string              // captured terminal output from tmux pane (set before done is closed)
 	roles         map[string][]string // role name → command, from SandboxSpec.Roles
 	proxyDone     chan struct{}       // closed when the proxy process exits
 	proxyExitCode int                 // proxy exit code (set before proxyDone is closed)
@@ -952,8 +953,10 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 
 	// Close the done channel and kill the proxy. finishSandbox is
 	// idempotent (via doneOnce), so it's safe even if the session
-	// watcher fires concurrently.
-	l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"))
+	// watcher fires concurrently. No output capture — the session was
+	// killed before we could capture, and explicit destruction is not
+	// an error path that needs diagnostics.
+	l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"), "")
 
 	// Wait for done to ensure everything has settled before cleanup.
 	<-sb.done
@@ -1027,6 +1030,9 @@ func (l *Launcher) handleWaitSandbox(ctx context.Context, conn net.Conn, encoder
 		response := IPCResponse{OK: true, ExitCode: &exitCode}
 		if sandbox.exitError != nil {
 			response.Error = sandbox.exitError.Error()
+		}
+		if sandbox.exitOutput != "" {
+			response.Output = sandbox.exitOutput
 		}
 		if err := encoder.Encode(response); err != nil {
 			l.logger.Error("encoding wait-sandbox result", "error", err,
@@ -1724,15 +1730,26 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 	}
 }
 
-// startSessionWatcher starts a background goroutine that polls the tmux
-// session for the given principal. When the session disappears (for any
-// reason — command exited, session killed, tmux server crashed), the
-// goroutine reads the exit code file, kills the proxy, and closes the
-// sandbox's done channel via finishSandbox.
+// startSessionWatcher starts a background goroutine that monitors a sandbox's
+// tmux session and drives its lifecycle to completion. This is the single
+// lifecycle driver for all sandboxes — there are no special cases for pipeline
+// executors vs interactive agents vs human operators.
 //
-// This is the single lifecycle driver for all sandboxes. There are no
-// special cases for pipeline executors vs interactive agents vs human
-// operators: when the tmux session ends, the sandbox is done.
+// Detection strategy: the tmux session has remain-on-exit enabled, so when the
+// sandboxed process exits, the pane stays alive (showing "Pane is dead") instead
+// of being destroyed. The watcher polls for two conditions:
+//
+//  1. Exit code file exists — the sandbox script wrote it just before exiting.
+//     The pane is still alive (remain-on-exit), so we can capture its scrollback
+//     via capture-pane, then kill the session.
+//
+//  2. Session gone — something external killed the session (handleDestroySandbox,
+//     shutdownAllSandboxes, or tmux server crash). No pane capture is possible.
+//     This is the fallback; the primary detection is (1).
+//
+// The watcher also listens on sb.done for early termination by other code paths
+// (e.g., handleDestroySandbox calls finishSandbox directly to avoid waiting for
+// the next poll interval).
 func (l *Launcher) startSessionWatcher(localpart string, sb *managedSandbox) {
 	sessionName := tmuxSessionName(localpart)
 	exitCodePath := filepath.Join(sb.configDir, "exit-code")
@@ -1745,51 +1762,117 @@ func (l *Launcher) startSessionWatcher(localpart string, sb *managedSandbox) {
 			select {
 			case <-sb.done:
 				// Sandbox already finished (e.g., handleDestroySandbox
-				// called finishSandbox before we detected the session gone).
+				// called finishSandbox before we detected the exit).
 				return
 			case <-ticker.C:
 			}
 
-			if !l.tmuxServer.HasSession(sessionName) {
-				// Session is gone. Read the exit code if the sandbox
-				// script wrote one.
+			// Primary detection: check if the exit code file exists. The
+			// sandbox script writes this just before exiting, and
+			// remain-on-exit keeps the tmux pane alive so we can still
+			// capture its content.
+			if _, statErr := os.Stat(exitCodePath); statErr == nil {
 				exitCode := -1
-				var exitError error
 				if data, readErr := os.ReadFile(exitCodePath); readErr == nil {
 					if code, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
 						exitCode = code
 					}
 				}
+
+				// Capture the pane content before killing the session.
+				// On failure (e.g., tmux server crashed between the stat
+				// and capture), proceed without output — the exit code
+				// alone is still valuable.
+				var output string
+				if exitCode != 0 {
+					captured, captureErr := l.tmuxServer.CapturePane(sessionName, maxCapturedOutputLines)
+					if captureErr != nil {
+						l.logger.Warn("failed to capture pane output",
+							"principal", localpart,
+							"session", sessionName,
+							"error", captureErr,
+						)
+					} else {
+						output = strings.TrimRight(captured, "\n")
+					}
+				}
+
+				// Kill the session now that we have the output. The pane
+				// was kept alive by remain-on-exit solely for this capture.
+				l.destroyTmuxSession(localpart)
+
+				var exitError error
 				if exitCode != 0 {
 					exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
 				}
 
-				l.logger.Info("tmux session ended",
+				l.logger.Info("sandbox process exited",
+					"principal", localpart,
+					"session", sessionName,
+					"exit_code", exitCode,
+					"captured_output_length", len(output),
+				)
+
+				l.finishSandbox(sb, exitCode, exitError, output)
+				return
+			}
+
+			// Fallback: session disappeared without writing an exit code
+			// file. This happens when the session is killed externally
+			// (handleDestroySandbox, shutdownAllSandboxes, tmux crash).
+			// No output capture is possible — the pane is already gone.
+			if !l.tmuxServer.HasSession(sessionName) {
+				exitCode := -1
+				if data, readErr := os.ReadFile(exitCodePath); readErr == nil {
+					if code, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
+						exitCode = code
+					}
+				}
+				var exitError error
+				if exitCode != 0 {
+					exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
+				}
+
+				l.logger.Info("tmux session disappeared",
 					"principal", localpart,
 					"session", sessionName,
 					"exit_code", exitCode,
 				)
 
-				l.finishSandbox(sb, exitCode, exitError)
+				l.finishSandbox(sb, exitCode, exitError, "")
 				return
 			}
 		}
 	}()
 }
 
-// finishSandbox sets the exit code and error on a sandbox and closes its
-// done channel. Safe to call from multiple goroutines (session watcher,
-// handleDestroySandbox, shutdownAllSandboxes) — doneOnce ensures the
-// channel is closed exactly once and the exit state is set atomically
-// with the close.
+// maxCapturedOutputLines is the maximum number of lines captured from a
+// sandbox's tmux pane when the process exits with a non-zero exit code.
+// This bounds the size of the output carried through IPC and into Matrix
+// messages. The full scrollback (up to history-limit, currently 50000)
+// exists in the pane until we kill the session, but only the tail is
+// useful for diagnosing failures.
+const maxCapturedOutputLines = 500
+
+// finishSandbox sets the exit code, error, and captured output on a sandbox
+// and closes its done channel. Safe to call from multiple goroutines (session
+// watcher, handleDestroySandbox, shutdownAllSandboxes) — doneOnce ensures the
+// channel is closed exactly once and the exit state is set atomically with the
+// close.
+//
+// output is the captured terminal content from the tmux pane. It is only
+// available when the session watcher detects a normal process exit (the
+// pane is still alive due to remain-on-exit). For forced destruction or
+// launcher shutdown, output is empty — this is expected and not an error.
 //
 // Also kills the proxy process if it is still running. The proxy is
 // infrastructure for the sandbox; when the sandbox ends, the proxy has
 // no purpose.
-func (l *Launcher) finishSandbox(sb *managedSandbox, exitCode int, exitError error) {
+func (l *Launcher) finishSandbox(sb *managedSandbox, exitCode int, exitError error, output string) {
 	sb.doneOnce.Do(func() {
 		sb.exitCode = exitCode
 		sb.exitError = exitError
+		sb.exitOutput = output
 		close(sb.done)
 	})
 
@@ -1854,7 +1937,7 @@ func (l *Launcher) shutdownAllSandboxes() {
 	// Finish each sandbox: close done channels and kill proxy processes.
 	for localpart, sb := range l.sandboxes {
 		l.logger.Info("shutting down sandbox", "principal", localpart, "proxy_pid", sb.proxyProcess.Pid)
-		l.finishSandbox(sb, -1, fmt.Errorf("launcher shutdown"))
+		l.finishSandbox(sb, -1, fmt.Errorf("launcher shutdown"), "")
 
 		// Wait for the done channel (should be immediate since we just
 		// called finishSandbox, but the session watcher goroutine may
@@ -1862,6 +1945,36 @@ func (l *Launcher) shutdownAllSandboxes() {
 		<-sb.done
 		l.cleanupSandbox(localpart)
 	}
+}
+
+// writeTmuxConfig writes a minimal tmux configuration file to the run
+// directory and returns its path. The file is loaded when the tmux server
+// first starts (via -f on new-session). Global options must be in this
+// file rather than set via SetOption after session creation because a
+// command that exits instantly can race with the option-setting code:
+// the command exits, the session ends, the server exits (no remaining
+// sessions), and the subsequent SetOption call fails with "no server
+// running".
+//
+// Options set here:
+//   - remain-on-exit: keeps the pane alive after the command exits so the
+//     session watcher can capture terminal output via capture-pane.
+//   - prefix: Ctrl-a (distinct from the user's Ctrl-b default).
+//   - mouse: on for relay pass-through.
+//   - history-limit: generous scrollback for observation history.
+func writeTmuxConfig(runDir string) string {
+	configPath := filepath.Join(runDir, "tmux.conf")
+	config := "set-option -g remain-on-exit on\n" +
+		"set-option -g prefix C-a\n" +
+		"set-option -g mouse on\n" +
+		"set-option -g history-limit 50000\n"
+	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		// The run directory must be writable — if this fails, the
+		// launcher is misconfigured. Panic is appropriate since we
+		// haven't started serving yet.
+		panic(fmt.Sprintf("writing tmux config to %s: %v", configPath, err))
+	}
+	return configPath
 }
 
 // tmuxSessionName returns the tmux session name for a principal.
@@ -1911,36 +2024,15 @@ func (l *Launcher) createTmuxSession(localpart string, command ...string) error 
 	return nil
 }
 
-// configureTmuxSession sets Bureau-standard tmux options on a session and
-// the server. Global options (prefix, mouse, scrollback) are set with -g
-// so all sessions on Bureau's dedicated server inherit them. Per-session
-// options (status bar content) are set on the specific session.
+// configureTmuxSession sets per-session tmux options (status bar content).
+// Global options (prefix, mouse, history-limit, remain-on-exit) are loaded
+// from the tmux config file written by writeTmuxConfig at server startup,
+// which eliminates the race condition where a fast-exiting command causes
+// the tmux server to exit before global SetOption calls execute.
 func (l *Launcher) configureTmuxSession(sessionName, localpart string) {
-	type tmuxOption struct {
-		global bool
-		key    string
-		value  string
-	}
-
-	options := []tmuxOption{
-		{global: true, key: "prefix", value: "C-a"},
-		{global: true, key: "mouse", value: "on"},
-		{global: true, key: "history-limit", value: "50000"},
-		{global: false, key: "status-left", value: fmt.Sprintf(" %s ", localpart)},
-	}
-
-	for _, option := range options {
-		var err error
-		if option.global {
-			err = l.tmuxServer.SetOption("", option.key, option.value)
-		} else {
-			err = l.tmuxServer.SetOption(sessionName, option.key, option.value)
-		}
-		if err != nil {
-			l.logger.Warn("setting tmux option failed",
-				"session", sessionName, "option", option.key,
-				"error", err)
-		}
+	if err := l.tmuxServer.SetOption(sessionName, "status-left", fmt.Sprintf(" %s ", localpart)); err != nil {
+		l.logger.Warn("setting tmux session status-left failed",
+			"session", sessionName, "error", err)
 	}
 }
 

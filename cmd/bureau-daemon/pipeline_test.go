@@ -660,7 +660,7 @@ func TestPostPipelineResult(t *testing.T) {
 
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd1",
-			command, fixedTestTime, 0, "", entries)
+			command, fixedTestTime, 0, "", "", entries)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {
@@ -703,7 +703,7 @@ func TestPostPipelineResult(t *testing.T) {
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd2",
 			schema.CommandMessage{Command: "pipeline.execute"},
-			fixedTestTime, 1, "exit status 1", entries)
+			fixedTestTime, 1, "exit status 1", "", entries)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {
@@ -728,7 +728,7 @@ func TestPostPipelineResult(t *testing.T) {
 		ctx := context.Background()
 		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd3",
 			schema.CommandMessage{Command: "pipeline.execute"},
-			fixedTestTime, 137, "killed by signal 9", nil)
+			fixedTestTime, 137, "killed by signal 9", "", nil)
 
 		messages := harness.getSentMessages()
 		if len(messages) != 1 {

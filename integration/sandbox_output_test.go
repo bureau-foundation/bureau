@@ -1,0 +1,107 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package integration_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
+)
+
+// TestSandboxExitOutputCapture verifies that when a sandbox process exits
+// with a non-zero exit code, the daemon captures the terminal output from
+// the tmux pane and includes it in the config room notification. This is
+// the end-to-end test for the remain-on-exit + capture-pane error capture
+// mechanism.
+//
+// The test deploys a principal with a template pointing at a nonexistent
+// binary. Bwrap fails to exec it and prints a clear error to stderr. The
+// launcher's session watcher captures the pane output before destroying
+// the tmux session, sends it through IPC, and the daemon posts it to the
+// config room.
+func TestSandboxExitOutputCapture(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	machine := newTestMachine(t, "machine/output-capture")
+	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
+		t.Fatalf("create workspace root: %v", err)
+	}
+
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+
+	// Publish a template with a command that will fail inside the sandbox.
+	// The binary path does not exist, so bwrap will fail to exec it and
+	// print an error like "execvp /this/binary/does/not/exist: No such
+	// file or directory".
+	templateRoomID := grantTemplateAccess(t, admin, machine)
+	_, err := admin.SendStateEvent(t.Context(), templateRoomID,
+		schema.EventTypeTemplate, "failing-agent", schema.TemplateContent{
+			Description: "Agent with nonexistent binary for output capture test",
+			Command:     []string{"/this/binary/does/not/exist"},
+			Namespaces:  &schema.TemplateNamespaces{PID: true},
+			Security: &schema.TemplateSecurity{
+				NewSession:    true,
+				DieWithParent: true,
+				NoNewPrivs:    true,
+			},
+			Filesystem: []schema.TemplateMount{
+				{Dest: "/tmp", Type: "tmpfs"},
+			},
+			CreateDirs: []string{"/tmp", "/run/bureau"},
+			EnvironmentVariables: map[string]string{
+				"HOME": "/tmp",
+				"TERM": "xterm-256color",
+			},
+		})
+	if err != nil {
+		t.Fatalf("publish failing template: %v", err)
+	}
+
+	// Register a principal and push credentials.
+	agent := registerPrincipal(t, "agent/will-fail", "password")
+	pushCredentials(t, admin, machine, agent)
+
+	// Watch the config room BEFORE pushing the machine config so we
+	// catch the sandbox exit notification via /sync long-polling.
+	exitWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	// Push the machine config. The daemon will reconcile, create the
+	// sandbox, and the sandbox will fail immediately because bwrap
+	// cannot exec the nonexistent binary.
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:  agent,
+			Template: "bureau/template:failing-agent",
+		}},
+	})
+
+	// Wait for the exit notification. The daemon posts this to the
+	// config room when the sandbox exits. With our changes, it includes
+	// the captured terminal output when the exit code is non-zero.
+	exitMessage := exitWatch.WaitForMessage(t, "Captured output", machine.UserID)
+
+	// The message should contain the exit code indicator.
+	if !strings.Contains(exitMessage, "exited with code") {
+		t.Errorf("exit message missing exit code, got: %s", exitMessage)
+	}
+
+	// The captured output should contain the bwrap error about the
+	// nonexistent binary. The exact wording depends on the bwrap version
+	// but all versions include the path and "No such file or directory".
+	if !strings.Contains(exitMessage, "/this/binary/does/not/exist") {
+		t.Errorf("captured output missing binary path, got: %s", exitMessage)
+	}
+	if !strings.Contains(exitMessage, "No such file or directory") {
+		t.Errorf("captured output missing errno message, got: %s", exitMessage)
+	}
+}

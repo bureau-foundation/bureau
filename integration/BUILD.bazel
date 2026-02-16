@@ -35,6 +35,7 @@ go_test(
         "quickstart_test.go",
         "restart_test.go",
         "revocation_test.go",
+        "sandbox_output_test.go",
         "service_discovery_test.go",
         "setup_test.go",
         "structured_api_test.go",

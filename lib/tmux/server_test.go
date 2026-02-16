@@ -190,6 +190,95 @@ func TestNewTestServerIsolation(t *testing.T) {
 	}
 }
 
+func TestCapturePane(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	// Enable remain-on-exit so the pane stays alive after the command exits.
+	// This mirrors how the launcher configures Bureau's tmux server.
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	// Run a command that prints known output and exits.
+	if err := server.NewSession("capture-test", "sh", "-c", "echo 'hello from sandbox'; echo 'error: something broke' >&2"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// Wait for the pane to become dead (command exited, but session persists).
+	for {
+		output, err := server.Run("list-panes", "-t", "capture-test", "-F", "#{pane_dead}")
+		if err != nil {
+			t.Fatalf("list-panes: %v", err)
+		}
+		if strings.TrimSpace(output) == "1" {
+			break
+		}
+		if t.Context().Err() != nil {
+			t.Fatal("timed out waiting for pane to become dead")
+		}
+		runtime.Gosched()
+	}
+
+	// Session should still exist (remain-on-exit).
+	if !server.HasSession("capture-test") {
+		t.Fatal("session disappeared despite remain-on-exit")
+	}
+
+	// Capture the pane content.
+	captured, err := server.CapturePane("capture-test", 0)
+	if err != nil {
+		t.Fatalf("CapturePane: %v", err)
+	}
+
+	if !strings.Contains(captured, "hello from sandbox") {
+		t.Errorf("captured output missing stdout content, got: %q", captured)
+	}
+	if !strings.Contains(captured, "error: something broke") {
+		t.Errorf("captured output missing stderr content, got: %q", captured)
+	}
+}
+
+func TestCapturePaneWithMaxLines(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	// Print 10 numbered lines.
+	if err := server.NewSession("capture-limit", "sh", "-c",
+		"for i in 1 2 3 4 5 6 7 8 9 10; do echo \"line $i\"; done"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// Wait for pane to become dead.
+	for {
+		output, err := server.Run("list-panes", "-t", "capture-limit", "-F", "#{pane_dead}")
+		if err != nil {
+			t.Fatalf("list-panes: %v", err)
+		}
+		if strings.TrimSpace(output) == "1" {
+			break
+		}
+		if t.Context().Err() != nil {
+			t.Fatal("timed out waiting for pane to become dead")
+		}
+		runtime.Gosched()
+	}
+
+	// Capture with limit of 3 lines.
+	captured, err := server.CapturePane("capture-limit", 3)
+	if err != nil {
+		t.Fatalf("CapturePane: %v", err)
+	}
+
+	// Should contain the last lines but not the first ones.
+	lines := strings.Split(strings.TrimRight(captured, "\n"), "\n")
+	if len(lines) > 3 {
+		t.Errorf("expected at most 3 lines, got %d: %v", len(lines), lines)
+	}
+}
+
 func TestConfigIsolation(t *testing.T) {
 	// Create a custom tmux.conf that sets a distinctive option.
 	configDir := t.TempDir()

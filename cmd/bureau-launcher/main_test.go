@@ -1097,7 +1097,7 @@ func requireTmux(t *testing.T) {
 func newTestRunDir(t *testing.T) (string, *tmux.Server) {
 	t.Helper()
 	runDir := testutil.SocketDir(t)
-	server := tmux.NewServer(principal.TmuxSocketPath(runDir), "/dev/null")
+	server := tmux.NewServer(principal.TmuxSocketPath(runDir), writeTmuxConfig(runDir))
 	t.Cleanup(func() {
 		server.KillServer()
 	})
@@ -1182,6 +1182,7 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 		{"prefix", "C-a"},
 		{"mouse", "on"},
 		{"history-limit", "50000"},
+		{"remain-on-exit", "on"},
 	}
 
 	for _, test := range globalOptions {

@@ -25,6 +25,13 @@ import (
 // synchronization point: once it appears, the proxy is guaranteed to be
 // enforcing the new grants.
 //
+// A single roomWatch is used across all phases rather than creating a new
+// watch per phase. This eliminates sync-position races: each WaitForMessage
+// advances the watch's nextBatch monotonically, so Phase 3 can never
+// accidentally consume Phase 2's message. Grant-count matching provides
+// additional disambiguation — AllowJoin produces "(1 grants)" while
+// default-deny produces "(0 grants)".
+//
 // Phase 3 uses a fresh room (room B) because the agent joined room A in
 // phase 2. The Matrix /join endpoint is idempotent for already-joined
 // members, so retesting room A would succeed regardless of grants.
@@ -58,6 +65,15 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		t.Fatalf("proxy whoami = %q, want %q", userID, agent.UserID)
 	}
 
+	// Create a single watch for all phases. The watch starts after the
+	// initial deploy is confirmed operational (proxyWhoami above), so
+	// its sync position is past any initial-deploy events. The daemon's
+	// create-missing loop sets d.lastGrants during sandbox creation;
+	// the hot-reload loop in subsequent reconciles finds equal grants
+	// and posts no message, so there is no initial "Authorization grants
+	// updated" message to drain.
+	watch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	// --- Phase 1: Default-deny blocks join ---
 
 	roomA, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -79,8 +95,6 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 
 	// --- Phase 2: Hot-reload AllowJoin=true ---
 
-	watch := watchRoom(t, admin, machine.ConfigRoomID)
-
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:      agent,
@@ -88,11 +102,10 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		}},
 	})
 
-	// Wait for the daemon's grants hot-reload confirmation. The watch
-	// checkpoint was taken before the config push, so only new messages
-	// after the push are considered.
-	watch.WaitForMessage(t, "Authorization grants updated for agent/policy-hr",
-		machine.UserID)
+	// Wait for the daemon's grants hot-reload confirmation. AllowJoin
+	// synthesizes exactly 1 grant (matrix/join action), so we match on
+	// "(1 grants)" to distinguish from Phase 3's "(0 grants)".
+	watch.WaitForMessage(t, "(1 grants)", machine.UserID)
 	t.Log("daemon confirmed grants hot-reload for AllowJoin=true")
 
 	// Now the proxy is guaranteed to enforce the new grants.
@@ -117,15 +130,13 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 		t.Fatalf("invite agent to room B: %v", err)
 	}
 
-	watch = watchRoom(t, admin, machine.ConfigRoomID)
-
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: agent}},
 	})
 
-	// Wait for the daemon's grants revert confirmation via a fresh watch.
-	watch.WaitForMessage(t, "Authorization grants updated for agent/policy-hr",
-		machine.UserID)
+	// Wait for the daemon's grants revert confirmation. Default-deny
+	// produces 0 grants, so match on "(0 grants)".
+	watch.WaitForMessage(t, "(0 grants)", machine.UserID)
 	t.Log("daemon confirmed grants revert to default-deny")
 
 	statusCode, body = proxyTryJoinRoom(t, proxyClient, roomB.RoomID)
@@ -152,6 +163,12 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 // the daemon posts "Authorization grants updated for <principal>" to the
 // config room — this serves as the synchronization point.
 //
+// A single roomWatch is used across all phases (including the service
+// directory wait) rather than creating a new watch per phase. This
+// eliminates sync-position races: the watch's nextBatch advances
+// monotonically as each WaitForMessage returns, so later phases never
+// see earlier phases' messages.
+//
 // This proves the daemon's reconcile → resolveGrantsForProxy →
 // pushAuthorizationToProxy → proxy GrantsAllow filtering flow
 // applies runtime visibility changes end-to-end.
@@ -169,7 +186,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	// Deploy a consumer FIRST so the proxy exists when the daemon
+	// Deploy the consumer FIRST so the proxy exists when the daemon
 	// processes the service event. The daemon's "Service directory
 	// updated" message is posted after pushServiceDirectory, which
 	// pushes to all running proxies. If the proxy doesn't exist when
@@ -184,10 +201,15 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	})
 	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
 
-	// Watch the daemon's config room for service directory updates. Set
-	// up the watch BEFORE publishing the service event to capture the
-	// sync position before the directory change message arrives.
-	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	// Create a single watch for the entire test: service directory
+	// waiting, Phase 2 grants, and Phase 3 grants all use the same
+	// watch. Starting the watch after the proxy is confirmed running
+	// ensures its sync position is past any initial-deploy events.
+	// The daemon's create-missing loop sets d.lastGrants during sandbox
+	// creation; the hot-reload loop in subsequent reconciles finds
+	// equal grants and posts no message, so there is no initial
+	// "Authorization grants updated" message to drain.
+	watch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	// Publish a test service in #bureau/service. No actual service
 	// principal needs to run — the directory entry is constructed from
@@ -213,7 +235,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// deployed above, so pushServiceDirectory includes it — the message
 	// is posted after the push completes, guaranteeing the proxy has
 	// the updated directory.
-	serviceWatch.WaitForMessage(t, "added service/vis-hr/test", machine.UserID)
+	watch.WaitForMessage(t, "added service/vis-hr/test", machine.UserID)
 
 	entries := proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {
@@ -227,8 +249,6 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 
 	// --- Phase 2: Non-matching visibility — service disappears ---
 
-	watch := watchRoom(t, admin, machine.ConfigRoomID)
-
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:           agent,
@@ -237,7 +257,9 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	})
 
 	// Wait for the daemon's grants hot-reload confirmation, then
-	// verify the service is no longer visible.
+	// verify the service is no longer visible. The single watch's
+	// nextBatch has advanced past Phase 1's service directory message,
+	// so this WaitForMessage only sees new events.
 	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
 		machine.UserID)
 
@@ -249,8 +271,6 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 
 	// --- Phase 3: Restore matching visibility — service reappears ---
 
-	watch = watchRoom(t, admin, machine.ConfigRoomID)
-
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:           agent,
@@ -259,7 +279,8 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	})
 
 	// Wait for the daemon's grants hot-reload confirmation, then
-	// verify the service is visible again.
+	// verify the service is visible again. Phase 2's grants message
+	// was already consumed above, so this matches Phase 3's message.
 	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
 		machine.UserID)
 

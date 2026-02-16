@@ -370,6 +370,12 @@ type MachineStatus struct {
 	// as the signaling target for WebRTC connection establishment.
 	// Empty if the daemon is not accepting transport connections.
 	TransportAddress string `json:"transport_address,omitempty"`
+
+	// Principals reports per-sandbox resource usage derived from cgroup
+	// v2 statistics. Keyed by principal localpart. Populated by daemons
+	// that support enriched heartbeats. Omitted by older daemons —
+	// consumers must handle its absence gracefully.
+	Principals map[string]PrincipalResourceUsage `json:"principals,omitempty"`
 }
 
 // SandboxCounts reports how many sandboxes are in each state.
@@ -463,6 +469,14 @@ type MachineInfo struct {
 	// GPUs lists the GPU hardware present on this machine. Each
 	// entry describes a single GPU. Empty if no GPUs are detected.
 	GPUs []GPUInfo `json:"gpus,omitempty"`
+
+	// Labels are operator-assigned key-value tags describing the machine's
+	// capabilities and organizational role. The fleet controller uses labels
+	// for placement constraint matching (PlacementConstraints.Requires).
+	// Examples: "gpu=rtx4090", "persistent=true", "tier=production".
+	// Published by the daemon from configuration; updated via
+	// "bureau machine label" CLI.
+	Labels map[string]string `json:"labels,omitempty"`
 
 	// DaemonVersion is the bureau-daemon version string
 	// (from lib/version at build time).

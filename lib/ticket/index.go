@@ -254,17 +254,36 @@ func (idx *Index) Put(ticketID string, content schema.TicketContent) {
 		idx.removeGateWatches(ticketID, &old)
 	}
 
-	// Clone the Gates slice to break backing-array aliasing between
-	// the stored content and the caller's copy. Without this, in-place
-	// modifications to the caller's Gates elements (e.g., setting
-	// Status to "satisfied" in satisfyGate) would alias through to
-	// the stored copy, causing removeGateWatches to see modified
-	// values instead of the original values it needs to compute
-	// correct watch keys for removal.
+	// Clone all slice fields to break backing-array aliasing between
+	// the stored content and the caller's copy. Go's value-type map
+	// stores a copy of the struct, but slice headers in that copy
+	// share backing arrays with the caller's original. If the caller
+	// later modifies slice elements in-place (e.g., setting
+	// gate.Status = "satisfied" before calling Put), those mutations
+	// alias through to the stored copy, corrupting secondary index
+	// maintenance that needs to see the original values for removal.
+	// Cloning at the storage boundary makes the index self-protecting
+	// regardless of caller mutation patterns.
+	if len(content.Labels) > 0 {
+		content.Labels = append([]string(nil), content.Labels...)
+	}
+	if len(content.BlockedBy) > 0 {
+		content.BlockedBy = append([]string(nil), content.BlockedBy...)
+	}
 	if len(content.Gates) > 0 {
 		cloned := make([]schema.TicketGate, len(content.Gates))
 		copy(cloned, content.Gates)
 		content.Gates = cloned
+	}
+	if len(content.Notes) > 0 {
+		cloned := make([]schema.TicketNote, len(content.Notes))
+		copy(cloned, content.Notes)
+		content.Notes = cloned
+	}
+	if len(content.Attachments) > 0 {
+		cloned := make([]schema.TicketAttachment, len(content.Attachments))
+		copy(cloned, content.Attachments)
+		content.Attachments = cloned
 	}
 
 	idx.tickets[ticketID] = content

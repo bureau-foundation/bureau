@@ -140,6 +140,14 @@ func runEnable(params *enableParams) error {
 		return fmt.Errorf("publishing principal assignment: %w", err)
 	}
 
+	// Step 3: Publish fleet room_service binding in all machine config rooms.
+	// This makes the fleet controller discoverable via RequiredServices for
+	// any agent on any machine in the deployment.
+	bindingCount, err := publishFleetBindings(ctx, adminSession, serviceUserID, params.ServerName)
+	if err != nil {
+		return fmt.Errorf("publishing fleet bindings: %w", err)
+	}
+
 	if done, err := params.EmitJSON(enableResult{
 		ServicePrincipal: servicePrincipal,
 		ServiceUserID:    serviceUserID,
@@ -151,6 +159,7 @@ func runEnable(params *enableParams) error {
 	fmt.Fprintf(os.Stderr, "\nFleet controller enabled:\n")
 	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", servicePrincipal, serviceUserID)
 	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", host)
+	fmt.Fprintf(os.Stderr, "  Bindings: %d config room(s)\n", bindingCount)
 	fmt.Fprintf(os.Stderr, "\nThe daemon will start the fleet controller and register it in\n")
 	fmt.Fprintf(os.Stderr, "the service room. The fleet controller will begin tracking machines\n")
 	fmt.Fprintf(os.Stderr, "and processing FleetServiceContent events from the fleet room.\n")
@@ -214,6 +223,59 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 
 	fmt.Fprintf(os.Stderr, "Registered service account %s\n", session.UserID())
 	return nil
+}
+
+// publishFleetBindings publishes an m.bureau.room_service state event with
+// state key "fleet" in every active machine's config room. This binds the
+// "fleet" service role to the fleet controller so agents with
+// required_services: ["fleet"] can discover the fleet controller socket.
+//
+// Active machines are discovered from m.bureau.machine_key state events in
+// #bureau/machine. Machines with empty key content (decommissioned) are
+// skipped. Returns the number of config rooms successfully updated.
+func publishFleetBindings(ctx context.Context, session *messaging.Session, serviceUserID, serverName string) (int, error) {
+	machineAlias := schema.FullRoomAlias(schema.RoomAliasMachine, serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
+	if err != nil {
+		return 0, fmt.Errorf("resolving machine room %s: %w", machineAlias, err)
+	}
+
+	events, err := session.GetRoomState(ctx, machineRoomID)
+	if err != nil {
+		return 0, fmt.Errorf("reading machine room state: %w", err)
+	}
+
+	binding := schema.RoomServiceContent{Principal: serviceUserID}
+	count := 0
+
+	for _, event := range events {
+		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil || *event.StateKey == "" {
+			continue
+		}
+		// Skip decommissioned machines (empty key field).
+		if keyValue, _ := event.Content["key"].(string); keyValue == "" {
+			continue
+		}
+
+		machineLocalpart := *event.StateKey
+		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineLocalpart), serverName)
+		configRoomID, err := session.ResolveAlias(ctx, configAlias)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: cannot resolve config room for %s: %v\n", machineLocalpart, err)
+			continue
+		}
+
+		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeRoomService, "fleet", binding)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: cannot publish fleet binding in %s: %v\n", machineLocalpart, err)
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "  Published fleet binding in config room for %s\n", machineLocalpart)
+		count++
+	}
+
+	return count, nil
 }
 
 // publishFleetAssignment adds the fleet controller to the machine's

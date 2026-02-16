@@ -48,16 +48,26 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 }
 
-// TestStatusParamsDefaults verifies the default socket and token paths.
-func TestStatusParamsDefaults(t *testing.T) {
-	expectedSocket := principal.SocketPath("service/fleet/main")
-	if defaultSocketPath != expectedSocket {
-		t.Errorf("default socket path: got %q, want %q", defaultSocketPath, expectedSocket)
+// TestDefaultFleetSocketPath verifies the default socket path outside a
+// sandbox falls back to the host-side principal socket path.
+func TestDefaultFleetSocketPath(t *testing.T) {
+	// Tests run outside a sandbox, so the sandbox mount point does not
+	// exist and the function falls back to the host-side path.
+	got := defaultFleetSocketPath()
+	want := principal.SocketPath("service/fleet/main")
+	if got != want {
+		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, want)
 	}
+}
 
-	expectedToken := "/run/bureau/tokens/fleet"
-	if defaultTokenPath != expectedToken {
-		t.Errorf("default token path: got %q, want %q", defaultTokenPath, expectedToken)
+// TestDefaultFleetTokenPath verifies the default token path outside a
+// sandbox returns the sandbox token path (which won't exist on disk,
+// but is the canonical location).
+func TestDefaultFleetTokenPath(t *testing.T) {
+	got := defaultFleetTokenPath()
+	want := sandboxTokenPath
+	if got != want {
+		t.Errorf("defaultFleetTokenPath(): got %q, want %q", got, want)
 	}
 }
 
@@ -69,21 +79,25 @@ func TestConnectionAddFlags(t *testing.T) {
 	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	connection.AddFlags(flagSet)
 
-	// Verify flags exist.
+	// Verify flags exist. Outside a sandbox (the test environment), the
+	// defaults come from the host-side fallback paths.
+	expectedSocket := defaultFleetSocketPath()
+	expectedToken := defaultFleetTokenPath()
+
 	socketFlag := flagSet.Lookup("socket")
 	if socketFlag == nil {
 		t.Fatal("--socket flag not registered")
 	}
-	if socketFlag.DefValue != defaultSocketPath {
-		t.Errorf("--socket default: got %q, want %q", socketFlag.DefValue, defaultSocketPath)
+	if socketFlag.DefValue != expectedSocket {
+		t.Errorf("--socket default: got %q, want %q", socketFlag.DefValue, expectedSocket)
 	}
 
 	tokenFlag := flagSet.Lookup("token-file")
 	if tokenFlag == nil {
 		t.Fatal("--token-file flag not registered")
 	}
-	if tokenFlag.DefValue != defaultTokenPath {
-		t.Errorf("--token-file default: got %q, want %q", tokenFlag.DefValue, defaultTokenPath)
+	if tokenFlag.DefValue != expectedToken {
+		t.Errorf("--token-file default: got %q, want %q", tokenFlag.DefValue, expectedToken)
 	}
 
 	// Parse with custom values.

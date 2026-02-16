@@ -51,6 +51,11 @@ type mockDoctorServer struct {
 	machineUsers  []string                  // users with m.bureau.machine_key state events in machine room
 	roomMembers   map[string][]string       // roomID -> joined member user IDs; nil = admin only
 
+	// Fleet binding support.
+	configRooms      map[string]string // machine localpart → config room ID
+	fleetControllers map[string]string // service localpart → principal user ID (entries in service room)
+	fleetBindings    map[string]string // config room ID → fleet binding principal (empty string = present but empty)
+
 	// Mutation tracking.
 	mu             sync.Mutex
 	invitesSent    map[string][]string // roomID -> []userID
@@ -136,6 +141,11 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				"#bureau/pipeline:local": m.pipelineID,
 				"#bureau/artifact:local": m.artifactID,
 				"#bureau/fleet:local":    m.fleetID,
+			}
+			// Add config room aliases from the configRooms field.
+			for machineLocalpart, configRoomID := range m.configRooms {
+				alias := "#bureau/config/" + machineLocalpart + ":local"
+				aliasMap[alias] = configRoomID
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -257,6 +267,20 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			return
 		}
 
+		// GET specific state event: m.bureau.room_service/fleet in config rooms.
+		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.room_service/fleet") {
+			roomID := extractRoomIDFromStatePath(rawPath)
+			if m.fleetBindings != nil {
+				if principal, ok := m.fleetBindings[roomID]; ok {
+					json.NewEncoder(writer).Encode(map[string]any{"principal": principal})
+					return
+				}
+			}
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
+			return
+		}
+
 		// GET room members.
 		if method == http.MethodGet && strings.Contains(path, "/members") && !strings.Contains(path, "/state") {
 			roomID := extractRoomIDFromPath(rawPath)
@@ -325,6 +349,24 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				return
 			}
 
+			if roomID == m.serviceID {
+				var events []messaging.Event
+				for localpart, principal := range m.fleetControllers {
+					stateKey := localpart
+					events = append(events, messaging.Event{
+						Type: schema.EventTypeService, StateKey: &stateKey,
+						Content: map[string]any{
+							"principal":   principal,
+							"machine":     m.adminUserID,
+							"protocol":    "cbor",
+							"description": "Fleet controller",
+						},
+					})
+				}
+				json.NewEncoder(writer).Encode(events)
+				return
+			}
+
 			json.NewEncoder(writer).Encode([]messaging.Event{})
 			return
 		}
@@ -383,31 +425,46 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, a
 
 // extractRoomIDFromStatePath extracts the room ID from paths like
 // /rooms/{roomId}/state/{type}/{key}. Since room IDs are URL-encoded,
-// this checks a few known patterns.
+// this checks a few known patterns. Also extracts config room IDs
+// of the form !config-<suffix>:local.
 func extractRoomIDFromStatePath(path string) string {
-	if strings.Contains(path, "%21machine%3Alocal") || strings.Contains(path, "!machine:local") {
-		return "!machine:local"
+	knownRooms := map[string]string{
+		"machine":  "!machine:local",
+		"service":  "!service:local",
+		"system":   "!system:local",
+		"space":    "!space:local",
+		"template": "!template:local",
+		"pipeline": "!pipeline:local",
+		"artifact": "!artifact:local",
+		"fleet":    "!fleet:local",
 	}
-	if strings.Contains(path, "%21service%3Alocal") || strings.Contains(path, "!service:local") {
-		return "!service:local"
+	for name, roomID := range knownRooms {
+		encoded := "%21" + name + "%3Alocal"
+		if strings.Contains(path, encoded) || strings.Contains(path, roomID) {
+			return roomID
+		}
 	}
-	if strings.Contains(path, "%21system%3Alocal") || strings.Contains(path, "!system:local") {
-		return "!system:local"
+	// Handle config room IDs of the form !config-<suffix>:local.
+	// URL-encoded form: %21config-<suffix>%3Alocal
+	const configPrefix = "%21config-"
+	if idx := strings.Index(path, configPrefix); idx >= 0 {
+		rest := path[idx+len(configPrefix):]
+		if end := strings.Index(rest, "%3Alocal"); end >= 0 {
+			return "!config-" + rest[:end] + ":local"
+		}
 	}
-	if strings.Contains(path, "%21space%3Alocal") || strings.Contains(path, "!space:local") {
-		return "!space:local"
-	}
-	if strings.Contains(path, "%21template%3Alocal") || strings.Contains(path, "!template:local") {
-		return "!template:local"
-	}
-	if strings.Contains(path, "%21pipeline%3Alocal") || strings.Contains(path, "!pipeline:local") {
-		return "!pipeline:local"
-	}
-	if strings.Contains(path, "%21artifact%3Alocal") || strings.Contains(path, "!artifact:local") {
-		return "!artifact:local"
-	}
-	if strings.Contains(path, "%21fleet%3Alocal") || strings.Contains(path, "!fleet:local") {
-		return "!fleet:local"
+	// Also handle unencoded form.
+	const rawConfigPrefix = "!config-"
+	if idx := strings.Index(path, rawConfigPrefix); idx >= 0 {
+		rest := path[idx+len(rawConfigPrefix):]
+		if end := strings.Index(rest, ":local"); end >= 0 {
+			suffix := rest[:end]
+			// Stop at path separator.
+			if slashIdx := strings.Index(suffix, "/"); slashIdx >= 0 {
+				suffix = suffix[:slashIdx]
+			}
+			return "!config-" + suffix + ":local"
+		}
 	}
 	return ""
 }
@@ -1331,6 +1388,162 @@ func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
 	fixCount := executeFixes(t.Context(), nil, results, true)
 	if fixCount != 0 {
 		t.Errorf("expected fixCount=0 in dry-run, got %d", fixCount)
+	}
+}
+
+func TestRunDoctor_FleetBindings_Healthy(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	mock := newHealthyMock(adminUserID)
+	mock.machineUsers = []string{"machine/workstation"}
+	mock.configRooms = map[string]string{
+		"machine/workstation": "!config-workstation:local",
+	}
+	mock.fleetControllers = map[string]string{
+		"service/fleet/prod": "@service/fleet/prod:local",
+	}
+	mock.fleetBindings = map[string]string{
+		"!config-workstation:local": "@service/fleet/prod:local",
+	}
+	server := mock.httpServer(t)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+
+	found := false
+	for _, result := range results {
+		if result.Name == "fleet binding machine/workstation" {
+			found = true
+			if result.Status != statusPass {
+				t.Errorf("expected PASS, got %s: %s", result.Status, result.Message)
+			}
+		}
+	}
+	if !found {
+		t.Error("fleet binding check not found in results")
+	}
+}
+
+func TestRunDoctor_FleetBindings_Missing(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	mock := newHealthyMock(adminUserID)
+	mock.machineUsers = []string{"machine/workstation"}
+	mock.configRooms = map[string]string{
+		"machine/workstation": "!config-workstation:local",
+	}
+	mock.fleetControllers = map[string]string{
+		"service/fleet/prod": "@service/fleet/prod:local",
+	}
+	// No fleetBindings — fleet binding is missing.
+	server := mock.httpServer(t)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+
+	found := false
+	for _, result := range results {
+		if result.Name == "fleet binding machine/workstation" {
+			found = true
+			if result.Status != statusFail {
+				t.Errorf("expected FAIL, got %s: %s", result.Status, result.Message)
+			}
+			if result.fix == nil {
+				t.Error("expected fix function for missing fleet binding")
+			}
+			if result.FixHint == "" {
+				t.Error("expected fix hint for missing fleet binding")
+			}
+		}
+	}
+	if !found {
+		t.Error("fleet binding check not found in results")
+	}
+}
+
+func TestRunDoctor_FleetBindings_FixPublishesBinding(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	mock := newHealthyMock(adminUserID)
+	mock.machineUsers = []string{"machine/workstation"}
+	mock.configRooms = map[string]string{
+		"machine/workstation": "!config-workstation:local",
+	}
+	mock.fleetControllers = map[string]string{
+		"service/fleet/prod": "@service/fleet/prod:local",
+	}
+	server := mock.httpServer(t)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+
+	executeFixes(t.Context(), session, results, false)
+
+	// Verify the fleet binding was published.
+	stateEvents := mock.getStateEvents()
+	bindingPublished := false
+	for _, event := range stateEvents {
+		if event.eventType == schema.EventTypeRoomService && event.stateKey == "fleet" &&
+			event.roomID == "!config-workstation:local" {
+			bindingPublished = true
+		}
+	}
+	if !bindingPublished {
+		t.Error("expected fleet binding to be published in config room")
+	}
+}
+
+func TestRunDoctor_FleetBindings_NoController(t *testing.T) {
+	adminUserID := "@bureau-admin:local"
+	mock := newHealthyMock(adminUserID)
+	mock.machineUsers = []string{"machine/workstation"}
+	// No fleet controllers — check should be skipped entirely.
+	server := mock.httpServer(t)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+
+	for _, result := range results {
+		if strings.HasPrefix(result.Name, "fleet binding") {
+			t.Errorf("unexpected fleet binding check when no fleet controller exists: %s", result.Name)
+		}
 	}
 }
 

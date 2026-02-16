@@ -12,6 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -213,44 +214,37 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	// <stateDir>/tokens/<consumer>/ticket.
 
 	// Publish a template with RequiredServices: ["ticket"].
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
+	grantTemplateAccess(t, admin, machine)
+
+	ticketConsumerRef, err := schema.ParseTemplateRef("bureau/template:ticket-consumer")
 	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
+		t.Fatalf("parse template ref: %v", err)
 	}
-
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
-	}
-
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "ticket-consumer", schema.TemplateContent{
-			Description:      "Consumer agent requiring ticket service",
-			Command:          []string{testAgentBinary},
-			RequiredServices: []string{"ticket"},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
+	_, err = template.Push(ctx, admin, ticketConsumerRef, schema.TemplateContent{
+		Description:      "Consumer agent requiring ticket service",
+		Command:          []string{testAgentBinary},
+		RequiredServices: []string{"ticket"},
+		Namespaces: &schema.TemplateNamespaces{
+			PID: true,
+		},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME":                "/workspace",
+			"TERM":                "xterm-256color",
+			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+		},
+	}, testServerName)
 	if err != nil {
 		t.Fatalf("publish ticket-consumer template: %v", err)
 	}
@@ -265,28 +259,20 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	// m.bureau.room_service from the project room (where the "ticket"
 	// binding lives). The authorization policy grants ticket/** actions
 	// so the daemon includes them in the minted service token.
-	templateRef := "bureau/template:ticket-consumer"
-	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: consumer.Localpart,
-					Template:  templateRef,
-					AutoStart: true,
-					Payload: map[string]any{
-						"WORKSPACE_ROOM_ID": projectRoomID,
-					},
-					Authorization: &schema.AuthorizationPolicy{
-						Grants: []schema.Grant{
-							{Actions: []string{"ticket/**"}},
-						},
-					},
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:  consumer,
+			Template: "bureau/template:ticket-consumer",
+			Payload: map[string]any{
+				"WORKSPACE_ROOM_ID": projectRoomID,
+			},
+			Authorization: &schema.AuthorizationPolicy{
+				Grants: []schema.Grant{
+					{Actions: []string{"ticket/**"}},
 				},
 			},
-		})
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
-	}
+		}},
+	})
 
 	// Wait for the consumer's proxy socket. This proves the daemon
 	// successfully resolved the template, resolved the ticket service
@@ -534,44 +520,37 @@ func TestTicketLifecycle(t *testing.T) {
 	// The PM gets ticket/** (all ticket operations including close/reopen).
 	// The worker gets specific grants excluding ticket/close and ticket/reopen.
 
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
+	grantTemplateAccess(t, admin, machine)
+
+	lifecycleRef, err := schema.ParseTemplateRef("bureau/template:ticket-lifecycle-agent")
 	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
+		t.Fatalf("parse template ref: %v", err)
 	}
-
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
-	}
-
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "ticket-lifecycle-agent", schema.TemplateContent{
-			Description:      "Agent for ticket lifecycle testing",
-			Command:          []string{testAgentBinary},
-			RequiredServices: []string{"ticket"},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
+	_, err = template.Push(ctx, admin, lifecycleRef, schema.TemplateContent{
+		Description:      "Agent for ticket lifecycle testing",
+		Command:          []string{testAgentBinary},
+		RequiredServices: []string{"ticket"},
+		Namespaces: &schema.TemplateNamespaces{
+			PID: true,
+		},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME":                "/workspace",
+			"TERM":                "xterm-256color",
+			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+		},
+	}, testServerName)
 	if err != nil {
 		t.Fatalf("publish ticket-lifecycle-agent template: %v", err)
 	}
@@ -585,55 +564,48 @@ func TestTicketLifecycle(t *testing.T) {
 	workerAccount := registerPrincipal(t, workerLocalpart, "worker-password")
 	pushCredentials(t, admin, machine, workerAccount)
 
-	templateRef := "bureau/template:ticket-lifecycle-agent"
-	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: pmAccount.Localpart,
-					Template:  templateRef,
-					AutoStart: true,
-					Payload: map[string]any{
-						"WORKSPACE_ROOM_ID": roomAlphaID,
-					},
-					Authorization: &schema.AuthorizationPolicy{
-						Grants: []schema.Grant{
-							{Actions: []string{"ticket/**"}},
-						},
-					},
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{
+			{
+				Account:  pmAccount,
+				Template: "bureau/template:ticket-lifecycle-agent",
+				Payload: map[string]any{
+					"WORKSPACE_ROOM_ID": roomAlphaID,
 				},
-				{
-					Localpart: workerAccount.Localpart,
-					Template:  templateRef,
-					AutoStart: true,
-					Payload: map[string]any{
-						"WORKSPACE_ROOM_ID": roomAlphaID,
-					},
-					Authorization: &schema.AuthorizationPolicy{
-						Grants: []schema.Grant{
-							{Actions: []string{
-								"ticket/create",
-								"ticket/update",
-								"ticket/list",
-								"ticket/ready",
-								"ticket/show",
-								"ticket/blocked",
-								"ticket/stats",
-								"ticket/grep",
-								"ticket/deps",
-								"ticket/ranked",
-								"ticket/children",
-								"ticket/epic-health",
-								"ticket/info",
-							}},
-						},
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{
+						{Actions: []string{"ticket/**"}},
 					},
 				},
 			},
-		})
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
-	}
+			{
+				Account:  workerAccount,
+				Template: "bureau/template:ticket-lifecycle-agent",
+				Payload: map[string]any{
+					"WORKSPACE_ROOM_ID": roomAlphaID,
+				},
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{
+						{Actions: []string{
+							"ticket/create",
+							"ticket/update",
+							"ticket/list",
+							"ticket/ready",
+							"ticket/show",
+							"ticket/blocked",
+							"ticket/stats",
+							"ticket/grep",
+							"ticket/deps",
+							"ticket/ranked",
+							"ticket/children",
+							"ticket/epic-health",
+							"ticket/info",
+						}},
+					},
+				},
+			},
+		},
+	})
 
 	// Wait for both consumer proxy sockets.
 	pmSocketPath := machine.PrincipalSocketPath(pmAccount.Localpart)

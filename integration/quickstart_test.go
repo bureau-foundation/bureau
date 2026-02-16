@@ -6,7 +6,6 @@ package integration_test
 import (
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -15,7 +14,7 @@ import (
 //
 //   - Boot a machine (launcher + daemon)
 //   - Publish a sysadmin-test template to the template room
-//   - Register a principal, seal credentials, push config
+//   - Register a principal, provision credentials, push config
 //   - Daemon reconciles → launcher creates sandbox → test agent starts
 //   - Test agent: verifies identity, whoami, resolves config room, sends
 //     "quickstart-test-ready"
@@ -33,7 +32,6 @@ func TestQuickstartTestAgent(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	fleetRoomID := defaultFleetRoomID(t)
 
 	// Boot a machine.
@@ -45,54 +43,8 @@ func TestQuickstartTestAgent(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Publish the sysadmin-test template. The template is defined inline
-	// with the absolute binary path bind-mounted into the sandbox (same
-	// pattern as the workspace integration tests). For the real quickstart
-	// CLI, the binary would come from the Nix runner-env PATH.
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
-	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
-	}
-
-	// Invite the machine to the template room so the daemon can resolve
-	// the template during config reconciliation.
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
-	}
-
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "sysadmin-test", schema.TemplateContent{
-			Description: "Test agent for quickstart integration testing",
-			Command:     []string{testAgentBinary},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				// Bind-mount the test agent binary into the sandbox at
-				// the same absolute path it occupies on the host.
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
-	if err != nil {
-		t.Fatalf("publish sysadmin-test template: %v", err)
-	}
+	// Publish the sysadmin-test template.
+	templateRef := publishTestAgentTemplate(t, admin, machine, "sysadmin-test")
 
 	// Register a principal and deploy it with the sysadmin-test template.
 	agent := registerPrincipal(t, "sysadmin/quickstart-test", "test-password")
@@ -116,20 +68,12 @@ func TestQuickstartTestAgent(t *testing.T) {
 
 	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	templateRef := "bureau/template:sysadmin-test"
-	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Localpart: agent.Localpart,
-					Template:  templateRef,
-					AutoStart: true,
-				},
-			},
-		})
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
-	}
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:  agent,
+			Template: templateRef,
+		}},
+	})
 
 	// Wait for the proxy socket to appear (proves sandbox creation worked).
 	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
@@ -146,9 +90,8 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// (via polling /messages through the proxy) and respond.
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err = admin.SendMessage(ctx, machine.ConfigRoomID,
-		messaging.NewTextMessage("hello from test harness"))
-	if err != nil {
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID,
+		messaging.NewTextMessage("hello from test harness")); err != nil {
 		t.Fatalf("send message to test agent: %v", err)
 	}
 

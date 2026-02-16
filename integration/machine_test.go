@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -346,39 +347,24 @@ func principalSession(t *testing.T, account principalAccount) *messaging.Session
 
 // pushCredentials encrypts a principal's Matrix credentials with the
 // machine's public key and pushes them as an m.bureau.credentials state
-// event to the machine's config room. The credentials are encrypted so
-// only the machine's launcher can decrypt them.
+// event to the machine's config room. Uses the production credential
+// provisioning library: fetches the machine key from Matrix, encrypts
+// with age, and publishes to the config room.
 func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachine, account principalAccount) {
 	t.Helper()
 
-	credentialBundle := map[string]string{
-		"MATRIX_TOKEN":          account.Token,
-		"MATRIX_USER_ID":        account.UserID,
-		"MATRIX_HOMESERVER_URL": testHomeserverURL,
-	}
-	credentialJSON, err := json.Marshal(credentialBundle)
+	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
+		MachineName: machine.Name,
+		Principal:   account.Localpart,
+		ServerName:  testServerName,
+		Credentials: map[string]string{
+			"MATRIX_TOKEN":          account.Token,
+			"MATRIX_USER_ID":        account.UserID,
+			"MATRIX_HOMESERVER_URL": testHomeserverURL,
+		},
+	})
 	if err != nil {
-		t.Fatalf("marshal credentials for %s: %v", account.Localpart, err)
-	}
-
-	ciphertext, err := sealed.Encrypt(credentialJSON, []string{machine.PublicKey})
-	if err != nil {
-		t.Fatalf("encrypt credentials for %s: %v", account.Localpart, err)
-	}
-
-	adminUserID := "@bureau-admin:" + testServerName
-	_, err = admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		schema.EventTypeCredentials, account.Localpart, schema.Credentials{
-			Version:       schema.CredentialsVersion,
-			Principal:     account.UserID,
-			EncryptedFor:  []string{machine.UserID},
-			Keys:          []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
-			Ciphertext:    ciphertext,
-			ProvisionedBy: adminUserID,
-			ProvisionedAt: "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("push credentials for %s: %v", account.Localpart, err)
+		t.Fatalf("provision credentials for %s on %s: %v", account.Localpart, machine.Name, err)
 	}
 }
 
@@ -459,43 +445,49 @@ func grantTemplateAccess(t *testing.T, admin *messaging.Session, machine *testMa
 }
 
 // publishTestAgentTemplate grants template room access and publishes a
-// minimal test-agent template suitable for sandbox creation. Returns the
-// template reference string (e.g., "bureau/template:fleet-test-agent")
-// for use in fleet service definitions or PrincipalAssignment templates.
+// minimal test-agent template suitable for sandbox creation. Uses the
+// production template push library to resolve the room and publish the
+// state event. Returns the template reference string (e.g.,
+// "bureau/template:fleet-test-agent") for use in fleet service
+// definitions or PrincipalAssignment templates.
 func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *testMachine, templateName string) string {
 	t.Helper()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
-	templateRoomID := grantTemplateAccess(t, admin, machine)
+	grantTemplateAccess(t, admin, machine)
 
-	_, err := admin.SendStateEvent(t.Context(), templateRoomID,
-		schema.EventTypeTemplate, templateName, schema.TemplateContent{
-			Description: "Test agent for " + templateName,
-			Command:     []string{testAgentBinary},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
+	ref, err := schema.ParseTemplateRef("bureau/template:" + templateName)
 	if err != nil {
-		t.Fatalf("publish test agent template %q: %v", templateName, err)
+		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
 
-	return "bureau/template:" + templateName
+	_, err = template.Push(t.Context(), admin, ref, schema.TemplateContent{
+		Description: "Test agent for " + templateName,
+		Command:     []string{testAgentBinary},
+		Namespaces: &schema.TemplateNamespaces{
+			PID: true,
+		},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME":                "/workspace",
+			"TERM":                "xterm-256color",
+			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+		},
+	}, testServerName)
+	if err != nil {
+		t.Fatalf("push test agent template %q: %v", templateName, err)
+	}
+
+	return ref.String()
 }

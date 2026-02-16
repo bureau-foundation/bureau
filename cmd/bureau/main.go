@@ -10,6 +10,7 @@ import (
 	artifactcmd "github.com/bureau-foundation/bureau/cmd/bureau/artifact"
 	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	credentialcmd "github.com/bureau-foundation/bureau/cmd/bureau/credential"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
 	fleetcmd "github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
@@ -56,6 +57,7 @@ observation, and structured messaging via Matrix.`,
 			observecmd.ListCommand(),
 			matrix.Command(),
 			machinecmd.Command(),
+			credentialcmd.Command(),
 			templatecmd.Command(),
 			pipelinecmd.Command(),
 			environmentcmd.Command(),

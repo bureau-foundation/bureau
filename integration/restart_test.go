@@ -4,22 +4,18 @@
 package integration_test
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/sealed"
-	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestDaemonRestartRecovery verifies that restarting the daemon while the
@@ -90,12 +86,6 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	}
 	_ = bootstrapConfig // Used for reference; password rotation tested elsewhere.
 
-	publicKeyBytes, err := os.ReadFile(filepath.Join(stateDir, "machine-key.pub"))
-	if err != nil {
-		t.Fatalf("read public key: %v", err)
-	}
-	publicKey := strings.TrimSpace(string(publicKeyBytes))
-
 	// --- Phase 2: Start launcher + daemon, deploy a principal ---
 	startProcess(t, "launcher", launcherBinary,
 		"--homeserver", testHomeserverURL,
@@ -128,72 +118,31 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("admin join config room: %v", err)
 	}
 
-	// Register the principal and encrypt credentials.
-	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: testHomeserverURL,
+	// Register the principal, provision credentials, and deploy.
+	account := registerPrincipal(t, principalLocalpart, "pass-restart-agent")
+
+	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
+		MachineName: machineName,
+		Principal:   principalLocalpart,
+		ServerName:  testServerName,
+		Credentials: map[string]string{
+			"MATRIX_TOKEN":          account.Token,
+			"MATRIX_USER_ID":        account.UserID,
+			"MATRIX_HOMESERVER_URL": testHomeserverURL,
+		},
 	})
 	if err != nil {
-		t.Fatalf("create matrix client: %v", err)
-	}
-
-	passwordBuffer, err := secret.NewFromString("pass-restart-agent")
-	if err != nil {
-		t.Fatalf("create password buffer: %v", err)
-	}
-	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
-	if err != nil {
-		t.Fatalf("create registration token buffer: %v", err)
-	}
-	principalSession, err := matrixClient.Register(ctx, messaging.RegisterRequest{
-		Username:          principalLocalpart,
-		Password:          passwordBuffer,
-		RegistrationToken: registrationTokenBuffer,
-	})
-	passwordBuffer.Close()
-	registrationTokenBuffer.Close()
-	if err != nil {
-		t.Fatalf("register principal: %v", err)
-	}
-	principalToken := principalSession.AccessToken()
-	principalSession.Close()
-
-	credentialBundle := map[string]string{
-		"MATRIX_TOKEN":          principalToken,
-		"MATRIX_USER_ID":        principalUserID,
-		"MATRIX_HOMESERVER_URL": testHomeserverURL,
-	}
-	credentialJSON, err := json.Marshal(credentialBundle)
-	if err != nil {
-		t.Fatalf("marshal credentials: %v", err)
-	}
-	ciphertext, err := sealed.Encrypt(credentialJSON, []string{publicKey})
-	if err != nil {
-		t.Fatalf("encrypt credentials: %v", err)
-	}
-
-	_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials,
-		principalLocalpart, map[string]any{
-			"version":        1,
-			"principal":      principalUserID,
-			"encrypted_for":  []string{machineUserID},
-			"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
-			"ciphertext":     ciphertext,
-			"provisioned_by": "@bureau-admin:" + testServerName,
-			"provisioned_at": "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("push credentials: %v", err)
+		t.Fatalf("provision credentials: %v", err)
 	}
 
 	_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
-		machineName, map[string]any{
-			"principals": []map[string]any{
+		machineName, schema.MachineConfig{
+			Principals: []schema.PrincipalAssignment{
 				{
-					"localpart":  principalLocalpart,
-					"template":   "",
-					"auto_start": true,
-					"matrix_policy": map[string]any{
-						"allow_join": true,
+					Localpart: principalLocalpart,
+					AutoStart: true,
+					MatrixPolicy: &schema.MatrixPolicy{
+						AllowJoin: true,
 					},
 				},
 			},

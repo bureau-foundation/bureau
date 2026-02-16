@@ -265,11 +265,13 @@ func runProvision(args []string) error {
 		return fmt.Errorf("encrypting credentials: %w", err)
 	}
 
-	// Ensure the config room exists.
+	// Resolve the config room. The config room must already exist (created
+	// by machine provisioning or the daemon's first boot). If it doesn't
+	// exist, that indicates the machine hasn't been provisioned.
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
-	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, matrixConf.AdminUserID)
+	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return fmt.Errorf("ensuring config room: %w", err)
+		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
 	}
 
 	// Publish the credentials state event.
@@ -343,11 +345,12 @@ func runAssign(args []string) error {
 		return err
 	}
 
-	// Ensure the config room exists.
+	// Resolve the config room. The config room must already exist (created
+	// by machine provisioning or the daemon's first boot).
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
-	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, matrixConf.AdminUserID)
+	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return fmt.Errorf("ensuring config room: %w", err)
+		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
 	}
 
 	// Read the current MachineConfig (if any) to merge the new assignment.
@@ -500,46 +503,4 @@ func runList(args []string) error {
 	}
 
 	return nil
-}
-
-// ensureConfigRoom ensures the per-machine config room exists. Creates it if
-// missing, with the admin user as the room admin and the machine user invited.
-func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, machineName, serverName, adminUserID string) (string, error) {
-	roomID, err := session.ResolveAlias(ctx, alias)
-	if err == nil {
-		return roomID, nil
-	}
-
-	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("resolving config room alias %q: %w", alias, err)
-	}
-
-	// Room doesn't exist — create it. The admin creates this room (unlike
-	// the daemon version where the machine creates it), so the admin already
-	// has power level 100.
-	aliasLocalpart := principal.RoomAliasLocalpart(alias)
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-
-	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:                      "Config: " + machineName,
-		Topic:                     "Machine configuration and credentials for " + machineName,
-		Alias:                     aliasLocalpart,
-		Preset:                    "private_chat",
-		Invite:                    []string{machineUserID},
-		Visibility:                "private",
-		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineUserID),
-	})
-	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeRoomInUse) {
-			// Race: room created between our check and creation attempt.
-			roomID, err = session.ResolveAlias(ctx, alias)
-			if err != nil {
-				return "", fmt.Errorf("room exists but cannot resolve alias %q: %w", alias, err)
-			}
-			return roomID, nil
-		}
-		return "", fmt.Errorf("creating config room: %w", err)
-	}
-
-	return response.RoomID, nil
 }

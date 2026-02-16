@@ -7,6 +7,7 @@ go_library(
     name = "template",
     srcs = [
         "doc.go",
+        "push.go",
         "resolve.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/template",

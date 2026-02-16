@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -310,11 +310,6 @@ func TestTwoMachineFleet(t *testing.T) {
 	const machineBName = "machine/fleet-b"
 	const principalALocalpart = "agent/fleet-a"
 	const principalBLocalpart = "agent/fleet-b"
-	machineAUserID := "@machine/fleet-a:" + testServerName
-	machineBUserID := "@machine/fleet-b:" + testServerName
-	principalAUserID := "@agent/fleet-a:" + testServerName
-	principalBUserID := "@agent/fleet-b:" + testServerName
-
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
@@ -392,17 +387,6 @@ func TestTwoMachineFleet(t *testing.T) {
 		}
 	}
 	t.Log("both machines completed first boot")
-
-	// Read public keys from disk for credential encryption.
-	readPublicKey := func(stateDir string) string {
-		data, err := os.ReadFile(filepath.Join(stateDir, "machine-key.pub"))
-		if err != nil {
-			t.Fatalf("read public key from %s: %v", stateDir, err)
-		}
-		return strings.TrimSpace(string(data))
-	}
-	publicKeyA := readPublicKey(stateDirA)
-	publicKeyB := readPublicKey(stateDirB)
 
 	// Verify both machine keys are published. First boot already completed,
 	// so these events exist in room state — read them directly.
@@ -482,55 +466,18 @@ func TestTwoMachineFleet(t *testing.T) {
 		t.Errorf("expected at least 2 machine keys in #bureau/machine, got %d", keyCount)
 	}
 
-	// --- Register principals and encrypt credentials ---
-	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: testHomeserverURL,
-	})
-	if err != nil {
-		t.Fatalf("create matrix client: %v", err)
-	}
+	// --- Register principals and provision credentials ---
+	principalAAccount := registerPrincipal(t, principalALocalpart, "pass-fleet-a")
+	principalBAccount := registerPrincipal(t, principalBLocalpart, "pass-fleet-b")
 
 	type principalSetup struct {
-		localpart    string
-		userID       string
-		token        string
+		account      principalAccount
 		machineSetup machineSetup
-		machineKey   string
-		machineUser  string
 	}
-
-	registerPrincipalLocal := func(localpart, password string) string {
-		passwordBuffer, err := secret.NewFromString(password)
-		if err != nil {
-			t.Fatalf("create password buffer for %q: %v", localpart, err)
-		}
-		defer passwordBuffer.Close()
-
-		registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
-		if err != nil {
-			t.Fatalf("create registration token buffer: %v", err)
-		}
-		defer registrationTokenBuffer.Close()
-
-		session, err := matrixClient.Register(ctx, messaging.RegisterRequest{
-			Username:          localpart,
-			Password:          passwordBuffer,
-			RegistrationToken: registrationTokenBuffer,
-		})
-		if err != nil {
-			t.Fatalf("register principal %q: %v", localpart, err)
-		}
-		token := session.AccessToken()
-		session.Close()
-		return token
-	}
-
-	principalAToken := registerPrincipalLocal(principalALocalpart, "pass-fleet-a")
-	principalBToken := registerPrincipalLocal(principalBLocalpart, "pass-fleet-b")
 
 	principals := []principalSetup{
-		{principalALocalpart, principalAUserID, principalAToken, machineA, publicKeyA, machineAUserID},
-		{principalBLocalpart, principalBUserID, principalBToken, machineB, publicKeyB, machineBUserID},
+		{principalAAccount, machineA},
+		{principalBAccount, machineB},
 	}
 
 	// Resolve config rooms (created by daemons) and push credentials + config.
@@ -544,44 +491,28 @@ func TestTwoMachineFleet(t *testing.T) {
 			t.Fatalf("admin join config room %s: %v", configAlias, err)
 		}
 
-		// Encrypt credentials for this principal's machine.
-		credentialBundle := map[string]string{
-			"MATRIX_TOKEN":          p.token,
-			"MATRIX_USER_ID":        p.userID,
-			"MATRIX_HOMESERVER_URL": testHomeserverURL,
-		}
-		credentialJSON, err := json.Marshal(credentialBundle)
+		_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
+			MachineName: p.machineSetup.name,
+			Principal:   p.account.Localpart,
+			ServerName:  testServerName,
+			Credentials: map[string]string{
+				"MATRIX_TOKEN":          p.account.Token,
+				"MATRIX_USER_ID":        p.account.UserID,
+				"MATRIX_HOMESERVER_URL": testHomeserverURL,
+			},
+		})
 		if err != nil {
-			t.Fatalf("marshal credentials: %v", err)
-		}
-		ciphertext, err := sealed.Encrypt(credentialJSON, []string{p.machineKey})
-		if err != nil {
-			t.Fatalf("encrypt credentials for %s: %v", p.localpart, err)
-		}
-
-		_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials,
-			p.localpart, map[string]any{
-				"version":        1,
-				"principal":      p.userID,
-				"encrypted_for":  []string{p.machineUser},
-				"keys":           []string{"MATRIX_TOKEN", "MATRIX_USER_ID", "MATRIX_HOMESERVER_URL"},
-				"ciphertext":     ciphertext,
-				"provisioned_by": "@bureau-admin:" + testServerName,
-				"provisioned_at": "2026-01-01T00:00:00Z",
-			})
-		if err != nil {
-			t.Fatalf("push credentials for %s: %v", p.localpart, err)
+			t.Fatalf("provision credentials for %s: %v", p.account.Localpart, err)
 		}
 
 		_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
-			p.machineSetup.name, map[string]any{
-				"principals": []map[string]any{
+			p.machineSetup.name, schema.MachineConfig{
+				Principals: []schema.PrincipalAssignment{
 					{
-						"localpart":  p.localpart,
-						"template":   "",
-						"auto_start": true,
-						"matrix_policy": map[string]any{
-							"allow_join": true,
+						Localpart: p.account.Localpart,
+						AutoStart: true,
+						MatrixPolicy: &schema.MatrixPolicy{
+							AllowJoin: true,
 						},
 					},
 				},
@@ -592,8 +523,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Wait for both proxy sockets ---
-	proxySocketA := principal.RunDirSocketPath(machineA.runDir, principalALocalpart)
-	proxySocketB := principal.RunDirSocketPath(machineB.runDir, principalBLocalpart)
+	proxySocketA := principal.RunDirSocketPath(machineA.runDir, principalAAccount.Localpart)
+	proxySocketB := principal.RunDirSocketPath(machineB.runDir, principalBAccount.Localpart)
 	waitForFile(t, proxySocketA)
 	waitForFile(t, proxySocketB)
 	t.Log("both proxies spawned")
@@ -603,11 +534,11 @@ func TestTwoMachineFleet(t *testing.T) {
 	clientB := proxyHTTPClient(proxySocketB)
 	whoamiA := proxyWhoami(t, clientA)
 	whoamiB := proxyWhoami(t, clientB)
-	if whoamiA != principalAUserID {
-		t.Errorf("proxy A whoami = %q, want %q", whoamiA, principalAUserID)
+	if whoamiA != principalAAccount.UserID {
+		t.Errorf("proxy A whoami = %q, want %q", whoamiA, principalAAccount.UserID)
 	}
-	if whoamiB != principalBUserID {
-		t.Errorf("proxy B whoami = %q, want %q", whoamiB, principalBUserID)
+	if whoamiB != principalBAccount.UserID {
+		t.Errorf("proxy B whoami = %q, want %q", whoamiB, principalBAccount.UserID)
 	}
 
 	// --- Create a shared room and exchange messages ---
@@ -615,7 +546,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	sharedRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Fleet Test Room",
 		Preset:     "private_chat",
-		Invite:     []string{principalAUserID, principalBUserID},
+		Invite:     []string{principalAAccount.UserID, principalBAccount.UserID},
 		Visibility: "private",
 	})
 	if err != nil {
@@ -639,10 +570,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	// meaning the homeserver has persisted the events. A subsequent /sync
 	// sees them immediately.
 	eventsB := proxySyncRoomTimeline(t, clientB, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsB, principalAUserID, messageFromA)
+	assertMessagePresent(t, eventsB, principalAAccount.UserID, messageFromA)
 
 	eventsA := proxySyncRoomTimeline(t, clientA, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsA, principalBUserID, messageFromB)
+	assertMessagePresent(t, eventsA, principalBAccount.UserID, messageFromB)
 
 	t.Log("cross-machine message exchange verified")
 

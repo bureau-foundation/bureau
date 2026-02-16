@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -25,6 +26,7 @@ import (
 type provisionParams struct {
 	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
 	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
+	FleetRoom      string `json:"fleet_room"   flag:"fleet-room"      desc:"fleet room alias or ID to invite machine to (optional)"`
 	OutputPath     string `json:"-"            flag:"output"          desc:"path to write bootstrap config (default: stdout)"`
 }
 
@@ -80,12 +82,12 @@ is immediately rotated.`,
 				return cli.Validation("invalid machine name: %w", err)
 			}
 
-			return runProvision(machineName, params.CredentialFile, params.ServerName, params.OutputPath)
+			return runProvision(machineName, params.CredentialFile, params.ServerName, params.FleetRoom, params.OutputPath)
 		},
 	}
 }
 
-func runProvision(machineName, credentialFile, serverName, outputPath string) error {
+func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -192,6 +194,37 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 		fmt.Fprintf(os.Stderr, "  Invited to %s\n", serviceAlias)
 	}
 
+	// System room: daemons need this for token signing key retrieval.
+	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
+	systemRoomID, err := adminSession.ResolveAlias(ctx, systemAlias)
+	if err != nil {
+		return cli.NotFound("resolve system room %q: %w", systemAlias, err)
+	}
+	if err := adminSession.InviteUser(ctx, systemRoomID, machineUserID); err != nil {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			return cli.Internal("invite machine to system room: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", systemAlias)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Invited to %s\n", systemAlias)
+	}
+
+	// Fleet room: needed for HA leases and service definitions.
+	if fleetRoom != "" {
+		fleetRoomID, err := resolveRoomTarget(ctx, adminSession, fleetRoom, serverName)
+		if err != nil {
+			return cli.NotFound("resolve fleet room %q: %w", fleetRoom, err)
+		}
+		if err := adminSession.InviteUser(ctx, fleetRoomID, machineUserID); err != nil {
+			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				return cli.Internal("invite machine to fleet room: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "  Already invited to fleet room %s\n", fleetRoom)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Invited to fleet room %s\n", fleetRoom)
+		}
+	}
+
 	// Create the per-machine config room. The admin creates it (not the
 	// machine) so the admin has PL 100 from the start. The machine account
 	// is invited.
@@ -248,4 +281,21 @@ func runProvision(machineName, credentialFile, serverName, outputPath string) er
 	fmt.Fprintf(os.Stderr, "\nThe one-time password will be rotated on first boot.\n")
 
 	return nil
+}
+
+// resolveRoomTarget resolves a room target to a room ID. Accepts:
+//   - "#alias:server" — resolved via the homeserver
+//   - "!roomid:server" — returned as-is
+func resolveRoomTarget(ctx context.Context, session *messaging.Session, target, serverName string) (string, error) {
+	if strings.HasPrefix(target, "#") {
+		roomID, err := session.ResolveAlias(ctx, target)
+		if err != nil {
+			return "", fmt.Errorf("resolve alias %q: %w", target, err)
+		}
+		return roomID, nil
+	}
+	if strings.HasPrefix(target, "!") {
+		return target, nil
+	}
+	return "", fmt.Errorf("room must be an alias (#...) or room ID (!...): got %q", target)
 }

@@ -4,17 +4,19 @@
 package template
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 )
 
 // templatePushParams holds the parameters for the template push command.
 type templatePushParams struct {
+	cli.SessionConfig
 	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
@@ -53,11 +55,11 @@ exist without actually publishing.`,
 		Examples: []cli.Example{
 			{
 				Description: "Push a template to Matrix",
-				Command:     "bureau template push iree/template:amdgpu-developer agent.json",
+				Command:     "bureau template push --credential-file ./creds iree/template:amdgpu-developer agent.json",
 			},
 			{
 				Description: "Dry-run: validate and check inheritance without publishing",
-				Command:     "bureau template push --dry-run iree/template:amdgpu-developer agent.json",
+				Command:     "bureau template push --credential-file ./creds --dry-run iree/template:amdgpu-developer agent.json",
 			},
 		},
 		Params:         func() any { return &params },
@@ -93,32 +95,33 @@ exist without actually publishing.`,
 			}
 
 			// Connect to Matrix for inheritance verification and publishing.
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			session, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
 				return err
 			}
-			defer cancel()
 
-			// Verify the target room exists.
-			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
-			roomID, err := session.ResolveAlias(ctx, roomAlias)
-			if err != nil {
-				return cli.NotFound("resolving target room %q: %w", roomAlias, err)
-			}
-
-			// Verify inheritance target exists (if any).
-			if content.Inherits != "" {
-				parentRef, err := schema.ParseTemplateRef(content.Inherits)
-				if err != nil {
-					return cli.Validation("invalid inherits reference %q: %w", content.Inherits, err)
-				}
-				if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
-					return cli.NotFound("parent template %q not found in Matrix: %w", content.Inherits, err)
-				}
-				fmt.Fprintf(os.Stderr, "parent template %q: found\n", content.Inherits)
-			}
-
+			// Dry-run: resolve room and verify inheritance without publishing.
 			if params.DryRun {
+				roomAlias := ref.RoomAlias(params.ServerName)
+				roomID, err := session.ResolveAlias(ctx, roomAlias)
+				if err != nil {
+					return cli.NotFound("resolving target room %q: %w", roomAlias, err)
+				}
+
+				if content.Inherits != "" {
+					parentRef, err := schema.ParseTemplateRef(content.Inherits)
+					if err != nil {
+						return cli.Validation("invalid inherits reference %q: %w", content.Inherits, err)
+					}
+					if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
+						return cli.NotFound("parent template %q not found in Matrix: %w", content.Inherits, err)
+					}
+					fmt.Fprintf(os.Stderr, "parent template %q: found\n", content.Inherits)
+				}
+
 				if done, err := params.EmitJSON(templatePushResult{
 					Ref:          ref.String(),
 					File:         filePath,
@@ -135,8 +138,8 @@ exist without actually publishing.`,
 				return nil
 			}
 
-			// Publish the template as a state event.
-			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTemplate, ref.Template, content)
+			// Publish the template via the library function.
+			result, err := libtmpl.Push(ctx, session, ref, *content, params.ServerName)
 			if err != nil {
 				return cli.Internal("publishing template: %w", err)
 			}
@@ -144,16 +147,16 @@ exist without actually publishing.`,
 			if done, err := params.EmitJSON(templatePushResult{
 				Ref:          ref.String(),
 				File:         filePath,
-				RoomAlias:    roomAlias,
-				RoomID:       roomID,
+				RoomAlias:    result.RoomAlias,
+				RoomID:       result.RoomID,
 				TemplateName: ref.Template,
-				EventID:      eventID,
+				EventID:      result.EventID,
 				DryRun:       false,
 			}); done {
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)
+			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), result.RoomAlias, result.EventID)
 			return nil
 		},
 	}

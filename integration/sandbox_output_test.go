@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/template"
 )
 
 // TestSandboxExitOutputCapture verifies that when a sandbox process exits
@@ -46,28 +47,32 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	// The binary path does not exist, so bwrap will fail to exec it and
 	// print an error like "execvp /this/binary/does/not/exist: No such
 	// file or directory".
-	templateRoomID := grantTemplateAccess(t, admin, machine)
-	_, err := admin.SendStateEvent(t.Context(), templateRoomID,
-		schema.EventTypeTemplate, "failing-agent", schema.TemplateContent{
-			Description: "Agent with nonexistent binary for output capture test",
-			Command:     []string{"/this/binary/does/not/exist"},
-			Namespaces:  &schema.TemplateNamespaces{PID: true},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME": "/tmp",
-				"TERM": "xterm-256color",
-			},
-		})
+	grantTemplateAccess(t, admin, machine)
+
+	failingRef, err := schema.ParseTemplateRef("bureau/template:failing-agent")
 	if err != nil {
-		t.Fatalf("publish failing template: %v", err)
+		t.Fatalf("parse template ref: %v", err)
+	}
+	_, err = template.Push(t.Context(), admin, failingRef, schema.TemplateContent{
+		Description: "Agent with nonexistent binary for output capture test",
+		Command:     []string{"/this/binary/does/not/exist"},
+		Namespaces:  &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs: []string{"/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME": "/tmp",
+			"TERM": "xterm-256color",
+		},
+	}, testServerName)
+	if err != nil {
+		t.Fatalf("push failing template: %v", err)
 	}
 
 	// Register a principal and push credentials.

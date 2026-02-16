@@ -128,3 +128,143 @@ proxy query is guaranteed to see the new directory.
 
 **Unit tests with time-dependent logic** should use injectable clocks, not
 real time.
+
+## Use production code paths, not inline logic
+
+Integration tests must exercise the same code paths that production uses.
+Every business operation has a library function in `lib/` or a helper in
+`machine_test.go` that calls it. Tests call these — never inline the
+implementation.
+
+### Why this matters
+
+When a test inlines business logic (manual credential encryption, direct
+room resolution + state event publishing, hand-constructed config payloads),
+it creates a parallel implementation that:
+
+- **Drifts silently** from production — a change to the library function
+  doesn't propagate to the test, so the test passes but the system is broken
+- **Hides regressions** — the test exercises its own copy of the logic, not
+  the code that ships
+- **Defeats type safety** — using `map[string]any` instead of typed structs
+  skips compile-time validation of the protocol schema
+
+### Required helpers
+
+Use these instead of inlining the equivalent operations:
+
+| Operation | Helper | Production path |
+|-----------|--------|-----------------|
+| Provision credentials | `pushCredentials(t, admin, machine, account)` | `lib/credential.Provision` |
+| Push machine config | `pushMachineConfig(t, admin, machine, config)` | `schema.MachineConfig` via `SendStateEvent` |
+| Publish standard test template | `publishTestAgentTemplate(t, admin, machine, name)` | `lib/template.Push` |
+| Grant template room access | `grantTemplateAccess(t, admin, machine)` | `InviteUser` to template room |
+| Register a principal account | `registerPrincipal(t, localpart, password)` | `messaging.Client.Register` |
+| Deploy principals end-to-end | `deployPrincipals(t, admin, machine, config)` | credentials + config + wait for sockets |
+
+For custom templates (non-standard content like `RequiredServices`,
+intentionally failing binaries, etc.), use `template.Push` directly with
+`grantTemplateAccess`:
+
+```go
+grantTemplateAccess(t, admin, machine)
+
+ref, err := schema.ParseTemplateRef("bureau/template:my-custom")
+if err != nil {
+    t.Fatalf("parse template ref: %v", err)
+}
+_, err = template.Push(ctx, admin, ref, schema.TemplateContent{
+    Description:      "Custom template for this test",
+    Command:          []string{testAgentBinary},
+    RequiredServices: []string{"ticket"},
+    // ... rest of template content
+}, testServerName)
+if err != nil {
+    t.Fatalf("push template: %v", err)
+}
+```
+
+### Anti-patterns
+
+**Direct state event construction for business operations.** If the
+operation has a library function, use it. Direct `admin.SendStateEvent`
+with business types is a sign you're bypassing the production path.
+
+```go
+// BAD: inlines credential encryption, bypasses production provisioning
+bundle := map[string]string{"MATRIX_TOKEN": token}
+data, _ := json.Marshal(bundle)
+encrypted, _ := sealed.Encrypt(data, publicKey)
+admin.SendStateEvent(ctx, configRoomID, "m.bureau.credentials", key, encrypted)
+
+// GOOD: uses production credential provisioning
+pushCredentials(t, admin, machine, account)
+```
+
+```go
+// BAD: inlines template room resolution and state event publish
+templateRoomID, _ := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasTemplate, server))
+admin.InviteUser(ctx, templateRoomID, machine.UserID)
+admin.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, name, content)
+
+// GOOD: uses production template push
+grantTemplateAccess(t, admin, machine)
+ref, _ := schema.ParseTemplateRef("bureau/template:" + name)
+template.Push(ctx, admin, ref, content, testServerName)
+```
+
+```go
+// BAD: manual MachineConfig with untyped map
+admin.SendStateEvent(ctx, configRoomID, "m.bureau.machine_config", machineName,
+    map[string]any{"principals": []map[string]any{{...}}})
+
+// ALSO BAD: typed struct but inline instead of helper
+admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
+    machine.Name, schema.MachineConfig{...})
+
+// GOOD: uses pushMachineConfig helper
+pushMachineConfig(t, admin, machine, deploymentConfig{
+    Principals: []principalSpec{{
+        Account:  agent,
+        Template: templateRef,
+    }},
+})
+```
+
+**Resolving well-known rooms manually.** Room aliases for system rooms
+(`bureau/system`, `bureau/machine`, `bureau/template`, `bureau/service`,
+`bureau/config/<name>`) are resolved internally by the library functions
+and helpers. Test code should not resolve them unless it genuinely needs
+the room ID for a purpose the helpers don't cover (e.g., setting up a
+room watch on a specific global room).
+
+### When direct Matrix API calls ARE correct
+
+Some operations are inherently test-specific and have no production
+library equivalent. Direct `session.SendStateEvent`, `session.CreateRoom`,
+and similar calls are appropriate when:
+
+- **Reading state for assertions** — `admin.GetStateEvent` to verify a
+  ticket was created, a config was published, etc. Tests need to read
+  Matrix state to verify outcomes.
+- **Sending test messages** — `admin.SendMessage` to trigger agent behavior
+  from the test harness.
+- **Setting up domain-specific fixtures** — creating project rooms with
+  ticket configuration, publishing room service bindings, configuring
+  power levels. These are specific to the domain (tickets, services) and
+  don't have Bureau-level library functions.
+- **Deliberately crafting invalid or edge-case state** — tests that verify
+  error handling, recovery from inconsistent state, or security boundaries
+  may need to construct state that the production libraries would reject.
+  Comment clearly why the direct API call is intentional.
+- **Room membership management** — `admin.InviteUser` and
+  `session.JoinRoom` for test-specific room membership (e.g., making an
+  agent join a config room so it can send messages). The helpers handle
+  membership for standard operations; direct calls are for test-specific
+  setup.
+
+The test for whether a direct API call is appropriate: could this operation
+be done incorrectly in a way that would silently break the test? If yes,
+there should be a library function or helper. If no (because the operation
+is simple and its correctness is obvious from the call site), a direct
+call is fine.

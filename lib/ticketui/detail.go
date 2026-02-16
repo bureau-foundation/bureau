@@ -532,7 +532,11 @@ func (renderer DetailRenderer) renderDependencies(title string, ticketIDs []stri
 
 		statusStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.StatusColor(content.Status))
+		priorityStyle := lipgloss.NewStyle().
+			Foreground(renderer.theme.PriorityColor(content.Priority))
 		idStyle := lipgloss.NewStyle().
+			Foreground(renderer.theme.StatusColor(content.Status))
+		titleStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.FaintText)
 
 		icon := statusIconString(content.Status)
@@ -540,7 +544,8 @@ func (renderer DetailRenderer) renderDependencies(title string, ticketIDs []stri
 			icon = " " // Reserve the column so IDs align.
 		}
 
-		prefix := statusStyle.Render(icon) + " " + idStyle.Render(ticketID) + " "
+		priorityText := fmt.Sprintf("P%d", content.Priority)
+		prefix := statusStyle.Render(icon) + " " + priorityStyle.Render(priorityText) + " " + idStyle.Render(ticketID) + " "
 		prefixWidth := lipgloss.Width(prefix)
 
 		titleText := content.Title
@@ -554,7 +559,7 @@ func (renderer DetailRenderer) renderDependencies(title string, ticketIDs []stri
 			TicketID: ticketID,
 			EndX:     renderer.width,
 		})
-		lines = append(lines, prefix+titleText)
+		lines = append(lines, prefix+titleStyle.Render(titleText))
 	}
 
 	return headerStyle.Render(title) + "\n" + strings.Join(lines, "\n"), targets
@@ -577,7 +582,11 @@ func (renderer DetailRenderer) renderChildren(parentID string, children []ticket
 	for _, child := range children {
 		statusStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.StatusColor(child.Content.Status))
+		priorityStyle := lipgloss.NewStyle().
+			Foreground(renderer.theme.PriorityColor(child.Content.Priority))
 		idStyle := lipgloss.NewStyle().
+			Foreground(renderer.theme.StatusColor(child.Content.Status))
+		titleStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.FaintText)
 
 		icon := statusIconString(child.Content.Status)
@@ -585,7 +594,8 @@ func (renderer DetailRenderer) renderChildren(parentID string, children []ticket
 			icon = " " // Reserve the column so IDs align.
 		}
 
-		prefix := statusStyle.Render(icon) + " " + idStyle.Render(child.ID) + " "
+		priorityText := fmt.Sprintf("P%d", child.Content.Priority)
+		prefix := statusStyle.Render(icon) + " " + priorityStyle.Render(priorityText) + " " + idStyle.Render(child.ID) + " "
 		prefixWidth := lipgloss.Width(prefix)
 
 		titleText := child.Content.Title
@@ -599,7 +609,7 @@ func (renderer DetailRenderer) renderChildren(parentID string, children []ticket
 			TicketID: child.ID,
 			EndX:     renderer.width,
 		})
-		lines = append(lines, prefix+titleText)
+		lines = append(lines, prefix+titleStyle.Render(titleText))
 	}
 
 	return headerStyle.Render(header) + "\n" + strings.Join(lines, "\n"), targets

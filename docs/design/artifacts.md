@@ -724,8 +724,8 @@ Both containers and reconstruction records use the same envelope:
 
 ```
 ┌─────────────────┬──────────────────────┬─────────────────────────────────────┐
-│ Version (1 byte)│ Nonce (24 bytes)     │ Ciphertext + Tag (N + 16 bytes)    │
-│ 0x01            │ random, crypto/rand  │ XChaCha20-Poly1305 Seal output     │
+│ Version (1 byte)│ Nonce (24 bytes)     │ Ciphertext + Tag (N + 16 bytes)     │
+│ 0x01            │ random, crypto/rand  │ XChaCha20-Poly1305 Seal output      │
 └─────────────────┴──────────────────────┴─────────────────────────────────────┘
 ```
 

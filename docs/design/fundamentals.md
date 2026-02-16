@@ -280,8 +280,27 @@ available to each principal.
 Credentials never enter the sandbox. They live in the proxy process,
 loaded from encrypted bundles that the launcher decrypts at sandbox
 creation time. A compromised agent can use the credentials its proxy
-holds, and no others — this is the credential isolation guarantee. See
-[credentials.md](credentials.md) for the encryption and provisioning model.
+holds, and no others — this is the credential isolation guarantee.
+
+Bureau uses age encryption for credential bundles: simple file-based
+encryption with multiple recipients, no key server, no protocol state.
+A credential bundle encrypted to three machine public keys is three
+recipient stanzas and a payload — the format is small enough to audit
+by reading the source. The launcher decrypts with the machine's age
+private key (held in the kernel keyring); the plaintext never touches
+disk.
+
+The alternatives carry operational weight Bureau doesn't need. HSMs and
+PKCS#11 add hardware dependencies and configuration surface that would
+be required on every machine in the fleet. GPG's key management and
+format complexity are well-documented liabilities. age is stateless and
+composable: encrypt to any set of X25519 public keys, decrypt with the
+corresponding private key, done. TPM binding is a complementary
+enhancement for hardware-backed key protection, not a replacement — age
+provides the encryption envelope, TPM protects the private key that
+opens it.
+
+See [credentials.md](credentials.md) for the encryption and provisioning model.
 
 ### Bridge
 
@@ -347,6 +366,23 @@ and layout system.
 Messaging is how principals communicate persistently and asynchronously.
 All structured communication between principals — and all persistent
 state — flows through Matrix.
+
+Bureau needs a persistence layer that is also an event bus, also a
+permission system, and also human-readable. Matrix provides all four.
+Rooms scope access — a principal that isn't in a room can't see its
+state. State events are typed, versioned, and queryable — they're the
+data model, not a message queue hack. The `/sync` long-poll gives every
+consumer an event stream without a separate pub-sub system. And humans
+can join any room with a standard client and read the conversation
+directly — the audit trail is just chat history.
+
+The alternative is building this from components: a database for state,
+a message broker for events, an ACL system for permissions, and a
+separate audit log. Matrix is all of these in one protocol, with
+federation for multi-machine and end-to-end encryption as a future
+option. Bureau doesn't use Matrix because it's a chat server — it uses
+Matrix because it's a replicated, permissioned, event-driven state
+store that happens to also be a chat server.
 
 Matrix is Bureau's persistence layer, event bus, and coordination
 mechanism. The homeserver (Continuwuity, running locally) is the single
@@ -478,6 +514,16 @@ be behind NAT. No machine needs a public IP. The TURN server provides
 relay when direct peer-to-peer connections fail. For large deployments,
 an SFU (LiveKit) can replace the mesh for group communication without
 changing the sandbox interface.
+
+WebRTC is the only production-grade protocol that provides all of this
+natively. Raw TCP and gRPC require either public addresses or manual
+port forwarding — untenable for a system designed to work on a
+Raspberry Pi behind a home router as easily as on a cloud GPU cluster.
+WireGuard provides encrypted tunnels but requires key distribution and
+network configuration that scales poorly with fleet size. WebRTC's ICE
+negotiation handles the hard part (discovering a working path between
+two machines) and DTLS encrypts the transport without external
+certificate infrastructure.
 
 ### Fleet
 

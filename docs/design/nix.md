@@ -117,6 +117,28 @@ dependencies beyond the Bazel client itself.
 
 ## Nix
 
+### Why Nix
+
+Bureau distributes binaries, runtime environments, and tool closures to
+machines that may have no compilation toolchain and must not diverge
+from each other. Nix gives content-addressed, hermetic closures: a
+store path hash encodes every input, so two machines with the same path
+have byte-identical contents. Presence implies closure integrity — no
+partial installs, no missing dependencies at runtime.
+
+Environments compose from atomic modules rather than monolithic images.
+Two environments sharing 90% of their packages share 90% of their disk
+via hard links in the Nix store — fifty agents with the same
+environment consume one copy on disk. Adding a tool to an environment
+is a function call, not a rebuild of a container image.
+
+Containers bundle an entire OS into each image. For Bureau, that's the
+wrong granularity — a sandbox environment is a set of tools, not a
+distro. Traditional package managers lack content-addressing,
+reproducibility, and atomic rollback. Nix provides all three, plus a
+binary cache for pull-based distribution that works identically for one
+machine or a hundred.
+
 ### What Nix Does
 
 - **Dev shell** — hermetic development environment with everything
@@ -164,10 +186,9 @@ Because Bureau does not use Nix content-addressed (CA) derivations
 (they remain experimental), a source change that does not affect a
 binary's actual output still produces a new Nix store path (Nix hashes
 inputs, not outputs). The daemon handles this by comparing SHA256
-hashes of the actual binary content (`lib/binhash`). If the binary is
-byte-identical to what is running, no restart occurs — regardless of
-whether the store path changed. `CompareBureauVersion` produces a
-`VersionDiff` with per-component changed flags.
+hashes of the actual binary content. If the binary is byte-identical
+to what is running, no restart occurs — regardless of whether the
+store path changed.
 
 ### Flake Structure
 
@@ -337,7 +358,7 @@ When the daemon sees a new `BureauVersion` in MachineConfig:
 
 The daemon self-update via `exec()` is inherently risky: if the new
 binary crashes, the old binary must be able to detect and report the
-failure. The `lib/watchdog` package provides this:
+failure. The watchdog mechanism handles this:
 
 1. Before `exec()`: write a watchdog state file (component name,
    previous binary path, new binary path, timestamp). The write is

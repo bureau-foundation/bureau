@@ -91,7 +91,7 @@ same path prefix.
 
 ### Validation rules
 
-Localparts are validated at registration time (`lib/principal`):
+Localparts are validated at registration time:
 
 - **Non-empty.** A zero-length localpart is meaningless.
 - **Maximum 80 characters.** Unix socket paths are limited to 108 bytes
@@ -519,8 +519,7 @@ silent degradation.
 
 ### Service implementation pattern
 
-Bureau services share a common startup sequence implemented in
-`lib/service/`:
+Bureau services share a common startup sequence:
 
 1. Load Matrix session from `session.json` (written by launcher)
 2. Validate session (WhoAmI)
@@ -532,15 +531,14 @@ Bureau services share a common startup sequence implemented in
 8. Start the incremental `/sync` loop
 9. On shutdown: deregister from `#bureau/service`, drain connections
 
-The `lib/service` package provides `LoadSession`, `ValidateSession`,
-`Register`/`Deregister`, `ResolveServiceRoom`, `InitialSync`,
-`RunSyncLoop`, `AcceptInvites`, and `SocketServer`. Services wire
-these together and add domain-specific logic: index structures, action
-handlers, event processing.
+A shared service infrastructure library provides session management,
+registration, sync loops, invite handling, and socket serving. Services
+compose these building blocks and add domain-specific logic: index
+structures, action handlers, event processing.
 
 ### Service wire protocol
 
-Service sockets use CBOR (`lib/codec`) with one connection per
+Service sockets use CBOR with one connection per
 request-response cycle:
 
 1. Client connects to the Unix socket
@@ -566,12 +564,29 @@ Protocol constraints:
 - 10-second write timeout (server must respond promptly)
 - 1 MB maximum request size
 
-CBOR is Bureau's standard internal serialization (`lib/codec`
-configures Core Deterministic Encoding: sorted keys, smallest integer
-encoding, no indefinite-length items). JSON is used for external
-interfaces: the Matrix Client-Server API, proxy HTTP endpoints, and the
-sandbox filesystem contract (payload.json, trigger.json, identity.json).
-The boundary is clear — JSON crosses network boundaries and enters the
+CBOR's value for Bureau is three properties: self-delimiting messages
+(each item's length is in its header, so no framing protocol is needed
+beyond the encoding itself), deterministic encoding (sorted keys and
+canonical integer representation give a single valid byte sequence for
+any value, which is required when token payloads are signed), and
+native binary data (service identity tokens, Ed25519 signatures, and
+content hashes are raw bytes, not base64-encoded strings inside JSON).
+
+JSON would work for the message structure but forces base64 encoding
+for every binary field — adding encoding overhead and a class of bugs
+(wrong base64 variant, padding errors, double-encoding). Protocol
+Buffers require schema compilation and code generation, making the wire
+format opaque to inspection and the build more complex. MessagePack
+lacks a deterministic encoding mode, which is required when token
+payloads must serialize identically on every machine for signature
+verification.
+
+CBOR is Bureau's standard internal serialization, configured for Core
+Deterministic Encoding: sorted keys, smallest integer encoding, no
+indefinite-length items. JSON is used for external interfaces: the
+Matrix Client-Server API, proxy HTTP endpoints, and the sandbox
+filesystem contract (payload.json, trigger.json, identity.json). The
+boundary is clear — JSON crosses network boundaries and enters the
 sandbox filesystem, CBOR stays inside Bureau's internal protocols.
 
 ---

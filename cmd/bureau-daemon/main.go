@@ -58,6 +58,7 @@ func run() error {
 		pipelineExecutorBinary string
 		pipelineEnvironment    string
 		statusInterval         time.Duration
+		haBaseDelay            time.Duration
 		showVersion            bool
 	)
 
@@ -73,6 +74,7 @@ func run() error {
 	flag.StringVar(&pipelineExecutorBinary, "pipeline-executor-binary", "", "path to bureau-pipeline-executor binary (enables pipeline.execute command)")
 	flag.StringVar(&pipelineEnvironment, "pipeline-environment", "", "Nix store path providing pipeline executor's toolchain (e.g., /nix/store/...-runner-env)")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
+	flag.DurationVar(&haBaseDelay, "ha-base-delay", 1*time.Second, "base unit for HA acquisition timing (all backoff ranges and verification scale from this; 0 for instant acquisition in tests)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -374,7 +376,7 @@ func run() error {
 
 	// Initialize the HA watchdog for daemon-level failover of
 	// ha_class:critical services.
-	daemon.haWatchdog = newHAWatchdog(daemon, logger)
+	daemon.haWatchdog = newHAWatchdog(daemon, haBaseDelay, logger)
 
 	// Perform the initial Matrix /sync to establish a since token and
 	// baseline state (reconcile, peer addresses, service directory).

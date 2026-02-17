@@ -52,17 +52,30 @@ type haWatchdog struct {
 	// testability (fake clock in tests, real clock in production).
 	clock clock.Clock
 
+	// baseDelay is the base unit for all HA acquisition timing.
+	// Preferred machines wait 1-3 × baseDelay before claiming,
+	// non-preferred machines wait 4-10 × baseDelay, and the
+	// verification window is 2 × baseDelay. Production default
+	// is 1s. Integration tests set this to 0 for instantaneous
+	// acquisition while still exercising the full protocol path.
+	baseDelay time.Duration
+
 	logger *slog.Logger
 }
 
 // newHAWatchdog creates an haWatchdog bound to the given daemon.
-func newHAWatchdog(daemon *Daemon, logger *slog.Logger) *haWatchdog {
+// baseDelay controls the timing of the acquisition protocol: all random
+// backoff ranges and the verification window scale linearly from this
+// value. Production uses 1s; integration tests use 0 for instant
+// acquisition.
+func newHAWatchdog(daemon *Daemon, baseDelay time.Duration, logger *slog.Logger) *haWatchdog {
 	return &haWatchdog{
 		daemon:           daemon,
 		criticalServices: make(map[string]*schema.FleetServiceContent),
 		leases:           make(map[string]*schema.HALeaseContent),
 		heldLeases:       make(map[string]context.CancelFunc),
 		clock:            daemon.clock,
+		baseDelay:        baseDelay,
 		logger:           logger,
 	}
 }
@@ -270,31 +283,37 @@ func labelSatisfied(requirement string, labels map[string]string) bool {
 // we won.
 func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart string, definition *schema.FleetServiceContent) error {
 	// Determine delay range based on preference. Preferred machines
-	// get shorter delays (1-3s), others get longer delays (4-10s).
-	minDelay := 4 * time.Second
-	maxDelay := 10 * time.Second
-	for _, preferred := range definition.Placement.PreferredMachines {
-		if preferred == w.daemon.machineName {
-			minDelay = 1 * time.Second
-			maxDelay = 3 * time.Second
-			break
+	// get shorter delays (1-3 × baseDelay), others get longer delays
+	// (4-10 × baseDelay). When baseDelay is 0 (integration tests),
+	// all delays are 0 and acquisition is instantaneous.
+	var delay time.Duration
+	if w.baseDelay > 0 {
+		minDelay := 4 * w.baseDelay
+		maxDelay := 10 * w.baseDelay
+		for _, preferred := range definition.Placement.PreferredMachines {
+			if preferred == w.daemon.machineName {
+				minDelay = 1 * w.baseDelay
+				maxDelay = 3 * w.baseDelay
+				break
+			}
 		}
+
+		delayRange := maxDelay - minDelay
+		//nolint:gosec // The random delay is for jitter, not security.
+		delay = minDelay + time.Duration(rand.Int63n(int64(delayRange)))
 	}
 
-	// Generate random delay within the range.
-	delayRange := maxDelay - minDelay
-	//nolint:gosec // The random delay is for jitter, not security.
-	delay := minDelay + time.Duration(rand.Int63n(int64(delayRange)))
+	if delay > 0 {
+		w.logger.Info("waiting before lease acquisition attempt",
+			"service", serviceLocalpart,
+			"delay", delay,
+		)
 
-	w.logger.Info("waiting before lease acquisition attempt",
-		"service", serviceLocalpart,
-		"delay", delay,
-	)
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-w.clock.After(delay):
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-w.clock.After(delay):
+		}
 	}
 
 	// Read the current lease state from Matrix.
@@ -335,12 +354,15 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 	w.logger.Info("wrote lease claim, verifying",
 		"service", serviceLocalpart)
 
-	// Verification window: wait then read back.
-	const verificationDelay = 2 * time.Second
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-w.clock.After(verificationDelay):
+	// Verification window: wait then read back. The delay gives Matrix
+	// time to propagate the write before we check if we won.
+	verificationDelay := 2 * w.baseDelay
+	if verificationDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-w.clock.After(verificationDelay):
+		}
 	}
 
 	// Read the lease back to see if we won.

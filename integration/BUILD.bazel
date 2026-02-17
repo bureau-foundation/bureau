@@ -23,6 +23,7 @@ go_test(
         "config_hotreload_test.go",
         "fleet_controller_test.go",
         "fleet_test.go",
+        "ha_test.go",
         "helpers_test.go",
         "inotify_test.go",
         "lifecycle_test.go",

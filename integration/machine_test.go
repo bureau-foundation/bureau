@@ -6,6 +6,7 @@ package integration_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -57,6 +58,7 @@ type machineOptions struct {
 	ProxyBinary            string // optional: launcher --proxy-binary
 	ObserveRelayBinary     string // optional: daemon --observe-relay-binary
 	StatusInterval         string // optional: daemon --status-interval (default "2s")
+	HABaseDelay            string // optional: daemon --ha-base-delay (default "0s" for tests)
 	PipelineExecutorBinary string // optional: daemon --pipeline-executor-binary
 	PipelineEnvironment    string // optional: daemon --pipeline-environment (Nix store path)
 }
@@ -114,14 +116,25 @@ func newTestMachine(t *testing.T, name string) *testMachine {
 // readiness signals (launcher socket, machine key publication, status
 // heartbeat, config room creation), and populates the machine's PublicKey,
 // ConfigRoomID, and MachineRoomID fields.
+//
+// Both the launcher and daemon are registered for automatic cleanup via
+// t.Cleanup. Use startMachineLauncher + startMachineDaemonManual when
+// the test needs to kill and restart the daemon mid-test.
 func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
+	t.Helper()
+	startMachineLauncher(t, admin, machine, options)
+	startMachineDaemon(t, admin, machine, options)
+}
+
+// startMachineLauncher boots the launcher for a machine, waits for the
+// launcher socket and machine key publication, and populates the machine's
+// PublicKey and MachineRoomID fields. Does NOT start the daemon — call
+// startMachineDaemon or startMachineDaemonManual after this.
+func startMachineLauncher(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
 	t.Helper()
 
 	if options.LauncherBinary == "" {
 		t.Fatal("machineOptions.LauncherBinary is required")
-	}
-	if options.DaemonBinary == "" {
-		t.Fatal("machineOptions.DaemonBinary is required")
 	}
 	if options.FleetRoomID == "" {
 		t.Fatal("machineOptions.FleetRoomID is required")
@@ -203,22 +216,31 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 		t.Fatal("machine key has empty public key")
 	}
 	machine.PublicKey = machineKey.PublicKey
+}
 
-	// Start the daemon.
+// buildDaemonArgs constructs the CLI arguments for starting a daemon
+// from the given machine and options. Shared by startMachineDaemon and
+// startMachineDaemonManual.
+func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 	statusInterval := options.StatusInterval
 	if statusInterval == "" {
 		statusInterval = "2s"
+	}
+	haBaseDelay := options.HABaseDelay
+	if haBaseDelay == "" {
+		haBaseDelay = "0s"
 	}
 	daemonArgs := []string{
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machine.Name,
 		"--server-name", testServerName,
-		"--fleet-room", fleetRoomID,
+		"--fleet-room", options.FleetRoomID,
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
 		"--admin-user", "bureau-admin",
 		"--status-interval", statusInterval,
+		"--ha-base-delay", haBaseDelay,
 	}
 	if options.ObserveRelayBinary != "" {
 		daemonArgs = append(daemonArgs, "--observe-relay-binary", options.ObserveRelayBinary)
@@ -229,11 +251,68 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	if options.PipelineEnvironment != "" {
 		daemonArgs = append(daemonArgs, "--pipeline-environment", options.PipelineEnvironment)
 	}
+	return daemonArgs
+}
+
+// startMachineDaemon starts the daemon for a machine as a managed process
+// (registered for automatic cleanup), waits for the first heartbeat, and
+// resolves the config room. Populates machine.ConfigRoomID.
+func startMachineDaemon(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
+	t.Helper()
+
+	if options.DaemonBinary == "" {
+		t.Fatal("machineOptions.DaemonBinary is required")
+	}
+
+	daemonArgs := buildDaemonArgs(machine, options)
 
 	// Set up a watch before starting the daemon to detect the first heartbeat.
-	statusWatch := watchRoom(t, admin, machineRoomID)
+	statusWatch := watchRoom(t, admin, machine.MachineRoomID)
 
 	startProcess(t, machine.Name+"-daemon", options.DaemonBinary, daemonArgs...)
+
+	waitForDaemonReady(t, admin, machine, statusWatch)
+}
+
+// startMachineDaemonManual starts the daemon for a machine as a manually
+// managed process and returns the *exec.Cmd handle. The caller is
+// responsible for killing the process (e.g., via cmd.Process.Signal).
+// Unlike startMachineDaemon, no automatic cleanup is registered.
+//
+// Use this for tests that need to kill and restart the daemon mid-test
+// (e.g., HA failover, daemon restart recovery).
+func startMachineDaemonManual(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) *exec.Cmd {
+	t.Helper()
+
+	if options.DaemonBinary == "" {
+		t.Fatal("machineOptions.DaemonBinary is required")
+	}
+
+	daemonArgs := buildDaemonArgs(machine, options)
+
+	// Set up a watch before starting the daemon to detect the first heartbeat.
+	statusWatch := watchRoom(t, admin, machine.MachineRoomID)
+
+	cmd := exec.Command(options.DaemonBinary, daemonArgs...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start daemon: %v", err)
+	}
+	t.Logf("daemon started (pid %d)", cmd.Process.Pid)
+
+	waitForDaemonReady(t, admin, machine, statusWatch)
+
+	return cmd
+}
+
+// waitForDaemonReady waits for the daemon's first heartbeat and resolves
+// the per-machine config room. Shared by startMachineDaemon and
+// startMachineDaemonManual.
+func waitForDaemonReady(t *testing.T, admin *messaging.Session, machine *testMachine, statusWatch roomWatch) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	// Wait for daemon readiness (MachineStatus heartbeat).
 	statusWatch.WaitForStateEvent(t,

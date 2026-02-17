@@ -52,7 +52,7 @@ func newHATestDaemon(t *testing.T) (*Daemon, *mockMatrixState) {
 	daemon.statusInterval = 60 * time.Second
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	daemon.haWatchdog = newHAWatchdog(daemon, daemon.logger)
+	daemon.haWatchdog = newHAWatchdog(daemon, 1*time.Second, daemon.logger)
 
 	return daemon, matrixState
 }

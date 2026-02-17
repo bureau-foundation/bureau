@@ -171,6 +171,16 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 		d.discoverPushTargets(ctx)
 	}
 
+	// Evaluate HA leases for pre-existing critical services. Without
+	// this, a daemon that boots while a critical service has an expired
+	// lease won't attempt acquisition until the next fleet room state
+	// change. Runs after the service directory sync so that the HA
+	// watchdog has access to the current service state.
+	if d.haWatchdog != nil {
+		d.haWatchdog.syncFleetState(ctx)
+		d.haWatchdog.evaluate(ctx)
+	}
+
 	return response.NextBatch, nil
 }
 

@@ -55,7 +55,6 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 
 	ctx := t.Context()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	fleetRoomID := defaultFleetRoomID(t)
 
 	// --- Phase 0: Boot a machine ---
@@ -226,8 +225,8 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 		t.Fatalf("parse template ref: %v", err)
 	}
 	_, err = template.Push(ctx, admin, ticketConsumerRef, schema.TemplateContent{
-		Description:      "Consumer agent requiring ticket service",
-		Command:          []string{testAgentBinary},
+		Description:      "Long-running consumer requiring ticket service",
+		Command:          []string{"/usr/bin/sleep", "infinity"},
 		RequiredServices: []string{"ticket"},
 		Namespaces: &schema.TemplateNamespaces{
 			PID: true,
@@ -238,17 +237,10 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 			NoNewPrivs:    true,
 		},
 		Filesystem: []schema.TemplateMount{
-			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Source: "/usr/bin/sleep", Dest: "/usr/bin/sleep", Mode: "ro"},
 			{Dest: "/tmp", Type: "tmpfs"},
 		},
 		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                "/workspace",
-			"TERM":                "xterm-256color",
-			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-		},
 	}, testServerName)
 	if err != nil {
 		t.Fatalf("publish ticket-consumer template: %v", err)
@@ -397,7 +389,6 @@ func TestTicketLifecycle(t *testing.T) {
 
 	ctx := t.Context()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	fleetRoomID := defaultFleetRoomID(t)
 
 	// --- Phase 0: Boot a machine ---
@@ -536,8 +527,8 @@ func TestTicketLifecycle(t *testing.T) {
 		t.Fatalf("parse template ref: %v", err)
 	}
 	_, err = template.Push(ctx, admin, lifecycleRef, schema.TemplateContent{
-		Description:      "Agent for ticket lifecycle testing",
-		Command:          []string{testAgentBinary},
+		Description:      "Long-running agent for ticket lifecycle testing",
+		Command:          []string{"/usr/bin/sleep", "infinity"},
 		RequiredServices: []string{"ticket"},
 		Namespaces: &schema.TemplateNamespaces{
 			PID: true,
@@ -548,17 +539,10 @@ func TestTicketLifecycle(t *testing.T) {
 			NoNewPrivs:    true,
 		},
 		Filesystem: []schema.TemplateMount{
-			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Source: "/usr/bin/sleep", Dest: "/usr/bin/sleep", Mode: "ro"},
 			{Dest: "/tmp", Type: "tmpfs"},
 		},
 		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                "/workspace",
-			"TERM":                "xterm-256color",
-			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-		},
 	}, testServerName)
 	if err != nil {
 		t.Fatalf("publish ticket-lifecycle-agent template: %v", err)

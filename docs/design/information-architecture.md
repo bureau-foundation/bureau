@@ -451,13 +451,15 @@ These Matrix-native event types are always locked to admin (100):
 
 Strict lockdown. `events_default: 100`, `state_default: 100`.
 
-- Admin and machine daemon (100): can set all state events, including
-  `machine_config` and `credentials`. The machine daemon needs PL 100
-  for HA hosting (writing MachineConfig), inviting fleet controllers
-  to the config room, and granting them PL 50.
-- Fleet controllers (50): can write `machine_config` for service
-  placement. Granted PL 50 by the daemon when it detects them in the
-  fleet room. Cannot write credentials or room metadata.
+- Admin (100): can set all state events, including `credentials` and
+  `m.room.power_levels`. The admin is the only user at PL 100, keeping
+  the trust boundary tight. Admin can kick machines (100 > 50) during
+  decommission.
+- Machine daemon and fleet controllers (50): can write `machine_config`
+  for HA hosting and service placement, publish layouts, invite users,
+  and send messages. Cannot write credentials, power levels, or room
+  metadata. Fleet controllers are granted PL 50 by the admin during
+  provisioning.
 - Default (0): messages only.
 
 No new state event types can be introduced without explicitly adding

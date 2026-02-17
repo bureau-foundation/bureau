@@ -177,11 +177,12 @@ func startFleetController(t *testing.T, admin *messaging.Session, machine *testM
 	}
 
 	// The fleet controller needs access to each machine's config room
-	// to read/write MachineConfig for place/unplace. In production, the
-	// daemon detects fleet controllers in the fleet room and invites
-	// them to the config room with PL 50. In this test, the daemon's
-	// sync loop handles this automatically after the fleet controller
-	// joins the fleet room.
+	// to read/write MachineConfig for place/unplace. The admin grants
+	// this explicitly: invite + PL 50.
+	grantFleetControllerConfigAccess(t, admin, &fleetController{
+		PrincipalName: controllerName,
+		UserID:        account.UserID,
+	}, machine)
 
 	// Start the fleet controller binary.
 	socketPath := principal.RunDirSocketPath(machine.RunDir, controllerName)
@@ -276,20 +277,49 @@ func loadDaemonSigningKey(t *testing.T, machine *testMachine) ed25519.PrivateKey
 	return privateKey
 }
 
-// inviteFleetControllerToConfigRoom invites a fleet controller to a
-// machine's config room so it can read/write MachineConfig for placement.
-func inviteFleetControllerToConfigRoom(t *testing.T, admin *messaging.Session, fc *fleetController, machine *testMachine) {
+// grantFleetControllerConfigAccess invites a fleet controller to a machine's
+// config room and grants it PL 50 so it can read/write MachineConfig for
+// placement. The admin (PL 100) reads current power levels, adds the fleet
+// controller at PL 50, and writes the updated power levels back.
+func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.Session, fc *fleetController, machine *testMachine) {
 	t.Helper()
+	ctx := t.Context()
 
 	if machine.ConfigRoomID == "" {
 		t.Fatal("machine has no config room ID — was startMachine called?")
 	}
 
 	userID := principal.MatrixUserID(fc.PrincipalName, testServerName)
-	if err := admin.InviteUser(t.Context(), machine.ConfigRoomID, userID); err != nil {
+
+	// Invite (idempotent — M_FORBIDDEN means already a member).
+	if err := admin.InviteUser(ctx, machine.ConfigRoomID, userID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			t.Fatalf("invite fleet controller to config room %s: %v", machine.ConfigRoomID, err)
 		}
+	}
+
+	// Read current power levels, add fleet controller at PL 50, write back.
+	powerLevelJSON, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
+		schema.MatrixEventTypePowerLevels, "")
+	if err != nil {
+		t.Fatalf("read config room power levels: %v", err)
+	}
+
+	var powerLevels map[string]any
+	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
+		t.Fatalf("unmarshal config room power levels: %v", err)
+	}
+
+	users, _ := powerLevels["users"].(map[string]any)
+	if users == nil {
+		users = make(map[string]any)
+		powerLevels["users"] = users
+	}
+	users[userID] = 50
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
+		t.Fatalf("grant fleet controller PL 50 in config room: %v", err)
 	}
 }
 
@@ -921,6 +951,11 @@ func TestFleetReconciliation(t *testing.T) {
 
 	controllerName := "service/fleet/reconcile-test"
 	fc := startFleetController(t, admin, machineA, controllerName, fleetRoomID)
+
+	// Grant the fleet controller access to machineB's config room.
+	// startFleetController only grants access for the machine it receives
+	// (machineA); additional machines need explicit grants.
+	grantFleetControllerConfigAccess(t, admin, fc, machineB)
 
 	// Wait for the fleet controller to discover both config rooms.
 	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)

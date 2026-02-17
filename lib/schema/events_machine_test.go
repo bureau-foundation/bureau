@@ -699,14 +699,15 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("admin power level = %v, want 100", adminLevel)
 	}
 
-	// Machine should have power level 100 (trusted infrastructure: writes
-	// MachineConfig for HA hosting, manages fleet controller access).
+	// Machine should have power level 50 (operational writes: MachineConfig
+	// for HA hosting, layout publishes, invites). PL 50 cannot modify
+	// credentials, power levels, or room metadata (all PL 100).
 	machineLevel, ok := users[machineUserID]
 	if !ok {
 		t.Fatalf("machine %q not in users map", machineUserID)
 	}
-	if machineLevel != 100 {
-		t.Errorf("machine power level = %v, want 100", machineLevel)
+	if machineLevel != 50 {
+		t.Errorf("machine power level = %v, want 50", machineLevel)
 	}
 
 	// Default user power level should be 0 (other members are read-only).
@@ -719,8 +720,8 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("invite = %v, want 50", levels["invite"])
 	}
 
-	// MachineConfig requires PL 50 (fleet controllers can write placements).
-	// Credentials require PL 100 (admin and machine only).
+	// MachineConfig requires PL 50 (machine and fleet controllers can write placements).
+	// Credentials require PL 100 (admin only).
 	events, ok := levels["events"].(map[string]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")

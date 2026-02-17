@@ -180,11 +180,12 @@ func run() error {
 		logger.Info("machine age public key loaded")
 	}
 
-	// Ensure the per-machine config room exists.
+	// Resolve and join the per-machine config room. The room must already
+	// exist (created by "bureau machine provision").
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
-	configRoomID, err := ensureConfigRoom(ctx, session, configRoomAlias, machineName, serverName, adminUser, logger)
+	configRoomID, err := resolveConfigRoom(ctx, session, configRoomAlias, logger)
 	if err != nil {
-		return fmt.Errorf("ensuring config room: %w", err)
+		return fmt.Errorf("resolving config room: %w", err)
 	}
 	logger.Info("config room ready", "room_id", configRoomID, "alias", configRoomAlias)
 
@@ -391,12 +392,6 @@ func run() error {
 		// Continue — the sync loop will start from scratch with an empty
 		// token, which triggers a fresh initial sync.
 	}
-
-	// Grant fleet controllers access to the config room. Fleet
-	// controllers that joined the fleet room before this daemon started
-	// need to be invited and granted PL 50 in the config room so they
-	// can write MachineConfig for service placement.
-	daemon.grantFleetControllerConfigAccess(ctx)
 
 	// Start the incremental sync loop, status heartbeat loop, and
 	// token refresh loop.
@@ -1152,182 +1147,21 @@ func uptimeSeconds() int64 {
 	return info.Uptime
 }
 
-// ensureConfigRoom ensures the per-machine config room exists. If it doesn't,
-// creates it with the admin user invited.
-func ensureConfigRoom(ctx context.Context, session *messaging.Session, alias, machineName, serverName, adminUser string, logger *slog.Logger) (string, error) {
-	// Try to resolve the alias first.
+// resolveConfigRoom resolves the per-machine config room alias and joins it.
+// The config room must already exist (created by "bureau machine provision").
+// The daemon does not create config rooms — that is the admin's responsibility
+// during provisioning.
+func resolveConfigRoom(ctx context.Context, session *messaging.Session, alias string, logger *slog.Logger) (string, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
-	if err == nil {
-		// Room exists — join it (idempotent).
-		if _, err := session.JoinRoom(ctx, roomID); err != nil {
-			logger.Warn("join config room returned error (may already be joined)", "error", err)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return "", fmt.Errorf("config room %q not found — run 'bureau machine provision' first", alias)
 		}
-		return roomID, nil
-	}
-
-	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return "", fmt.Errorf("resolving config room alias %q: %w", alias, err)
 	}
 
-	// Room doesn't exist — create it.
-	logger.Info("creating per-machine config room", "alias", alias)
-
-	// The config room alias is e.g., "#bureau/config/machine/workstation:bureau.local".
-	// The room_alias_name is the localpart without # or :server.
-	aliasLocalpart := principal.RoomAliasLocalpart(alias)
-
-	adminUserID := principal.MatrixUserID(adminUser, serverName)
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-
-	// Create without power_level_content_override. The private_chat preset
-	// gives the room creator PL 100, which is needed to send all the preset
-	// events (join_rules, history_visibility, etc.) during room creation.
-	// If we set the machine to PL 50 via override, the merged power levels
-	// take effect before the preset events — and the machine at PL 50 can't
-	// send m.room.join_rules (which requires PL 100 per state_default).
-	// Instead, we create with preset defaults, then apply restrictive power
-	// levels as a separate state event.
-	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:       "Config: " + machineName,
-		Topic:      "Machine configuration and credentials for " + machineName,
-		Alias:      aliasLocalpart,
-		Preset:     "private_chat",
-		Invite:     []string{adminUserID},
-		Visibility: "private",
-	})
-	if err != nil {
-		// If the room was created between our alias check and now, try to
-		// resolve again.
-		if messaging.IsMatrixError(err, messaging.ErrCodeRoomInUse) {
-			roomID, err = session.ResolveAlias(ctx, alias)
-			if err != nil {
-				return "", fmt.Errorf("room exists but cannot resolve alias %q: %w", alias, err)
-			}
-			if _, err := session.JoinRoom(ctx, roomID); err != nil {
-				logger.Warn("join config room returned error (may already be joined)", "error", err)
-			}
-			return roomID, nil
-		}
-		return "", fmt.Errorf("creating config room: %w", err)
+	if _, err := session.JoinRoom(ctx, roomID); err != nil {
+		logger.Warn("join config room returned error (may already be joined)", "error", err)
 	}
-
-	// Apply power levels now that the room exists. The machine (creator,
-	// PL 100 from preset) stays at PL 100: trusted infrastructure that
-	// needs full room management for HA hosting and fleet controller
-	// access grants. The admin also gets PL 100.
-	_, err = session.SendStateEvent(ctx, response.RoomID, schema.MatrixEventTypePowerLevels, "",
-		schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
-	if err != nil {
-		return "", fmt.Errorf("setting config room power levels: %w", err)
-	}
-
-	logger.Info("created config room",
-		"room_id", response.RoomID,
-		"alias", alias,
-		"admin", adminUserID,
-	)
-	return response.RoomID, nil
-}
-
-// grantFleetControllerConfigAccess reads the fleet room membership and
-// grants non-machine, non-admin members PL 50 in the config room. Fleet
-// controllers need PL 50 to write MachineConfig state events for service
-// placement. The daemon (PL 100 in the config room) performs this grant
-// whenever fleet room membership changes.
-//
-// The function is idempotent: members already at PL 50 are skipped. Members
-// not yet in the config room are invited first. The function logs and
-// continues on individual errors so that one unreachable fleet controller
-// does not block others.
-func (d *Daemon) grantFleetControllerConfigAccess(ctx context.Context) {
-	if d.fleetRoomID == "" || d.configRoomID == "" {
-		return
-	}
-
-	members, err := d.session.GetRoomMembers(ctx, d.fleetRoomID)
-	if err != nil {
-		d.logger.Error("reading fleet room members for config access grants", "error", err)
-		return
-	}
-
-	adminUserID := principal.MatrixUserID(d.adminUser, d.serverName)
-
-	var fleetControllers []string
-	for _, member := range members {
-		if member.Membership != "join" {
-			continue
-		}
-		// Skip the admin user.
-		if member.UserID == adminUserID {
-			continue
-		}
-		// Skip all non-service users. The fleet room contains every
-		// machine in the cluster, but only service/* principals are
-		// fleet controllers.
-		localpart, err := principal.LocalpartFromMatrixID(member.UserID)
-		if err != nil || !strings.HasPrefix(localpart, "service/") {
-			continue
-		}
-		fleetControllers = append(fleetControllers, member.UserID)
-	}
-
-	if len(fleetControllers) == 0 {
-		return
-	}
-
-	// Read current power levels from the config room.
-	currentPowerLevels, err := d.session.GetStateEvent(ctx, d.configRoomID,
-		schema.MatrixEventTypePowerLevels, "")
-	if err != nil {
-		d.logger.Error("reading config room power levels", "error", err)
-		return
-	}
-
-	var powerLevels map[string]any
-	if err := json.Unmarshal(currentPowerLevels, &powerLevels); err != nil {
-		d.logger.Error("parsing config room power levels", "error", err)
-		return
-	}
-
-	users, _ := powerLevels["users"].(map[string]any)
-	if users == nil {
-		users = make(map[string]any)
-		powerLevels["users"] = users
-	}
-
-	var updated bool
-	for _, controllerUserID := range fleetControllers {
-		// Skip if already at PL 50 or higher.
-		if existingPowerLevel, exists := users[controllerUserID]; exists {
-			if powerLevel, ok := existingPowerLevel.(float64); ok && powerLevel >= 50 {
-				continue
-			}
-		}
-
-		// Invite the fleet controller to the config room (idempotent —
-		// Matrix returns M_FORBIDDEN if already a member, which we ignore).
-		if err := d.session.InviteUser(ctx, d.configRoomID, controllerUserID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				d.logger.Error("inviting fleet controller to config room",
-					"user_id", controllerUserID, "error", err)
-				continue
-			}
-		}
-
-		users[controllerUserID] = 50
-		updated = true
-		d.logger.Info("granting fleet controller config room access",
-			"user_id", controllerUserID,
-			"power_level", 50,
-		)
-	}
-
-	if !updated {
-		return
-	}
-
-	if _, err := d.session.SendStateEvent(ctx, d.configRoomID,
-		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
-		d.logger.Error("updating config room power levels for fleet controllers", "error", err)
-	}
+	return roomID, nil
 }

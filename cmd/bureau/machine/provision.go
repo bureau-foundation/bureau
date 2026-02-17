@@ -275,8 +275,9 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 			return cli.Internal("create config room: %w", createError)
 		}
 	} else {
-		// Set power levels: admin=100, machine=50. Machine can invite
-		// and write layouts but cannot modify config or credentials.
+		// Set power levels: admin=100, machine=50. Machine can write
+		// MachineConfig, layouts, and invites but cannot modify
+		// credentials, power levels, or room metadata.
 		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
 			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 		if err != nil {

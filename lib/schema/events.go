@@ -2132,34 +2132,32 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 }
 
 // ConfigRoomPowerLevels returns power level content for a per-machine config
-// room. Three tiers:
+// room. Two tiers:
 //
-//   - Admin + Machine (100): credential writes, room metadata, power level
-//     management. The machine (daemon) is trusted infrastructure that needs
-//     PL 100 to write MachineConfig for HA hosting, invite fleet controllers
-//     to config rooms, and grant them PL 50.
-//   - Fleet controller (50): MachineConfig writes for service placement.
-//     Fleet controllers are granted PL 50 by the daemon when it detects
-//     them in the fleet room. PL 50 is sufficient for MachineConfig but
-//     not for credentials or room metadata.
+//   - Admin (100): credential writes, room metadata, power level management,
+//     kicking machines during decommission. The admin is the only user at
+//     PL 100, keeping the config room's trust boundary tight.
+//   - Machine + fleet controllers (50): MachineConfig writes (HA hosting,
+//     service placement), layout publishes, invites, and message sends.
+//     PL 50 is sufficient for operational writes but cannot modify
+//     credentials (PL 100), power levels (PL 100), or room metadata (PL 100).
 //   - Default (0): read-only (principals, other members).
 //
-// Both admin and machine creation paths are safe: the creator gets PL 100
-// from the private_chat preset, and ConfigRoomPowerLevels keeps the creator
-// at PL 100. When the daemon creates the room, it applies this as a
-// separate power_levels state event after creation. When the admin creates
-// the room (bureau-credentials), it can use this as PowerLevelContentOverride.
+// The admin creates config rooms via "bureau machine provision". The admin
+// gets PL 100 from the private_chat preset, then applies this power level
+// structure as a state event. The machine joins via invite and operates at
+// PL 50.
 func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 	users := map[string]any{
 		adminUserID: 100,
 	}
 	if machineUserID != "" && machineUserID != adminUserID {
-		users[machineUserID] = 100
+		users[machineUserID] = 50
 	}
 
 	events := AdminProtectedEvents()
-	events[EventTypeMachineConfig] = 50 // fleet controllers (PL 50) write placements
-	events[EventTypeCredentials] = 100  // admin and machine only
+	events[EventTypeMachineConfig] = 50 // machine and fleet controllers (PL 50) write placements
+	events[EventTypeCredentials] = 100  // admin only
 	events[EventTypeLayout] = 0         // daemon publishes layout state
 	events[MatrixEventTypeMessage] = 0  // daemon posts command results and pipeline results
 

@@ -365,13 +365,6 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	}
 
 	if needsHAEval {
-		// Grant fleet controllers access to the config room. Fleet
-		// controllers need PL 50 in the config room to write
-		// MachineConfig for service placement. The daemon (PL 100)
-		// detects fleet controllers as non-machine members of the
-		// fleet room and grants them access.
-		d.grantFleetControllerConfigAccess(ctx)
-
 		if d.haWatchdog != nil {
 			d.logger.Info("fleet room state changed, evaluating HA leases")
 			d.haWatchdog.syncFleetState(ctx)

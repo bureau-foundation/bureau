@@ -92,6 +92,14 @@ type machineState struct {
 	// PrincipalAssignment events.
 	configRoomID string
 
+	// pendingEchoEventID, when non-empty, holds the Matrix event ID
+	// returned by the most recent writeMachineConfig call for this
+	// machine. While set, processMachineConfigEvent skips /sync
+	// events that are not the echo of that write, preventing stale
+	// sync data from overwriting optimistic local updates made by
+	// place() or unplace(). Cleared when the echo arrives.
+	pendingEchoEventID string
+
 	// lastHeartbeat is the time the fleet controller last received a
 	// MachineStatus event for this machine. Used for staleness
 	// detection in checkMachineHealth.
@@ -400,7 +408,7 @@ func (fc *FleetController) processMachineConfigEvent(roomID string, event messag
 	// Track the config room mapping.
 	fc.configRooms[stateKey] = roomID
 
-	// Extract fleet-managed assignments.
+	// Ensure the machine entry exists so we can check pending echoes.
 	machine, exists := fc.machines[stateKey]
 	if !exists {
 		machine = &machineState{
@@ -409,6 +417,18 @@ func (fc *FleetController) processMachineConfigEvent(roomID string, event messag
 		fc.machines[stateKey] = machine
 	}
 	machine.configRoomID = roomID
+
+	// If a write is pending for this machine, skip stale /sync
+	// events to prevent overwriting optimistic local updates from
+	// place() or unplace(). Only the echo of our own write (matching
+	// event ID) clears the pending state and applies normally.
+	if machine.pendingEchoEventID != "" {
+		if event.EventID == machine.pendingEchoEventID {
+			machine.pendingEchoEventID = ""
+		} else {
+			return
+		}
+	}
 
 	// Extract fleet-managed assignments from the config event and
 	// update the service instance index incrementally.

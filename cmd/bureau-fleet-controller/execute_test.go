@@ -175,9 +175,12 @@ func TestWriteMachineConfig(t *testing.T) {
 			{Localpart: "service/stt/whisper", Template: "bureau/template:whisper-stt"},
 		},
 	}
-	err := fc.writeMachineConfig(context.Background(), "machine/workstation", config)
+	eventID, err := fc.writeMachineConfig(context.Background(), "machine/workstation", config)
 	if err != nil {
 		t.Fatalf("writeMachineConfig: %v", err)
+	}
+	if eventID == "" {
+		t.Error("writeMachineConfig should return a non-empty event ID")
 	}
 
 	if len(store.writes) != 1 {
@@ -197,7 +200,7 @@ func TestWriteMachineConfig(t *testing.T) {
 func TestWriteMachineConfigNoConfigRoom(t *testing.T) {
 	fc, _ := newExecuteTestController()
 
-	err := fc.writeMachineConfig(context.Background(), "machine/workstation", &schema.MachineConfig{})
+	_, err := fc.writeMachineConfig(context.Background(), "machine/workstation", &schema.MachineConfig{})
 	if err == nil {
 		t.Fatal("expected error for missing config room")
 	}
@@ -279,6 +282,11 @@ func TestPlaceHappyPath(t *testing.T) {
 	serviceState := fc.services["service/stt/whisper"]
 	if _, exists := serviceState.instances["machine/workstation"]; !exists {
 		t.Error("service instances should contain the target machine")
+	}
+
+	// Verify pending echo was recorded.
+	if machine.pendingEchoEventID == "" {
+		t.Error("machine should have a pending echo event ID after place")
 	}
 }
 
@@ -498,6 +506,11 @@ func TestUnplaceHappyPath(t *testing.T) {
 	serviceState := fc.services["service/stt/whisper"]
 	if _, exists := serviceState.instances["machine/workstation"]; exists {
 		t.Error("service instances should not contain the target machine")
+	}
+
+	// Verify pending echo was recorded.
+	if machine.pendingEchoEventID == "" {
+		t.Error("machine should have a pending echo event ID after unplace")
 	}
 }
 

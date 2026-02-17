@@ -45,18 +45,18 @@ func (fc *FleetController) readMachineConfig(ctx context.Context, machineLocalpa
 }
 
 // writeMachineConfig writes a MachineConfig state event to a machine's
-// config room.
-func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalpart string, config *schema.MachineConfig) error {
+// config room and returns the event ID assigned by the homeserver.
+func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalpart string, config *schema.MachineConfig) (string, error) {
 	configRoomID, exists := fc.configRooms[machineLocalpart]
 	if !exists {
-		return fmt.Errorf("no config room for machine %s", machineLocalpart)
+		return "", fmt.Errorf("no config room for machine %s", machineLocalpart)
 	}
 
-	_, err := fc.configStore.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
+	eventID, err := fc.configStore.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
-		return fmt.Errorf("writing machine config for %s: %w", machineLocalpart, err)
+		return "", fmt.Errorf("writing machine config for %s: %w", machineLocalpart, err)
 	}
-	return nil
+	return eventID, nil
 }
 
 // buildAssignment constructs a PrincipalAssignment for a fleet-managed
@@ -108,9 +108,14 @@ func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineL
 	assignment := fc.buildAssignment(serviceLocalpart, serviceState.definition)
 	config.Principals = append(config.Principals, assignment)
 
-	if err := fc.writeMachineConfig(ctx, machineLocalpart, config); err != nil {
+	eventID, err := fc.writeMachineConfig(ctx, machineLocalpart, config)
+	if err != nil {
 		return err
 	}
+
+	// Record the pending echo so that processMachineConfigEvent
+	// skips stale /sync events until this write's echo arrives.
+	machine.pendingEchoEventID = eventID
 
 	// Update in-memory model.
 	assignmentCopy := assignment
@@ -164,9 +169,14 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 	}
 	config.Principals = filtered
 
-	if err := fc.writeMachineConfig(ctx, machineLocalpart, config); err != nil {
+	eventID, err := fc.writeMachineConfig(ctx, machineLocalpart, config)
+	if err != nil {
 		return err
 	}
+
+	// Record the pending echo so that processMachineConfigEvent
+	// skips stale /sync events until this write's echo arrives.
+	machine.pendingEchoEventID = eventID
 
 	// Update in-memory model.
 	delete(machine.assignments, serviceLocalpart)

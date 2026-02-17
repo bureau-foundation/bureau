@@ -90,6 +90,17 @@ type roomState struct {
 	// index is the in-memory ticket index for this room.
 	index *ticket.Index
 
+	// pendingEchoes tracks event IDs of ticket writes made by
+	// mutation handlers (or gate satisfaction) that have not yet
+	// been echoed back via /sync. The sync loop checks this map
+	// in indexTicketEvent: events for a ticket with a pending echo
+	// are skipped unless they ARE the echo, preventing stale
+	// pre-echo events from overwriting optimistic local updates.
+	//
+	// Keyed by ticket ID (state_key), value is the event ID
+	// returned by SendStateEvent. Cleared when the echo arrives.
+	pendingEchoes map[string]string
+
 	// alias is the room's canonical alias (e.g.,
 	// "#iree/general:bureau.local"), resolved once when the room is
 	// first tracked. Empty if the room has no alias or the fetch
@@ -189,9 +200,10 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID string, st
 	state, exists := ts.rooms[roomID]
 	if !exists {
 		state = &roomState{
-			config: config,
-			index:  ticket.NewIndex(),
-			alias:  ts.resolveRoomAlias(ctx, roomID),
+			config:        config,
+			index:         ticket.NewIndex(),
+			pendingEchoes: make(map[string]string),
+			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
 	} else {
@@ -379,9 +391,10 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID st
 	state, exists := ts.rooms[roomID]
 	if !exists {
 		state = &roomState{
-			config: config,
-			index:  ticket.NewIndex(),
-			alias:  ts.resolveRoomAlias(ctx, roomID),
+			config:        config,
+			index:         ticket.NewIndex(),
+			pendingEchoes: make(map[string]string),
+			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
 
@@ -476,11 +489,32 @@ func (ts *TicketService) parseTicketConfig(event messaging.Event) *schema.Ticket
 
 // indexTicketEvent parses a ticket event and adds it to the room's
 // index. Returns true if the ticket was successfully indexed.
+//
+// If the ticket has a pending echo (from a local write via a mutation
+// handler or gate satisfaction), this method skips the event unless it
+// IS the expected echo. This prevents the sync loop from overwriting
+// optimistic local updates with stale events that were in-flight when
+// the local write happened.
 func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Event) bool {
 	if event.StateKey == nil {
 		return false
 	}
 	ticketID := *event.StateKey
+
+	// Check for a pending echo from a local write.
+	if expectedEventID, pending := state.pendingEchoes[ticketID]; pending {
+		if event.EventID == expectedEventID {
+			// This is the echo of our write. Clear the pending
+			// entry and fall through to index the authoritative
+			// server version.
+			delete(state.pendingEchoes, ticketID)
+		} else {
+			// This event predates our write (it was in-flight
+			// when we wrote). Skip it to preserve the optimistic
+			// local update.
+			return false
+		}
+	}
 
 	// Empty content means the ticket was redacted.
 	if len(event.Content) == 0 {
@@ -508,6 +542,26 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 
 	state.index.Put(ticketID, content)
 	return true
+}
+
+// putWithEcho writes a ticket to Matrix and updates the local index,
+// recording the returned event ID as a pending echo. The sync loop
+// will skip /sync events for this ticket until the echo arrives,
+// preventing stale pre-echo events from overwriting this optimistic
+// update.
+//
+// All mutation paths that write ticket state events and update the
+// local index must use this method instead of calling SendStateEvent
+// and index.Put directly. This includes socket handlers, gate
+// satisfaction, and any future write path.
+func (ts *TicketService) putWithEcho(ctx context.Context, roomID string, state *roomState, ticketID string, content schema.TicketContent) error {
+	eventID, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content)
+	if err != nil {
+		return err
+	}
+	state.pendingEchoes[ticketID] = eventID
+	state.index.Put(ticketID, content)
+	return nil
 }
 
 // totalTickets returns the total number of tickets across all rooms.

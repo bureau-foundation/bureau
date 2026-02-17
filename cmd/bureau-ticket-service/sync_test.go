@@ -35,8 +35,9 @@ func newTestService() *TicketService {
 // tickets pre-indexed.
 func newTrackedRoom(tickets map[string]schema.TicketContent) *roomState {
 	state := &roomState{
-		config: &schema.TicketConfigContent{Version: 1},
-		index:  ticket.NewIndex(),
+		config:        &schema.TicketConfigContent{Version: 1},
+		index:         ticket.NewIndex(),
+		pendingEchoes: make(map[string]string),
 	}
 	for id, content := range tickets {
 		state.index.Put(id, content)
@@ -421,4 +422,310 @@ func TestConcurrentSyncAndReads(t *testing.T) {
 // iteration index in the concurrency test.
 func ticketIDForIteration(iteration int) string {
 	return fmt.Sprintf("tkt-sync-%04d", iteration)
+}
+
+// --- Pending echo tests ---
+//
+// These tests verify that the pending echo mechanism prevents the sync
+// loop from overwriting optimistic local updates with stale events.
+
+func TestPendingEchoSkipsStaleEvent(t *testing.T) {
+	ts := newTestService()
+	state := newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+	ts.rooms["!room:local"] = state
+
+	// Simulate a mutation handler writing to the ticket. The handler
+	// called putWithEcho which stored the pending echo.
+	closedContent := schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
+	}
+	state.pendingEchoes["tkt-1"] = "$mutation-event-id"
+	state.index.Put("tkt-1", closedContent)
+
+	// Now simulate the sync loop delivering a stale event (from a
+	// /sync response that was in-flight when the mutation happened).
+	staleContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "in_progress",
+		Type: "task", Assignee: "someone",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T12:00:00Z",
+	})
+	staleEvent := messaging.Event{
+		EventID:  "$stale-event-id", // Different from the pending echo
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  staleContent,
+	}
+
+	indexed := ts.indexTicketEvent(state, staleEvent)
+
+	if indexed {
+		t.Fatal("stale event should not have been indexed")
+	}
+
+	// The optimistic update should be preserved.
+	current, exists := state.index.Get("tkt-1")
+	if !exists {
+		t.Fatal("ticket should still exist in index")
+	}
+	if current.Status != "closed" {
+		t.Fatalf("ticket status should be 'closed' (optimistic update preserved), got %q", current.Status)
+	}
+
+	// The pending echo should still be there (not consumed).
+	if _, pending := state.pendingEchoes["tkt-1"]; !pending {
+		t.Fatal("pending echo should still be present after skipping stale event")
+	}
+}
+
+func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
+	ts := newTestService()
+	state := newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+	ts.rooms["!room:local"] = state
+
+	// Simulate a pending echo from a mutation handler.
+	state.pendingEchoes["tkt-1"] = "$echo-event-id"
+	state.index.Put("tkt-1", schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
+	})
+
+	// The echo arrives: event ID matches the pending entry.
+	echoContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
+	})
+	echoEvent := messaging.Event{
+		EventID:  "$echo-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  echoContent,
+	}
+
+	indexed := ts.indexTicketEvent(state, echoEvent)
+
+	if !indexed {
+		t.Fatal("echo event should have been indexed")
+	}
+
+	// The pending echo should be cleared.
+	if _, pending := state.pendingEchoes["tkt-1"]; pending {
+		t.Fatal("pending echo should have been cleared after echo arrival")
+	}
+
+	// The index should have the echo's content.
+	current, _ := state.index.Get("tkt-1")
+	if current.Status != "closed" {
+		t.Fatalf("ticket status should be 'closed', got %q", current.Status)
+	}
+}
+
+func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
+	ts := newTestService()
+	state := newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+	ts.rooms["!room:local"] = state
+
+	// Set up and clear a pending echo (simulating echo arrival).
+	state.pendingEchoes["tkt-1"] = "$echo-event-id"
+	echoContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
+	})
+	ts.indexTicketEvent(state, messaging.Event{
+		EventID:  "$echo-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  echoContent,
+	})
+
+	// Now a subsequent event arrives (e.g., someone reopened the ticket
+	// after our close). With no pending echo, it should be applied.
+	reopenContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "open",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-03T00:00:00Z",
+	})
+	reopenEvent := messaging.Event{
+		EventID:  "$reopen-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  reopenContent,
+	}
+
+	indexed := ts.indexTicketEvent(state, reopenEvent)
+
+	if !indexed {
+		t.Fatal("post-echo event should have been indexed")
+	}
+
+	current, _ := state.index.Get("tkt-1")
+	if current.Status != "open" {
+		t.Fatalf("ticket should have been reopened, got status %q", current.Status)
+	}
+}
+
+func TestPendingEchoLatestWriteWins(t *testing.T) {
+	ts := newTestService()
+	state := newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+	ts.rooms["!room:local"] = state
+
+	// First mutation: claim (in_progress).
+	state.pendingEchoes["tkt-1"] = "$claim-event-id"
+	state.index.Put("tkt-1", schema.TicketContent{
+		Version: 1, Title: "original", Status: "in_progress",
+		Type: "task", Assignee: "alice",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+	})
+
+	// Second mutation: close (overwrites the pending echo).
+	state.pendingEchoes["tkt-1"] = "$close-event-id"
+	state.index.Put("tkt-1", schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
+	})
+
+	// Sync delivers the claim echo. It's NOT the expected echo
+	// (we expect the close echo now), so it should be skipped.
+	claimEchoContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "in_progress",
+		Type: "task", Assignee: "alice",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+	})
+	indexed := ts.indexTicketEvent(state, messaging.Event{
+		EventID:  "$claim-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  claimEchoContent,
+	})
+
+	if indexed {
+		t.Fatal("claim echo should have been skipped (close is the latest pending)")
+	}
+
+	current, _ := state.index.Get("tkt-1")
+	if current.Status != "closed" {
+		t.Fatalf("ticket should remain closed, got %q", current.Status)
+	}
+
+	// The close echo arrives and should be applied.
+	closeEchoContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "original", Status: "closed",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
+	})
+	indexed = ts.indexTicketEvent(state, messaging.Event{
+		EventID:  "$close-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  closeEchoContent,
+	})
+
+	if !indexed {
+		t.Fatal("close echo should have been indexed")
+	}
+
+	if _, pending := state.pendingEchoes["tkt-1"]; pending {
+		t.Fatal("pending echo should be cleared after close echo")
+	}
+}
+
+func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
+	ts := newTestService()
+	state := newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+	ts.rooms["!room:local"] = state
+
+	// No pending echo — events should be indexed normally.
+	newContent := toContentMap(t, schema.TicketContent{
+		Version: 1, Title: "updated", Status: "in_progress",
+		Type: "task", Assignee: "bob",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+	})
+
+	indexed := ts.indexTicketEvent(state, messaging.Event{
+		EventID:  "$normal-event-id",
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-1"),
+		Content:  newContent,
+	})
+
+	if !indexed {
+		t.Fatal("event without pending echo should have been indexed")
+	}
+
+	current, _ := state.index.Get("tkt-1")
+	if current.Status != "in_progress" {
+		t.Fatalf("ticket should be in_progress, got %q", current.Status)
+	}
+}
+
+// TestPutWithEchoRecordsEcho verifies that putWithEcho stores the
+// event ID returned by SendStateEvent in the pending echoes map.
+func TestPutWithEchoRecordsEcho(t *testing.T) {
+	writer := &fakeWriterForEchoTest{}
+	ts := &TicketService{
+		writer:    writer,
+		clock:     clock.Real(),
+		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:     make(map[string]*roomState),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	state := newTrackedRoom(nil)
+	ts.rooms["!room:local"] = state
+
+	content := schema.TicketContent{
+		Version: 1, Title: "test", Status: "open",
+		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+
+	writer.nextEventID = "$returned-event-42"
+
+	err := ts.putWithEcho(context.Background(), "!room:local", state, "tkt-1", content)
+	if err != nil {
+		t.Fatalf("putWithEcho: %v", err)
+	}
+
+	// Verify the pending echo was recorded with the returned event ID.
+	echoID, pending := state.pendingEchoes["tkt-1"]
+	if !pending {
+		t.Fatal("putWithEcho should record a pending echo")
+	}
+	if echoID != "$returned-event-42" {
+		t.Fatalf("pending echo should be '$returned-event-42', got %q", echoID)
+	}
+
+	// Verify the index was updated.
+	stored, exists := state.index.Get("tkt-1")
+	if !exists {
+		t.Fatal("ticket should be in index after putWithEcho")
+	}
+	if stored.Title != "test" {
+		t.Fatalf("indexed ticket title should be 'test', got %q", stored.Title)
+	}
+}
+
+// fakeWriterForEchoTest is a minimal matrixWriter that returns a
+// configurable event ID.
+type fakeWriterForEchoTest struct {
+	nextEventID string
+}
+
+func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _, _, _ string, _ any) (string, error) {
+	return f.nextEventID, nil
 }

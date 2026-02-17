@@ -637,3 +637,279 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 		t.Errorf("machine hostname = %q, want %q", machine.info.Hostname, "workstation")
 	}
 }
+
+// --- Pending echo tests ---
+
+// TestPendingEchoSkipsStaleConfigEvent verifies that a /sync event
+// arriving while a write is pending does not overwrite the optimistic
+// local state set by place() or unplace().
+func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
+	fc := newTestFleetController()
+
+	// Set up a machine with a placed service and a pending echo.
+	placedAssignment := &schema.PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/template:whisper-stt",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+	fc.machines["machine/workstation"] = &machineState{
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/stt/whisper": placedAssignment,
+		},
+		configRoomID:       "!config-ws:local",
+		pendingEchoEventID: "$echo-abc",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances: map[string]*schema.PrincipalAssignment{
+			"machine/workstation": placedAssignment,
+		},
+	}
+
+	// Simulate a stale /sync event with no fleet assignments (the
+	// state before our place() write). The event ID does NOT match
+	// the pending echo.
+	staleContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{},
+	})
+	staleEvent := messaging.Event{
+		EventID:  "$stale-old-event",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  staleContent,
+	}
+
+	fc.processMachineConfigEvent("!config-ws:local", staleEvent)
+
+	// Optimistic state from place() should be preserved.
+	machine := fc.machines["machine/workstation"]
+	if len(machine.assignments) != 1 {
+		t.Fatalf("expected 1 assignment (preserved), got %d", len(machine.assignments))
+	}
+	if _, exists := machine.assignments["service/stt/whisper"]; !exists {
+		t.Error("placed assignment should still be present")
+	}
+
+	// Pending echo should still be set.
+	if machine.pendingEchoEventID != "$echo-abc" {
+		t.Errorf("pending echo should still be %q, got %q", "$echo-abc", machine.pendingEchoEventID)
+	}
+
+	// Service instance should be preserved too.
+	serviceState := fc.services["service/stt/whisper"]
+	if len(serviceState.instances) != 1 {
+		t.Fatalf("expected 1 service instance (preserved), got %d", len(serviceState.instances))
+	}
+}
+
+// TestPendingEchoClearsOnEchoArrival verifies that when the echo of
+// our own write arrives via /sync, the pending echo is cleared and
+// the event is applied normally.
+func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
+	fc := newTestFleetController()
+
+	placedAssignment := &schema.PrincipalAssignment{
+		Localpart: "service/stt/whisper",
+		Template:  "bureau/template:whisper-stt",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+	fc.machines["machine/workstation"] = &machineState{
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/stt/whisper": placedAssignment,
+		},
+		configRoomID:       "!config-ws:local",
+		pendingEchoEventID: "$echo-abc",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances: map[string]*schema.PrincipalAssignment{
+			"machine/workstation": placedAssignment,
+		},
+	}
+
+	// The echo event — same event ID as the pending echo, with the
+	// assignment we placed.
+	echoContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/template:whisper-stt",
+				AutoStart: true,
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+	echoEvent := messaging.Event{
+		EventID:  "$echo-abc",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  echoContent,
+	}
+
+	fc.processMachineConfigEvent("!config-ws:local", echoEvent)
+
+	// Pending echo should be cleared.
+	machine := fc.machines["machine/workstation"]
+	if machine.pendingEchoEventID != "" {
+		t.Errorf("pending echo should be cleared after echo arrival, got %q", machine.pendingEchoEventID)
+	}
+
+	// Assignment should still be present (echo confirms it).
+	if len(machine.assignments) != 1 {
+		t.Fatalf("expected 1 assignment after echo, got %d", len(machine.assignments))
+	}
+}
+
+// TestPendingEchoAllowsSubsequentEvents verifies that after the echo
+// clears the pending state, subsequent /sync events apply normally.
+func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
+	fc := newTestFleetController()
+
+	fc.machines["machine/workstation"] = &machineState{
+		assignments: map[string]*schema.PrincipalAssignment{
+			"service/stt/whisper": {
+				Localpart: "service/stt/whisper",
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+		configRoomID:       "!config-ws:local",
+		pendingEchoEventID: "$echo-abc",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances:  make(map[string]*schema.PrincipalAssignment),
+	}
+
+	// Process the echo to clear the pending state.
+	echoContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/template:whisper-stt",
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+	fc.processMachineConfigEvent("!config-ws:local", messaging.Event{
+		EventID:  "$echo-abc",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  echoContent,
+	})
+
+	// Now process a subsequent event that removes all fleet assignments.
+	emptyContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{},
+	})
+	fc.processMachineConfigEvent("!config-ws:local", messaging.Event{
+		EventID:  "$later-event",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  emptyContent,
+	})
+
+	// The subsequent event should have been applied — assignments empty.
+	machine := fc.machines["machine/workstation"]
+	if len(machine.assignments) != 0 {
+		t.Fatalf("expected 0 assignments after subsequent event, got %d", len(machine.assignments))
+	}
+}
+
+// TestPendingEchoLatestWriteWins verifies that if multiple writes
+// happen before any echo arrives, the latest write's event ID
+// supersedes the earlier one. Only the latest echo clears the
+// pending state.
+func TestPendingEchoLatestWriteWins(t *testing.T) {
+	fc := newTestFleetController()
+
+	fc.machines["machine/workstation"] = &machineState{
+		assignments:        make(map[string]*schema.PrincipalAssignment),
+		configRoomID:       "!config-ws:local",
+		pendingEchoEventID: "$echo-first",
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	// Simulate a second write overwriting the pending echo.
+	fc.machines["machine/workstation"].pendingEchoEventID = "$echo-second"
+
+	// The echo of the first write arrives — should still be skipped
+	// because we're waiting for the second echo.
+	firstContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{},
+	})
+	fc.processMachineConfigEvent("!config-ws:local", messaging.Event{
+		EventID:  "$echo-first",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  firstContent,
+	})
+
+	machine := fc.machines["machine/workstation"]
+	if machine.pendingEchoEventID != "$echo-second" {
+		t.Errorf("pending echo should still be %q after first echo, got %q",
+			"$echo-second", machine.pendingEchoEventID)
+	}
+
+	// The echo of the second write arrives — should clear and apply.
+	secondContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{},
+	})
+	fc.processMachineConfigEvent("!config-ws:local", messaging.Event{
+		EventID:  "$echo-second",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  secondContent,
+	})
+
+	if machine.pendingEchoEventID != "" {
+		t.Errorf("pending echo should be cleared after second echo, got %q", machine.pendingEchoEventID)
+	}
+}
+
+// TestNoPendingEchoPassesThrough verifies that when no write is
+// pending, /sync events are applied normally (no regression).
+func TestNoPendingEchoPassesThrough(t *testing.T) {
+	fc := newTestFleetController()
+
+	fc.machines["machine/workstation"] = &machineState{
+		assignments:  make(map[string]*schema.PrincipalAssignment),
+		configRoomID: "!config-ws:local",
+		// No pending echo.
+	}
+	fc.configRooms["machine/workstation"] = "!config-ws:local"
+
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		definition: &schema.FleetServiceContent{Template: "t"},
+		instances:  make(map[string]*schema.PrincipalAssignment),
+	}
+
+	configContent := toContentMap(t, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "service/stt/whisper",
+				Template:  "bureau/template:whisper-stt",
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+	fc.processMachineConfigEvent("!config-ws:local", messaging.Event{
+		EventID:  "$normal-event",
+		Type:     schema.EventTypeMachineConfig,
+		StateKey: stringPtr("machine/workstation"),
+		Content:  configContent,
+	})
+
+	machine := fc.machines["machine/workstation"]
+	if len(machine.assignments) != 1 {
+		t.Fatalf("expected 1 assignment from normal event, got %d", len(machine.assignments))
+	}
+	if _, exists := machine.assignments["service/stt/whisper"]; !exists {
+		t.Error("assignment should be present after normal event processing")
+	}
+}

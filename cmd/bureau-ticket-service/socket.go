@@ -995,12 +995,12 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 
 	ticketID := ts.generateTicketID(state, request.Room, now, content.Title, nil)
 
-	// Write to Matrix, then update the local index so the creator
-	// sees the result without a /sync round-trip.
-	if _, err := ts.writer.SendStateEvent(ctx, request.Room, schema.EventTypeTicket, ticketID, content); err != nil {
+	// Write to Matrix and update the local index so the creator sees
+	// the result without a /sync round-trip. putWithEcho records the
+	// event ID so the sync loop won't overwrite this with stale data.
+	if err := ts.putWithEcho(ctx, request.Room, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return createResponse{
 		ID:   ticketID,
@@ -1150,10 +1150,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return mutationResponse{
 		ID:      ticketID,
@@ -1203,10 +1202,9 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return mutationResponse{
 		ID:      ticketID,
@@ -1253,10 +1251,9 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return mutationResponse{
 		ID:      ticketID,
@@ -1366,10 +1363,9 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 
 	// Phase 4: Write all state events and update the index.
 	for i := range tickets {
-		if _, err := ts.writer.SendStateEvent(ctx, request.Room, schema.EventTypeTicket, tickets[i].id, tickets[i].content); err != nil {
+		if err := ts.putWithEcho(ctx, request.Room, state, tickets[i].id, tickets[i].content); err != nil {
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", tickets[i].id, err)
 		}
-		state.index.Put(tickets[i].id, tickets[i].content)
 	}
 
 	return batchCreateResponse{
@@ -1452,10 +1448,9 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 
 	// Phase 2: Write all state events and update the index.
 	for _, entry := range request.Tickets {
-		if _, err := ts.writer.SendStateEvent(ctx, request.Room, schema.EventTypeTicket, entry.ID, entry.Content); err != nil {
+		if err := ts.putWithEcho(ctx, request.Room, state, entry.ID, entry.Content); err != nil {
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", entry.ID, err)
 		}
-		state.index.Put(entry.ID, entry.Content)
 	}
 
 	return importResponse{
@@ -1516,10 +1511,9 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return mutationResponse{
 		ID:      ticketID,
@@ -1582,10 +1576,9 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
-	state.index.Put(ticketID, content)
 
 	return mutationResponse{
 		ID:      ticketID,

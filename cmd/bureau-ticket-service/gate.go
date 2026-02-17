@@ -369,12 +369,7 @@ func (ts *TicketService) satisfyGate(
 	content.Gates[gateIndex].SatisfiedBy = satisfiedBy
 	content.UpdatedAt = now
 
-	if _, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content); err != nil {
-		return err
-	}
-
-	state.index.Put(ticketID, content)
-	return nil
+	return ts.putWithEcho(ctx, roomID, state, ticketID, content)
 }
 
 // evaluateTimerGates checks all pending timer gates across all rooms

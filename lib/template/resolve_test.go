@@ -569,6 +569,104 @@ func TestMergeHealthCheck(t *testing.T) {
 	})
 }
 
+func TestMergeProxyServices(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Command: []string{"/bin/parent"},
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+				StripHeaders:  []string{"x-api-key"},
+			},
+			"openai": {
+				Upstream:      "https://api.openai.com",
+				InjectHeaders: map[string]string{"Authorization": "OPENAI_BEARER"},
+			},
+		},
+	}
+
+	child := &schema.TemplateContent{
+		// Override anthropic with different upstream, add a new service.
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com/v2",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY_V2"},
+			},
+			"github": {
+				Upstream:      "https://api.github.com",
+				InjectHeaders: map[string]string{"Authorization": "GITHUB_TOKEN"},
+			},
+		},
+	}
+
+	result := Merge(parent, child)
+
+	if len(result.ProxyServices) != 3 {
+		t.Fatalf("ProxyServices count = %d, want 3", len(result.ProxyServices))
+	}
+
+	// anthropic should be overridden by child.
+	anthropic := result.ProxyServices["anthropic"]
+	if anthropic.Upstream != "https://api.anthropic.com/v2" {
+		t.Errorf("anthropic.Upstream = %q, want %q", anthropic.Upstream, "https://api.anthropic.com/v2")
+	}
+	if anthropic.InjectHeaders["x-api-key"] != "ANTHROPIC_API_KEY_V2" {
+		t.Errorf("anthropic.InjectHeaders[x-api-key] = %q, want %q",
+			anthropic.InjectHeaders["x-api-key"], "ANTHROPIC_API_KEY_V2")
+	}
+
+	// openai should be inherited from parent.
+	openai := result.ProxyServices["openai"]
+	if openai.Upstream != "https://api.openai.com" {
+		t.Errorf("openai.Upstream = %q, want %q", openai.Upstream, "https://api.openai.com")
+	}
+
+	// github should come from child.
+	github := result.ProxyServices["github"]
+	if github.Upstream != "https://api.github.com" {
+		t.Errorf("github.Upstream = %q, want %q", github.Upstream, "https://api.github.com")
+	}
+}
+
+func TestMergeProxyServicesNilInputs(t *testing.T) {
+	t.Parallel()
+
+	// nil parent + non-nil child = child.
+	parent := &schema.TemplateContent{Command: []string{"/bin/parent"}}
+	child := &schema.TemplateContent{
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {Upstream: "https://api.anthropic.com"},
+		},
+	}
+	result := Merge(parent, child)
+	if len(result.ProxyServices) != 1 {
+		t.Errorf("ProxyServices count = %d, want 1", len(result.ProxyServices))
+	}
+
+	// non-nil parent + nil child = parent.
+	parent2 := &schema.TemplateContent{
+		Command: []string{"/bin/parent"},
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"openai": {Upstream: "https://api.openai.com"},
+		},
+	}
+	child2 := &schema.TemplateContent{}
+	result2 := Merge(parent2, child2)
+	if len(result2.ProxyServices) != 1 {
+		t.Errorf("ProxyServices count = %d, want 1", len(result2.ProxyServices))
+	}
+
+	// nil parent + nil child = nil.
+	parent3 := &schema.TemplateContent{Command: []string{"/bin/parent"}}
+	child3 := &schema.TemplateContent{}
+	result3 := Merge(parent3, child3)
+	if result3.ProxyServices != nil {
+		t.Errorf("ProxyServices should be nil when both inputs are nil, got %v", result3.ProxyServices)
+	}
+}
+
 func TestMergeClearsInherits(t *testing.T) {
 	t.Parallel()
 

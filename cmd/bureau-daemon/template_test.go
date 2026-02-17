@@ -615,6 +615,57 @@ func TestResolveInstanceConfigNoOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveInstanceConfigCarriesProxyServices(t *testing.T) {
+	t.Parallel()
+
+	template := &schema.TemplateContent{
+		Command: []string{"/usr/local/bin/claude"},
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+				StripHeaders:  []string{"x-api-key", "authorization"},
+			},
+			"openai": {
+				Upstream:      "https://api.openai.com",
+				InjectHeaders: map[string]string{"Authorization": "OPENAI_BEARER"},
+			},
+		},
+	}
+
+	assignment := &schema.PrincipalAssignment{
+		Localpart: "test/claude-agent",
+		Template:  "bureau/template:claude",
+	}
+
+	spec := resolveInstanceConfig(template, assignment)
+
+	if len(spec.ProxyServices) != 2 {
+		t.Fatalf("ProxyServices count = %d, want 2", len(spec.ProxyServices))
+	}
+	anthropic, ok := spec.ProxyServices["anthropic"]
+	if !ok {
+		t.Fatal("ProxyServices missing \"anthropic\" key")
+	}
+	if anthropic.Upstream != "https://api.anthropic.com" {
+		t.Errorf("anthropic.Upstream = %q, want %q", anthropic.Upstream, "https://api.anthropic.com")
+	}
+	if anthropic.InjectHeaders["x-api-key"] != "ANTHROPIC_API_KEY" {
+		t.Errorf("anthropic.InjectHeaders[x-api-key] = %q, want %q",
+			anthropic.InjectHeaders["x-api-key"], "ANTHROPIC_API_KEY")
+	}
+	if len(anthropic.StripHeaders) != 2 {
+		t.Errorf("anthropic.StripHeaders length = %d, want 2", len(anthropic.StripHeaders))
+	}
+	openai, ok := spec.ProxyServices["openai"]
+	if !ok {
+		t.Fatal("ProxyServices missing \"openai\" key")
+	}
+	if openai.Upstream != "https://api.openai.com" {
+		t.Errorf("openai.Upstream = %q, want %q", openai.Upstream, "https://api.openai.com")
+	}
+}
+
 func TestResolveInstanceConfigDoesNotMutateTemplate(t *testing.T) {
 	t.Parallel()
 

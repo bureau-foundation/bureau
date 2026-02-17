@@ -1009,6 +1009,53 @@ type TemplateContent struct {
 	// entirely (no field-level merge — the parameters form a coherent
 	// unit). When nil, no health monitoring is performed.
 	HealthCheck *HealthCheck `json:"health_check,omitempty"`
+
+	// ProxyServices declares external HTTP API upstreams that the proxy
+	// should be configured to forward. The daemon registers these on
+	// the principal's proxy after sandbox creation, enabling credential
+	// injection without exposing API keys to the sandboxed agent.
+	//
+	// During template inheritance, ProxyServices maps are merged with
+	// child values winning on conflict (same semantics as
+	// EnvironmentVariables and Roles).
+	//
+	// Example:
+	//
+	//   "proxy_services": {
+	//     "anthropic": {
+	//       "upstream": "https://api.anthropic.com",
+	//       "inject_headers": {"x-api-key": "ANTHROPIC_API_KEY"},
+	//       "strip_headers": ["x-api-key", "authorization"]
+	//     }
+	//   }
+	//
+	// Inside the sandbox, agents reach the service at
+	// /http/<service-name>/... on the proxy socket (directly via Unix
+	// socket clients, or via the bridge's TCP endpoint for HTTP clients
+	// that require a URL).
+	ProxyServices map[string]TemplateProxyService `json:"proxy_services,omitempty"`
+}
+
+// TemplateProxyService declares an external HTTP API upstream that the
+// proxy should forward requests to with credential injection. The daemon
+// registers each service on the principal's proxy via the admin API
+// after sandbox creation.
+type TemplateProxyService struct {
+	// Upstream is the base URL of the external API
+	// (e.g., "https://api.anthropic.com"). Required.
+	Upstream string `json:"upstream"`
+
+	// InjectHeaders maps HTTP header names to credential names. When
+	// forwarding a request, the proxy reads each credential from the
+	// principal's credential bundle and sets it as the specified header.
+	// Example: {"x-api-key": "ANTHROPIC_API_KEY"} injects the
+	// ANTHROPIC_API_KEY credential as the x-api-key header.
+	InjectHeaders map[string]string `json:"inject_headers,omitempty"`
+
+	// StripHeaders lists HTTP headers to remove from incoming requests
+	// before forwarding. Use this to prevent agents from injecting
+	// their own authentication headers.
+	StripHeaders []string `json:"strip_headers,omitempty"`
 }
 
 // HealthCheck configures automated health monitoring for principals

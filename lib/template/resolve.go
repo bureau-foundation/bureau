@@ -126,7 +126,7 @@ func Fetch(ctx context.Context, session *messaging.Session, ref schema.TemplateR
 //
 // Merge rules:
 //   - Scalars (Description, Command, Environment): child replaces parent if non-zero
-//   - Maps (EnvironmentVariables, Roles, DefaultPayload): merged, child values win on conflict
+//   - Maps (EnvironmentVariables, Roles, DefaultPayload, ProxyServices): merged, child values win on conflict
 //   - Slices (Filesystem, CreateDirs, RequiredCredentials, RequiredServices):
 //     child appended after parent, deduplicated where applicable
 //     (Filesystem by Dest, strings by value)
@@ -152,6 +152,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result.EnvironmentVariables = mergeStringMaps(parent.EnvironmentVariables, child.EnvironmentVariables)
 	result.Roles = mergeStringSliceMaps(parent.Roles, child.Roles)
 	result.DefaultPayload = MergeAnyMaps(parent.DefaultPayload, child.DefaultPayload)
+
+	// Maps: merge proxy services with child winning on conflict.
+	result.ProxyServices = mergeProxyServices(parent.ProxyServices, child.ProxyServices)
 
 	// Slices: child appended after parent, deduplicated.
 	result.Filesystem = mergeMounts(parent.Filesystem, child.Filesystem)
@@ -247,6 +250,22 @@ func mergeMounts(parent, child []schema.TemplateMount) []schema.TemplateMount {
 	}
 	// Append all child mounts.
 	result = append(result, child...)
+	return result
+}
+
+// mergeProxyServices merges two map[string]TemplateProxyService maps. Child
+// values win on conflict. Returns nil if both inputs are empty.
+func mergeProxyServices(parent, child map[string]schema.TemplateProxyService) map[string]schema.TemplateProxyService {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	result := make(map[string]schema.TemplateProxyService, len(parent)+len(child))
+	for key, value := range parent {
+		result[key] = value
+	}
+	for key, value := range child {
+		result[key] = value
+	}
 	return result
 }
 

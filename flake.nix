@@ -275,6 +275,7 @@
         # and the pipeline executor runs structured step sequences.
         sandboxBinaries = [
           "bureau"
+          "bureau-bridge"
           "bureau-proxy-call"
           "bureau-pipeline-executor"
         ];

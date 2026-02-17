@@ -32,6 +32,7 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 		Roles:            template.Roles,
 		CreateDirs:       template.CreateDirs,
 		RequiredServices: template.RequiredServices,
+		ProxyServices:    template.ProxyServices,
 	}
 
 	// Copy environment variables so overrides don't mutate the template.

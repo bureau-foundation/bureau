@@ -372,6 +372,68 @@ func (d *Daemon) configureConsumerProxy(ctx context.Context, consumerLocalpart s
 	}
 }
 
+// configureExternalProxyServices registers external HTTP API upstreams on a
+// consumer's proxy. These are services declared in the template's ProxyServices
+// field — external APIs (like Anthropic, OpenAI) that the proxy should forward
+// to with credential injection. Called after a new sandbox starts or when an
+// adopted principal's proxy is configured.
+func (d *Daemon) configureExternalProxyServices(ctx context.Context, consumerLocalpart string, proxyServices map[string]schema.TemplateProxyService) {
+	for name, service := range proxyServices {
+		if err := d.registerExternalProxyService(ctx, consumerLocalpart, name, service); err != nil {
+			d.logger.Error("failed to register external proxy service",
+				"service", name,
+				"consumer", consumerLocalpart,
+				"upstream", service.Upstream,
+				"error", err,
+			)
+		}
+	}
+}
+
+// registerExternalProxyService registers a single external HTTP API upstream
+// on a consumer's proxy via the admin API (PUT /v1/admin/services/{name}).
+// Unlike registerProxyRoute (which routes to another principal's proxy socket),
+// this registers an internet-facing upstream with credential injection headers.
+func (d *Daemon) registerExternalProxyService(ctx context.Context, consumerLocalpart, serviceName string, service schema.TemplateProxyService) error {
+	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+	client := proxyAdminClient(adminSocket)
+
+	body, err := json.Marshal(adminServiceRegistration{
+		UpstreamURL:   service.Upstream,
+		InjectHeaders: service.InjectHeaders,
+		StripHeaders:  service.StripHeaders,
+	})
+	if err != nil {
+		return fmt.Errorf("marshaling registration request: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		"http://localhost/v1/admin/services/"+serviceName,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("connecting to admin socket %s: %w", adminSocket, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusCreated {
+		return fmt.Errorf("admin API returned %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	d.logger.Info("registered external proxy service",
+		"service", serviceName,
+		"consumer", consumerLocalpart,
+		"upstream", service.Upstream,
+	)
+	return nil
+}
+
 // proxyAdminClient creates an HTTP client that communicates via a Unix socket.
 // The daemon uses this to reach proxy admin sockets for service routing.
 func proxyAdminClient(socketPath string) *http.Client {
@@ -391,12 +453,23 @@ func proxyAdminClient(socketPath string) *http.Client {
 type adminServiceRegistration struct {
 	// UpstreamURL provides the URL for path construction. For local service
 	// routing, this includes a path prefix that routes through the provider's
-	// proxy: "http://localhost/http/<service-name>". The actual connection
-	// goes through UpstreamUnix.
+	// proxy: "http://localhost/http/<service-name>". For external services,
+	// this is the actual upstream URL (e.g., "https://api.anthropic.com").
+	// The actual connection goes through UpstreamUnix when set.
 	UpstreamURL string `json:"upstream_url,omitempty"`
 
-	// UpstreamUnix is the provider's proxy admin socket path.
+	// UpstreamUnix is the provider's proxy socket path. Used for local
+	// service routing where the upstream is another principal's proxy.
 	UpstreamUnix string `json:"upstream_unix,omitempty"`
+
+	// InjectHeaders maps HTTP header names to credential names. The proxy
+	// reads each credential from the principal's credential bundle and sets
+	// it as the specified header on upstream requests.
+	InjectHeaders map[string]string `json:"inject_headers,omitempty"`
+
+	// StripHeaders lists HTTP headers to remove from incoming requests
+	// before forwarding to the upstream.
+	StripHeaders []string `json:"strip_headers,omitempty"`
 }
 
 // registerProxyRoute registers a single service on a single consumer's proxy

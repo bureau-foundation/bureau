@@ -97,4 +97,12 @@ type SandboxSpec struct {
 	// launcher as ServiceMounts. If any role cannot be resolved,
 	// sandbox creation fails.
 	RequiredServices []string `json:"required_services,omitempty"`
+
+	// ProxyServices declares external HTTP API upstreams that the proxy
+	// should forward with credential injection. The daemon registers
+	// these on the principal's proxy after sandbox creation. The
+	// launcher does not use this field — it exists in SandboxSpec so
+	// that structurallyChanged() (which uses JSON serialization)
+	// detects proxy service changes and triggers sandbox restarts.
+	ProxyServices map[string]TemplateProxyService `json:"proxy_services,omitempty"`
 }

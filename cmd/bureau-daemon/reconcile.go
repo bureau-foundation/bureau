@@ -458,6 +458,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// responds to create-sandbox.
 		d.configureConsumerProxy(ctx, localpart)
 
+		// Register external HTTP API services declared by the template
+		// (e.g., Anthropic, OpenAI). The proxy forwards requests to
+		// these upstreams with credential injection so agents reach
+		// external APIs at /http/<name>/... without seeing API keys.
+		if sandboxSpec != nil && len(sandboxSpec.ProxyServices) > 0 {
+			d.configureExternalProxyServices(ctx, localpart, sandboxSpec.ProxyServices)
+		}
+
 		// Push the service directory so the new consumer's agent can
 		// discover services via GET /v1/services.
 		directory := d.buildServiceDirectory()
@@ -674,6 +682,11 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, 
 	// Register all known local service routes on the adopted consumer's
 	// proxy so it can reach services discovered while the daemon was down.
 	d.configureConsumerProxy(ctx, localpart)
+
+	// Register external HTTP API services from the template.
+	if spec := d.lastSpecs[localpart]; spec != nil && len(spec.ProxyServices) > 0 {
+		d.configureExternalProxyServices(ctx, localpart, spec.ProxyServices)
+	}
 
 	// Push the service directory so the consumer's agent can discover
 	// services via GET /v1/services.

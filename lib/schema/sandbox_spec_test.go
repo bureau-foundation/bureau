@@ -51,6 +51,13 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 			"shell": {"/bin/bash"},
 		},
 		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		ProxyServices: map[string]TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+				StripHeaders:  []string{"x-api-key", "authorization"},
+			},
+		},
 	}
 
 	data, err := json.Marshal(original)
@@ -149,6 +156,21 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 	if len(decoded.CreateDirs) != 3 {
 		t.Fatalf("CreateDirs count = %d, want 3", len(decoded.CreateDirs))
 	}
+	if len(decoded.ProxyServices) != 1 {
+		t.Fatalf("ProxyServices count = %d, want 1", len(decoded.ProxyServices))
+	}
+	decodedAnthropic, ok := decoded.ProxyServices["anthropic"]
+	if !ok {
+		t.Fatal("ProxyServices missing \"anthropic\" key")
+	}
+	if decodedAnthropic.Upstream != "https://api.anthropic.com" {
+		t.Errorf("ProxyServices[anthropic].Upstream: got %q, want %q",
+			decodedAnthropic.Upstream, "https://api.anthropic.com")
+	}
+	if decodedAnthropic.InjectHeaders["x-api-key"] != "ANTHROPIC_API_KEY" {
+		t.Errorf("ProxyServices[anthropic].InjectHeaders[x-api-key]: got %q, want %q",
+			decodedAnthropic.InjectHeaders["x-api-key"], "ANTHROPIC_API_KEY")
+	}
 }
 
 func TestSandboxSpecOmitsEmptyFields(t *testing.T) {
@@ -172,7 +194,7 @@ func TestSandboxSpecOmitsEmptyFields(t *testing.T) {
 	omittedFields := []string{
 		"filesystem", "namespaces", "resources", "security",
 		"environment_variables", "environment_path",
-		"payload", "roles", "create_dirs",
+		"payload", "roles", "create_dirs", "proxy_services",
 	}
 	for _, field := range omittedFields {
 		if _, exists := raw[field]; exists {

@@ -47,6 +47,13 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 			"model":      "claude-sonnet-4-5-20250929",
 			"max_tokens": float64(4096),
 		},
+		ProxyServices: map[string]TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+				StripHeaders:  []string{"x-api-key", "authorization"},
+			},
+		},
 	}
 
 	data, err := json.Marshal(original)
@@ -158,6 +165,22 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 	assertField(t, defaultPayload, "model", "claude-sonnet-4-5-20250929")
 	assertField(t, defaultPayload, "max_tokens", float64(4096))
 
+	// Verify proxy_services.
+	proxyServices, ok := raw["proxy_services"].(map[string]any)
+	if !ok {
+		t.Fatal("proxy_services field missing or wrong type")
+	}
+	anthropic, ok := proxyServices["anthropic"].(map[string]any)
+	if !ok {
+		t.Fatal("proxy_services.anthropic missing or wrong type")
+	}
+	assertField(t, anthropic, "upstream", "https://api.anthropic.com")
+	injectHeaders, ok := anthropic["inject_headers"].(map[string]any)
+	if !ok {
+		t.Fatal("proxy_services.anthropic.inject_headers missing or wrong type")
+	}
+	assertField(t, injectHeaders, "x-api-key", "ANTHROPIC_API_KEY")
+
 	// Round-trip back to struct.
 	var decoded TemplateContent
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -203,6 +226,25 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 	if len(decoded.Roles["agent"]) != 2 || decoded.Roles["agent"][0] != "/usr/local/bin/claude" {
 		t.Errorf("Roles[agent] = %v, want [/usr/local/bin/claude --agent]", decoded.Roles["agent"])
 	}
+	if len(decoded.ProxyServices) != 1 {
+		t.Fatalf("ProxyServices count = %d, want 1", len(decoded.ProxyServices))
+	}
+	decodedAnthropic, ok := decoded.ProxyServices["anthropic"]
+	if !ok {
+		t.Fatal("ProxyServices missing \"anthropic\" key")
+	}
+	if decodedAnthropic.Upstream != "https://api.anthropic.com" {
+		t.Errorf("ProxyServices[anthropic].Upstream: got %q, want %q",
+			decodedAnthropic.Upstream, "https://api.anthropic.com")
+	}
+	if decodedAnthropic.InjectHeaders["x-api-key"] != "ANTHROPIC_API_KEY" {
+		t.Errorf("ProxyServices[anthropic].InjectHeaders[x-api-key]: got %q, want %q",
+			decodedAnthropic.InjectHeaders["x-api-key"], "ANTHROPIC_API_KEY")
+	}
+	if len(decodedAnthropic.StripHeaders) != 2 || decodedAnthropic.StripHeaders[0] != "x-api-key" {
+		t.Errorf("ProxyServices[anthropic].StripHeaders: got %v, want [x-api-key authorization]",
+			decodedAnthropic.StripHeaders)
+	}
 }
 
 func TestTemplateContentOmitsEmptyFields(t *testing.T) {
@@ -226,7 +268,7 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 		"description", "inherits", "environment", "environment_variables",
 		"filesystem", "namespaces", "resources", "security",
 		"create_dirs", "roles", "required_credentials", "default_payload",
-		"health_check",
+		"health_check", "proxy_services",
 	}
 	for _, field := range omittedFields {
 		if _, exists := raw[field]; exists {

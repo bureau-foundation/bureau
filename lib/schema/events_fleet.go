@@ -3,7 +3,10 @@
 
 package schema
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Fleet management event type constants. These events live in the
 // #bureau/fleet room and are consumed by the fleet controller service
@@ -62,6 +65,60 @@ const (
 	// Room: #bureau/fleet:<server>
 	EventTypeFleetAlert = "m.bureau.fleet_alert"
 )
+
+// Fleet controller notification msgtype constants. These are posted as
+// m.room.message events to the fleet room when the fleet controller's
+// internal model changes. External observers (tests, dashboards) match
+// on msgtype to synchronize with fleet controller state.
+const (
+	// MsgTypeFleetConfigRoomDiscovered is posted when the fleet
+	// controller joins and processes a machine's config room.
+	MsgTypeFleetConfigRoomDiscovered = "m.bureau.fleet_config_room_discovered"
+
+	// MsgTypeFleetServiceDiscovered is posted when the fleet
+	// controller processes a new fleet service definition.
+	MsgTypeFleetServiceDiscovered = "m.bureau.fleet_service_discovered"
+)
+
+// FleetConfigRoomDiscoveredMessage is the content of an m.room.message
+// event with msgtype MsgTypeFleetConfigRoomDiscovered. Posted when the
+// fleet controller joins a machine's config room and processes its
+// MachineConfig state event.
+type FleetConfigRoomDiscoveredMessage struct {
+	MsgType      string `json:"msgtype"`
+	Body         string `json:"body"`
+	Machine      string `json:"machine"`
+	ConfigRoomID string `json:"config_room_id"`
+}
+
+// NewFleetConfigRoomDiscoveredMessage constructs a FleetConfigRoomDiscoveredMessage.
+func NewFleetConfigRoomDiscoveredMessage(machine, configRoomID string) FleetConfigRoomDiscoveredMessage {
+	return FleetConfigRoomDiscoveredMessage{
+		MsgType:      MsgTypeFleetConfigRoomDiscovered,
+		Body:         fmt.Sprintf("Config room discovered for %s", machine),
+		Machine:      machine,
+		ConfigRoomID: configRoomID,
+	}
+}
+
+// FleetServiceDiscoveredMessage is the content of an m.room.message
+// event with msgtype MsgTypeFleetServiceDiscovered. Posted when the
+// fleet controller processes a new fleet service definition from the
+// fleet room.
+type FleetServiceDiscoveredMessage struct {
+	MsgType string `json:"msgtype"`
+	Body    string `json:"body"`
+	Service string `json:"service"`
+}
+
+// NewFleetServiceDiscoveredMessage constructs a FleetServiceDiscoveredMessage.
+func NewFleetServiceDiscoveredMessage(service string) FleetServiceDiscoveredMessage {
+	return FleetServiceDiscoveredMessage{
+		MsgType: MsgTypeFleetServiceDiscovered,
+		Body:    fmt.Sprintf("Service discovered: %s", service),
+		Service: service,
+	}
+}
 
 // FleetServiceContent defines a service that the fleet controller manages.
 // The fleet controller reads these, evaluates placement constraints against

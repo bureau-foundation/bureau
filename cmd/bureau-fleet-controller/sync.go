@@ -166,6 +166,11 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 		"config_rooms", len(fc.configRooms),
 	)
 
+	// Emit structured notifications for everything discovered during
+	// initial sync so observers can synchronize with the fleet
+	// controller's model state without polling its API.
+	fc.emitDiscoveryNotifications(ctx, nil, nil)
+
 	return sinceToken, nil
 }
 
@@ -456,15 +461,44 @@ func isFleetManaged(assignment *schema.PrincipalAssignment) bool {
 // socket handler goroutines.
 func (fc *FleetController) handleSync(ctx context.Context, response *messaging.SyncResponse) {
 	// Accept invites without holding the lock (Matrix I/O).
+	// Accepted rooms don't appear in Rooms.Join until the next /sync
+	// batch. Fetch their full state now so they are modeled in this
+	// sync cycle — same approach as initialSync.
+	var acceptedRoomStates []acceptedRoom
 	if len(response.Rooms.Invite) > 0 {
 		acceptedRooms := service.AcceptInvites(ctx, fc.session, response.Rooms.Invite, fc.logger)
 		if len(acceptedRooms) > 0 {
 			fc.logger.Info("accepted room invites", "count", len(acceptedRooms))
 		}
+		for _, roomID := range acceptedRooms {
+			events, err := fc.session.GetRoomState(ctx, roomID)
+			if err != nil {
+				fc.logger.Error("failed to fetch state for accepted room",
+					"room_id", roomID,
+					"error", err,
+				)
+				continue
+			}
+			acceptedRoomStates = append(acceptedRoomStates, acceptedRoom{
+				roomID: roomID,
+				events: events,
+			})
+		}
 	}
 
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
+
+	// Snapshot config rooms and services before processing so we can
+	// detect new discoveries and emit notifications.
+	previousConfigRooms := make(map[string]bool, len(fc.configRooms))
+	for machineLocalpart := range fc.configRooms {
+		previousConfigRooms[machineLocalpart] = true
+	}
+	previousServices := make(map[string]bool, len(fc.services))
+	for serviceLocalpart := range fc.services {
+		previousServices[serviceLocalpart] = true
+	}
 
 	// Clean up state for rooms the fleet controller has been removed
 	// from. Process leaves before joins so that a leave+rejoin in the
@@ -477,6 +511,14 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	for roomID, room := range response.Rooms.Join {
 		fc.processRoomSync(roomID, room)
 	}
+
+	// Process state for rooms accepted in this sync cycle.
+	for _, accepted := range acceptedRoomStates {
+		fc.processRoomState(accepted.roomID, accepted.events, nil)
+	}
+
+	// Emit notifications for newly discovered config rooms and services.
+	fc.emitDiscoveryNotifications(ctx, previousConfigRooms, previousServices)
 
 	// Reconcile after processing all events: compare desired replica
 	// counts with actual instance counts and place/unplace as needed.
@@ -584,6 +626,14 @@ func (fc *FleetController) rebuildServiceInstances() {
 	}
 }
 
+// acceptedRoom pairs a room ID with its full state, fetched after
+// accepting an invite. Used by handleSync to process newly joined rooms
+// in the same sync cycle as the invite acceptance.
+type acceptedRoom struct {
+	roomID string
+	events []messaging.Event
+}
+
 // parseEventContent parses a Matrix event's Content map into a typed
 // struct via JSON round-trip. This matches how the Matrix homeserver
 // delivers events: the SDK gives us map[string]any, and we need typed
@@ -598,4 +648,46 @@ func parseEventContent[T any](event messaging.Event) (*T, error) {
 		return nil, err
 	}
 	return &content, nil
+}
+
+// emitDiscoveryNotifications sends structured notification messages to
+// the fleet room for config rooms and services that are new since the
+// previous snapshot. Pass nil maps for initial sync (everything is new)
+// or snapshots of the previous state for incremental sync.
+func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previousConfigRooms, previousServices map[string]bool) {
+	for machineLocalpart, roomID := range fc.configRooms {
+		if previousConfigRooms != nil && previousConfigRooms[machineLocalpart] {
+			continue
+		}
+		fc.sendFleetNotification(ctx,
+			schema.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID))
+	}
+
+	for serviceLocalpart := range fc.services {
+		if previousServices != nil && previousServices[serviceLocalpart] {
+			continue
+		}
+		fc.sendFleetNotification(ctx,
+			schema.NewFleetServiceDiscoveredMessage(serviceLocalpart))
+	}
+}
+
+// sendFleetNotification posts a structured notification message to the
+// fleet room. These are m.room.message events with custom msgtypes,
+// following the same pattern as daemon notifications.
+func (fc *FleetController) sendFleetNotification(ctx context.Context, content any) {
+	if fc.session == nil {
+		return
+	}
+	eventID, err := fc.session.SendEvent(ctx, fc.fleetRoomID, schema.MatrixEventTypeMessage, content)
+	if err != nil {
+		fc.logger.Error("failed to send fleet notification",
+			"error", err,
+		)
+	} else {
+		fc.logger.Info("fleet notification sent",
+			"event_id", eventID,
+			"fleet_room", fc.fleetRoomID,
+		)
+	}
 }

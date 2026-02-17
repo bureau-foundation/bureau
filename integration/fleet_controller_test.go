@@ -314,98 +314,49 @@ func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineLoca
 	t.Fatalf("machine %q not found in fleet controller model (model has %d machines)", machineLocalpart, len(response.Machines))
 }
 
-// waitForFleetConfigRoom waits for the fleet controller to join the
-// machine's config room, then verifies the fleet controller has discovered
-// the config room ID via its model. The join sequence is:
+// waitForFleetConfigRoom waits for the fleet controller to discover and
+// process a machine's config room. The fleet controller posts a
+// MsgTypeFleetConfigRoomDiscovered notification to the fleet room after
+// it joins and processes the MachineConfig state event. The sequence is:
 //   - Daemon's sync detects the fleet controller in the fleet room
 //   - Daemon invites the fleet controller to the config room (PL 50)
 //   - Fleet controller's sync detects the invite and joins
-//   - Fleet controller processes the room state (MachineConfig)
+//   - Fleet controller calls GetRoomState and processes MachineConfig
+//   - Fleet controller emits a config room discovered notification
 //
-// The configWatch must be created BEFORE starting the fleet controller
-// so the admin's sync checkpoint captures the join event.
-func waitForFleetConfigRoom(t *testing.T, configWatch roomWatch, fc *fleetController, client *service.ServiceClient, machineLocalpart string) {
+// The fleetWatch must be created on the fleet room BEFORE starting the
+// fleet controller so the admin's sync checkpoint captures the
+// notification event.
+func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetController, machineLocalpart string) {
 	t.Helper()
 
-	// Wait for the fleet controller to join the config room via the
-	// admin's room watch. This is event-driven (Matrix /sync long-poll)
-	// with no polling.
-	configWatch.WaitForEvent(t, func(event messaging.Event) bool {
-		if event.Type != "m.room.member" {
-			return false
-		}
-		if event.StateKey == nil || *event.StateKey != fc.UserID {
-			return false
-		}
-		membership, _ := event.Content["membership"].(string)
-		return membership == "join"
-	}, "fleet controller joins config room")
-
-	// The fleet controller processes config room state during its /sync
-	// handler. The admin sees the join via a separate sync stream — there
-	// is a small window where the fleet controller has joined but hasn't
-	// yet completed processing the room state. Retry with the test
-	// context as the deadline (same pattern as waitForFleetService).
-	ctx := t.Context()
-	for {
-		var response fleetShowMachineResponse
-		if err := client.Call(ctx, "show-machine",
-			map[string]any{"machine": machineLocalpart}, &response); err != nil {
-			// Fleet controller might not have the machine yet if it's
-			// still processing the config room state.
-			if ctx.Err() != nil {
-				t.Fatalf("show-machine failed after config room join: %v", err)
-			}
-			continue
-		}
-		if response.ConfigRoomID != "" {
-			return
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("fleet controller joined config room but config_room_id is still empty for machine %s", machineLocalpart)
-		}
-	}
+	waitForNotification[schema.FleetConfigRoomDiscoveredMessage](
+		t, fleetWatch, schema.MsgTypeFleetConfigRoomDiscovered, fc.UserID,
+		func(m schema.FleetConfigRoomDiscoveredMessage) bool {
+			return m.Machine == machineLocalpart
+		},
+		"fleet controller discovers config room for "+machineLocalpart,
+	)
 }
 
-// waitForFleetService waits for a fleet service definition to appear in
-// the fleet controller's model. The caller publishes the service state
-// event to the fleet room, then uses fleetWatch (a room watch on the fleet
-// room created BEFORE publishing) to wait for the event to be visible via
-// Matrix /sync. Once the admin sync sees the event, the fleet controller's
-// independent /sync will also deliver it — but there's a small window
-// (single-digit milliseconds) where the admin sync response arrives before
-// the fleet controller has finished processing its sync response. The
-// bounded retry after the room watch handles this propagation window.
-func waitForFleetService(t *testing.T, fleetWatch roomWatch, client *service.ServiceClient, serviceLocalpart string) {
+// waitForFleetService waits for the fleet controller to process a fleet
+// service definition. The fleet controller posts a
+// MsgTypeFleetServiceDiscovered notification to the fleet room after it
+// processes a new FleetServiceContent state event from the fleet room.
+//
+// The fleetWatch must be created on the fleet room BEFORE publishing the
+// service definition so the admin's sync checkpoint captures the
+// notification event.
+func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetController, serviceLocalpart string) {
 	t.Helper()
 
-	// Wait for the fleet service state event to be visible via /sync.
-	// This is the event-driven signal that the homeserver has the event.
-	fleetWatch.WaitForStateEvent(t, schema.EventTypeFleetService, serviceLocalpart)
-
-	// The fleet controller watches the same room via its own /sync.
-	// Both syncs are woken by the same event, but the fleet controller
-	// may need a few milliseconds to process its sync response. Retry
-	// with the test context as the deadline — this is NOT polling (the
-	// event-driven watch above guarantees the event exists), it's
-	// synchronizing across two independent sync streams.
-	ctx := t.Context()
-	for {
-		var response fleetListServicesResponse
-		if err := client.Call(ctx, "list-services", nil, &response); err != nil {
-			t.Fatalf("list-services after fleet room sync: %v", err)
-		}
-
-		for _, svc := range response.Services {
-			if svc.Localpart == serviceLocalpart {
-				return
-			}
-		}
-
-		if ctx.Err() != nil {
-			t.Fatalf("fleet controller did not process service %q (admin sync confirmed event exists, but fleet controller model has %d services)", serviceLocalpart, len(response.Services))
-		}
-	}
+	waitForNotification[schema.FleetServiceDiscoveredMessage](
+		t, fleetWatch, schema.MsgTypeFleetServiceDiscovered, fc.UserID,
+		func(m schema.FleetServiceDiscoveredMessage) bool {
+			return m.Service == serviceLocalpart
+		},
+		"fleet controller discovers service "+serviceLocalpart,
+	)
 }
 
 // --- Fleet controller integration tests ---
@@ -546,7 +497,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		serviceLocalpart := "service/stt/lifecycle"
 
 		// Create a fleet room watch before publishing so we can
-		// event-wait for the state event to propagate via /sync.
+		// event-wait for the service discovered notification.
 		fleetWatch := watchRoom(t, admin, fleetRoomID)
 
 		publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
@@ -557,7 +508,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		})
 
 		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
-		waitForFleetService(t, fleetWatch, authClient, serviceLocalpart)
+		waitForFleetService(t, &fleetWatch, fc, serviceLocalpart)
 
 		// Verify the service appears in list-services with correct fields.
 		var listResponse fleetListServicesResponse
@@ -766,11 +717,10 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// room IDs from MachineConfig state events inside config rooms.
 	pushMachineConfig(t, admin, machine, deploymentConfig{})
 
-	// Create a config room watch BEFORE starting the fleet controller.
-	// The fleet controller will be invited to the config room by the
-	// daemon after it joins the fleet room. We watch for its join event
-	// to know when it has discovered the config room.
-	configWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	// Create a fleet room watch BEFORE starting the fleet controller.
+	// The fleet controller posts config room discovered notifications
+	// to the fleet room after it joins and processes each config room.
+	configDiscoverWatch := watchRoom(t, admin, fleetRoomID)
 
 	// Start the fleet controller. The daemon detects the fleet controller
 	// joining the fleet room via /sync, invites it to the config room,
@@ -783,13 +733,14 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
 	ctx := t.Context()
 
-	// Wait for the fleet controller to join the config room. This is
-	// event-driven via the config room watch — no polling.
-	waitForFleetConfigRoom(t, configWatch, fc, authClient, machine.Name)
+	// Wait for the fleet controller to discover the config room. The
+	// fleet controller emits a structured notification to the fleet
+	// room after processing the MachineConfig state event.
+	waitForFleetConfigRoom(t, &configDiscoverWatch, fc, machine.Name)
 
 	// Create a fleet room watch before publishing the service so we
-	// can event-wait for the state event to propagate via /sync.
-	fleetWatch := watchRoom(t, admin, fleetRoomID)
+	// can event-wait for the service discovered notification.
+	serviceDiscoverWatch := watchRoom(t, admin, fleetRoomID)
 
 	// Publish a fleet service definition with Min=0 so the reconcile
 	// loop does not auto-place it. This test exercises explicit place
@@ -801,7 +752,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		Failover: "migrate",
 		Priority: 10,
 	})
-	waitForFleetService(t, fleetWatch, authClient, serviceLocalpart)
+	waitForFleetService(t, &serviceDiscoverWatch, fc, serviceLocalpart)
 
 	// --- Place the service ---
 	t.Run("Place", func(t *testing.T) {

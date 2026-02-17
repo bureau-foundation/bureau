@@ -19,7 +19,6 @@ import (
 	mcpcmd "github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
-	quickstartcmd "github.com/bureau-foundation/bureau/cmd/bureau/quickstart"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
@@ -40,7 +39,6 @@ func Root() *cli.Command {
 Manage sandboxed agent processes with credential isolation, live
 observation, and structured messaging via Matrix.`,
 		Subcommands: []*cli.Command{
-			quickstartcmd.Command(),
 			cli.LoginCommand(),
 			cli.WhoAmICommand(),
 			observecmd.ObserveCommand(),

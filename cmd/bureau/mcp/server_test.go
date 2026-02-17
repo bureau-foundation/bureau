@@ -1732,7 +1732,7 @@ func TestToolCategory(t *testing.T) {
 	}{
 		{"three segments", "bureau_pipeline_list", "pipeline"},
 		{"four segments", "bureau_ticket_dep_add", "ticket"},
-		{"two segments", "bureau_quickstart", "quickstart"},
+		{"two segments", "bureau_observe", "observe"},
 		{"single segment", "standalone", ""},
 	}
 	for _, tt := range tests {

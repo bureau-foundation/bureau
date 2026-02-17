@@ -34,7 +34,7 @@ type Mount struct {
 	Optional bool   `yaml:"optional,omitempty"`
 	Glob     bool   `yaml:"glob,omitempty"`
 	// Upper specifies the upper layer for overlay mounts.
-	// Must be "tmpfs" (default) or a path inside the worktree.
+	// Must be "tmpfs" (default) or a path inside the working directory.
 	// Only used when Type is "overlay".
 	Upper string `yaml:"upper,omitempty"`
 }
@@ -290,27 +290,28 @@ func (p *Profile) Validate() error {
 }
 
 // ValidateOverlayUpper validates that an overlay upper path is safe.
-// The upper path must be either "tmpfs" or inside the worktree.
+// The upper path must be either "tmpfs" or inside the working directory.
 // This MUST be called after variable expansion.
 //
 // Security invariant: upper layer writes must never escape the sandbox.
-// If upper is a host path outside worktree, an agent could write malicious
-// code that gets executed with the host user's permissions.
+// If upper is a host path outside the working directory, an agent could write
+// malicious code that gets executed with the host user's permissions.
 //
 // This function resolves symlinks to prevent bypass attacks where an attacker
-// creates a symlink inside the worktree pointing outside (e.g., /workspace/cache -> /etc).
-func ValidateOverlayUpper(upper string, worktree string) error {
+// creates a symlink inside the working directory pointing outside
+// (e.g., /workspace/cache -> /etc).
+func ValidateOverlayUpper(upper string, workingDirectory string) error {
 	// Empty or "tmpfs" is always safe.
 	if upper == "" || upper == OverlayUpperTmpfs {
 		return nil
 	}
 
-	// Resolve worktree symlinks first (worktree must exist).
-	worktreeResolved, err := filepath.EvalSymlinks(worktree)
+	// Resolve working directory symlinks first (working directory must exist).
+	workingDirectoryResolved, err := filepath.EvalSymlinks(workingDirectory)
 	if err != nil {
-		return fmt.Errorf("cannot resolve worktree path %q: %w", worktree, err)
+		return fmt.Errorf("cannot resolve working directory path %q: %w", workingDirectory, err)
 	}
-	worktreeResolved = filepath.Clean(worktreeResolved)
+	workingDirectoryResolved = filepath.Clean(workingDirectoryResolved)
 
 	// Try to resolve upper path symlinks.
 	// If the path doesn't exist yet, resolve its parent directory.
@@ -326,11 +327,11 @@ func ValidateOverlayUpper(upper string, worktree string) error {
 	}
 	upperResolved = filepath.Clean(upperResolved)
 
-	// Upper must be inside worktree (comparing resolved paths).
-	if !strings.HasPrefix(upperResolved, worktreeResolved+string(filepath.Separator)) && upperResolved != worktreeResolved {
-		return fmt.Errorf("overlay upper path %q resolves to %q which is outside worktree %q: "+
-			"upper must be \"tmpfs\" or inside the worktree to prevent privilege escalation",
-			upper, upperResolved, worktreeResolved)
+	// Upper must be inside working directory (comparing resolved paths).
+	if !strings.HasPrefix(upperResolved, workingDirectoryResolved+string(filepath.Separator)) && upperResolved != workingDirectoryResolved {
+		return fmt.Errorf("overlay upper path %q resolves to %q which is outside working directory %q: "+
+			"upper must be \"tmpfs\" or inside the working directory to prevent privilege escalation",
+			upper, upperResolved, workingDirectoryResolved)
 	}
 
 	return nil

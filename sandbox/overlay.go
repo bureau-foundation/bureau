@@ -22,13 +22,13 @@ import (
 //
 // Security invariant: the lower layer is ALWAYS read-only from the host's
 // perspective, and the upper layer is ALWAYS either tmpfs or inside the
-// sandbox worktree. This prevents privilege escalation.
+// sandbox working directory. This prevents privilege escalation.
 type OverlayManager struct {
-	fuseBin       string
-	fusermountBin string
-	worktree      string
-	mounts        []*overlayMount
-	tempDir       string
+	fuseBin          string
+	fusermountBin    string
+	workingDirectory string
+	mounts           []*overlayMount
+	tempDir          string
 }
 
 // overlayMount represents a single active overlay mount.
@@ -60,7 +60,7 @@ func validateOverlayPath(path, fieldName string) error {
 //
 // Returns an error if fuse-overlayfs is not available.
 // This ensures we fail loudly rather than falling back to insecure mounts.
-func NewOverlayManager(worktree string) (*OverlayManager, error) {
+func NewOverlayManager(workingDirectory string) (*OverlayManager, error) {
 	fuseBin, err := exec.LookPath("fuse-overlayfs")
 	if err != nil {
 		return nil, fmt.Errorf("fuse-overlayfs not found: %w\n\n"+
@@ -81,10 +81,10 @@ func NewOverlayManager(worktree string) (*OverlayManager, error) {
 	}
 
 	return &OverlayManager{
-		fuseBin:       fuseBin,
-		fusermountBin: fusermountBin,
-		worktree:      worktree,
-		mounts:        make([]*overlayMount, 0),
+		fuseBin:          fuseBin,
+		fusermountBin:    fusermountBin,
+		workingDirectory: workingDirectory,
+		mounts:           make([]*overlayMount, 0),
 	}, nil
 }
 
@@ -109,7 +109,7 @@ func (m *OverlayManager) SetupMount(mount Mount) (mergedPath string, err error) 
 	}
 
 	// Validate upper path security.
-	if err := ValidateOverlayUpper(mount.Upper, m.worktree); err != nil {
+	if err := ValidateOverlayUpper(mount.Upper, m.workingDirectory); err != nil {
 		return "", err
 	}
 
@@ -148,7 +148,7 @@ func (m *OverlayManager) SetupMount(mount Mount) (mergedPath string, err error) 
 		// Create upper in our temp directory (which could be tmpfs or regular fs).
 		overlay.upperDir = filepath.Join(m.tempDir, mountName+"-upper")
 	} else {
-		// Use specified path (already validated to be in worktree).
+		// Use specified path (already validated to be in working directory).
 		overlay.upperDir = mount.Upper
 	}
 

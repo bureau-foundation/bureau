@@ -133,7 +133,7 @@ var EscapeTests = []EscapeTest{
 	},
 	{
 		Name:        "filesystem-write-outside",
-		Description: "Attempt to write outside worktree",
+		Description: "Attempt to write outside working directory",
 		Category:    "filesystem",
 		Severity:    "critical",
 		Run: func(ctx context.Context) error {
@@ -148,15 +148,15 @@ var EscapeTests = []EscapeTest{
 				if err == nil {
 					f.Close()
 					os.Remove(path)
-					return fmt.Errorf("write outside worktree succeeded: %s", path)
+					return fmt.Errorf("write outside working directory succeeded: %s", path)
 				}
 			}
 			return nil // Good - writes blocked.
 		},
 	},
 	{
-		Name:        "filesystem-worktree-write",
-		Description: "Verify worktree writes work",
+		Name:        "filesystem-workspace-write",
+		Description: "Verify workspace writes work",
 		Category:    "filesystem",
 		Severity:    "medium",
 		Run: func(ctx context.Context) error {
@@ -165,23 +165,23 @@ var EscapeTests = []EscapeTest{
 			content := []byte("test")
 
 			if err := os.WriteFile(testFile, content, 0644); err != nil {
-				return fmt.Errorf("worktree write BLOCKED (should succeed): %v", err)
+				return fmt.Errorf("workspace write BLOCKED (should succeed): %v", err)
 			}
 
 			// Read it back.
 			readContent, err := os.ReadFile(testFile)
 			if err != nil {
 				os.Remove(testFile)
-				return fmt.Errorf("worktree read BLOCKED (should succeed): %v", err)
+				return fmt.Errorf("workspace read BLOCKED (should succeed): %v", err)
 			}
 
 			os.Remove(testFile)
 
 			if string(readContent) != string(content) {
-				return fmt.Errorf("worktree content mismatch")
+				return fmt.Errorf("workspace content mismatch")
 			}
 
-			return nil // Good - worktree writes work.
+			return nil // Good - workspace writes work.
 		},
 	},
 

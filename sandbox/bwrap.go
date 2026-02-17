@@ -16,9 +16,6 @@ type BwrapOptions struct {
 	// Profile is the resolved and expanded profile to use.
 	Profile *Profile
 
-	// Worktree is the path to the agent's worktree (mounted at /workspace).
-	Worktree string
-
 	// ExtraBinds are additional bind mounts specified via CLI.
 	// Format: "source:dest:mode" where mode is "ro" or "rw".
 	ExtraBinds []string
@@ -81,7 +78,7 @@ func (b *BwrapBuilder) Build(opts *BwrapOptions) ([]string, error) {
 	b.addBaseMounts()
 
 	// Add filesystem mounts from profile.
-	if err := b.addProfileMounts(opts.Profile, opts.Worktree, opts.OverlayMerged); err != nil {
+	if err := b.addProfileMounts(opts.Profile, opts.OverlayMerged); err != nil {
 		return nil, err
 	}
 
@@ -193,17 +190,9 @@ func (b *BwrapBuilder) addBaseMounts() {
 
 // addProfileMounts adds mounts from the profile configuration.
 // overlayMerged maps dest paths to their fuse-overlayfs merged directories.
-func (b *BwrapBuilder) addProfileMounts(profile *Profile, worktree string, overlayMerged map[string]string) error {
+func (b *BwrapBuilder) addProfileMounts(profile *Profile, overlayMerged map[string]string) error {
 	for _, mount := range profile.Filesystem {
 		source := mount.Source
-
-		// Substitute ${WORKTREE} placeholder.
-		if source == "${WORKTREE}" {
-			if worktree == "" {
-				return fmt.Errorf("mount %s references ${WORKTREE} but no worktree was provided", mount.Dest)
-			}
-			source = worktree
-		}
 
 		switch mount.Type {
 		case MountTypeTmpfs:

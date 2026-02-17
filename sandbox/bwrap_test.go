@@ -34,7 +34,6 @@ func TestBwrapBuilder(t *testing.T) {
 	builder := NewBwrapBuilder()
 	args, err := builder.Build(&BwrapOptions{
 		Profile:  profile,
-		Worktree: "/workspace",
 		Command:  []string{"/bin/bash"},
 		ClearEnv: true,
 	})
@@ -101,8 +100,7 @@ func TestBwrapBuilderExtraBinds(t *testing.T) {
 
 	builder := NewBwrapBuilder()
 	args, err := builder.Build(&BwrapOptions{
-		Profile:  profile,
-		Worktree: "/workspace",
+		Profile: profile,
 		ExtraBinds: []string{
 			"/src/feature:/workspace/feature:ro",
 			"/src/libs:/libs:rw",
@@ -134,7 +132,6 @@ func TestBwrapBuilderBazelCache(t *testing.T) {
 	builder := NewBwrapBuilder()
 	args, err := builder.Build(&BwrapOptions{
 		Profile:    profile,
-		Worktree:   "/workspace",
 		BazelCache: "/var/cache/bazel",
 		Command:    []string{"/bin/bash"},
 	})
@@ -157,38 +154,15 @@ func TestBwrapBuilderValidation(t *testing.T) {
 
 	// Missing profile.
 	_, err := builder.Build(&BwrapOptions{
-		Worktree: "/workspace",
-		Command:  []string{"/bin/bash"},
+		Command: []string{"/bin/bash"},
 	})
 	if err == nil {
 		t.Error("expected error for missing profile")
 	}
 
-	// Empty worktree is allowed (only errors when a mount uses ${WORKTREE}).
-	_, err = builder.Build(&BwrapOptions{
-		Profile: &Profile{Name: "test"},
-		Command: []string{"/bin/bash"},
-	})
-	if err != nil {
-		t.Errorf("empty worktree should be allowed, got: %v", err)
-	}
-
-	// ${WORKTREE} reference without a worktree set should error.
-	_, err = builder.Build(&BwrapOptions{
-		Profile: &Profile{
-			Name:       "test",
-			Filesystem: []Mount{{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"}},
-		},
-		Command: []string{"/bin/bash"},
-	})
-	if err == nil {
-		t.Error("expected error when ${WORKTREE} is used without worktree set")
-	}
-
 	// Missing command.
 	_, err = builder.Build(&BwrapOptions{
-		Profile:  &Profile{Name: "test"},
-		Worktree: "/workspace",
+		Profile: &Profile{Name: "test"},
 	})
 	if err == nil {
 		t.Error("expected error for missing command")

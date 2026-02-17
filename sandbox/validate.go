@@ -73,14 +73,14 @@ func (v *Validator) fail(name, message string) {
 }
 
 // ValidateAll runs all validation checks for a sandbox configuration.
-func (v *Validator) ValidateAll(profile *Profile, worktree string, proxySocket string) {
+func (v *Validator) ValidateAll(profile *Profile, workingDirectory string, proxySocket string) {
 	v.ValidateBwrap()
 	v.ValidateSystemd()
 	v.ValidateUserNamespaces()
-	v.ValidateWorktree(worktree)
+	v.ValidateWorkingDirectory(workingDirectory)
 	v.ValidateProxySocket(proxySocket)
 	v.ValidateProfile(profile)
-	v.ValidateProfileSources(profile, worktree, proxySocket)
+	v.ValidateProfileSources(profile, workingDirectory, proxySocket)
 }
 
 // ValidateBwrap checks that bubblewrap is available.
@@ -156,36 +156,36 @@ func (v *Validator) ValidateUserNamespaces() {
 	v.pass("userns", "user namespaces enabled")
 }
 
-// ValidateWorktree checks that the worktree directory exists.
-func (v *Validator) ValidateWorktree(worktree string) {
-	if worktree == "" {
-		v.fail("worktree", "worktree path is required")
+// ValidateWorkingDirectory checks that the working directory exists.
+func (v *Validator) ValidateWorkingDirectory(workingDirectory string) {
+	if workingDirectory == "" {
+		v.fail("working_directory", "working directory path is required")
 		return
 	}
 
 	// Resolve to absolute path.
-	absPath, err := filepath.Abs(worktree)
+	absPath, err := filepath.Abs(workingDirectory)
 	if err != nil {
-		v.fail("worktree", fmt.Sprintf("cannot resolve path: %v", err))
+		v.fail("working_directory", fmt.Sprintf("cannot resolve path: %v", err))
 		return
 	}
 
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			v.fail("worktree", fmt.Sprintf("does not exist: %s", absPath))
+			v.fail("working_directory", fmt.Sprintf("does not exist: %s", absPath))
 		} else {
-			v.fail("worktree", fmt.Sprintf("cannot access: %v", err))
+			v.fail("working_directory", fmt.Sprintf("cannot access: %v", err))
 		}
 		return
 	}
 
 	if !info.IsDir() {
-		v.fail("worktree", fmt.Sprintf("not a directory: %s", absPath))
+		v.fail("working_directory", fmt.Sprintf("not a directory: %s", absPath))
 		return
 	}
 
-	v.pass("worktree", fmt.Sprintf("exists: %s", absPath))
+	v.pass("working_directory", fmt.Sprintf("exists: %s", absPath))
 }
 
 // ValidateProxySocket checks that the proxy socket exists.
@@ -229,14 +229,14 @@ func (v *Validator) ValidateProfile(profile *Profile) {
 }
 
 // ValidateProfileSources checks that all non-optional mount sources exist.
-func (v *Validator) ValidateProfileSources(profile *Profile, worktree, proxySocket string) {
+func (v *Validator) ValidateProfileSources(profile *Profile, workingDirectory, proxySocket string) {
 	if profile == nil {
 		return
 	}
 
 	vars := Variables{
-		"WORKTREE":     worktree,
-		"PROXY_SOCKET": proxySocket,
+		"WORKING_DIRECTORY": workingDirectory,
+		"PROXY_SOCKET":      proxySocket,
 	}
 
 	for _, mount := range profile.Filesystem {

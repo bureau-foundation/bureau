@@ -81,16 +81,16 @@ COMMANDS
 
 EXAMPLES
     # Run a command with an explicit profile file
-    bureau-sandbox run --profile-file=myprofile.yaml --worktree=/path/to/work -- bash
+    bureau-sandbox run --profile-file=myprofile.yaml --working-directory=/path/to/work -- bash
 
     # Validate configuration before running
-    bureau-sandbox validate --profile-file=myprofile.yaml --worktree=/path/to/work
+    bureau-sandbox validate --profile-file=myprofile.yaml --working-directory=/path/to/work
 
     # Run with GPU support
-    bureau-sandbox run --profile-file=myprofile.yaml --gpu --worktree=/path/to/work -- python train.py
+    bureau-sandbox run --profile-file=myprofile.yaml --gpu --working-directory=/path/to/work -- python train.py
 
     # Dry run to see the bwrap command
-    bureau-sandbox run --profile-file=myprofile.yaml --worktree=/path/to/work --dry-run -- bash
+    bureau-sandbox run --profile-file=myprofile.yaml --working-directory=/path/to/work --dry-run -- bash
 
 PROFILE FILES
     Profile files are YAML containing a sandbox profile definition:
@@ -151,7 +151,7 @@ func runCmd(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	profileFile := fs.String("profile-file", "", "Path to a YAML sandbox profile definition (required)")
-	worktree := fs.String("worktree", "", "Path to agent worktree (required)")
+	workingDirectory := fs.String("working-directory", "", "Host path mounted at /workspace inside the sandbox (required)")
 	proxySocket := fs.String("proxy-socket", "", "Override proxy socket path")
 	scopeName := fs.String("name", "", "Systemd scope name for resource tracking")
 	gpu := fs.Bool("gpu", false, "Enable GPU passthrough")
@@ -177,9 +177,9 @@ FLAGS
 		fs.PrintDefaults()
 		fmt.Print(`
 EXAMPLES
-    bureau-sandbox run --profile-file=dev.yaml --worktree=/work -- bash
-    bureau-sandbox run --profile-file=dev.yaml --worktree=/work --gpu -- python train.py
-    bureau-sandbox run --profile-file=dev.yaml --worktree=/work --dry-run -- bash
+    bureau-sandbox run --profile-file=dev.yaml --working-directory=/work -- bash
+    bureau-sandbox run --profile-file=dev.yaml --working-directory=/work --gpu -- python train.py
+    bureau-sandbox run --profile-file=dev.yaml --working-directory=/work --dry-run -- bash
 `)
 	}
 
@@ -197,8 +197,8 @@ EXAMPLES
 		return fmt.Errorf("--profile-file is required: specify a YAML file containing the sandbox profile definition")
 	}
 
-	if *worktree == "" {
-		return fmt.Errorf("--worktree is required")
+	if *workingDirectory == "" {
+		return fmt.Errorf("--working-directory is required")
 	}
 
 	// Load profile from file.
@@ -219,15 +219,15 @@ EXAMPLES
 
 	// Create sandbox.
 	sb, err := sandbox.New(sandbox.Config{
-		Profile:     profile,
-		Worktree:    *worktree,
-		ProxySocket: *proxySocket,
-		ScopeName:   *scopeName,
-		GPU:         *gpu,
-		BazelCache:  *bazelCache,
-		ExtraBinds:  extraBinds,
-		ExtraEnv:    extraEnvMap,
-		Logger:      logger,
+		Profile:          profile,
+		WorkingDirectory: *workingDirectory,
+		ProxySocket:      *proxySocket,
+		ScopeName:        *scopeName,
+		GPU:              *gpu,
+		BazelCache:       *bazelCache,
+		ExtraBinds:       extraBinds,
+		ExtraEnv:         extraEnvMap,
+		Logger:           logger,
 	})
 	if err != nil {
 		return err
@@ -268,7 +268,7 @@ func validateCmd(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 
 	profileFile := fs.String("profile-file", "", "Path to a YAML sandbox profile definition (required)")
-	worktree := fs.String("worktree", "", "Path to agent worktree (required)")
+	workingDirectory := fs.String("working-directory", "", "Host path mounted at /workspace inside the sandbox (required)")
 	proxySocket := fs.String("proxy-socket", "", "Override proxy socket path")
 	gpu := fs.Bool("gpu", false, "Also validate GPU requirements")
 
@@ -291,8 +291,8 @@ FLAGS
 		return fmt.Errorf("--profile-file is required: specify a YAML file containing the sandbox profile definition")
 	}
 
-	if *worktree == "" {
-		return fmt.Errorf("--worktree is required")
+	if *workingDirectory == "" {
+		return fmt.Errorf("--working-directory is required")
 	}
 
 	// Load profile from file.
@@ -303,7 +303,7 @@ FLAGS
 
 	// Run validation.
 	validator := sandbox.NewValidator()
-	validator.ValidateAll(profile, *worktree, *proxySocket)
+	validator.ValidateAll(profile, *workingDirectory, *proxySocket)
 
 	if *gpu {
 		validator.ValidateGPU()
@@ -346,7 +346,7 @@ CATEGORIES
 NOTE
     This command should be run INSIDE a sandbox. To test your sandbox:
 
-    bureau-sandbox run --profile-file=dev.yaml --worktree=/tmp/test -- \
+    bureau-sandbox run --profile-file=dev.yaml --working-directory=/tmp/test -- \
         bureau-sandbox test
 `)
 	}
@@ -360,7 +360,7 @@ NOTE
 		fmt.Println("Warning: Not running inside a sandbox (BUREAU_SANDBOX != 1)")
 		fmt.Println("For proper testing, run this command inside a sandbox:")
 		fmt.Println()
-		fmt.Println("  bureau-sandbox run --profile-file=<profile.yaml> --worktree=/tmp/test -- \\")
+		fmt.Println("  bureau-sandbox run --profile-file=<profile.yaml> --working-directory=/tmp/test -- \\")
 		fmt.Println("      bureau-sandbox test")
 		fmt.Println()
 		fmt.Println("Running tests anyway (results may not reflect sandbox isolation)...")

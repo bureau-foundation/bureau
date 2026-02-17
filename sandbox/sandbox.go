@@ -16,17 +16,17 @@ import (
 
 // Sandbox manages isolated command execution.
 type Sandbox struct {
-	profile        *Profile
-	worktree       string
-	proxySocket    string
-	scopeName      string
-	gpu            bool
-	bazelCache     string
-	extraBinds     []string
-	extraEnv       map[string]string
-	logger         *slog.Logger
-	overlayManager *OverlayManager
-	overlayMerged  map[string]string // dest -> merged path for overlay mounts
+	profile          *Profile
+	workingDirectory string
+	proxySocket      string
+	scopeName        string
+	gpu              bool
+	bazelCache       string
+	extraBinds       []string
+	extraEnv         map[string]string
+	logger           *slog.Logger
+	overlayManager   *OverlayManager
+	overlayMerged    map[string]string // dest -> merged path for overlay mounts
 }
 
 // Config holds configuration for creating a new Sandbox.
@@ -34,8 +34,9 @@ type Config struct {
 	// Profile is the resolved profile to use.
 	Profile *Profile
 
-	// Worktree is the path to the agent's worktree.
-	Worktree string
+	// WorkingDirectory is the host path mounted at /workspace inside the
+	// sandbox. This is the root of the agent's writable filesystem.
+	WorkingDirectory string
 
 	// ProxySocket is the path to the bureau-proxy Unix socket.
 	ProxySocket string
@@ -64,14 +65,14 @@ func New(config Config) (*Sandbox, error) {
 	if config.Profile == nil {
 		return nil, fmt.Errorf("profile is required")
 	}
-	if config.Worktree == "" {
-		return nil, fmt.Errorf("worktree is required")
+	if config.WorkingDirectory == "" {
+		return nil, fmt.Errorf("working directory is required")
 	}
 
-	// Resolve worktree to absolute path.
-	worktree, err := filepath.Abs(config.Worktree)
+	// Resolve working directory to absolute path.
+	workingDirectory, err := filepath.Abs(config.WorkingDirectory)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve worktree path: %w", err)
+		return nil, fmt.Errorf("failed to resolve working directory path: %w", err)
 	}
 
 	// Default proxy socket.
@@ -86,15 +87,15 @@ func New(config Config) (*Sandbox, error) {
 	}
 
 	return &Sandbox{
-		profile:     config.Profile,
-		worktree:    worktree,
-		proxySocket: proxySocket,
-		scopeName:   config.ScopeName,
-		gpu:         config.GPU,
-		bazelCache:  config.BazelCache,
-		extraBinds:  config.ExtraBinds,
-		extraEnv:    config.ExtraEnv,
-		logger:      logger,
+		profile:          config.Profile,
+		workingDirectory: workingDirectory,
+		proxySocket:      proxySocket,
+		scopeName:        config.ScopeName,
+		gpu:              config.GPU,
+		bazelCache:       config.BazelCache,
+		extraBinds:       config.ExtraBinds,
+		extraEnv:         config.ExtraEnv,
+		logger:           logger,
 	}, nil
 }
 
@@ -119,7 +120,7 @@ func (s *Sandbox) Run(ctx context.Context, command []string) error {
 
 	s.logger.Info("running sandboxed command",
 		"profile", s.profile.Name,
-		"worktree", s.worktree,
+		"working_directory", s.workingDirectory,
 		"command", command,
 	)
 
@@ -137,7 +138,7 @@ func (s *Sandbox) Run(ctx context.Context, command []string) error {
 // setupOverlays creates overlay mounts for the sandbox.
 func (s *Sandbox) setupOverlays() error {
 	var err error
-	s.overlayManager, err = NewOverlayManager(s.worktree)
+	s.overlayManager, err = NewOverlayManager(s.workingDirectory)
 	if err != nil {
 		return err
 	}
@@ -146,10 +147,10 @@ func (s *Sandbox) setupOverlays() error {
 
 	// Expand variables for overlay mounts.
 	vars := Variables{
-		"WORKTREE":     s.worktree,
-		"PROXY_SOCKET": s.proxySocket,
-		"TERM":         os.Getenv("TERM"),
-		"HOME":         os.Getenv("HOME"),
+		"WORKING_DIRECTORY": s.workingDirectory,
+		"PROXY_SOCKET":      s.proxySocket,
+		"TERM":              os.Getenv("TERM"),
+		"HOME":              os.Getenv("HOME"),
 	}
 
 	for _, mount := range s.profile.Filesystem {
@@ -201,9 +202,9 @@ func (s *Sandbox) cleanupOverlays() {
 func (s *Sandbox) Command(ctx context.Context, command []string) (*exec.Cmd, error) {
 	// Expand profile variables.
 	vars := Variables{
-		"WORKTREE":     s.worktree,
-		"PROXY_SOCKET": s.proxySocket,
-		"TERM":         os.Getenv("TERM"),
+		"WORKING_DIRECTORY": s.workingDirectory,
+		"PROXY_SOCKET":      s.proxySocket,
+		"TERM":              os.Getenv("TERM"),
 	}
 	if s.bazelCache != "" {
 		vars["BAZEL_CACHE"] = s.bazelCache
@@ -214,7 +215,6 @@ func (s *Sandbox) Command(ctx context.Context, command []string) (*exec.Cmd, err
 	builder := NewBwrapBuilder()
 	bwrapArgs, err := builder.Build(&BwrapOptions{
 		Profile:       profile,
-		Worktree:      s.worktree,
 		ExtraBinds:    s.extraBinds,
 		ExtraEnv:      s.extraEnv,
 		BazelCache:    s.bazelCache,
@@ -276,9 +276,9 @@ func (s *Sandbox) Command(ctx context.Context, command []string) (*exec.Cmd, err
 func (s *Sandbox) DryRun(command []string) ([]string, error) {
 	// Expand profile variables.
 	vars := Variables{
-		"WORKTREE":     s.worktree,
-		"PROXY_SOCKET": s.proxySocket,
-		"TERM":         os.Getenv("TERM"),
+		"WORKING_DIRECTORY": s.workingDirectory,
+		"PROXY_SOCKET":      s.proxySocket,
+		"TERM":              os.Getenv("TERM"),
 	}
 	if s.bazelCache != "" {
 		vars["BAZEL_CACHE"] = s.bazelCache
@@ -292,7 +292,6 @@ func (s *Sandbox) DryRun(command []string) ([]string, error) {
 	builder := NewBwrapBuilder()
 	bwrapArgs, err := builder.Build(&BwrapOptions{
 		Profile:       profile,
-		Worktree:      s.worktree,
 		ExtraBinds:    s.extraBinds,
 		ExtraEnv:      s.extraEnv,
 		BazelCache:    s.bazelCache,
@@ -326,7 +325,7 @@ func (s *Sandbox) DryRun(command []string) ([]string, error) {
 // Validate runs pre-flight validation checks.
 func (s *Sandbox) Validate(w io.Writer) error {
 	validator := NewValidator()
-	validator.ValidateAll(s.profile, s.worktree, s.proxySocket)
+	validator.ValidateAll(s.profile, s.workingDirectory, s.proxySocket)
 
 	if s.gpu {
 		validator.ValidateGPU()
@@ -345,9 +344,9 @@ func (s *Sandbox) Profile() *Profile {
 	return s.profile
 }
 
-// Worktree returns the sandbox's worktree path.
-func (s *Sandbox) Worktree() string {
-	return s.worktree
+// WorkingDirectory returns the sandbox's working directory path.
+func (s *Sandbox) WorkingDirectory() string {
+	return s.workingDirectory
 }
 
 // ExitError represents a non-zero exit from the sandboxed command.

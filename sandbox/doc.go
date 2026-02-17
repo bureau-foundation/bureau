@@ -17,9 +17,9 @@
 // proc, dev, dev-bind (for GPU passthrough), and overlay. Overlay mounts
 // use fuse-overlayfs ([OverlayManager]) to provide copy-on-write access to
 // host directories (package caches, tool installations) with writes captured
-// in either a tmpfs or a worktree-contained upper layer. The upper layer
-// path is validated ([ValidateOverlayUpper]) with symlink resolution to
-// prevent writes from escaping the worktree.
+// in either a tmpfs or a working-directory-contained upper layer. The upper
+// layer path is validated ([ValidateOverlayUpper]) with symlink resolution to
+// prevent writes from escaping the working directory.
 //
 // Resource limits are enforced via systemd transient scopes ([SystemdScope]),
 // setting cgroup v2 properties for task count, memory, CPU quota, and CPU
@@ -28,7 +28,7 @@
 //
 // [BwrapBuilder] translates a Profile into bwrap command-line arguments.
 // [Validator] performs pre-flight checks (bwrap availability, user namespace
-// support, worktree existence, proxy socket reachability, mount source
+// support, working directory existence, proxy socket reachability, mount source
 // validity). [Capabilities] probes the host for available features.
 // [EscapeTestRunner] verifies sandbox containment by running a battery of
 // escape attempts (network, filesystem, process, privilege, terminal) and

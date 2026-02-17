@@ -21,7 +21,7 @@ func testSandboxProfile() *Profile {
 		Name:        "test",
 		Description: "Minimal profile for sandbox tests",
 		Filesystem: []Mount{
-			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKING_DIRECTORY}", Dest: "/workspace", Mode: "rw"},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
 			{Source: "/usr", Dest: "/usr", Mode: "ro"},
 			{Source: "/bin", Dest: "/bin", Mode: "ro"},
@@ -77,12 +77,11 @@ func skipIfNoSandbox(t *testing.T) {
 func TestSandboxDryRun(t *testing.T) {
 	profile := testSandboxProfile()
 
-	// Create temp worktree.
-	worktree := t.TempDir()
+	workingDirectory := t.TempDir()
 
 	sb, err := New(Config{
-		Profile:  profile,
-		Worktree: worktree,
+		Profile:          profile,
+		WorkingDirectory: workingDirectory,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -119,11 +118,11 @@ func TestSandboxDryRun(t *testing.T) {
 func TestSandboxValidate(t *testing.T) {
 	profile := testSandboxProfile()
 
-	worktree := t.TempDir()
+	workingDirectory := t.TempDir()
 
 	sb, err := New(Config{
-		Profile:  profile,
-		Worktree: worktree,
+		Profile:          profile,
+		WorkingDirectory: workingDirectory,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -141,9 +140,9 @@ func TestSandboxValidate(t *testing.T) {
 		t.Errorf("expected profile name in output")
 	}
 
-	// Should mention the worktree.
-	if !strings.Contains(output, worktree) {
-		t.Errorf("expected worktree in output")
+	// Should mention the working directory.
+	if !strings.Contains(output, workingDirectory) {
+		t.Errorf("expected working directory in output")
 	}
 }
 
@@ -152,17 +151,16 @@ func TestSandboxRunSimple(t *testing.T) {
 
 	profile := testSandboxProfile()
 
-	worktree := t.TempDir()
+	workingDirectory := t.TempDir()
 
-	// Create a test file in worktree.
-	testFile := filepath.Join(worktree, "test.txt")
+	testFile := filepath.Join(workingDirectory, "test.txt")
 	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
 	sb, err := New(Config{
-		Profile:  profile,
-		Worktree: worktree,
+		Profile:          profile,
+		WorkingDirectory: workingDirectory,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -170,23 +168,23 @@ func TestSandboxRunSimple(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run a simple command that reads from worktree.
+	// Run a simple command that reads from the working directory.
 	err = sb.Run(ctx, []string{"/bin/cat", "/workspace/test.txt"})
 	if err != nil {
 		t.Errorf("Run failed: %v", err)
 	}
 }
 
-func TestSandboxRunWriteWorktree(t *testing.T) {
+func TestSandboxRunWriteWorkingDirectory(t *testing.T) {
 	skipIfNoSandbox(t)
 
 	profile := testSandboxProfile()
 
-	worktree := t.TempDir()
+	workingDirectory := t.TempDir()
 
 	sb, err := New(Config{
-		Profile:  profile,
-		Worktree: worktree,
+		Profile:          profile,
+		WorkingDirectory: workingDirectory,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -200,8 +198,8 @@ func TestSandboxRunWriteWorktree(t *testing.T) {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	// Verify file was written to host worktree.
-	outputFile := filepath.Join(worktree, "output.txt")
+	// Verify file was written to host working directory.
+	outputFile := filepath.Join(workingDirectory, "output.txt")
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
@@ -217,11 +215,11 @@ func TestSandboxExitCode(t *testing.T) {
 
 	profile := testSandboxProfile()
 
-	worktree := t.TempDir()
+	workingDirectory := t.TempDir()
 
 	sb, err := New(Config{
-		Profile:  profile,
-		Worktree: worktree,
+		Profile:          profile,
+		WorkingDirectory: workingDirectory,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)

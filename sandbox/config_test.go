@@ -160,20 +160,20 @@ func TestVariableExpansion(t *testing.T) {
 	t.Parallel()
 
 	vars := Variables{
-		"WORKTREE":     "/home/user/work",
-		"PROXY_SOCKET": "/run/proxy.sock",
+		"WORKING_DIRECTORY": "/home/user/work",
+		"PROXY_SOCKET":      "/run/proxy.sock",
 	}
 
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"${WORKTREE}", "/home/user/work"},
+		{"${WORKING_DIRECTORY}", "/home/user/work"},
 		{"${PROXY_SOCKET}", "/run/proxy.sock"},
-		{"${WORKTREE}/bin", "/home/user/work/bin"},
+		{"${WORKING_DIRECTORY}/bin", "/home/user/work/bin"},
 		{"no vars here", "no vars here"},
 		{"${UNKNOWN}", "${UNKNOWN}"},
-		{"${WORKTREE}:${PROXY_SOCKET}", "/home/user/work:/run/proxy.sock"},
+		{"${WORKING_DIRECTORY}:${PROXY_SOCKET}", "/home/user/work:/run/proxy.sock"},
 	}
 
 	for _, tt := range tests {
@@ -188,29 +188,29 @@ func TestExpandProfile(t *testing.T) {
 	t.Parallel()
 
 	vars := Variables{
-		"WORKTREE":     "/home/user/work",
-		"PROXY_SOCKET": "/run/proxy.sock",
-		"TERM":         "xterm",
+		"WORKING_DIRECTORY": "/home/user/work",
+		"PROXY_SOCKET":      "/run/proxy.sock",
+		"TERM":              "xterm",
 	}
 
 	profile := &Profile{
 		Name: "test",
 		Filesystem: []Mount{
-			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKING_DIRECTORY}", Dest: "/workspace", Mode: "rw"},
 			{Source: "${PROXY_SOCKET}", Dest: "/run/bureau/proxy.sock", Mode: "rw"},
 		},
 		Environment: map[string]string{
 			"TERM":    "${TERM}",
-			"WORKDIR": "${WORKTREE}",
+			"WORKDIR": "${WORKING_DIRECTORY}",
 		},
-		CreateDirs: []string{"${WORKTREE}/.cache"},
+		CreateDirs: []string{"${WORKING_DIRECTORY}/.cache"},
 	}
 
 	expanded := vars.ExpandProfile(profile)
 
 	// Check filesystem.
 	if expanded.Filesystem[0].Source != "/home/user/work" {
-		t.Errorf("expected expanded worktree, got %q", expanded.Filesystem[0].Source)
+		t.Errorf("expected expanded working directory, got %q", expanded.Filesystem[0].Source)
 	}
 	if expanded.Filesystem[1].Source != "/run/proxy.sock" {
 		t.Errorf("expected expanded proxy socket, got %q", expanded.Filesystem[1].Source)
@@ -230,7 +230,7 @@ func TestExpandProfile(t *testing.T) {
 	}
 
 	// Original profile should be unchanged.
-	if profile.Filesystem[0].Source != "${WORKTREE}" {
+	if profile.Filesystem[0].Source != "${WORKING_DIRECTORY}" {
 		t.Error("original profile was modified")
 	}
 }

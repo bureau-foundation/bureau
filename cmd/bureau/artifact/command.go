@@ -23,12 +23,16 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/principal"
 )
 
-// Default paths inside a Bureau sandbox.
+// Sandbox-standard paths for the artifact service role. When an agent
+// declares required_services: ["artifact"], the daemon bind-mounts the
+// artifact service socket at this path and writes a service token to
+// the tokens directory.
 const (
-	defaultSocketPath = "/run/bureau/principal/service/artifact/main.sock"
-	defaultTokenPath  = "/run/bureau/tokens/artifact"
+	sandboxSocketPath = "/run/bureau/service/artifact.sock"
+	sandboxTokenPath  = "/run/bureau/tokens/artifact"
 )
 
 // Command returns the top-level "artifact" command with all subcommands.
@@ -100,18 +104,44 @@ type ArtifactConnection struct {
 
 // AddFlags registers --socket and --token-file flags with dynamic defaults
 // from BUREAU_ARTIFACT_SOCKET and BUREAU_ARTIFACT_TOKEN environment variables.
+// If neither environment variable is set, defaults are detected from the
+// runtime environment: inside a sandbox, the RequiredServices mount points
+// are used; outside, the host-side principal socket path.
 func (c *ArtifactConnection) AddFlags(flagSet *pflag.FlagSet) {
-	socketDefault := defaultSocketPath
+	socketDefault := defaultArtifactSocketPath()
 	if envSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); envSocket != "" {
 		socketDefault = envSocket
 	}
-	tokenDefault := defaultTokenPath
+	tokenDefault := defaultArtifactTokenPath()
 	if envToken := os.Getenv("BUREAU_ARTIFACT_TOKEN"); envToken != "" {
 		tokenDefault = envToken
 	}
 
 	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "artifact service socket path")
 	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file")
+}
+
+// defaultArtifactSocketPath returns the default artifact service socket path.
+// Inside a sandbox (detected by the presence of the RequiredServices mount
+// point), the standard /run/bureau/service/artifact.sock path is used.
+// Outside a sandbox, the host-side principal socket path is used as a
+// fallback for direct CLI access.
+func defaultArtifactSocketPath() string {
+	if _, err := os.Stat(sandboxSocketPath); err == nil {
+		return sandboxSocketPath
+	}
+	return principal.SocketPath("service/artifact/main")
+}
+
+// defaultArtifactTokenPath returns the default artifact service token path.
+// Inside a sandbox, the daemon-provisioned token at /run/bureau/tokens/artifact
+// is used. Outside a sandbox, the same path is returned as a fallback
+// (it will only exist if the daemon minted tokens for this principal).
+func defaultArtifactTokenPath() string {
+	if _, err := os.Stat(sandboxTokenPath); err == nil {
+		return sandboxTokenPath
+	}
+	return sandboxTokenPath
 }
 
 // connect creates an artifact client from the connection parameters.

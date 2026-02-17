@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
@@ -138,6 +140,165 @@ func writeSSEEvent(writer http.ResponseWriter, flusher http.Flusher, eventType s
 	payload, _ := json.Marshal(data)
 	fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", eventType, payload)
 	flusher.Flush()
+}
+
+// mockToolStep describes a single tool invocation in a mock LLM sequence.
+// The mock returns a tool_use response for this step, the agent executes
+// the tool and sends back a tool_result, and the mock returns a text
+// response acknowledging the result.
+//
+// The mock is purely a puppeteer — it tells the agent what to do but never
+// participates in verification. All test assertions read outcomes from
+// Matrix state events, which is the same observation path production
+// systems use.
+type mockToolStep struct {
+	// ToolName is the MCP tool name (e.g., "bureau_ticket_create").
+	ToolName string
+
+	// ToolInput returns the tool input for this step. Use a closure to
+	// capture values from the test scope (e.g., room IDs, ticket IDs
+	// read from Matrix state events between steps).
+	ToolInput func() map[string]any
+}
+
+// mockToolSequenceServer wraps an httptest.Server with a synchronization
+// channel that signals when all expected LLM request pairs have been handled.
+type mockToolSequenceServer struct {
+	*httptest.Server
+
+	// AllStepsCompleted is closed when the final text response (after the
+	// last tool_result) has been sent. Waiting on this ensures the complete
+	// tool→result→LLM cycle for every step has finished.
+	AllStepsCompleted <-chan struct{}
+}
+
+// newMockToolSequence creates a mock Anthropic Messages API server that
+// handles a multi-step tool sequence. Each step produces two HTTP requests:
+//
+//   - Even request (2*i): returns a tool_use for step i
+//   - Odd request (2*i+1): validates tool_result is present, returns text
+//
+// After the final odd request, AllStepsCompleted is closed. The mock
+// validates that the agent sends tool_result blocks (proving the agent
+// protocol works) but does not extract or expose their content — all
+// verification flows through Matrix state events.
+func newMockToolSequence(t *testing.T, steps []mockToolStep) *mockToolSequenceServer {
+	t.Helper()
+
+	var (
+		mutex     sync.Mutex
+		callCount int
+	)
+
+	allDone := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mutex.Lock()
+		current := callCount
+		callCount++
+		mutex.Unlock()
+
+		// Validate request body is well-formed.
+		var wireRequest struct {
+			Model    string `json:"model"`
+			Stream   bool   `json:"stream"`
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&wireRequest); err != nil {
+			http.Error(writer, "bad request body", http.StatusBadRequest)
+			return
+		}
+		if !wireRequest.Stream {
+			http.Error(writer, "expected stream=true", http.StatusBadRequest)
+			return
+		}
+
+		stepIndex := current / 2
+		isToolResult := current%2 == 1
+
+		if stepIndex >= len(steps) {
+			t.Errorf("mock: unexpected request %d (only %d steps configured)", current, len(steps))
+			http.Error(writer, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+
+		if isToolResult {
+			// Odd request: validate tool_result is present (proves the
+			// agent executed the tool and sent the result back).
+			toolCallID := fmt.Sprintf("tc_mock_%02d", stepIndex)
+			if !hasToolResult(wireRequest.Messages, toolCallID) {
+				t.Errorf("mock: request %d missing tool_result for %s", current, toolCallID)
+			}
+
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "end_turn",
+				InputTokens:  200,
+				OutputTokens: 15,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(`{"type":"text","text":"Step %d completed"}`, stepIndex)),
+				},
+			})
+
+			// Signal completion after the last step's text response.
+			if stepIndex == len(steps)-1 {
+				close(allDone)
+			}
+		} else {
+			// Even request: return tool_use.
+			step := steps[stepIndex]
+			toolInput := step.ToolInput()
+			toolInputJSON, _ := json.Marshal(toolInput)
+			toolCallID := fmt.Sprintf("tc_mock_%02d", stepIndex)
+
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "tool_use",
+				InputTokens:  150,
+				OutputTokens: 30,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(
+						`{"type":"tool_use","id":"%s","name":"%s","input":%s}`,
+						toolCallID, step.ToolName, toolInputJSON,
+					)),
+				},
+			})
+		}
+	}))
+
+	t.Cleanup(server.Close)
+	return &mockToolSequenceServer{
+		Server:            server,
+		AllStepsCompleted: allDone,
+	}
+}
+
+// hasToolResult checks whether the message history contains a tool_result
+// for the given tool_use_id. Used by the mock to validate that the agent
+// executed the tool and sent the result back — a protocol-level assertion,
+// not a content-level one.
+func hasToolResult(messages []struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}, toolUseID string) bool {
+	for _, message := range messages {
+		var blocks []struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
+		}
+		if err := json.Unmarshal(message.Content, &blocks); err != nil {
+			continue
+		}
+		for _, block := range blocks {
+			if block.Type == "tool_result" && block.ToolUseID == toolUseID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // registerProxyHTTPService registers an HTTP service on a proxy's admin

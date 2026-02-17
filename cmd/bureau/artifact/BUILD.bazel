@@ -11,6 +11,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//lib/artifact",
+        "//lib/principal",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

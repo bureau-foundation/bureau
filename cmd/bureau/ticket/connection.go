@@ -10,13 +10,17 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/service"
 )
 
-// Default paths inside a Bureau sandbox.
+// Sandbox-standard paths for the ticket service role. When an agent
+// declares required_services: ["ticket"], the daemon bind-mounts the
+// ticket service socket at this path and writes a service token to
+// the tokens directory.
 const (
-	defaultSocketPath = "/run/bureau/principal/service/ticket/main.sock"
-	defaultTokenPath  = "/run/bureau/tokens/ticket"
+	sandboxSocketPath = "/run/bureau/service/ticket.sock"
+	sandboxTokenPath  = "/run/bureau/tokens/ticket"
 )
 
 // TicketConnection manages socket and token flags for ticket commands.
@@ -32,18 +36,44 @@ type TicketConnection struct {
 
 // AddFlags registers --socket and --token-file flags with dynamic defaults
 // from BUREAU_TICKET_SOCKET and BUREAU_TICKET_TOKEN environment variables.
+// If neither environment variable is set, defaults are detected from the
+// runtime environment: inside a sandbox, the RequiredServices mount points
+// are used; outside, the host-side principal socket path.
 func (c *TicketConnection) AddFlags(flagSet *pflag.FlagSet) {
-	socketDefault := defaultSocketPath
+	socketDefault := defaultTicketSocketPath()
 	if envSocket := os.Getenv("BUREAU_TICKET_SOCKET"); envSocket != "" {
 		socketDefault = envSocket
 	}
-	tokenDefault := defaultTokenPath
+	tokenDefault := defaultTicketTokenPath()
 	if envToken := os.Getenv("BUREAU_TICKET_TOKEN"); envToken != "" {
 		tokenDefault = envToken
 	}
 
 	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "ticket service socket path")
 	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file")
+}
+
+// defaultTicketSocketPath returns the default ticket service socket path.
+// Inside a sandbox (detected by the presence of the RequiredServices mount
+// point), the standard /run/bureau/service/ticket.sock path is used.
+// Outside a sandbox, the host-side principal socket path is used as a
+// fallback for direct CLI access.
+func defaultTicketSocketPath() string {
+	if _, err := os.Stat(sandboxSocketPath); err == nil {
+		return sandboxSocketPath
+	}
+	return principal.SocketPath("service/ticket/main")
+}
+
+// defaultTicketTokenPath returns the default ticket service token path.
+// Inside a sandbox, the daemon-provisioned token at /run/bureau/tokens/ticket
+// is used. Outside a sandbox, the same path is returned as a fallback
+// (it will only exist if the daemon minted tokens for this principal).
+func defaultTicketTokenPath() string {
+	if _, err := os.Stat(sandboxTokenPath); err == nil {
+		return sandboxTokenPath
+	}
+	return sandboxTokenPath
 }
 
 // connect creates a service client from the connection parameters.

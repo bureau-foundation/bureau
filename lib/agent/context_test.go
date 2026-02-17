@@ -41,6 +41,18 @@ func TestSystemPrompt(t *testing.T) {
 
 	prompt := agentContext.SystemPrompt()
 
+	// The system prompt provides neutral runtime context — it must not
+	// prescribe the agent's identity or role. Agents are arbitrary
+	// programs (assistants, NPCs, chatbots, etc.); only the operator's
+	// configuration (template system prompt, payload) defines what the
+	// agent IS.
+	if strings.Contains(prompt, "You are running as") || strings.Contains(prompt, "Bureau agent") {
+		t.Error("system prompt should not prescribe agent identity or role")
+	}
+	if !strings.Contains(prompt, "# Runtime Context") {
+		t.Error("system prompt should start with neutral Runtime Context header")
+	}
+
 	// Verify identity section.
 	if !strings.Contains(prompt, "@agent/test:bureau.local") {
 		t.Error("system prompt should contain user ID")

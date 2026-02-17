@@ -60,13 +60,16 @@ func RunConfigFromEnvironment() RunConfig {
 //  4. Opens the session log writer.
 //  5. Spawns the agent process via the Driver.
 //  6. Pumps structured events from the driver into the session log.
-//  7. Sends a "ready" message to the config room.
-//  8. Starts a message pump: long-polls Matrix /sync for incoming messages
+//  7. Starts a message pump: long-polls Matrix /sync for incoming messages
 //     in the config room and writes them to the agent's stdin.
-//  9. Handles SIGINT/SIGTERM for graceful shutdown.
-//  10. Waits for the agent process to exit.
-//  11. Posts a completion summary to the config room.
-//  12. Closes the session log.
+//  8. Waits for the pump to capture its initial stream position.
+//  9. Sends a "ready" message to the config room — this guarantees
+//     the pump is listening and any message sent after "agent-ready"
+//     will be delivered to the agent.
+//  10. Handles SIGINT/SIGTERM for graceful shutdown.
+//  11. Waits for the agent process to exit.
+//  12. Posts a completion summary to the config room.
+//  13. Closes the session log.
 func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	logger := config.Logger
 	if logger == nil {
@@ -115,14 +118,13 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// Generate session ID.
 	sessionID := fmt.Sprintf("%s-%d", agentContext.Identity.UserID, time.Now().UnixMilli())
 
-	// Determine initial prompt.
+	// Determine initial prompt. If no prompt is configured in the
+	// payload, pass empty to the driver — the agent loop waits for
+	// a Matrix message instead of making a wasted LLM call.
 	prompt := agentContext.TaskPrompt()
-	if prompt == "" {
-		prompt = "You are a Bureau agent. Check your system prompt for context about your identity and available services. Wait for instructions."
-	}
 
-	// Log the initial prompt.
-	if sessionLog != nil {
+	// Log the initial prompt (skip if no prompt was configured).
+	if sessionLog != nil && prompt != "" {
 		sessionLog.Write(Event{
 			Timestamp: time.Now(),
 			Type:      EventTypePrompt,
@@ -177,19 +179,30 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		close(events)
 	}()
 
-	// Send ready message.
-	logger.Info("sending ready message to config room")
-	if _, err := proxy.SendTextMessage(ctx, agentContext.ConfigRoomID, "agent-ready"); err != nil {
-		logger.Warn("failed to send ready message", "error", err)
-	}
-
 	// Message pump: poll config room for incoming messages, write to stdin.
+	// The pump must be started and listening BEFORE we send "agent-ready",
+	// so that any message sent in response to agent-ready is captured.
 	messagePumpCtx, cancelMessagePump := context.WithCancel(ctx)
 	defer cancelMessagePump()
 
 	ownUserID := agentContext.Identity.UserID
 	machineUserID := fmt.Sprintf("@%s:%s", config.MachineName, config.ServerName)
-	go runMessagePump(messagePumpCtx, proxy, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger)
+	pumpReady := make(chan struct{})
+	go runMessagePump(messagePumpCtx, proxy, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
+
+	// Wait for the pump to complete its initial /sync before announcing
+	// readiness. This guarantees "agent-ready" means the pump is listening.
+	select {
+	case <-pumpReady:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Send ready message.
+	logger.Info("sending ready message to config room")
+	if _, err := proxy.SendTextMessage(ctx, agentContext.ConfigRoomID, "agent-ready"); err != nil {
+		logger.Warn("failed to send ready message", "error", err)
+	}
 
 	// Signal handling.
 	signalChannel := make(chan os.Signal, 2)
@@ -282,7 +295,7 @@ func formatSummary(summary SessionSummary, processError error) string {
 // Messages from the agent itself and from the machine daemon are
 // skipped (the daemon posts operational messages like service directory
 // updates that are not intended for the agent).
-func runMessagePump(ctx context.Context, proxy *proxyclient.Client, roomID, ownUserID, machineUserID string, stdin io.Writer, logger *slog.Logger) {
+func runMessagePump(ctx context.Context, proxy *proxyclient.Client, roomID, ownUserID, machineUserID string, stdin io.Writer, logger *slog.Logger, ready chan<- struct{}) {
 	filter := buildMessageSyncFilter(roomID)
 
 	// Initial /sync with timeout=0 to capture the stream position. Events
@@ -294,9 +307,15 @@ func runMessagePump(ctx context.Context, proxy *proxyclient.Client, roomID, ownU
 	})
 	if err != nil {
 		logger.Error("message pump: initial sync failed", "error", err)
+		close(ready)
 		return
 	}
 	sinceToken := response.NextBatch
+
+	// Signal that the pump has captured the stream position and is
+	// ready to receive messages. Callers wait on this before announcing
+	// "agent-ready" to ensure no messages are missed.
+	close(ready)
 
 	// Long-poll loop with exponential backoff on transient errors.
 	backoff := time.Second

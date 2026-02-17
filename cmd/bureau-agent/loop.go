@@ -69,9 +69,24 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		Message: fmt.Sprintf("bureau-agent starting with model %s, %d tools", config.model, len(toolDefinitions)),
 	})
 
-	// Initialize conversation with the user's prompt.
-	messages := []llm.Message{
-		llm.UserMessage(initialPrompt),
+	// Initialize the conversation. If no prompt was configured in the
+	// payload, wait for the first message from Matrix instead of making
+	// a wasted LLM call. This also ensures the first LLM call only
+	// happens after the test (or production caller) has had a chance to
+	// register any required services on the proxy.
+	var messages []llm.Message
+	if initialPrompt != "" {
+		messages = []llm.Message{llm.UserMessage(initialPrompt)}
+	} else {
+		config.logger.Info("no initial prompt, waiting for first message")
+		if !waitForMessage(ctx, scanner) {
+			config.logger.Info("stdin closed before first message, agent loop ending")
+			return nil
+		}
+		firstMessage := scanner.Text()
+		config.logger.Info("first message received", "length", len(firstMessage))
+		encoder.Encode(loopEvent{Type: "prompt", Content: firstMessage, Source: "injected"})
+		messages = []llm.Message{llm.UserMessage(firstMessage)}
 	}
 
 	var totalTurns int64

@@ -428,6 +428,150 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 	}
 }
 
+// TestAgentLoop_EmptyPromptWaitsForMessage verifies that when the
+// initial prompt is empty, the loop does not call the LLM until a
+// message arrives on stdin. This is the production behavior for agents
+// with no configured task prompt — they wait for a Matrix message.
+func TestAgentLoop_EmptyPromptWaitsForMessage(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("Got it!")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 50, OutputTokens: 10},
+				Model:      "mock-model",
+			},
+		},
+	}
+
+	root := &cli.Command{Name: "test"}
+	toolServer := mcp.NewServer(root, nil)
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+			provider:     provider,
+			tools:        toolServer,
+			model:        "mock-model",
+			systemPrompt: "",
+			maxTokens:    1024,
+			stdin:        stdinReader,
+			stdout:       stdoutWriter,
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, "") // Empty initial prompt.
+	}()
+
+	scanner := bufio.NewScanner(stdoutReader)
+
+	// First event: "system" (init). The loop emits this immediately.
+	if !scanner.Scan() {
+		t.Fatal("expected system event, got EOF")
+	}
+	var systemEvent loopEvent
+	if err := json.Unmarshal(scanner.Bytes(), &systemEvent); err != nil {
+		t.Fatalf("parsing system event: %v", err)
+	}
+	if systemEvent.Type != "system" {
+		t.Errorf("first event type = %q, want %q", systemEvent.Type, "system")
+	}
+
+	// At this point the loop should be blocked in waitForMessage —
+	// it should NOT have called the LLM.
+	if provider.callCount != 0 {
+		t.Fatalf("LLM called %d times before any message was sent, want 0", provider.callCount)
+	}
+
+	// Inject a message via stdin.
+	fmt.Fprintln(stdinWriter, "Hello from Matrix")
+
+	// Read events: expect prompt, metric, response.
+	var sawPrompt, sawResponse bool
+	for scanner.Scan() {
+		var event loopEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("parsing event: %v", err)
+		}
+		if event.Type == "prompt" && event.Content == "Hello from Matrix" && event.Source == "injected" {
+			sawPrompt = true
+		}
+		if event.Type == "response" && event.Content == "Got it!" {
+			sawResponse = true
+			break
+		}
+	}
+
+	if !sawPrompt {
+		t.Error("did not see 'prompt' event for injected message")
+	}
+	if !sawResponse {
+		t.Error("did not see 'response' event")
+	}
+	if provider.callCount != 1 {
+		t.Errorf("LLM called %d times, want 1", provider.callCount)
+	}
+
+	stdinWriter.Close()
+	err := <-loopDone
+	if err != nil {
+		t.Errorf("loop returned error: %v", err)
+	}
+}
+
+// TestAgentLoop_EmptyPromptStdinClosed verifies that when the initial
+// prompt is empty and stdin is closed before any message arrives, the
+// loop exits cleanly without calling the LLM.
+func TestAgentLoop_EmptyPromptStdinClosed(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("should not be called")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+		},
+	}
+
+	root := &cli.Command{Name: "test"}
+	toolServer := mcp.NewServer(root, nil)
+
+	stdinReader, stdinWriter := io.Pipe()
+
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- runAgentLoop(context.Background(), &agentLoopConfig{
+			provider:     provider,
+			tools:        toolServer,
+			model:        "mock-model",
+			systemPrompt: "",
+			maxTokens:    1024,
+			stdin:        stdinReader,
+			stdout:       io.Discard,
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, "") // Empty initial prompt.
+	}()
+
+	// Close stdin immediately — loop should exit without calling LLM.
+	stdinWriter.Close()
+
+	err := <-loopDone
+	if err != nil {
+		t.Errorf("loop returned error: %v", err)
+	}
+	if provider.callCount != 0 {
+		t.Errorf("LLM called %d times, want 0", provider.callCount)
+	}
+}
+
 // testEchoCommandTree creates a command tree with a single echo tool.
 func testEchoCommandTree() *cli.Command {
 	type echoParams struct {

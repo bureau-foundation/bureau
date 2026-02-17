@@ -97,8 +97,7 @@ func readPayload() map[string]any {
 func (agentContext *AgentContext) SystemPrompt() string {
 	var builder strings.Builder
 
-	builder.WriteString("# Bureau Agent Context\n\n")
-	builder.WriteString(fmt.Sprintf("You are running as a Bureau agent: %s\n\n", agentContext.Identity.UserID))
+	builder.WriteString("# Runtime Context\n\n")
 
 	// Identity section.
 	builder.WriteString("## Identity\n\n")

@@ -31,7 +31,6 @@ import (
 //   - CRITICAL message posted to the config room
 func TestProxyCrashRecovery(t *testing.T) {
 	t.Parallel()
-
 	const machineName = "machine/proxy-crash"
 	const principalLocalpart = "agent/proxy-crash"
 	machineUserID := "@machine/proxy-crash:" + testServerName

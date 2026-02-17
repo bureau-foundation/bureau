@@ -52,6 +52,13 @@ func (s *Session) DeviceID() string {
 	return s.deviceID
 }
 
+// CloseIdleConnections closes idle HTTP connections in the underlying
+// transport's connection pool. Call this after a sync error to force
+// the next request to establish a fresh TCP connection.
+func (s *Session) CloseIdleConnections() {
+	s.client.CloseIdleConnections()
+}
+
 // Close releases the access token memory (zeros, unlocks, unmaps).
 // Idempotent — safe to call multiple times.
 func (s *Session) Close() error {

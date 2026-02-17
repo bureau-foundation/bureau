@@ -273,6 +273,22 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		needsReconcile = true
 	}
 
+	// Detect config room eviction. Being kicked from the config room
+	// means the admin has revoked or decommissioned this machine — the
+	// daemon can no longer read credentials or machine config. The only
+	// safe response is emergency shutdown: destroy all sandboxes and
+	// exit. This handles the race where the revoke/decommission command
+	// tombstones credential state events and kicks the machine in the
+	// same sync batch — the room appears in Rooms.Leave (not Rooms.Join)
+	// because the final membership state is "leave", so the tombstone
+	// events are never visible to the Join handler.
+	if _, kicked := response.Rooms.Leave[d.configRoomID]; kicked {
+		d.logger.Error("evicted from config room, initiating emergency shutdown",
+			"config_room", d.configRoomID)
+		d.emergencyShutdown()
+		return
+	}
+
 	for roomID, room := range response.Rooms.Join {
 		if !roomHasStateChanges(room) {
 			continue

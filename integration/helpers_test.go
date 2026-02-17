@@ -624,10 +624,10 @@ func findPipelineEvent(t *testing.T, events []messaging.Event) map[string]any {
 // uncached version created 40 concurrent nix build calls that contended
 // on the Nix daemon's store lock.
 var (
-	runnerEnvOnce      sync.Once
-	runnerEnvPath      string
+	runnerEnvOnce       sync.Once
+	runnerEnvPath       string
 	runnerEnvSkipReason string // non-empty means skip (Nix unavailable or build failed)
-	runnerEnvFatalMsg  string // non-empty means fatal (broken Nix derivation)
+	runnerEnvFatalMsg   string // non-empty means fatal (broken Nix derivation)
 )
 
 // findRunnerEnv builds the Nix integration-test-env and returns the store
@@ -781,6 +781,7 @@ func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatc
 func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) bool, description string) messaging.Event {
 	t.Helper()
 	ctx := t.Context()
+	var syncRetries int
 	for {
 		// Scan pending events from previous sync responses before
 		// issuing a new /sync. This is critical for correctness: when
@@ -795,18 +796,37 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 			}
 		}
 
+		// On retry after a sync error, use a short server-side
+		// timeout (1s) so the HTTP round-trip itself provides
+		// backoff. On first attempt or after success, use the
+		// normal 30s long-poll hold.
+		syncTimeout := 30000
+		if syncRetries > 0 {
+			syncTimeout = 1000
+		}
 		response, err := w.session.Sync(ctx, messaging.SyncOptions{
 			Since:      w.nextBatch,
 			SetTimeout: true,
-			Timeout:    30000, // 30s server-side hold
+			Timeout:    syncTimeout,
 		})
 		if err != nil {
 			if ctx.Err() != nil {
 				t.Fatalf("test context cancelled waiting for event: %s (room %s)",
 					description, w.roomID)
 			}
-			t.Fatalf("roomWatch sync: %v", err)
+			syncRetries++
+			// TCP-level errors (connection reset, EOF) often indicate
+			// a poisoned connection in Go's HTTP pool. Drop idle
+			// connections so the next attempt opens a fresh socket.
+			w.session.CloseIdleConnections()
+			if syncRetries > 5 {
+				t.Fatalf("sync failed %d consecutive times waiting for event: %s (room %s): %v",
+					syncRetries, description, w.roomID, err)
+			}
+			t.Logf("roomWatch sync error (attempt %d/5, pool reset): %v", syncRetries, err)
+			continue
 		}
+		syncRetries = 0
 		w.nextBatch = response.NextBatch
 
 		if joined, ok := response.Rooms.Join[w.roomID]; ok {

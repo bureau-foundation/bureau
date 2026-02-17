@@ -9,8 +9,10 @@ import (
 )
 
 // emergencyShutdown destroys all running sandboxes and cancels the daemon
-// context. Called when the daemon detects that its Matrix account has been
-// deactivated (M_UNKNOWN_TOKEN or M_FORBIDDEN from /sync).
+// context. Called when the daemon detects an unrecoverable condition:
+//   - Matrix account deactivated (M_UNKNOWN_TOKEN or M_FORBIDDEN from /sync)
+//   - Evicted from the config room (kicked by admin during revocation or
+//     decommission — the daemon can no longer read credentials or config)
 //
 // Uses a fresh context with a 10-second timeout since the daemon's own
 // context may be cancelled or the Matrix session may be dead. The launcher

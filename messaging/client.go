@@ -68,6 +68,14 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}, nil
 }
 
+// CloseIdleConnections closes idle HTTP connections in the underlying
+// transport's connection pool. Call this after a network disruption to
+// force subsequent requests to establish fresh TCP connections instead
+// of reusing a poisoned pooled connection.
+func (c *Client) CloseIdleConnections() {
+	c.httpClient.CloseIdleConnections()
+}
+
 // ServerVersions returns the Matrix protocol versions and unstable features
 // supported by the homeserver. This is an unauthenticated endpoint — useful
 // for checking whether the homeserver is reachable and what it supports.

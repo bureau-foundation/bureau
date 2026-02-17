@@ -1950,6 +1950,10 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	d.notifyReconcile()
 
 	// Schedule a deferred reconcile after the crash backoff expires.
+	// When the deferred reconcile succeeds and the principal is running,
+	// post a "recovered" notification. Without this, the "backing_off"
+	// message above is the last status posted and observers never learn
+	// that recovery succeeded.
 	if crashBackoff > 0 && d.shutdownCtx != nil {
 		go func() {
 			select {
@@ -1961,6 +1965,18 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 						"principal", localpart,
 						"error", err,
 					)
+				} else {
+					d.reconcileMu.Lock()
+					nowRunning := d.running[localpart]
+					d.reconcileMu.Unlock()
+					if nowRunning {
+						if _, err := d.sendEventRetry(d.shutdownCtx, d.configRoomID,
+							schema.MatrixEventTypeMessage,
+							schema.NewProxyCrashMessage(localpart, "recovered", exitCode, "")); err != nil {
+							d.logger.Error("failed to post deferred proxy recovery notification",
+								"principal", localpart, "error", err)
+						}
+					}
 				}
 				d.notifyReconcile()
 			}

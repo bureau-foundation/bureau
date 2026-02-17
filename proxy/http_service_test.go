@@ -771,6 +771,7 @@ func TestMatrixAPIFilter(t *testing.T) {
 			"GET /_matrix/client/v3/rooms/*/relations/*",
 			"GET /_matrix/client/v3/sync*",
 			"GET /_matrix/client/v3/account/whoami",
+			"GET /_matrix/client/v3/directory/room/*",
 			"POST /_matrix/client/v3/join/*",
 			"GET /_matrix/client/v3/joined_rooms",
 		},
@@ -858,14 +859,14 @@ func TestMatrixAPIFilter(t *testing.T) {
 			path:       "/_matrix/client/v3/joined_rooms",
 			wantStatus: http.StatusOK,
 		},
-
-		// Blocked endpoints — administrative/discovery operations.
 		{
-			name:       "alias resolution blocked",
+			name:       "resolve room alias",
 			method:     "GET",
 			path:       "/_matrix/client/v3/directory/room/%23bureau%2Fmachines:bureau.local",
-			wantStatus: http.StatusForbidden,
+			wantStatus: http.StatusOK,
 		},
+
+		// Blocked endpoints — administrative/discovery operations.
 		{
 			name:       "public rooms blocked",
 			method:     "GET",

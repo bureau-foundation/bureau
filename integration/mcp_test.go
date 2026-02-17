@@ -4,34 +4,49 @@
 package integration_test
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
-	"os"
-	"os/exec"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// TestMCPServer verifies that the MCP server correctly filters tools
-// based on authorization grants propagated through the full stack:
-// authorization policy → daemon → proxy → MCP server.
+// TestMCPServer verifies that MCP tool authorization works end-to-end when
+// bureau-agent runs inside a real sandbox with daemon-resolved grants.
 //
-// The test deploys a principal with a grant for command/pipeline/list
-// but NOT command/template/list, then launches "bureau mcp serve" as a
-// subprocess connected to the principal's proxy socket. It verifies
-// that tools/list reflects the grant and that tools/call enforces
-// authorization.
+// The agent is deployed with a narrow grant: only command/matrix/send.
+// A mock LLM drives the agent through three requests:
+//
+//  1. Return tool_use for bureau_matrix_send (authorized) — the agent
+//     executes the tool, which posts a message to Matrix through the proxy.
+//  2. Validate the tool_result, then return tool_use for bureau_template_list
+//     (unauthorized — agent has no command/template/list grant).
+//  3. Validate the tool_result contains "not authorized" (from the MCP
+//     server's CallTool rejecting the unauthorized tool), return text.
+//
+// Verification flows through two paths:
+//   - Matrix: admin watches for the message posted by the authorized tool
+//   - Mock: validates the unauthorized tool's error content in the wire protocol
+//
+// This proves: grant flow from daemon → proxy → MCP server, authorized
+// tool execution through the proxy, and unauthorized tool rejection — all
+// from inside the sandbox where production agents run.
 func TestMCPServer(t *testing.T) {
 	t.Parallel()
 
+	ctx := t.Context()
 	admin := adminSession(t)
 	defer admin.Close()
 
 	fleetRoomID := createFleetRoom(t, admin)
 
+	// Boot a machine.
 	machine := newTestMachine(t, "machine/mcp")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
@@ -40,241 +55,219 @@ func TestMCPServer(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Deploy a principal with a targeted authorization policy: grant
-	// only command/pipeline/list. The daemon resolves this into grants
-	// and pushes them to the proxy, where the MCP server fetches them
-	// via GET /v1/grants.
-	agent := registerPrincipal(t, "test/mcp-agent", "mcp-agent-password")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account: agent,
-			Authorization: &schema.AuthorizationPolicy{
-				Grants: []schema.Grant{
-					{Actions: []string{"command/pipeline/list"}},
-				},
+	// Deploy bureau-agent with only command/matrix/send granted.
+	// The daemon resolves this into grants and pushes them to the proxy,
+	// where the MCP server reads them via GET /v1/grants.
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:    testutil.DataBinary(t, "BUREAU_AGENT_BINARY"),
+		Localpart: "agent/mcp-auth-test",
+		ExtraEnv: map[string]string{
+			"BUREAU_AGENT_MODEL":      "mock-model",
+			"BUREAU_AGENT_SERVICE":    "anthropic",
+			"BUREAU_AGENT_MAX_TOKENS": "1024",
+		},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"command/matrix/send"}},
 			},
-		}},
+		},
 	})
 
-	proxySocket := proxySockets[agent.Localpart]
-	bureauBinary := resolvedBinary(t, "BUREAU_BINARY")
+	// Start the mock Anthropic server. The mock drives a 3-request sequence:
+	// authorized tool → unauthorized tool → validate error.
+	mock := newMockMCPAuthSequence(t, machine.ConfigRoomID)
+	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.Server.URL)
 
-	t.Run("ToolsListFilteredByGrants", func(t *testing.T) {
-		result := mcpToolsList(t, bureauBinary, proxySocket)
+	// Watch for the authorized tool's Matrix message before sending the prompt.
+	responseWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage("Test MCP authorization")); err != nil {
+		t.Fatalf("sending prompt to agent: %v", err)
+	}
 
-		// With only command/pipeline/list granted, exactly one tool
-		// should be visible: bureau_pipeline_list. All other commands
-		// either lack RequiredGrants (hidden by default-deny) or have
-		// ungranted requirements.
-		var names []string
-		for _, tool := range result.Tools {
-			names = append(names, tool.Name)
-		}
+	// Wait for the bureau_matrix_send tool to post its message. This
+	// proves the authorized tool executed through the proxy from inside
+	// the sandbox.
+	responseWatch.WaitForMessage(t, "mcp-auth-test", agent.Account.UserID)
+	t.Log("authorized tool (bureau_matrix_send) posted message via proxy")
 
-		if len(result.Tools) != 1 {
-			t.Fatalf("expected 1 tool, got %d: %v", len(result.Tools), names)
-		}
-		if result.Tools[0].Name != "bureau_pipeline_list" {
-			t.Errorf("expected bureau_pipeline_list, got %q", result.Tools[0].Name)
-		}
-	})
+	// Wait for the mock to confirm all three LLM requests completed.
+	// The mock validated on request 3 that the tool_result for the
+	// unauthorized bureau_template_list call contained "not authorized".
+	select {
+	case <-mock.AllRequestsHandled:
+		t.Log("all LLM requests handled — authorized + unauthorized tool cycle verified")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for all LLM requests to complete")
+	}
 
-	t.Run("ToolsCallUnauthorized", func(t *testing.T) {
-		// Calling a tool the principal lacks grants for should fail
-		// with a JSON-RPC error before the command is invoked.
-		resp := mcpCallTool(t, bureauBinary, proxySocket, "bureau_template_list", nil)
-		if resp.Error == nil {
-			t.Fatal("expected JSON-RPC error calling unauthorized tool")
-		}
-		if !strings.Contains(resp.Error.Message, "not authorized") {
-			t.Errorf("error message = %q, want it to contain 'not authorized'",
-				resp.Error.Message)
-		}
-	})
-
-	t.Run("ToolsCallAuthorized", func(t *testing.T) {
-		// Calling an authorized tool should pass the grant check and
-		// invoke the command. The command itself will fail (no Matrix
-		// operator session inside the sandbox), but the MCP response
-		// is a tool-level error (isError=true), not a JSON-RPC error.
-		// This proves the authorization gate was passed.
-		resp := mcpCallTool(t, bureauBinary, proxySocket, "bureau_pipeline_list",
-			map[string]any{"room": "bureau/pipeline"})
-		if resp.Error != nil {
-			t.Fatalf("unexpected JSON-RPC error: code=%d message=%q",
-				resp.Error.Code, resp.Error.Message)
-		}
-
-		var result mcpCallResult
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			t.Fatalf("unmarshal tools/call result: %v", err)
-		}
-
-		// The command was invoked (grant check passed). It returns an
-		// error because there's no operator session, but that's the
-		// command's problem, not the authorization system's.
-		if !result.IsError {
-			// If it somehow succeeded (e.g., the command found a
-			// session), that's fine too — authorization passed either way.
-			t.Log("tool execution succeeded (unexpected but acceptable)")
-		}
-	})
+	if mock.AuthorizationError() != "" {
+		t.Fatal(mock.AuthorizationError())
+	}
 }
 
-// --- MCP protocol helpers for integration tests ---
+// mockMCPAuthServer wraps an httptest.Server with synchronization for the
+// 3-request MCP authorization test sequence.
+type mockMCPAuthServer struct {
+	Server             *httptest.Server
+	AllRequestsHandled <-chan struct{}
 
-// mcpResponse is a JSON-RPC 2.0 response parsed from the MCP server's stdout.
-type mcpResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *mcpRPCError    `json:"error"`
+	// authorizationError is set if the mock detected a protocol violation
+	// (e.g., tool_result for the unauthorized call didn't contain the
+	// expected error). Read after AllRequestsHandled is closed.
+	authorizationError string
+	mutex              sync.Mutex
 }
 
-type mcpRPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+// AuthorizationError returns any validation failure detected by the mock.
+// Safe to call after AllRequestsHandled is closed.
+func (m *mockMCPAuthServer) AuthorizationError() string {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return m.authorizationError
 }
 
-// mcpListResult is the parsed result of a tools/list response.
-type mcpListResult struct {
-	Tools []mcpTool `json:"tools"`
-}
-
-type mcpTool struct {
-	Name        string `json:"name"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-}
-
-// mcpCallResult is the parsed result of a tools/call response.
-type mcpCallResult struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	IsError bool `json:"isError"`
-}
-
-// mcpSession launches "bureau mcp serve" as a subprocess connected to the
-// given proxy socket, sends JSON-RPC messages to its stdin, and returns
-// all responses. The subprocess receives EOF after all messages are sent
-// and is waited to exit.
-func mcpSession(t *testing.T, bureauBinary, proxySocket string, messages ...map[string]any) []mcpResponse {
+// newMockMCPAuthSequence creates a mock Anthropic Messages API server for
+// the MCP authorization test. It handles three requests:
+//
+//   - Request 0: return tool_use for bureau_matrix_send (authorized).
+//   - Request 1: validate tool_result for request 0, return tool_use for
+//     bureau_template_list (unauthorized — agent lacks grant).
+//   - Request 2: validate tool_result for request 1 contains "not authorized",
+//     return text "done", signal AllRequestsHandled.
+func newMockMCPAuthSequence(t *testing.T, configRoomID string) *mockMCPAuthServer {
 	t.Helper()
 
-	var stdin bytes.Buffer
-	for _, msg := range messages {
-		data, err := json.Marshal(msg)
-		if err != nil {
-			t.Fatalf("marshal message: %v", err)
+	var (
+		mutex     sync.Mutex
+		callCount int
+	)
+
+	allDone := make(chan struct{})
+	mock := &mockMCPAuthServer{AllRequestsHandled: allDone}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mutex.Lock()
+		current := callCount
+		callCount++
+		mutex.Unlock()
+
+		// Parse the wire request to validate structure.
+		var wireRequest struct {
+			Model    string `json:"model"`
+			Stream   bool   `json:"stream"`
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
 		}
-		stdin.Write(data)
-		stdin.WriteByte('\n')
-	}
-
-	cmd := exec.Command(bureauBinary, "mcp", "serve")
-	cmd.Stdin = &stdin
-	cmd.Env = append(os.Environ(), "BUREAU_PROXY_SOCKET="+proxySocket)
-
-	output, err := cmd.Output()
-	if err != nil {
-		// Include stderr in the error for debugging.
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("bureau mcp serve failed: %v\nstderr: %s", err, exitErr.Stderr)
+		if err := json.NewDecoder(request.Body).Decode(&wireRequest); err != nil {
+			http.Error(writer, "bad request body", http.StatusBadRequest)
+			return
 		}
-		t.Fatalf("bureau mcp serve failed: %v", err)
-	}
+		if !wireRequest.Stream {
+			http.Error(writer, "expected stream=true", http.StatusBadRequest)
+			return
+		}
 
-	var responses []mcpResponse
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
+		switch current {
+		case 0:
+			// Return tool_use for bureau_matrix_send (authorized).
+			toolInput, _ := json.Marshal(map[string]string{
+				"room":    configRoomID,
+				"message": "mcp-auth-test",
+			})
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "tool_use",
+				InputTokens:  150,
+				OutputTokens: 30,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(
+						`{"type":"tool_use","id":"tc_auth_00","name":"bureau_matrix_send","input":%s}`,
+						toolInput)),
+				},
+			})
+
+		case 1:
+			// Validate tool_result for tc_auth_00 is present, then
+			// return tool_use for bureau_template_list (unauthorized).
+			if !hasToolResult(wireRequest.Messages, "tc_auth_00") {
+				t.Error("mock: request 1 missing tool_result for tc_auth_00")
+			}
+
+			toolInput, _ := json.Marshal(map[string]string{
+				"room": "#bureau/template:" + testServerName,
+			})
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "tool_use",
+				InputTokens:  200,
+				OutputTokens: 30,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(
+						`{"type":"tool_use","id":"tc_auth_01","name":"bureau_template_list","input":%s}`,
+						toolInput)),
+				},
+			})
+
+		case 2:
+			// Validate tool_result for tc_auth_01 contains "not authorized".
+			// This proves the MCP server inside the sandbox rejected the
+			// unauthorized tool call.
+			toolResultContent := findToolResultContent(wireRequest.Messages, "tc_auth_01")
+			if toolResultContent == "" {
+				t.Error("mock: request 2 missing tool_result for tc_auth_01")
+			} else if !strings.Contains(toolResultContent, "not authorized") {
+				mock.mutex.Lock()
+				mock.authorizationError = fmt.Sprintf(
+					"mock: tool_result for unauthorized bureau_template_list should contain 'not authorized', got: %q",
+					toolResultContent)
+				mock.mutex.Unlock()
+			}
+
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "end_turn",
+				InputTokens:  250,
+				OutputTokens: 15,
+				Content: []json.RawMessage{
+					json.RawMessage(`{"type":"text","text":"Authorization test complete"}`),
+				},
+			})
+			close(allDone)
+
+		default:
+			t.Errorf("mock: unexpected request %d", current)
+			http.Error(writer, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+
+	t.Cleanup(server.Close)
+	mock.Server = server
+	return mock
+}
+
+// findToolResultContent searches the message history for a tool_result
+// with the given tool_use_id and returns its content string. Returns
+// empty string if not found.
+func findToolResultContent(messages []struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}, toolUseID string) string {
+	for _, message := range messages {
+		var blocks []struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
+			Content   string `json:"content"`
+		}
+		if err := json.Unmarshal(message.Content, &blocks); err != nil {
 			continue
 		}
-		var resp mcpResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			t.Fatalf("unmarshal response: %v\nraw: %s", err, line)
+		for _, block := range blocks {
+			if block.Type == "tool_result" && block.ToolUseID == toolUseID {
+				return block.Content
+			}
 		}
-		responses = append(responses, resp)
 	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scanning output: %v", err)
-	}
-
-	return responses
-}
-
-// mcpInitMessages returns the initialize request and initialized
-// notification that start every MCP session.
-func mcpInitMessages() []map[string]any {
-	return []map[string]any{
-		{
-			"jsonrpc": "2.0",
-			"id":      0,
-			"method":  "initialize",
-			"params": map[string]any{
-				"protocolVersion": "2025-11-25",
-				"capabilities":    map[string]any{},
-				"clientInfo":      map[string]any{"name": "integration-test", "version": "1.0"},
-			},
-		},
-		{
-			"jsonrpc": "2.0",
-			"method":  "notifications/initialized",
-		},
-	}
-}
-
-// mcpToolsList launches an MCP session and returns the parsed tools/list result.
-func mcpToolsList(t *testing.T, bureauBinary, proxySocket string) mcpListResult {
-	t.Helper()
-
-	messages := append(mcpInitMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/list",
-	})
-
-	responses := mcpSession(t, bureauBinary, proxySocket, messages...)
-	if len(responses) < 2 {
-		t.Fatalf("expected at least 2 responses (init + tools/list), got %d", len(responses))
-	}
-
-	resp := responses[1]
-	if resp.Error != nil {
-		t.Fatalf("tools/list error: code=%d message=%q", resp.Error.Code, resp.Error.Message)
-	}
-
-	var result mcpListResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal tools/list result: %v", err)
-	}
-	return result
-}
-
-// mcpCallTool launches an MCP session with a single tools/call and returns
-// the raw response, allowing callers to assert on both success and error.
-func mcpCallTool(t *testing.T, bureauBinary, proxySocket, name string, arguments map[string]any) mcpResponse {
-	t.Helper()
-
-	params := map[string]any{"name": name}
-	if arguments != nil {
-		params["arguments"] = arguments
-	}
-
-	messages := append(mcpInitMessages(), map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params":  params,
-	})
-
-	responses := mcpSession(t, bureauBinary, proxySocket, messages...)
-	if len(responses) < 2 {
-		t.Fatalf("expected at least 2 responses (init + tools/call), got %d", len(responses))
-	}
-
-	return responses[1]
+	return ""
 }

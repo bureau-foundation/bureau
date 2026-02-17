@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -420,23 +420,39 @@ func containerHasBwrap(t *testing.T, containerID string) bool {
 	return true
 }
 
-// waitForFileInContainer polls until a file exists inside the container.
-// Bounded by a context derived from the test context with the given timeout.
+// waitForFileInContainer blocks until a file exists inside the container.
+// Uses inotifywait to watch the parent directory for creation events
+// instead of busy-spinning docker exec calls.
 func waitForFileInContainer(t *testing.T, containerID, path string, timeout time.Duration) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 
+	directory := filepath.Dir(path)
+	timeoutSeconds := strconv.Itoa(max(1, int(timeout.Seconds())))
+
 	for {
-		code := dockerExecExitCode(t, containerID, "test", "-e", path)
-		if code == 0 {
+		if dockerExecExitCode(t, containerID, "test", "-e", path) == 0 {
 			return
 		}
 		if ctx.Err() != nil {
 			t.Fatalf("timed out after %s waiting for file in container: %s", timeout, path)
 		}
-		runtime.Gosched()
+
+		// Watch for create events in the parent directory. If the
+		// parent doesn't exist yet, watch its parent instead (e.g.,
+		// watch /run for the creation of bureau/).
+		watchDirectory := directory
+		if dockerExecExitCode(t, containerID, "test", "-d", directory) != 0 {
+			watchDirectory = filepath.Dir(directory)
+		}
+
+		cmd := exec.CommandContext(ctx, "docker", "exec", containerID,
+			"inotifywait", "-t", timeoutSeconds, "-e", "create", watchDirectory)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		_ = cmd.Run()
 	}
 }
 

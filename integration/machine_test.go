@@ -569,3 +569,41 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *t
 
 	return ref.String()
 }
+
+// joinConfigRoom invites an agent to the config room and joins via a
+// direct session. The agent needs config room membership so the lifecycle
+// manager can post messages (agent-ready, text responses) to the room.
+func joinConfigRoom(t *testing.T, admin *messaging.Session, configRoomID string, agent principalAccount) {
+	t.Helper()
+
+	ctx := t.Context()
+	if err := admin.InviteUser(ctx, configRoomID, agent.UserID); err != nil {
+		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			t.Fatalf("invite agent %s to config room: %v", agent.Localpart, err)
+		}
+	}
+	agentSession := principalSession(t, agent)
+	if _, err := agentSession.JoinRoom(ctx, configRoomID); err != nil {
+		t.Fatalf("agent %s join config room: %v", agent.Localpart, err)
+	}
+	agentSession.Close()
+}
+
+// readDaemonMintedToken reads a daemon-minted service token from the
+// machine's state directory. The daemon writes tokens to
+// <stateDir>/tokens/<localpart>/<role> during sandbox provisioning.
+// Call this after the proxy socket appears (which proves the daemon
+// completed sandbox creation including token minting).
+func readDaemonMintedToken(t *testing.T, machine *testMachine, localpart, serviceRole string) []byte {
+	t.Helper()
+
+	tokenPath := filepath.Join(machine.StateDir, "tokens", localpart, serviceRole)
+	token, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("read daemon-minted %s token for %s at %s: %v", serviceRole, localpart, tokenPath, err)
+	}
+	if len(token) == 0 {
+		t.Fatalf("daemon-minted %s token for %s is empty", serviceRole, localpart)
+	}
+	return token
+}

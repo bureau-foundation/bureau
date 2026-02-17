@@ -29,7 +29,6 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
@@ -41,72 +40,15 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Publish a test template. Same structure as the quickstart test:
-	// PID namespace, security flags, bind-mounted test agent binary,
-	// standard environment variable expansion.
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
-	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
-	}
-
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
-	}
-
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "payload-test-agent", schema.TemplateContent{
-			Description: "Test agent for payload delivery and hot-reload",
-			Command:     []string{testAgentBinary},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
-	if err != nil {
-		t.Fatalf("publish payload-test-agent template: %v", err)
-	}
+	// Publish a test template.
+	templateRef := publishTestAgentTemplate(t, admin, machine, "payload-test-agent")
 
 	// Register the principal and push credentials.
 	agent := registerPrincipal(t, "agent/payload-test", "payload-test-password")
 	pushCredentials(t, admin, machine, agent)
-
-	// The test agent sends messages to the config room from inside the
-	// sandbox. The proxy's default-deny grants block JoinRoom, so handle
-	// membership before the sandbox starts: admin invites, principal joins
-	// via direct session.
-	if err := admin.InviteUser(ctx, machine.ConfigRoomID, agent.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite agent to config room: %v", err)
-		}
-	}
-	agentSession := principalSession(t, agent)
-	if _, err := agentSession.JoinRoom(ctx, machine.ConfigRoomID); err != nil {
-		t.Fatalf("agent join config room: %v", err)
-	}
-	agentSession.Close()
+	joinConfigRoom(t, admin, machine.ConfigRoomID, agent)
 
 	// --- Phase 1: Deploy with initial payload ---
-
-	templateRef := "bureau/template:payload-test-agent"
 	initialPayload := map[string]any{
 		"version": float64(1),
 		"task":    "initial",
@@ -176,7 +118,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	// before sending the ack, so the ack should contain the updated payload.
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err = admin.SendMessage(ctx, machine.ConfigRoomID,
+	_, err := admin.SendMessage(ctx, machine.ConfigRoomID,
 		messaging.NewTextMessage("verify-payload-update"))
 	if err != nil {
 		t.Fatalf("send trigger message to agent: %v", err)
@@ -222,7 +164,6 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
@@ -234,69 +175,15 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Publish a test template (same structure as the payload-test-agent
-	// template, just with a different state key so it doesn't collide).
-	templateRoomAlias := schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName)
-	templateRoomID, err := admin.ResolveAlias(ctx, templateRoomAlias)
-	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
-	}
-
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
-	}
-
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "payload-empty-agent", schema.TemplateContent{
-			Description: "Test agent for empty-to-populated payload hot-reload",
-			Command:     []string{testAgentBinary},
-			Namespaces: &schema.TemplateNamespaces{
-				PID: true,
-			},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME":                "/workspace",
-				"TERM":                "xterm-256color",
-				"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-				"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-				"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-			},
-		})
-	if err != nil {
-		t.Fatalf("publish payload-empty-agent template: %v", err)
-	}
+	// Publish a test template.
+	templateRef := publishTestAgentTemplate(t, admin, machine, "payload-empty-agent")
 
 	// Register the principal and push credentials.
 	agent := registerPrincipal(t, "agent/payload-empty", "payload-empty-password")
 	pushCredentials(t, admin, machine, agent)
-
-	// Pre-join the agent to the config room (proxy's default-deny blocks
-	// JoinRoom from inside the sandbox).
-	if err := admin.InviteUser(ctx, machine.ConfigRoomID, agent.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite agent to config room: %v", err)
-		}
-	}
-	agentSession := principalSession(t, agent)
-	if _, err := agentSession.JoinRoom(ctx, machine.ConfigRoomID); err != nil {
-		t.Fatalf("agent join config room: %v", err)
-	}
-	agentSession.Close()
+	joinConfigRoom(t, admin, machine.ConfigRoomID, agent)
 
 	// --- Phase 1: Deploy WITHOUT a payload ---
-
-	templateRef := "bureau/template:payload-empty-agent"
 
 	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
@@ -356,7 +243,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	// Trigger the agent to re-read the payload and report it.
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err = admin.SendMessage(ctx, machine.ConfigRoomID,
+	_, err := admin.SendMessage(ctx, machine.ConfigRoomID,
 		messaging.NewTextMessage("verify-payload-from-empty"))
 	if err != nil {
 		t.Fatalf("send trigger message to agent: %v", err)

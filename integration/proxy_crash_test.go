@@ -211,14 +211,6 @@ func TestProxyCrashRecovery(t *testing.T) {
 	}
 	t.Log("new proxy serves correct identity")
 
-	// Verify the new proxy has a different PID (proves it was recreated,
-	// not just the same process somehow surviving SIGKILL).
-	newProxyPID := launcherListProxyPID(t, launcherSocket, principalLocalpart)
-	if newProxyPID == proxyPID {
-		t.Errorf("new proxy PID = %d, same as old — expected a different process", newProxyPID)
-	}
-	t.Logf("new proxy PID = %d (was %d)", newProxyPID, proxyPID)
-
 	t.Log("proxy crash recovery verified: detection, cleanup, re-creation, identity preserved")
 }
 

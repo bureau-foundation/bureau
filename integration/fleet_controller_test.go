@@ -4,7 +4,6 @@
 package integration_test
 
 import (
-	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"os"
@@ -15,7 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -212,44 +211,12 @@ func startFleetController(t *testing.T, admin *messaging.Session, machine *testM
 }
 
 // fleetClient creates a service.ServiceClient for the fleet controller.
-// If signingKey is non-nil, the client authenticates with a minted
-// service token carrying the given grants. If signingKey is nil, the
-// client is unauthenticated (for status checks).
-func fleetClient(t *testing.T, fc *fleetController, signingKey ed25519.PrivateKey, grants []servicetoken.Grant) *service.ServiceClient {
+// If token is non-nil, the client authenticates with the given
+// daemon-minted service token. If token is nil, the client is
+// unauthenticated (for status checks).
+func fleetClient(t *testing.T, fc *fleetController, token []byte) *service.ServiceClient {
 	t.Helper()
-
-	if signingKey == nil {
-		return service.NewServiceClientFromToken(fc.SocketPath, nil)
-	}
-
-	// Use a fixed far-future timestamp for test tokens. The fleet
-	// controller validates expiry against its own clock, and integration
-	// tests always run well within this window.
-	const testIssuedAt = 1735689600  // 2025-01-01T00:00:00Z
-	const testExpiresAt = 4070908800 // 2099-01-01T00:00:00Z
-	token := &servicetoken.Token{
-		Subject:   "test/fleet-operator",
-		Machine:   "machine/test",
-		Audience:  "fleet",
-		Grants:    grants,
-		ID:        "test-fleet-token",
-		IssuedAt:  testIssuedAt,
-		ExpiresAt: testExpiresAt,
-	}
-
-	tokenBytes, err := servicetoken.Mint(signingKey, token)
-	if err != nil {
-		t.Fatalf("mint fleet service token: %v", err)
-	}
-
-	return service.NewServiceClientFromToken(fc.SocketPath, tokenBytes)
-}
-
-// fleetAllGrants returns grants that authorize all fleet API actions.
-func fleetAllGrants() []servicetoken.Grant {
-	return []servicetoken.Grant{
-		{Actions: []string{"fleet/**"}},
-	}
+	return service.NewServiceClientFromToken(fc.SocketPath, token)
 }
 
 // publishFleetService publishes a FleetServiceContent state event to
@@ -261,20 +228,6 @@ func publishFleetService(t *testing.T, admin *messaging.Session, fleetRoomID, se
 	if err != nil {
 		t.Fatalf("publish fleet service %s: %v", serviceLocalpart, err)
 	}
-}
-
-// loadDaemonSigningKey reads the daemon's token signing private key from
-// the machine's state directory. The daemon generates this keypair at
-// startup and publishes the public key to #bureau/system.
-func loadDaemonSigningKey(t *testing.T, machine *testMachine) ed25519.PrivateKey {
-	t.Helper()
-
-	_, privateKey, err := servicetoken.LoadKeypair(machine.StateDir)
-	if err != nil {
-		t.Fatalf("load daemon signing keypair from %s: %v", machine.StateDir, err)
-	}
-
-	return privateKey
 }
 
 // grantFleetControllerConfigAccess invites a fleet controller to a machine's
@@ -391,6 +344,95 @@ func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetControlle
 	)
 }
 
+// publishFleetOperatorTemplate publishes a test agent template with
+// RequiredServices: ["fleet"]. Principals deployed with this template
+// get a daemon-minted fleet service token, which the test uses to
+// authenticate fleet controller API calls. Returns the template
+// reference string.
+func publishFleetOperatorTemplate(t *testing.T, admin *messaging.Session, machine *testMachine) string {
+	t.Helper()
+
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	grantTemplateAccess(t, admin, machine)
+
+	ref, err := schema.ParseTemplateRef("bureau/template:fleet-operator")
+	if err != nil {
+		t.Fatalf("parse fleet operator template ref: %v", err)
+	}
+
+	_, err = template.Push(t.Context(), admin, ref, schema.TemplateContent{
+		Description:      "Fleet operator with fleet service token",
+		Command:          []string{testAgentBinary},
+		RequiredServices: []string{"fleet"},
+		Namespaces:       &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME":                "/workspace",
+			"TERM":                "xterm-256color",
+			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+		},
+	}, testServerName)
+	if err != nil {
+		t.Fatalf("push fleet operator template: %v", err)
+	}
+
+	return ref.String()
+}
+
+// deployFleetOperator registers a principal, pushes credentials, deploys
+// it with the given fleet grants, waits for the proxy socket (proving
+// the daemon minted service tokens), and returns the daemon-minted fleet
+// token. The principal uses the fleet operator template which has
+// RequiredServices: ["fleet"], so the daemon mints a fleet token with
+// the filtered grants.
+func deployFleetOperator(t *testing.T, admin *messaging.Session, machine *testMachine, localpart, templateRef string, grants []string) []byte {
+	t.Helper()
+
+	account := registerPrincipal(t, localpart, localpart+"-password")
+	pushCredentials(t, admin, machine, account)
+	joinConfigRoom(t, admin, machine.ConfigRoomID, account)
+
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:  account,
+			Template: templateRef,
+			Authorization: &schema.AuthorizationPolicy{
+				Grants: []schema.Grant{{Actions: grants}},
+			},
+		}},
+	})
+
+	waitForFile(t, machine.PrincipalSocketPath(localpart))
+	return readDaemonMintedToken(t, machine, localpart, "fleet")
+}
+
+// publishFleetServiceBinding publishes an m.bureau.room_service state
+// event for the "fleet" role in the machine's config room. The daemon
+// reads this binding on demand when resolving RequiredServices during
+// sandbox creation — the binding must exist before any principal with
+// RequiredServices: ["fleet"] is deployed.
+func publishFleetServiceBinding(t *testing.T, admin *messaging.Session, machine *testMachine, fc *fleetController) {
+	t.Helper()
+
+	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+		schema.EventTypeRoomService, "fleet",
+		schema.RoomServiceContent{Principal: fc.UserID})
+	if err != nil {
+		t.Fatalf("publish fleet service binding in config room: %v", err)
+	}
+}
+
 // --- Fleet controller integration tests ---
 
 // TestFleetControllerLifecycle verifies the full fleet controller startup
@@ -419,26 +461,34 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 		FleetRoomID:    fleetRoomID,
 	})
 
+	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
+
 	// Start the fleet controller. It performs initial /sync before
 	// opening the socket, so by the time we can call APIs the fleet
-	// model should already contain the machine.
+	// model should already contain the machine. Must start before
+	// deploying the operator because the operator's template has
+	// RequiredServices: ["fleet"] — the daemon needs the fleet
+	// controller's socket and binding to resolve that dependency.
 	controllerName := "service/fleet/lifecycle"
 	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	publishFleetServiceBinding(t, admin, machine, fc)
 
-	// Load the daemon's token signing key. The daemon generated this
-	// keypair at startup and published the public key to #bureau/system.
-	// The fleet controller loaded that public key during startup to
-	// verify incoming tokens.
-	signingKey := loadDaemonSigningKey(t, machine)
+	// Deploy a fleet operator to obtain a daemon-minted fleet token.
+	// The daemon resolves the fleet service binding (published above),
+	// mounts the fleet controller socket, and mints a fleet token
+	// with the operator's grants.
+	operatorToken := deployFleetOperator(t, admin, machine,
+		"agent/fleet-lifecycle-operator", operatorTemplateRef, []string{"fleet/**"})
 
 	ctx := t.Context()
 
 	// --- Sub-test: unauthenticated status ---
 	t.Run("Status", func(t *testing.T) {
-		unauthClient := fleetClient(t, fc, nil, nil)
+		unauthClient := fleetClient(t, fc, nil)
 		var status fleetStatusResponse
 		if err := unauthClient.Call(ctx, "status", nil, &status); err != nil {
 			t.Fatalf("status: %v", err)
@@ -453,7 +503,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: authenticated info ---
 	t.Run("Info", func(t *testing.T) {
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 		var info fleetInfoResponse
 		if err := authClient.Call(ctx, "info", nil, &info); err != nil {
 			t.Fatalf("info: %v", err)
@@ -468,7 +518,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: list machines ---
 	t.Run("ListMachines", func(t *testing.T) {
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 		assertFleetMachine(t, authClient, machine.Name)
 
 		var response fleetListMachinesResponse
@@ -505,7 +555,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: show machine ---
 	t.Run("ShowMachine", func(t *testing.T) {
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 
 		var response fleetShowMachineResponse
 		if err := authClient.Call(ctx, "show-machine",
@@ -539,7 +589,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 			Priority: 10,
 		})
 
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 		waitForFleetService(t, &fleetWatch, fc, serviceLocalpart)
 
 		// Verify the service appears in list-services with correct fields.
@@ -580,7 +630,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	t.Run("ShowService", func(t *testing.T) {
 		serviceLocalpart := "service/stt/lifecycle"
 
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 		// The service was published in the ServiceDiscovery sub-test.
 		// Since sub-tests run sequentially within the parent, the fleet
 		// controller has already processed it.
@@ -610,7 +660,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	t.Run("Plan", func(t *testing.T) {
 		serviceLocalpart := "service/stt/lifecycle"
 
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 		var response fleetPlanResponse
 		if err := authClient.Call(ctx, "plan",
 			map[string]any{"service": serviceLocalpart}, &response); err != nil {
@@ -646,7 +696,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: machine health ---
 	t.Run("MachineHealth", func(t *testing.T) {
-		authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+		authClient := fleetClient(t, fc, operatorToken)
 
 		var response struct {
 			Machines []struct {
@@ -716,6 +766,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// Publish a test template so the daemon can create sandboxes when
 	// the fleet controller places a service.
 	templateRef := publishTestAgentTemplate(t, admin, machine, "fleet-place-agent")
+	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
 
 	// Register a Matrix account for the service principal. The fleet
 	// controller will reference this localpart when it creates a
@@ -731,22 +782,12 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// The test agent sends a ready signal to the config room. For that
 	// to work, the service account must be a member. The proxy's
 	// default-deny grants block JoinRoom, so handle membership before
-	// the sandbox starts: admin invites, principal joins via direct
-	// session (outside the sandbox).
-	if err := admin.InviteUser(t.Context(), machine.ConfigRoomID, serviceAccount.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite service to config room: %v", err)
-		}
-	}
-	serviceSession := principalSession(t, serviceAccount)
-	if _, err := serviceSession.JoinRoom(t.Context(), machine.ConfigRoomID); err != nil {
-		t.Fatalf("service join config room: %v", err)
-	}
-	serviceSession.Close()
+	// the sandbox starts.
+	joinConfigRoom(t, admin, machine.ConfigRoomID, serviceAccount)
 
 	// Push an empty MachineConfig so the fleet controller can discover
-	// the config room once it joins. The fleet controller learns config
-	// room IDs from MachineConfig state events inside config rooms.
+	// the config room. The fleet controller discovers config room IDs
+	// from MachineConfig state events.
 	pushMachineConfig(t, admin, machine, deploymentConfig{})
 
 	// Create a fleet room watch BEFORE starting the fleet controller.
@@ -760,9 +801,16 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// room invite and processes the MachineConfig event.
 	controllerName := "service/fleet/place-test"
 	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	publishFleetServiceBinding(t, admin, machine, fc)
 
-	signingKey := loadDaemonSigningKey(t, machine)
-	authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+	// Deploy a fleet operator to obtain a daemon-minted fleet token.
+	// The operator template has RequiredServices: ["fleet"], so the
+	// daemon resolves the fleet service binding, mounts the fleet
+	// controller socket, and mints a fleet token.
+	operatorToken := deployFleetOperator(t, admin, machine,
+		"agent/fleet-place-operator", operatorTemplateRef, []string{"fleet/**"})
+
+	authClient := fleetClient(t, fc, operatorToken)
 	ctx := t.Context()
 
 	// Wait for the fleet controller to discover the config room. The
@@ -926,6 +974,7 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish a test template and grant both machines access.
 	templateRef := publishTestAgentTemplate(t, admin, machineA, "fleet-recon-agent")
 	grantTemplateAccess(t, admin, machineB)
+	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machineA)
 
 	// Register the service principal and push credentials to both
 	// machines so either can create a sandbox after reconciliation.
@@ -935,10 +984,7 @@ func TestFleetReconciliation(t *testing.T) {
 	pushCredentials(t, admin, machineB, serviceAccount)
 
 	// Push empty MachineConfig to both machines so the fleet controller
-	// can discover their config room IDs. The daemon does not publish
-	// MachineConfig at startup — it reads existing config during its
-	// reconcile loop. The fleet controller discovers config room IDs
-	// from MachineConfig state events (processMachineConfigEvent).
+	// can discover their config rooms.
 	pushMachineConfig(t, admin, machineA, deploymentConfig{})
 	pushMachineConfig(t, admin, machineB, deploymentConfig{})
 
@@ -956,6 +1002,12 @@ func TestFleetReconciliation(t *testing.T) {
 	// startFleetController only grants access for the machine it receives
 	// (machineA); additional machines need explicit grants.
 	grantFleetControllerConfigAccess(t, admin, fc, machineB)
+
+	// Publish the fleet service binding and deploy a fleet operator on
+	// machineA to obtain a daemon-minted fleet token.
+	publishFleetServiceBinding(t, admin, machineA, fc)
+	operatorToken := deployFleetOperator(t, admin, machineA,
+		"agent/fleet-recon-operator", operatorTemplateRef, []string{"fleet/**"})
 
 	// Wait for the fleet controller to discover both config rooms.
 	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
@@ -994,8 +1046,7 @@ func TestFleetReconciliation(t *testing.T) {
 	}
 
 	// Verify the fleet model reflects both placements.
-	signingKey := loadDaemonSigningKey(t, machineA)
-	authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+	authClient := fleetClient(t, fc, operatorToken)
 	ctx := t.Context()
 
 	var showService fleetShowServiceResponse
@@ -1067,17 +1118,78 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	defer admin.Close()
 	fleetRoomID := createFleetRoom(t, admin)
 
-	// Minimal setup: one machine (no proxy needed), one fleet controller.
 	machine := newTestMachine(t, "machine/fleet-auth")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 		FleetRoomID:    fleetRoomID,
 	})
 
+	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
+
+	// Start the fleet controller first. The operator template has
+	// RequiredServices: ["fleet"], so the daemon needs the fleet
+	// controller's socket and binding before it can create sandboxes.
 	controllerName := "service/fleet/auth-test"
 	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
-	signingKey := loadDaemonSigningKey(t, machine)
+	publishFleetServiceBinding(t, admin, machine, fc)
+
+	// Deploy 3 principals with different grant scopes. Each uses the
+	// fleet operator template (RequiredServices: ["fleet"]) so the
+	// daemon mints a fleet token for each. The daemon's
+	// filterGrantsForService determines which grants end up in each
+	// token:
+	//   - narrowExact: "fleet/info" → token has one exact fleet grant
+	//   - narrowWildcard: "fleet/list-*" → token has one wildcard fleet grant
+	//   - noFleetGrants: "command/**" → no fleet-relevant grants, so the
+	//     token is valid but has zero grants (default-deny)
+	narrowExact := registerPrincipal(t, "agent/fleet-auth-exact", "fleet-auth-exact-password")
+	narrowWildcard := registerPrincipal(t, "agent/fleet-auth-wild", "fleet-auth-wild-password")
+	noFleetGrants := registerPrincipal(t, "agent/fleet-auth-denied", "fleet-auth-denied-password")
+
+	pushCredentials(t, admin, machine, narrowExact)
+	pushCredentials(t, admin, machine, narrowWildcard)
+	pushCredentials(t, admin, machine, noFleetGrants)
+
+	joinConfigRoom(t, admin, machine.ConfigRoomID, narrowExact)
+	joinConfigRoom(t, admin, machine.ConfigRoomID, narrowWildcard)
+	joinConfigRoom(t, admin, machine.ConfigRoomID, noFleetGrants)
+
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{
+			{
+				Account:  narrowExact,
+				Template: operatorTemplateRef,
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{{Actions: []string{"fleet/info"}}},
+				},
+			},
+			{
+				Account:  narrowWildcard,
+				Template: operatorTemplateRef,
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{{Actions: []string{"fleet/list-*"}}},
+				},
+			},
+			{
+				Account:  noFleetGrants,
+				Template: operatorTemplateRef,
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{{Actions: []string{"command/**"}}},
+				},
+			},
+		},
+	})
+
+	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-exact"))
+	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-wild"))
+	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-denied"))
+
+	narrowExactToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-exact", "fleet")
+	narrowWildcardToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-wild", "fleet")
+	noFleetGrantsToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-denied", "fleet")
+
 	ctx := t.Context()
 
 	// assertServiceError verifies that err is a *service.ServiceError
@@ -1105,7 +1217,7 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	}
 
 	t.Run("Unauthenticated", func(t *testing.T) {
-		client := fleetClient(t, fc, nil, nil)
+		client := fleetClient(t, fc, nil)
 
 		// Status is the only unauthenticated endpoint — it must
 		// succeed without a token.
@@ -1121,13 +1233,13 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 		}
 	})
 
-	t.Run("EmptyGrants", func(t *testing.T) {
-		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{})
+	t.Run("NoFleetGrants", func(t *testing.T) {
+		// This principal has grants=["command/**"] which
+		// filterGrantsForService excludes from the fleet token.
+		// The token is valid (signed by the daemon) but has zero
+		// fleet-relevant grants — default-deny rejects everything.
+		client := fleetClient(t, fc, noFleetGrantsToken)
 
-		// A valid token with zero grants is denied for every
-		// authenticated action. This verifies default-deny: token
-		// verification passes but the handler's requireGrant check
-		// rejects because no grant matches.
 		for _, action := range authenticatedActions {
 			err := client.Call(ctx, action, nil, nil)
 			assertServiceError(t, err, action, "access denied")
@@ -1135,10 +1247,9 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	})
 
 	t.Run("NarrowExactGrant", func(t *testing.T) {
-		// Grant only "fleet/info" — an exact match for a single action.
-		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{
-			{Actions: []string{"fleet/info"}},
-		})
+		// This principal has grants=["fleet/info"] — an exact match
+		// for a single action.
+		client := fleetClient(t, fc, narrowExactToken)
 
 		// The granted action succeeds.
 		var info fleetInfoResponse
@@ -1155,11 +1266,10 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	})
 
 	t.Run("NarrowWildcardGrant", func(t *testing.T) {
-		// Grant "fleet/list-*" — single-segment wildcard that matches
-		// list-machines and list-services but not show-machine or info.
-		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{
-			{Actions: []string{"fleet/list-*"}},
-		})
+		// This principal has grants=["fleet/list-*"] — single-segment
+		// wildcard that matches list-machines and list-services but
+		// not show-machine or info.
+		client := fleetClient(t, fc, narrowWildcardToken)
 
 		// Both list actions match the wildcard pattern.
 		var machines fleetListMachinesResponse

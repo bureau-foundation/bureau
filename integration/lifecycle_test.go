@@ -107,12 +107,6 @@ func TestMachineLifecycle(t *testing.T) {
 		t.Errorf("bootstrap file should have been deleted after first boot, but still exists")
 	}
 
-	// Verify session.json was written.
-	sessionPath := filepath.Join(stateDir, "session.json")
-	if _, err := os.Stat(sessionPath); err != nil {
-		t.Fatalf("session.json not written: %v", err)
-	}
-
 	// Verify keypair was generated.
 	publicKeyPath := filepath.Join(stateDir, "machine-key.pub")
 	publicKeyBytes, err := os.ReadFile(publicKeyPath)

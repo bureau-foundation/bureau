@@ -85,7 +85,6 @@ go_test(
         "//lib/schema",
         "//lib/secret",
         "//lib/service",
-        "//lib/servicetoken",
         "//lib/template",
         "//lib/testutil",
         "//messaging",

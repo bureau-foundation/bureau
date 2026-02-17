@@ -829,25 +829,6 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.Session, name, ticke
 	return room.RoomID
 }
 
-// joinConfigRoom invites an agent to the config room and joins via a
-// direct session. The agent needs config room membership so the lifecycle
-// manager can post messages (agent-ready, text responses) to the room.
-func joinConfigRoom(t *testing.T, admin *messaging.Session, configRoomID string, agent principalAccount) {
-	t.Helper()
-
-	ctx := t.Context()
-	if err := admin.InviteUser(ctx, configRoomID, agent.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite agent %s to config room: %v", agent.Localpart, err)
-		}
-	}
-	agentSession := principalSession(t, agent)
-	if _, err := agentSession.JoinRoom(ctx, configRoomID); err != nil {
-		t.Fatalf("agent %s join config room: %v", agent.Localpart, err)
-	}
-	agentSession.Close()
-}
-
 // waitForMockCompletion blocks until the mock LLM has finished all steps
 // or the test context expires.
 func waitForMockCompletion(t *testing.T, mock *mockToolSequenceServer) {

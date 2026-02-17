@@ -503,17 +503,24 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	// Section 7: Machine account membership.
 	results = append(results, checkMachineMembership(ctx, session, serverName, roomIDs)...)
 
-	// Section 8: Base templates published.
+	// Section 8: Operator membership — non-admin, non-machine members of
+	// the Bureau space should be in every standard room. The space is
+	// invite-only, so anyone who's joined it was deliberately onboarded.
+	if spaceRoomID != "" {
+		results = append(results, checkOperatorMembership(ctx, session, spaceRoomID, serverName, roomIDs)...)
+	}
+
+	// Section 9: Base templates published.
 	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
 		results = append(results, checkBaseTemplates(ctx, session, templateRoomID)...)
 	}
 
-	// Section 9: Base pipelines published.
+	// Section 10: Base pipelines published.
 	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
 		results = append(results, checkBasePipelines(ctx, session, pipelineRoomID)...)
 	}
 
-	// Section 10: Fleet service bindings in machine config rooms.
+	// Section 11: Fleet service bindings in machine config rooms.
 	// Every active machine's config room should have an m.bureau.room_service
 	// binding for the "fleet" role so agents with required_services: ["fleet"]
 	// can discover the fleet controller.
@@ -847,6 +854,86 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 					return session.InviteUser(ctx, serviceRoomID, capturedUserID)
 				},
 			))
+		}
+	}
+
+	return results
+}
+
+// checkOperatorMembership verifies that every operator (a non-admin,
+// non-machine member of the Bureau space) is a member of every standard
+// room. When doctor --fix creates new rooms, existing operators won't be
+// in them — this check catches that gap and offers invite fixes.
+//
+// Operators are identified by space membership: the Bureau space is
+// invite-only, so any joined user was deliberately onboarded. Machine
+// accounts (localparts starting with "machine/") are excluded because
+// they have their own membership check (checkMachineMembership).
+func checkOperatorMembership(ctx context.Context, session *messaging.Session, spaceRoomID, serverName string, roomIDs map[string]string) []checkResult {
+	// Get all joined members of the Bureau space.
+	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
+	if err != nil {
+		return []checkResult{fail("operator membership", fmt.Sprintf("cannot read space members: %v", err))}
+	}
+
+	adminUserID := session.UserID()
+	var operators []string
+	for _, member := range spaceMembers {
+		if member.Membership != "join" {
+			continue
+		}
+		if member.UserID == adminUserID {
+			continue
+		}
+		// Machine accounts have localparts like "machine/worker-01".
+		localpart := strings.TrimSuffix(strings.TrimPrefix(member.UserID, "@"), ":"+serverName)
+		if strings.HasPrefix(localpart, "machine/") {
+			continue
+		}
+		operators = append(operators, member.UserID)
+	}
+
+	if len(operators) == 0 {
+		return nil
+	}
+
+	var results []checkResult
+
+	for _, room := range standardRooms {
+		roomID, ok := roomIDs[room.alias]
+		if !ok {
+			continue
+		}
+
+		members, err := session.GetRoomMembers(ctx, roomID)
+		if err != nil {
+			results = append(results, fail(room.name+" operator membership", fmt.Sprintf("cannot read members: %v", err)))
+			continue
+		}
+
+		memberSet := make(map[string]bool)
+		for _, member := range members {
+			if member.Membership == "join" || member.Membership == "invite" {
+				memberSet[member.UserID] = true
+			}
+		}
+
+		for _, operatorUserID := range operators {
+			checkName := fmt.Sprintf("%s in %s", operatorUserID, room.name)
+			if memberSet[operatorUserID] {
+				results = append(results, pass(checkName, "member"))
+			} else {
+				capturedUserID := operatorUserID
+				capturedRoomID := roomID
+				results = append(results, failWithFix(
+					checkName,
+					fmt.Sprintf("operator %s not in %s", capturedUserID, room.name),
+					fmt.Sprintf("invite %s to %s", capturedUserID, room.name),
+					func(ctx context.Context, session *messaging.Session) error {
+						return session.InviteUser(ctx, capturedRoomID, capturedUserID)
+					},
+				))
+			}
 		}
 	}
 

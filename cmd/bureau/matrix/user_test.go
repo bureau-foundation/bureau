@@ -120,18 +120,23 @@ func TestUserCreate_Operator_NewUser(t *testing.T) {
 	if !gotRegister {
 		t.Error("register endpoint was not called")
 	}
-	if len(invitedRoomIDs) != 4 {
-		t.Errorf("expected 4 room invites, got %d: %v", len(invitedRoomIDs), invitedRoomIDs)
+	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	if len(invitedRoomIDs) != expectedRoomCount {
+		t.Errorf("expected %d room invites, got %d: %v", expectedRoomCount, len(invitedRoomIDs), invitedRoomIDs)
 	}
-	if len(joinedRoomIDs) != 4 {
-		t.Errorf("expected 4 room joins, got %d: %v", len(joinedRoomIDs), joinedRoomIDs)
+	if len(joinedRoomIDs) != expectedRoomCount {
+		t.Errorf("expected %d room joins, got %d: %v", expectedRoomCount, len(joinedRoomIDs), joinedRoomIDs)
 	}
 
 	expectedRooms := map[string]bool{
-		"!space:bureau.local":   false,
-		"!system:bureau.local":  false,
-		"!machine:bureau.local": false,
-		"!service:bureau.local": false,
+		"!space:bureau.local":    false,
+		"!system:bureau.local":   false,
+		"!machine:bureau.local":  false,
+		"!service:bureau.local":  false,
+		"!template:bureau.local": false,
+		"!pipeline:bureau.local": false,
+		"!artifact:bureau.local": false,
+		"!fleet:bureau.local":    false,
 	}
 	for _, roomID := range invitedRoomIDs {
 		if _, ok := expectedRooms[roomID]; !ok {
@@ -215,11 +220,12 @@ func TestUserCreate_Operator_ExistingUser(t *testing.T) {
 	if !gotLogin {
 		t.Error("login was not called for existing account")
 	}
-	if inviteCount != 4 {
-		t.Errorf("expected 4 invites, got %d", inviteCount)
+	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	if inviteCount != expectedRoomCount {
+		t.Errorf("expected %d invites, got %d", expectedRoomCount, inviteCount)
 	}
-	if joinCount != 4 {
-		t.Errorf("expected 4 joins, got %d", joinCount)
+	if joinCount != expectedRoomCount {
+		t.Errorf("expected %d joins, got %d", expectedRoomCount, joinCount)
 	}
 }
 
@@ -416,11 +422,12 @@ func TestUserCreate_Operator_ExistingUser_PasswordVerified(t *testing.T) {
 	if !gotLogin {
 		t.Error("login endpoint was not called to verify password")
 	}
-	if inviteCount != 4 {
-		t.Errorf("expected 4 invites after password verification, got %d", inviteCount)
+	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	if inviteCount != expectedRoomCount {
+		t.Errorf("expected %d invites after password verification, got %d", expectedRoomCount, inviteCount)
 	}
-	if joinCount != 4 {
-		t.Errorf("expected 4 joins after password verification, got %d", joinCount)
+	if joinCount != expectedRoomCount {
+		t.Errorf("expected %d joins after password verification, got %d", expectedRoomCount, joinCount)
 	}
 }
 
@@ -494,6 +501,10 @@ func writeTestCredentials(t *testing.T, homeserverURL string) string {
 		"MATRIX_SYSTEM_ROOM=!system:bureau.local",
 		"MATRIX_MACHINE_ROOM=!machine:bureau.local",
 		"MATRIX_SERVICE_ROOM=!service:bureau.local",
+		"MATRIX_TEMPLATE_ROOM=!template:bureau.local",
+		"MATRIX_PIPELINE_ROOM=!pipeline:bureau.local",
+		"MATRIX_ARTIFACT_ROOM=!artifact:bureau.local",
+		"MATRIX_FLEET_ROOM=!fleet:bureau.local",
 	}, "\n")
 
 	path := filepath.Join(t.TempDir(), "bureau-creds")

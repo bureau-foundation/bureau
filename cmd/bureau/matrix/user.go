@@ -283,17 +283,21 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 	}
 	defer adminSession.Close()
 
-	// Bureau infrastructure rooms from the credential file, in the order
-	// they appear in setup. Each entry maps a human-readable name to the
-	// credential file key holding the room ID.
-	bureauRooms := []struct {
+	// Bureau infrastructure rooms from the credential file. The space is
+	// first (so the user can see the hierarchy), then all standard rooms
+	// defined in standardRooms (same list doctor validates against).
+	type bureauRoom struct {
 		name          string
 		credentialKey string
-	}{
+	}
+	bureauRooms := []bureauRoom{
 		{"bureau (space)", "MATRIX_SPACE_ROOM"},
-		{"bureau/system", "MATRIX_SYSTEM_ROOM"},
-		{"bureau/machine", "MATRIX_MACHINE_ROOM"},
-		{"bureau/service", "MATRIX_SERVICE_ROOM"},
+	}
+	for _, room := range standardRooms {
+		bureauRooms = append(bureauRooms, bureauRoom{
+			name:          room.alias,
+			credentialKey: room.credentialKey,
+		})
 	}
 
 	for _, room := range bureauRooms {

@@ -219,7 +219,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.machineID, m.serviceID, m.pipelineID, m.artifactID, m.fleetID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.systemID, m.machineID, m.serviceID, m.pipelineID, m.artifactID, m.fleetID))
 			return
 		}
 
@@ -378,7 +378,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, artifactID, fleetID string) map[string]any {
+func powerLevelsForRoom(adminUserID, roomID, systemID, machineID, serviceID, pipelineID, artifactID, fleetID string) map[string]any {
 	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
@@ -397,6 +397,8 @@ func powerLevelsForRoom(adminUserID, roomID, machineID, serviceID, pipelineID, a
 	}
 
 	switch roomID {
+	case systemID:
+		events[schema.EventTypeTokenSigningKey] = 0
 	case machineID:
 		events[schema.EventTypeMachineKey] = 0
 		events[schema.EventTypeMachineInfo] = 0
@@ -1222,10 +1224,11 @@ func TestGetUserPowerLevel(t *testing.T) {
 	}
 }
 
-func TestGetEventPowerLevel(t *testing.T) {
+func TestGetStateEventPowerLevel(t *testing.T) {
 	powerLevels := map[string]any{
 		"events":         map[string]any{schema.MatrixEventTypeRoomName: float64(100), schema.EventTypeMachineKey: float64(0)},
 		"events_default": float64(50),
+		"state_default":  float64(75),
 	}
 
 	tests := []struct {
@@ -1234,13 +1237,16 @@ func TestGetEventPowerLevel(t *testing.T) {
 	}{
 		{schema.MatrixEventTypeRoomName, 100},
 		{schema.EventTypeMachineKey, 0},
-		{"m.unknown.type", 50},
+		// Unlisted state events fall back to state_default (75), not
+		// events_default (50). The Matrix spec requires this: state events
+		// not in the events map use state_default.
+		{"m.unknown.type", 75},
 	}
 
 	for _, test := range tests {
-		level := getEventPowerLevel(powerLevels, test.eventType)
+		level := getStateEventPowerLevel(powerLevels, test.eventType)
 		if level != test.expected {
-			t.Errorf("getEventPowerLevel(%q) = %v, want %v", test.eventType, level, test.expected)
+			t.Errorf("getStateEventPowerLevel(%q) = %v, want %v", test.eventType, level, test.expected)
 		}
 	}
 }

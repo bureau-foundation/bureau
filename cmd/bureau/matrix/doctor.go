@@ -669,7 +669,7 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 
 	// Check that each member-settable event type is at power level 0.
 	for _, eventType := range memberSettableEventTypes {
-		level := getEventPowerLevel(powerLevels, eventType)
+		level := getStateEventPowerLevel(powerLevels, eventType)
 		if level == 0 {
 			results = append(results, pass(name+" "+eventType, fmt.Sprintf("members can set %s (level 0)", eventType)))
 		} else {
@@ -699,19 +699,23 @@ func getUserPowerLevel(powerLevels map[string]any, userID string) float64 {
 	return level
 }
 
-// getEventPowerLevel extracts the power level required to send a specific event type.
-// Returns events_default if the event type is not in the events map.
-func getEventPowerLevel(powerLevels map[string]any, eventType string) float64 {
-	eventsDefault := getNumericField(powerLevels, "events_default")
+// getStateEventPowerLevel extracts the power level required to send a specific
+// state event type. Per the Matrix spec, state events not explicitly listed in
+// the events map fall back to state_default, not events_default. This
+// distinction matters: rooms with state_default=100 and events_default=0
+// block state events from regular members unless the event type has an
+// explicit entry in the events map.
+func getStateEventPowerLevel(powerLevels map[string]any, eventType string) float64 {
+	stateDefault := getNumericField(powerLevels, "state_default")
 
 	events, ok := powerLevels["events"].(map[string]any)
 	if !ok {
-		return eventsDefault
+		return stateDefault
 	}
 
 	level, ok := events[eventType].(float64)
 	if !ok {
-		return eventsDefault
+		return stateDefault
 	}
 	return level
 }

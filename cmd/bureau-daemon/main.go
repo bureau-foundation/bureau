@@ -828,6 +828,8 @@ const (
 	failureCategoryServiceResolution startFailureCategory = "service_resolution"
 	failureCategoryTokenMinting      startFailureCategory = "token_minting"
 	failureCategoryLauncherIPC       startFailureCategory = "launcher_ipc"
+	failureCategorySandboxCrash      startFailureCategory = "sandbox_crash"
+	failureCategoryProxyCrash        startFailureCategory = "proxy_crash"
 )
 
 // startFailure records a failed sandbox creation attempt for exponential

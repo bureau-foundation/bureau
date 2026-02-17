@@ -203,3 +203,131 @@ func TestRecordStartFailure_CategoryChange(t *testing.T) {
 		t.Errorf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
 	}
 }
+
+func TestSandboxCrashBackoff(t *testing.T) {
+	t.Parallel()
+
+	daemon, fakeClock := newTestDaemon(t)
+	localpart := "agent-crashy"
+
+	// First crash: 1s backoff.
+	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure := daemon.startFailures[localpart]
+	if failure == nil {
+		t.Fatal("expected crash failure to be recorded")
+	}
+	if failure.category != failureCategorySandboxCrash {
+		t.Errorf("category = %q, want %q", failure.category, failureCategorySandboxCrash)
+	}
+	if failure.attempts != 1 {
+		t.Errorf("attempts = %d, want 1", failure.attempts)
+	}
+	expectedRetryAt := testDaemonEpoch.Add(1 * time.Second)
+	if !failure.nextRetryAt.Equal(expectedRetryAt) {
+		t.Errorf("nextRetryAt = %v, want %v", failure.nextRetryAt, expectedRetryAt)
+	}
+
+	// Backoff not yet expired: reconcile should skip.
+	if !fakeClock.Now().Before(failure.nextRetryAt) {
+		t.Fatal("expected current time to be before nextRetryAt")
+	}
+
+	// Second crash after first backoff expires: 2s backoff.
+	fakeClock.Advance(2 * time.Second)
+	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure = daemon.startFailures[localpart]
+	if failure.attempts != 2 {
+		t.Errorf("attempts = %d, want 2", failure.attempts)
+	}
+	expectedRetryAt = testDaemonEpoch.Add(2*time.Second + 2*time.Second)
+	if !failure.nextRetryAt.Equal(expectedRetryAt) {
+		t.Errorf("nextRetryAt = %v, want %v", failure.nextRetryAt, expectedRetryAt)
+	}
+
+	// Third crash: 4s backoff.
+	fakeClock.Advance(3 * time.Second)
+	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure = daemon.startFailures[localpart]
+	if failure.attempts != 3 {
+		t.Errorf("attempts = %d, want 3", failure.attempts)
+	}
+	expectedRetryAt = testDaemonEpoch.Add(5*time.Second + 4*time.Second)
+	if !failure.nextRetryAt.Equal(expectedRetryAt) {
+		t.Errorf("nextRetryAt = %v, want %v", failure.nextRetryAt, expectedRetryAt)
+	}
+}
+
+func TestSandboxCrashBackoff_ClearedByConfigChange(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	localpart := "agent-fixable"
+
+	// Record several crashes to build up backoff.
+	for range 5 {
+		daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
+	}
+	if daemon.startFailures[localpart].attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", daemon.startFailures[localpart].attempts)
+	}
+
+	// A config change clears all start failures (including crash
+	// backoff). This is correct: if someone fixes the template or
+	// credentials, the principal should retry immediately.
+	daemon.clearStartFailures()
+
+	if daemon.startFailures[localpart] != nil {
+		t.Error("expected crash failure to be cleared by config change")
+	}
+}
+
+func TestProxyCrashBackoff(t *testing.T) {
+	t.Parallel()
+
+	daemon, fakeClock := newTestDaemon(t)
+	localpart := "agent-proxy-crash"
+
+	// First proxy crash: 1s backoff.
+	daemon.recordStartFailure(localpart, failureCategoryProxyCrash, "proxy exited with code 1")
+	failure := daemon.startFailures[localpart]
+	if failure == nil {
+		t.Fatal("expected proxy crash failure to be recorded")
+	}
+	if failure.category != failureCategoryProxyCrash {
+		t.Errorf("category = %q, want %q", failure.category, failureCategoryProxyCrash)
+	}
+	if failure.attempts != 1 {
+		t.Errorf("attempts = %d, want 1", failure.attempts)
+	}
+
+	// Crash backoff accumulates across proxy crashes like any other failure.
+	fakeClock.Advance(2 * time.Second)
+	daemon.recordStartFailure(localpart, failureCategoryProxyCrash, "proxy exited with code 1")
+	if daemon.startFailures[localpart].attempts != 2 {
+		t.Errorf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
+	}
+}
+
+func TestSandboxNormalExit_ClearsCrashBackoff(t *testing.T) {
+	t.Parallel()
+
+	daemon, fakeClock := newTestDaemon(t)
+	localpart := "agent-one-shot"
+
+	// Build up crash backoff from previous failures.
+	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
+	fakeClock.Advance(2 * time.Second)
+	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
+	if daemon.startFailures[localpart].attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
+	}
+
+	// A normal exit (code 0) clears the crash backoff. One-shot
+	// principals (setup/teardown) should be able to re-evaluate
+	// conditions immediately after completing.
+	daemon.clearStartFailure(localpart)
+
+	if daemon.startFailures[localpart] != nil {
+		t.Error("expected crash backoff to be cleared by normal exit")
+	}
+}

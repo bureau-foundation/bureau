@@ -1428,11 +1428,30 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.lastObserveAllowances, localpart)
 		d.lastActivityAt = d.clock.Now()
 	}
-	// Clear start failure backoff so the re-reconciliation below can
-	// immediately attempt to restart the principal. Without this, a
-	// principal that previously failed to start (different error),
-	// then succeeded, then crashed would inherit stale backoff state.
-	d.clearStartFailure(localpart)
+
+	// For normal exits (code 0), clear any stale start failure so
+	// reconcile can immediately re-evaluate StartConditions. One-shot
+	// principals (setup/teardown) exit 0 after completing their work;
+	// their conditions will have changed so they won't restart.
+	//
+	// For abnormal exits (code != 0), record a crash failure with
+	// exponential backoff to prevent a retry storm. Without this, a
+	// sandbox that starts successfully but immediately crashes causes
+	// an infinite zero-delay restart loop: watchSandboxExit fires,
+	// reconcile restarts the sandbox, it crashes again, repeat.
+	var crashBackoff time.Duration
+	if exitCode == 0 {
+		d.clearStartFailure(localpart)
+	} else {
+		d.recordStartFailure(localpart, failureCategorySandboxCrash, exitDescription)
+		crashBackoff = time.Until(d.startFailures[localpart].nextRetryAt)
+		d.logger.Warn("sandbox crash, backing off before retry",
+			"principal", localpart,
+			"exit_code", exitCode,
+			"attempts", d.startFailures[localpart].attempts,
+			"retry_at", d.startFailures[localpart].nextRetryAt,
+		)
+	}
 	d.reconcileMu.Unlock()
 
 	// Post exit notification to config room. On failure, include the
@@ -1452,6 +1471,10 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	}
 
 	// Trigger re-reconciliation so the loop can decide whether to restart.
+	// For crash exits, reconcile will see the backoff and skip the
+	// principal. We then schedule a deferred reconcile for when the
+	// backoff expires so the principal retries without waiting for an
+	// external sync event.
 	// This acquires reconcileMu again — safe because we released it above.
 	if err := d.reconcile(ctx); err != nil {
 		d.logger.Error("reconciliation after sandbox exit failed",
@@ -1460,6 +1483,28 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		)
 	}
 	d.notifyReconcile()
+
+	// Schedule a deferred reconcile after the crash backoff expires.
+	// Without this, the principal would only retry when the next sync
+	// event triggers reconciliation, which could be arbitrarily far in
+	// the future if no Matrix state changes. The goroutine exits
+	// cleanly on daemon shutdown via context cancellation.
+	if crashBackoff > 0 && d.shutdownCtx != nil {
+		go func() {
+			select {
+			case <-d.shutdownCtx.Done():
+				return
+			case <-d.clock.After(crashBackoff):
+				if err := d.reconcile(d.shutdownCtx); err != nil {
+					d.logger.Error("deferred reconciliation after crash backoff expired",
+						"principal", localpart,
+						"error", err,
+					)
+				}
+				d.notifyReconcile()
+			}
+		}()
+	}
 }
 
 // Type aliases for the shared IPC types. The canonical definitions live
@@ -1840,8 +1885,18 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		d.logger.Error("proxy exit handler: failed to destroy sandbox",
 			"principal", localpart, "error", err)
 	}
-	// Clear start failure backoff so crash-restart is immediate.
-	d.clearStartFailure(localpart)
+
+	// Record a proxy crash failure with exponential backoff. The proxy
+	// dying is always abnormal — without backoff, a crashing proxy
+	// causes the same retry storm as a crashing sandbox.
+	d.recordStartFailure(localpart, failureCategoryProxyCrash, fmt.Sprintf("proxy exited with code %d", exitCode))
+	crashBackoff := time.Until(d.startFailures[localpart].nextRetryAt)
+	d.logger.Warn("proxy crash, backing off before retry",
+		"principal", localpart,
+		"exit_code", exitCode,
+		"attempts", d.startFailures[localpart].attempts,
+		"retry_at", d.startFailures[localpart].nextRetryAt,
+	)
 	d.reconcileMu.Unlock()
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -1850,7 +1905,8 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			"principal", localpart, "error", err)
 	}
 
-	// Trigger re-reconciliation to restart the principal.
+	// Trigger re-reconciliation. Reconcile will see the crash backoff
+	// and skip the principal until the backoff expires.
 	if err := d.reconcile(ctx); err != nil {
 		d.logger.Error("reconciliation after proxy exit failed",
 			"principal", localpart,
@@ -1869,8 +1925,8 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		status := "recovered"
 		var errorMessage string
 		if !recovered {
-			status = "failed"
-			errorMessage = "principal not in desired state after proxy crash recovery"
+			status = "backing_off"
+			errorMessage = "proxy crashed, retry scheduled with exponential backoff"
 		}
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
 			schema.NewProxyCrashMessage(localpart, status, exitCode, errorMessage)); err != nil {
@@ -1879,6 +1935,24 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		}
 	}
 	d.notifyReconcile()
+
+	// Schedule a deferred reconcile after the crash backoff expires.
+	if crashBackoff > 0 && d.shutdownCtx != nil {
+		go func() {
+			select {
+			case <-d.shutdownCtx.Done():
+				return
+			case <-d.clock.After(crashBackoff):
+				if err := d.reconcile(d.shutdownCtx); err != nil {
+					d.logger.Error("deferred reconciliation after proxy crash backoff expired",
+						"principal", localpart,
+						"error", err,
+					)
+				}
+				d.notifyReconcile()
+			}
+		}()
+	}
 }
 
 // maxMatrixOutputLines is the maximum number of lines of captured sandbox

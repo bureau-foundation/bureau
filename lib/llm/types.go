@@ -93,8 +93,10 @@ func AssistantMessage(text string) Message {
 }
 
 // ToolResultMessage creates a user message containing tool results.
-// Per the Anthropic and OpenAI conventions, tool results are sent as
-// content blocks in a user-role message.
+// This is the internal representation; each provider converts to its
+// wire format. Anthropic sends tool results as content blocks in a
+// user-role message. OpenAI sends them as separate role:"tool"
+// messages (see toOpenAIUserMessages).
 func ToolResultMessage(results ...ToolResult) Message {
 	blocks := make([]ContentBlock, len(results))
 	for i, result := range results {

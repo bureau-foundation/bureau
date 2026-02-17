@@ -71,8 +71,22 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		maxTokens = parsed
 	}
 
+	// Read provider selection from environment.
+	providerName := os.Getenv("BUREAU_AGENT_PROVIDER")
+	if providerName == "" {
+		providerName = "anthropic"
+	}
+
 	// Create LLM provider through the proxy HTTP passthrough.
-	provider := llm.NewAnthropic(proxy.HTTPClient(), service)
+	var provider llm.Provider
+	switch providerName {
+	case "anthropic":
+		provider = llm.NewAnthropic(proxy.HTTPClient(), service)
+	case "openai":
+		provider = llm.NewOpenAI(proxy.HTTPClient(), service)
+	default:
+		return nil, nil, fmt.Errorf("unknown LLM provider %q (supported: anthropic, openai)", providerName)
+	}
 
 	// Read system prompt from the temp file written by agent.Run.
 	var systemPrompt string

@@ -20,4 +20,5 @@
 //
 // Current provider implementations:
 //   - [Anthropic]: Claude models via the Messages API (/v1/messages)
+//   - [OpenAI]: OpenAI-compatible models via the Chat Completions API (/v1/chat/completions)
 package llm

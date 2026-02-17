@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "anthropic.go",
         "doc.go",
+        "openai.go",
         "provider.go",
         "sse.go",
         "types.go",
@@ -20,6 +21,7 @@ go_test(
     name = "llm_test",
     srcs = [
         "anthropic_test.go",
+        "openai_test.go",
         "sse_test.go",
     ],
     embed = [":llm"],

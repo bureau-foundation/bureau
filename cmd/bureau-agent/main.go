@@ -16,6 +16,7 @@
 //   - BUREAU_PROXY_SOCKET: proxy Unix socket path
 //   - BUREAU_MACHINE_NAME: machine localpart
 //   - BUREAU_SERVER_NAME: Matrix server name
+//   - BUREAU_AGENT_PROVIDER: LLM provider backend (default: anthropic, also: openai)
 //   - BUREAU_AGENT_MODEL: LLM model identifier (default: claude-sonnet-4-5-20250929)
 //   - BUREAU_AGENT_SERVICE: proxy service name for LLM API (default: anthropic)
 //   - BUREAU_AGENT_MAX_TOKENS: max output tokens (default: 8192)

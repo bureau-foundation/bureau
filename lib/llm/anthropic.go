@@ -4,7 +4,6 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,61 +37,23 @@ func NewAnthropic(httpClient *http.Client, serviceName string) *Anthropic {
 func (provider *Anthropic) Complete(ctx context.Context, request Request) (*Response, error) {
 	wireRequest := provider.buildRequest(request, false)
 
-	body, err := json.Marshal(wireRequest)
+	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
+		provider.endpoint(), wireRequest, "llm/anthropic", false)
 	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: marshaling request: %w", err)
+		return nil, err
 	}
 
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		provider.endpoint(), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: creating request: %w", err)
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-
-	httpResponse, err := provider.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: sending request: %w", err)
-	}
-	defer httpResponse.Body.Close()
-
-	if httpResponse.StatusCode != http.StatusOK {
-		return nil, readProviderError(httpResponse)
-	}
-
-	var wireResponse anthropicResponse
-	if err := json.NewDecoder(httpResponse.Body).Decode(&wireResponse); err != nil {
-		return nil, fmt.Errorf("llm/anthropic: decoding response: %w", err)
-	}
-
-	return wireResponse.toResponse(), nil
+	return decodeResponse[anthropicResponse](httpResponse, "llm/anthropic")
 }
 
 // Stream sends a streaming request and returns an [EventStream].
 func (provider *Anthropic) Stream(ctx context.Context, request Request) (*EventStream, error) {
 	wireRequest := provider.buildRequest(request, true)
 
-	body, err := json.Marshal(wireRequest)
+	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
+		provider.endpoint(), wireRequest, "llm/anthropic", true)
 	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: marshaling request: %w", err)
-	}
-
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		provider.endpoint(), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: creating request: %w", err)
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "text/event-stream")
-
-	httpResponse, err := provider.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, fmt.Errorf("llm/anthropic: sending request: %w", err)
-	}
-
-	if httpResponse.StatusCode != http.StatusOK {
-		defer httpResponse.Body.Close()
-		return nil, readProviderError(httpResponse)
+		return nil, err
 	}
 
 	return provider.newEventStream(httpResponse.Body), nil
@@ -294,30 +255,6 @@ func (provider *Anthropic) newEventStream(body io.ReadCloser) *EventStream {
 	}
 
 	return stream
-}
-
-// readProviderError parses an error response from the Anthropic API.
-func readProviderError(httpResponse *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(httpResponse.Body, 4096))
-
-	var wireError struct {
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(body, &wireError) == nil && wireError.Error.Message != "" {
-		return &ProviderError{
-			StatusCode: httpResponse.StatusCode,
-			Type:       wireError.Error.Type,
-			Message:    wireError.Error.Message,
-		}
-	}
-
-	return &ProviderError{
-		StatusCode: httpResponse.StatusCode,
-		Message:    string(body),
-	}
 }
 
 // --- Anthropic wire types ---

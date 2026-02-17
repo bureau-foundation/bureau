@@ -4,9 +4,12 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"sync"
 )
 
@@ -184,4 +187,88 @@ func (err *ProviderError) IsRateLimited() bool {
 // IsOverloaded returns true if the error is a server overload response (HTTP 529).
 func (err *ProviderError) IsOverloaded() bool {
 	return err.StatusCode == 529
+}
+
+// doProviderRequest marshals wireRequest as JSON, POSTs it to endpoint
+// via httpClient, and returns the HTTP response. Returns a ProviderError
+// for non-200 status codes. When streaming is true, the Accept header is
+// set to text/event-stream.
+//
+// On success the caller is responsible for closing the response body.
+// On error the body is already closed.
+func doProviderRequest(ctx context.Context, httpClient *http.Client, endpoint string, wireRequest any, prefix string, streaming bool) (*http.Response, error) {
+	body, err := json.Marshal(wireRequest)
+	if err != nil {
+		return nil, fmt.Errorf("%s: marshaling request: %w", prefix, err)
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("%s: creating request: %w", prefix, err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	if streaming {
+		httpRequest.Header.Set("Accept", "text/event-stream")
+	}
+
+	httpResponse, err := httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, fmt.Errorf("%s: sending request: %w", prefix, err)
+	}
+
+	if httpResponse.StatusCode != http.StatusOK {
+		defer httpResponse.Body.Close()
+		return nil, readProviderError(httpResponse)
+	}
+
+	return httpResponse, nil
+}
+
+// wireResponse is implemented by pointer-to-struct types that can
+// convert themselves from JSON wire format to the common Response.
+type wireResponse[T any] interface {
+	*T
+	toResponse() *Response
+}
+
+// decodeResponse reads an HTTP response body as JSON into a
+// provider-specific wire response type and converts it to the common
+// Response. The HTTP response body is closed when this function returns.
+func decodeResponse[T any, P wireResponse[T]](httpResponse *http.Response, prefix string) (*Response, error) {
+	defer httpResponse.Body.Close()
+
+	wireResp := P(new(T))
+	if err := json.NewDecoder(httpResponse.Body).Decode(wireResp); err != nil {
+		return nil, fmt.Errorf("%s: decoding response: %w", prefix, err)
+	}
+
+	return wireResp.toResponse(), nil
+}
+
+// readProviderError parses an error response body in the common provider
+// error format used by Anthropic, OpenAI, and compatible APIs:
+// {"error":{"type":"...","message":"..."}}. Extra fields in the error
+// object (such as OpenAI's "code" and "param") are silently ignored.
+func readProviderError(httpResponse *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(httpResponse.Body, 4096))
+
+	var wireError struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &wireError) == nil && wireError.Error.Message != "" {
+		return &ProviderError{
+			StatusCode: httpResponse.StatusCode,
+			Type:       wireError.Error.Type,
+			Message:    wireError.Error.Message,
+		}
+	}
+
+	return &ProviderError{
+		StatusCode: httpResponse.StatusCode,
+		Message:    string(body),
+	}
 }

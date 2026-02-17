@@ -23,8 +23,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -102,9 +104,18 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Clean up any leftover state from a previous interrupted run with
-	// the same PID (unlikely but defensive).
-	_ = dockerCompose("down", "-v")
+	// Clean up leaked Docker resources from previous interrupted runs.
+	// When Bazel kills a test process (timeout, user cancel), the
+	// cleanup code after m.Run() never executes, leaving orphaned
+	// containers, networks, and volumes. Each leaked stack consumes a
+	// Docker bridge network from the finite address pool. Without this
+	// sweep, repeated interrupted runs exhaust all network addresses.
+	cleanupLeakedDockerResources()
+
+	// Install a signal handler so that SIGTERM (sent by Bazel on
+	// timeout) triggers docker compose cleanup before the process
+	// exits. Without this, the stack leaks when Bazel kills us.
+	installComposeCleanupSignalHandler()
 
 	if err := dockerCompose("up", "-d"); err != nil {
 		fmt.Fprintf(os.Stderr, "compose up failed: %v\n", err)
@@ -239,6 +250,106 @@ func dockerComposeOutput(args ...string) (string, error) {
 	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	return string(output), err
+}
+
+// cleanupLeakedDockerResources removes containers, networks, and volumes
+// from previous integration test runs that were killed before their cleanup
+// code could execute. Only targets resources from processes that are no
+// longer running — resources from live sibling test processes are left
+// alone.
+//
+// The project name format is "bureau-test-<pid>", so we extract the PID
+// from each resource name and check if that process is still alive.
+func cleanupLeakedDockerResources() {
+	// Identify orphaned project names by listing containers with
+	// bureau-test- in their name, extracting the PID from the project
+	// name, and checking if the process is still alive.
+	orphanedProjects := findOrphanedComposeProjects()
+	if len(orphanedProjects) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "cleaning up %d leaked test stacks from dead processes\n", len(orphanedProjects))
+
+	for _, project := range orphanedProjects {
+		// Use docker compose down -v to clean up the full stack
+		// for each orphaned project. This handles containers,
+		// networks, and volumes in the correct order.
+		composeFile := filepath.Join(workspaceRoot, "deploy", "test", "docker-compose.yaml")
+		cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", project, "down", "-v")
+		_ = cmd.Run()
+	}
+}
+
+// findOrphanedComposeProjects returns compose project names from dead
+// test processes. Lists all bureau-test-* containers, extracts the PID
+// from each project name, and returns projects whose PID is no longer
+// alive.
+func findOrphanedComposeProjects() []string {
+	cmd := exec.Command("docker", "ps", "-a",
+		"--filter", "name=bureau-test",
+		"--format", "{{.Labels}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	// Extract unique project names from container labels.
+	// Docker compose sets com.docker.compose.project=<name>.
+	projectSet := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		for _, label := range strings.Split(line, ",") {
+			if strings.HasPrefix(label, "com.docker.compose.project=") {
+				project := strings.TrimPrefix(label, "com.docker.compose.project=")
+				projectSet[project] = true
+			}
+		}
+	}
+
+	// Check each project's PID. The project name format is
+	// "bureau-test-<pid>".
+	var orphaned []string
+	for project := range projectSet {
+		pidString := strings.TrimPrefix(project, "bureau-test-")
+		if pidString == project {
+			continue // not our naming pattern
+		}
+		pid, err := strconv.Atoi(pidString)
+		if err != nil {
+			continue
+		}
+
+		// Signal 0 checks process existence without sending a
+		// signal. If the process is gone, the stack is orphaned.
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			orphaned = append(orphaned, project)
+			continue
+		}
+		if process.Signal(syscall.Signal(0)) != nil {
+			orphaned = append(orphaned, project)
+		}
+	}
+	return orphaned
+}
+
+// installComposeCleanupSignalHandler starts a goroutine that catches
+// SIGTERM and runs `docker compose down -v` before exiting. Bazel
+// sends SIGTERM when a test times out, then SIGKILL after a grace
+// period. This handler ensures the compose stack is torn down during
+// that grace window.
+func installComposeCleanupSignalHandler() {
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, syscall.SIGTERM)
+	go func() {
+		<-signalChannel
+		fmt.Fprintln(os.Stderr, "SIGTERM received, cleaning up docker compose stack...")
+		_ = dockerCompose("down", "-v")
+		os.Exit(1)
+	}()
 }
 
 // waitForHealthy polls the Continuwuity versions endpoint until it responds.

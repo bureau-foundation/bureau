@@ -1018,6 +1018,119 @@ func TestPipelineAssertStateInStep(t *testing.T) {
 	}
 }
 
+func TestParseStepOutputs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("string form", func(t *testing.T) {
+		t.Parallel()
+
+		raw := map[string]json.RawMessage{
+			"head_sha": json.RawMessage(`"/tmp/outputs/head_sha"`),
+		}
+		parsed, err := ParseStepOutputs(raw)
+		if err != nil {
+			t.Fatalf("ParseStepOutputs: %v", err)
+		}
+		if len(parsed) != 1 {
+			t.Fatalf("expected 1 output, got %d", len(parsed))
+		}
+		output := parsed["head_sha"]
+		if output.Path != "/tmp/outputs/head_sha" {
+			t.Errorf("Path = %q, want %q", output.Path, "/tmp/outputs/head_sha")
+		}
+		if output.Artifact {
+			t.Error("Artifact should be false for string form")
+		}
+		if output.ContentType != "" {
+			t.Errorf("ContentType should be empty, got %q", output.ContentType)
+		}
+	})
+
+	t.Run("object form", func(t *testing.T) {
+		t.Parallel()
+
+		raw := map[string]json.RawMessage{
+			"test_log": json.RawMessage(`{"path": "/tmp/test.log", "artifact": true, "content_type": "text/plain"}`),
+		}
+		parsed, err := ParseStepOutputs(raw)
+		if err != nil {
+			t.Fatalf("ParseStepOutputs: %v", err)
+		}
+		if len(parsed) != 1 {
+			t.Fatalf("expected 1 output, got %d", len(parsed))
+		}
+		output := parsed["test_log"]
+		if output.Path != "/tmp/test.log" {
+			t.Errorf("Path = %q, want %q", output.Path, "/tmp/test.log")
+		}
+		if !output.Artifact {
+			t.Error("Artifact should be true")
+		}
+		if output.ContentType != "text/plain" {
+			t.Errorf("ContentType = %q, want %q", output.ContentType, "text/plain")
+		}
+	})
+
+	t.Run("mixed forms", func(t *testing.T) {
+		t.Parallel()
+
+		raw := map[string]json.RawMessage{
+			"commit_sha": json.RawMessage(`"/tmp/outputs/sha"`),
+			"build_log":  json.RawMessage(`{"path": "/tmp/build.log", "artifact": true, "content_type": "text/plain"}`),
+		}
+		parsed, err := ParseStepOutputs(raw)
+		if err != nil {
+			t.Fatalf("ParseStepOutputs: %v", err)
+		}
+		if len(parsed) != 2 {
+			t.Fatalf("expected 2 outputs, got %d", len(parsed))
+		}
+
+		sha := parsed["commit_sha"]
+		if sha.Path != "/tmp/outputs/sha" {
+			t.Errorf("commit_sha.Path = %q, want %q", sha.Path, "/tmp/outputs/sha")
+		}
+		if sha.Artifact {
+			t.Error("commit_sha.Artifact should be false")
+		}
+
+		log := parsed["build_log"]
+		if log.Path != "/tmp/build.log" {
+			t.Errorf("build_log.Path = %q, want %q", log.Path, "/tmp/build.log")
+		}
+		if !log.Artifact {
+			t.Error("build_log.Artifact should be true")
+		}
+	})
+
+	t.Run("empty map returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		parsed, err := ParseStepOutputs(map[string]json.RawMessage{})
+		if err != nil {
+			t.Fatalf("ParseStepOutputs: %v", err)
+		}
+		if parsed != nil {
+			t.Errorf("expected nil for empty map, got %v", parsed)
+		}
+	})
+
+	t.Run("invalid JSON value", func(t *testing.T) {
+		t.Parallel()
+
+		raw := map[string]json.RawMessage{
+			"bad_output": json.RawMessage(`42`),
+		}
+		_, err := ParseStepOutputs(raw)
+		if err == nil {
+			t.Fatal("expected error for numeric value")
+		}
+		if !strings.Contains(err.Error(), "bad_output") {
+			t.Errorf("error should mention the output name, got: %v", err)
+		}
+	})
+}
+
 func TestPipelineOnFailure(t *testing.T) {
 	content := PipelineContent{
 		Steps: []PipelineStep{

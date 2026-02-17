@@ -237,6 +237,7 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	spec := daemon.buildPipelineExecutorSpec(
 		"bureau/pipeline:dev-workspace-init",
 		"/tmp/result-abc/result.jsonl",
+		"", "",
 		command,
 	)
 
@@ -346,7 +347,7 @@ func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	spec := daemon.buildPipelineExecutorSpec("test", "/tmp/result.jsonl",
-		schema.CommandMessage{})
+		"", "", schema.CommandMessage{})
 
 	if spec.EnvironmentPath != "" {
 		t.Errorf("EnvironmentPath should be empty, got %q", spec.EnvironmentPath)
@@ -362,7 +363,7 @@ func TestBuildPipelineExecutorSpec_NoRef(t *testing.T) {
 
 	// When pipelineRef is empty, the executor resolves via payload.
 	spec := daemon.buildPipelineExecutorSpec("", "/tmp/result.jsonl",
-		schema.CommandMessage{
+		"", "", schema.CommandMessage{
 			Parameters: map[string]any{
 				"pipeline_ref": "bureau/pipeline:inline-test",
 			},

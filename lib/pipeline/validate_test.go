@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -530,6 +531,137 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			expectedIssues: 0,
+		},
+		{
+			name: "valid run step with string outputs",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name:    "build",
+						Run:     "make build",
+						Outputs: map[string]json.RawMessage{"head_sha": json.RawMessage(`"/tmp/outputs/sha"`)},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "valid run step with object outputs",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "build",
+						Run:  "make build",
+						Outputs: map[string]json.RawMessage{
+							"build_log": json.RawMessage(`{"path": "/tmp/build.log", "artifact": true, "content_type": "text/plain"}`),
+						},
+					},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "outputs on publish step",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "publish-ready",
+						Publish: &schema.PipelinePublish{
+							EventType: "m.bureau.workspace",
+							Room:      "!room:bureau.local",
+							Content:   map[string]any{"status": "ready"},
+						},
+						Outputs: map[string]json.RawMessage{"bad": json.RawMessage(`"/tmp/bad"`)},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"outputs are only valid on run steps"},
+		},
+		{
+			name: "outputs on on_failure step",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "work", Run: "echo hello"},
+				},
+				OnFailure: []schema.PipelineStep{
+					{
+						Name:    "cleanup",
+						Run:     "echo cleanup",
+						Outputs: map[string]json.RawMessage{"result": json.RawMessage(`"/tmp/result"`)},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"outputs are not allowed on on_failure steps"},
+		},
+		{
+			name: "outputs with invalid name",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name:    "build",
+						Run:     "make build",
+						Outputs: map[string]json.RawMessage{"123-bad": json.RawMessage(`"/tmp/out"`)},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"valid identifier"},
+		},
+		{
+			name: "outputs with empty path",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name:    "build",
+						Run:     "make build",
+						Outputs: map[string]json.RawMessage{"result": json.RawMessage(`""`)},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"path is required"},
+		},
+		{
+			name: "content_type without artifact",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{
+						Name: "build",
+						Run:  "make build",
+						Outputs: map[string]json.RawMessage{
+							"result": json.RawMessage(`{"path": "/tmp/out", "artifact": false, "content_type": "text/plain"}`),
+						},
+					},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"content_type is only valid when artifact is true"},
+		},
+		{
+			name: "duplicate step names",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "build", Run: "make build"},
+					{Name: "build", Run: "make build-again"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"duplicate step name"},
+		},
+		{
+			name: "pipeline output with empty value",
+			content: &schema.PipelineContent{
+				Steps: []schema.PipelineStep{
+					{Name: "build", Run: "make build"},
+				},
+				Outputs: map[string]schema.PipelineOutput{
+					"result": {Description: "build result", Value: ""},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"value is required"},
 		},
 		{
 			name: "multiple issues",

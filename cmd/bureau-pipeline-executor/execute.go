@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifact"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -20,17 +23,28 @@ import (
 // defaultStepTimeout is used when a step does not specify its own timeout.
 const defaultStepTimeout = 5 * time.Minute
 
+// maxInlineOutputSize is the maximum size for inline (non-artifact) output
+// files. 64 KB is well within Matrix event size limits and is sufficient
+// for commit SHAs, branch names, version strings, and other small text
+// values that pipelines typically produce. Larger outputs should use
+// artifact mode.
+const maxInlineOutputSize = 64 * 1024
+
 // stepResult captures the outcome of executing a single pipeline step.
 type stepResult struct {
 	status   string // "ok", "failed", "skipped", "aborted"
 	duration time.Duration
 	err      error
+	outputs  map[string]string
 }
 
 // executeStep runs a single pipeline step: evaluates the when guard, runs
-// the command or publishes a state event, and runs the check command.
-// Returns the step result.
-func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, proxy *proxyclient.Client, logger *threadLogger) stepResult {
+// the command or publishes a state event, runs the check command, and
+// captures declared outputs. Returns the step result.
+//
+// The artifacts client may be nil — artifact-mode outputs will fail with
+// a clear error if the artifact service is not available.
+func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, proxy *proxyclient.Client, artifacts *artifact.Client, logger *threadLogger) stepResult {
 	startTime := time.Now()
 
 	// Parse timeout.
@@ -156,10 +170,33 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 		}
 	}
 
+	// Capture declared outputs after the step action succeeds. Output
+	// capture runs inside the step's timeout context — a slow artifact
+	// store counts against the step's time budget.
+	var outputs map[string]string
+	if len(step.Outputs) > 0 {
+		parsed, err := schema.ParseStepOutputs(step.Outputs)
+		if err != nil {
+			return stepResult{
+				status:   "failed",
+				duration: time.Since(startTime),
+				err:      fmt.Errorf("parsing output declarations: %w", err),
+			}
+		}
+		outputs, err = captureStepOutputs(stepContext, parsed, artifacts)
+		if err != nil {
+			return stepResult{
+				status:   "failed",
+				duration: time.Since(startTime),
+				err:      fmt.Errorf("capturing outputs: %w", err),
+			}
+		}
+	}
+
 	duration := time.Since(startTime)
 	fmt.Printf("[pipeline] step %d/%d: %s... ok (%s)\n", index+1, total, step.Name, formatDuration(duration))
 	logger.logStep(ctx, index, total, step.Name, "ok", duration)
-	return stepResult{status: "ok", duration: duration}
+	return stepResult{status: "ok", duration: duration, outputs: outputs}
 }
 
 // executeAssertState reads a Matrix state event and checks a condition against
@@ -256,6 +293,111 @@ func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertSta
 		status: status,
 		err:    fmt.Errorf("assert_state: %s", message),
 	}
+}
+
+// captureStepOutputs reads the declared output files and returns a map
+// of output name → value. For inline outputs, the file content is read
+// as a string (64 KB limit, trailing whitespace trimmed). For artifact
+// outputs, the file is streamed to the artifact service and the returned
+// art-* reference becomes the value.
+func captureStepOutputs(ctx context.Context, outputs map[string]schema.PipelineStepOutput, artifacts *artifact.Client) (map[string]string, error) {
+	result := make(map[string]string, len(outputs))
+
+	for name, output := range outputs {
+		value, err := captureOneOutput(ctx, name, output, artifacts)
+		if err != nil {
+			return nil, fmt.Errorf("output %q: %w", name, err)
+		}
+		result[name] = value
+	}
+
+	return result, nil
+}
+
+// captureOneOutput reads a single output file and returns its value as
+// either inline content or an artifact reference.
+func captureOneOutput(ctx context.Context, name string, output schema.PipelineStepOutput, artifacts *artifact.Client) (string, error) {
+	if output.Artifact {
+		return captureArtifactOutput(ctx, name, output, artifacts)
+	}
+	return captureInlineOutput(output.Path)
+}
+
+// captureInlineOutput reads a file as an inline string value. The file
+// must exist and be at most maxInlineOutputSize bytes. Trailing
+// whitespace (newlines, spaces) is trimmed — most commands write a
+// trailing newline that callers don't want in their variables.
+func captureInlineOutput(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("output file %s: %w", path, err)
+	}
+	if info.Size() > maxInlineOutputSize {
+		return "", fmt.Errorf(
+			"output file %s is %d bytes, exceeding the %d byte limit for inline outputs; "+
+				"use artifact mode for large outputs",
+			path, info.Size(), maxInlineOutputSize,
+		)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading output file %s: %w", path, err)
+	}
+
+	return strings.TrimRight(string(data), " \t\n\r"), nil
+}
+
+// captureArtifactOutput streams a file to the artifact service and returns
+// the art-* content-addressed reference. The artifact client must be
+// non-nil — the executor creates it at startup when the artifact service
+// socket is available in the sandbox.
+func captureArtifactOutput(ctx context.Context, name string, output schema.PipelineStepOutput, artifacts *artifact.Client) (string, error) {
+	if artifacts == nil {
+		return "", fmt.Errorf(
+			"artifact mode requires the artifact service, but no artifact socket is available in this sandbox; " +
+				"ensure the artifact service is running and the executor sandbox includes the artifact socket",
+		)
+	}
+
+	file, err := os.Open(output.Path)
+	if err != nil {
+		return "", fmt.Errorf("opening output file %s: %w", output.Path, err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat output file %s: %w", output.Path, err)
+	}
+
+	header := &artifact.StoreHeader{
+		Action:      "store",
+		ContentType: output.ContentType,
+		Filename:    name,
+		Size:        info.Size(),
+		Description: output.Description,
+	}
+
+	// For small files, embed the content directly in the header
+	// (avoids the streaming protocol overhead).
+	var reader io.Reader
+	if info.Size() <= artifact.SmallArtifactThreshold {
+		data, readErr := io.ReadAll(file)
+		if readErr != nil {
+			return "", fmt.Errorf("reading output file %s: %w", output.Path, readErr)
+		}
+		header.Data = data
+	} else {
+		reader = file
+	}
+
+	response, err := artifacts.Store(ctx, header, reader)
+	if err != nil {
+		return "", fmt.Errorf("storing artifact for output %q: %w", name, err)
+	}
+
+	return response.Ref, nil
 }
 
 // runShellCommand executes a command via sh -c with stdout and stderr

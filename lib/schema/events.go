@@ -1268,6 +1268,15 @@ type PipelineContent struct {
 	// context for on_failure steps.
 	OnFailure []PipelineStep `json:"on_failure,omitempty"`
 
+	// Outputs declares the pipeline's return values — which step outputs
+	// are promoted to the pipeline result. Each entry maps an output name
+	// to a PipelineOutput with a description and a value expression that
+	// references step outputs via ${OUTPUT_<step>_<name>} variables.
+	//
+	// Pipeline outputs are resolved after all steps succeed. On failure
+	// or abort, no pipeline-level outputs are produced.
+	Outputs map[string]PipelineOutput `json:"outputs,omitempty"`
+
 	// Log configures Matrix thread logging for pipeline executions.
 	// When set, the executor creates a thread in the specified room
 	// at pipeline start and posts step progress as thread replies.
@@ -1294,6 +1303,28 @@ type PipelineVariable struct {
 	// with both Required and Default set uses the default only
 	// when no explicit value is provided.
 	Required bool `json:"required,omitempty"`
+}
+
+// PipelineOutput declares a pipeline-level output value. Pipeline outputs
+// are the externally visible return values — they appear in
+// PipelineResultContent and CommandResultMessage so initiators and
+// observers can consume structured results.
+//
+// The Value field is a variable expression (e.g.,
+// "${OUTPUT_clone_repository_head_sha}") that references a step output.
+// It is expanded after all steps succeed, using the same variable
+// substitution as step fields.
+type PipelineOutput struct {
+	// Description is a human-readable explanation of what this output
+	// represents (e.g., "HEAD commit SHA of the cloned repository").
+	// Used in bureau pipeline show and in result events for
+	// observability.
+	Description string `json:"description,omitempty"`
+
+	// Value is a variable expression that resolves to the output value.
+	// Typically references a step output: "${OUTPUT_clone_repo_head_sha}".
+	// Expanded after all steps succeed.
+	Value string `json:"value"`
 }
 
 // PipelineStep is a single step in a pipeline. Exactly one of Run,
@@ -1370,11 +1401,101 @@ type PipelineStep struct {
 	// take precedence on conflict.
 	Env map[string]string `json:"env,omitempty"`
 
+	// Outputs declares files to capture as named output values after
+	// the step's run command (and check, if present) succeeds. Each
+	// map entry is either a string (file path for inline capture) or
+	// a JSON object (PipelineStepOutput with artifact mode and
+	// metadata). Only valid on run steps.
+	//
+	// Inline outputs read the file and store its content as a string
+	// value (64 KB limit, trailing whitespace trimmed). Artifact
+	// outputs stream the file to the artifact service and store the
+	// returned art-* reference as the value.
+	//
+	// Output values are injected as variables for subsequent steps:
+	// OUTPUT_<step_name>_<output_name> (dashes in step names become
+	// underscores).
+	//
+	// The value type is json.RawMessage to support both string and
+	// object forms. Use ParseStepOutputs to resolve into typed
+	// PipelineStepOutput structs.
+	Outputs map[string]json.RawMessage `json:"outputs,omitempty"`
+
 	// Interactive means this step expects terminal interaction.
 	// The executor allocates a PTY and does not capture stdout.
 	// The operator interacts via bureau observe (readwrite mode).
 	// Only valid with Run.
 	Interactive bool `json:"interactive,omitempty"`
+}
+
+// PipelineStepOutput declares how to capture a single output value
+// from a file produced by a run step.
+type PipelineStepOutput struct {
+	// Path is the filesystem path to read after the step succeeds.
+	// Supports ${VARIABLE} substitution (expanded before execution,
+	// same as all other step string fields).
+	Path string `json:"path"`
+
+	// Artifact means the file should be stored in the artifact
+	// service rather than read inline. The output value becomes the
+	// art-* content-addressed reference returned by the artifact
+	// service. Use this for large or binary outputs (model weights,
+	// compiled binaries, log files) that should be durably stored.
+	// When false (default), the file is read as an inline string
+	// (64 KB limit, trailing whitespace trimmed).
+	Artifact bool `json:"artifact,omitempty"`
+
+	// ContentType is the MIME type hint for artifact storage (e.g.,
+	// "text/plain", "application/gzip"). Only meaningful when
+	// Artifact is true. When empty, the artifact service
+	// auto-detects based on content.
+	ContentType string `json:"content_type,omitempty"`
+
+	// Description is a human-readable explanation of what this
+	// output represents (e.g., "HEAD commit SHA after clone").
+	// Used in bureau pipeline show and in result events for
+	// observability.
+	Description string `json:"description,omitempty"`
+}
+
+// ParseStepOutputs parses the raw output declarations from a PipelineStep
+// into typed PipelineStepOutput structs. Each entry in the map is either:
+//   - A JSON string: interpreted as an inline file path →
+//     PipelineStepOutput{Path: <string>}
+//   - A JSON object: unmarshaled directly into PipelineStepOutput
+//
+// Returns an error if any entry is neither a string nor a valid object.
+func ParseStepOutputs(raw map[string]json.RawMessage) (map[string]PipelineStepOutput, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	result := make(map[string]PipelineStepOutput, len(raw))
+	for name, rawValue := range raw {
+		parsed, err := parseOneStepOutput(name, rawValue)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = parsed
+	}
+	return result, nil
+}
+
+// parseOneStepOutput parses a single output declaration from its raw
+// JSON representation (string or object form).
+func parseOneStepOutput(name string, raw json.RawMessage) (PipelineStepOutput, error) {
+	// Try string form first (most common).
+	var path string
+	if err := json.Unmarshal(raw, &path); err == nil {
+		return PipelineStepOutput{Path: path}, nil
+	}
+
+	// Try object form.
+	var output PipelineStepOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return PipelineStepOutput{}, fmt.Errorf("output %q: must be a string (file path) or object (PipelineStepOutput), got: %s", name, string(raw))
+	}
+	return output, nil
 }
 
 // PipelinePublish describes a Matrix state event to publish as a
@@ -1520,6 +1641,13 @@ type PipelineResultContent struct {
 	// result event itself is published to the log room).
 	LogEventID string `json:"log_event_id,omitempty"`
 
+	// Outputs contains the pipeline's resolved output values. Each
+	// entry maps an output name to its string value (either inline
+	// file content or an art-* artifact reference). Only populated
+	// when Conclusion is "success" — failed and aborted pipelines
+	// produce no outputs.
+	Outputs map[string]string `json:"outputs,omitempty"`
+
 	// Extra is a documented extension namespace for experimental or
 	// preview fields before promotion to top-level schema fields in
 	// a version bump. Same semantics as TicketContent.Extra.
@@ -1543,6 +1671,12 @@ type PipelineStepResult struct {
 	// Error is the error message when the step failed or aborted.
 	// Empty for successful or skipped steps.
 	Error string `json:"error,omitempty"`
+
+	// Outputs contains the captured output values for this step.
+	// Each entry maps an output name to its string value (inline
+	// file content or art-* artifact reference). Only populated
+	// for steps with status "ok" that declared outputs.
+	Outputs map[string]string `json:"outputs,omitempty"`
 }
 
 // Validate checks that all required fields are present and well-formed.
@@ -2017,6 +2151,7 @@ type CommandResultMessage struct {
 	ExitCode   *int                 `json:"exit_code,omitempty"`
 	DurationMS int64                `json:"duration_ms,omitempty"`
 	Steps      []PipelineStepResult `json:"steps,omitempty"`
+	Outputs    map[string]string    `json:"outputs,omitempty"`
 	LogEventID string               `json:"log_event_id,omitempty"`
 	RequestID  string               `json:"request_id,omitempty"`
 	Principal  string               `json:"principal,omitempty"`

@@ -23,7 +23,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // handlePipelineExecute validates the pipeline.execute command,
@@ -170,8 +172,37 @@ func (d *Daemon) executePipeline(
 		return
 	}
 
+	// Discover and prepare artifact service access for the sandbox.
+	// Best-effort: if no artifact service is running, the executor
+	// runs without artifact support and only inline outputs work.
+	var artifactSocketPath, artifactTokenPath string
+	if socketPath := d.findLocalArtifactSocket(); socketPath != "" {
+		token := &servicetoken.Token{
+			Subject:   localpart,
+			Machine:   d.machineName,
+			Audience:  "artifact",
+			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
+			IssuedAt:  d.clock.Now().Unix(),
+			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+		}
+		tokenBytes, mintErr := servicetoken.Mint(d.tokenSigningPrivateKey, token)
+		if mintErr != nil {
+			d.logger.Warn("failed to mint artifact service token for pipeline executor",
+				"error", mintErr)
+		} else {
+			artifactTokenPath = filepath.Join(resultDirectory, "artifact.token")
+			if writeErr := os.WriteFile(artifactTokenPath, tokenBytes, 0600); writeErr != nil {
+				d.logger.Warn("failed to write artifact token file",
+					"path", artifactTokenPath, "error", writeErr)
+				artifactTokenPath = ""
+			} else {
+				artifactSocketPath = socketPath
+			}
+		}
+	}
+
 	// Build the sandbox spec for the pipeline executor.
-	spec := d.buildPipelineExecutorSpec(pipelineRef, resultFilePath, command)
+	spec := d.buildPipelineExecutorSpec(pipelineRef, resultFilePath, artifactSocketPath, artifactTokenPath, command)
 
 	// Build credentials from the daemon's own Matrix session. The
 	// pipeline executor talks to Matrix through its proxy, which needs
@@ -257,9 +288,31 @@ func (d *Daemon) executePipeline(
 //   - The workspace root bind-mounted RW (for git operations)
 //   - The Nix environment (if configured) for toolchain access
 //   - Security defaults: new session, die-with-parent, no-new-privs
+//
+// findLocalArtifactSocket returns the host-side socket path for the
+// local artifact service, or empty string if no artifact service is
+// running on this machine. Uses the same discovery pattern as
+// pushUpstreamConfig: search d.services for a local service with the
+// "content-addressed-store" capability.
+func (d *Daemon) findLocalArtifactSocket() string {
+	for localpart, service := range d.services {
+		if service.Machine != d.machineUserID {
+			continue
+		}
+		for _, capability := range service.Capabilities {
+			if capability == "content-addressed-store" {
+				return principal.RunDirSocketPath(d.runDir, localpart)
+			}
+		}
+	}
+	return ""
+}
+
 func (d *Daemon) buildPipelineExecutorSpec(
 	pipelineRef string,
 	resultFilePath string,
+	artifactSocketPath string,
+	artifactTokenPath string,
 	command schema.CommandMessage,
 ) *schema.SandboxSpec {
 	// Build the command. When a pipeline ref is provided, pass it as
@@ -306,6 +359,20 @@ func (d *Daemon) buildPipelineExecutorSpec(
 		spec.EnvironmentPath = d.pipelineEnvironment
 	}
 
+	// Artifact service: bind-mount the socket and token file when an
+	// artifact service is available. Pipeline steps with artifact-mode
+	// outputs need these to store files in the CAS. When not available,
+	// the executor's artifact client is nil and artifact outputs fail
+	// with a clear error at step capture time.
+	if artifactSocketPath != "" && artifactTokenPath != "" {
+		spec.Filesystem = append(spec.Filesystem,
+			schema.TemplateMount{Source: artifactSocketPath, Dest: "/run/bureau/artifact.sock", Mode: "rw"},
+			schema.TemplateMount{Source: artifactTokenPath, Dest: "/run/bureau/artifact.token", Mode: "ro"},
+		)
+		spec.EnvironmentVariables["BUREAU_ARTIFACT_SOCKET"] = "/run/bureau/artifact.sock"
+		spec.EnvironmentVariables["BUREAU_ARTIFACT_TOKEN"] = "/run/bureau/artifact.token"
+	}
+
 	// Build the payload from command parameters. The executor reads
 	// the payload for pipeline_ref, pipeline_inline, and variables.
 	if len(command.Parameters) > 0 {
@@ -342,17 +409,18 @@ func (d *Daemon) destroyPipelineSandbox(ctx context.Context, localpart string) {
 // entries from the result file. The Type field determines which
 // additional fields are populated.
 type pipelineResultEntry struct {
-	Type       string `json:"type"`
-	Pipeline   string `json:"pipeline,omitempty"`
-	StepCount  int    `json:"step_count,omitempty"`
-	Timestamp  string `json:"timestamp,omitempty"`
-	Index      int    `json:"index,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Status     string `json:"status,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
-	Error      string `json:"error,omitempty"`
-	FailedStep string `json:"failed_step,omitempty"`
-	LogEventID string `json:"log_event_id,omitempty"`
+	Type       string            `json:"type"`
+	Pipeline   string            `json:"pipeline,omitempty"`
+	StepCount  int               `json:"step_count,omitempty"`
+	Timestamp  string            `json:"timestamp,omitempty"`
+	Index      int               `json:"index,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Status     string            `json:"status,omitempty"`
+	DurationMS int64             `json:"duration_ms,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	FailedStep string            `json:"failed_step,omitempty"`
+	LogEventID string            `json:"log_event_id,omitempty"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 
 // readPipelineResultFile reads a JSONL result file and returns the
@@ -421,6 +489,7 @@ func (d *Daemon) postPipelineResult(
 			Status:     entry.Status,
 			DurationMS: entry.DurationMS,
 			Error:      entry.Error,
+			Outputs:    entry.Outputs,
 		})
 	}
 
@@ -460,8 +529,13 @@ func (d *Daemon) postPipelineResult(
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if terminalEntry != nil && terminalEntry.LogEventID != "" {
-		message.LogEventID = terminalEntry.LogEventID
+	if terminalEntry != nil {
+		if terminalEntry.LogEventID != "" {
+			message.LogEventID = terminalEntry.LogEventID
+		}
+		if len(terminalEntry.Outputs) > 0 {
+			message.Outputs = terminalEntry.Outputs
+		}
 	}
 
 	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {

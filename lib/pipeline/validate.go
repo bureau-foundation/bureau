@@ -4,11 +4,20 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
+
+// outputNamePattern matches valid output names. Same character set as
+// variable names (identifiers): start with a letter or underscore,
+// followed by letters, digits, or underscores. Anchored to the full
+// string.
+var outputNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Validate checks a PipelineContent for structural issues. Returns a
 // list of human-readable issue descriptions. An empty list means the
@@ -33,6 +42,23 @@ func Validate(content *schema.PipelineContent) []string {
 		issues = append(issues, "pipeline has no steps (at least one step is required)")
 	}
 
+	// Step names must be unique across the pipeline. Duplicate names
+	// would cause OUTPUT_<step>_<name> variable collisions, silently
+	// overwriting earlier step outputs with later ones.
+	stepNames := make(map[string]int, len(content.Steps))
+	for index, step := range content.Steps {
+		if step.Name != "" {
+			if firstIndex, exists := stepNames[step.Name]; exists {
+				issues = append(issues, fmt.Sprintf(
+					"steps[%d] %q: duplicate step name (first used at steps[%d])",
+					index, step.Name, firstIndex,
+				))
+			} else {
+				stepNames[step.Name] = index
+			}
+		}
+	}
+
 	for index, step := range content.Steps {
 		prefix := fmt.Sprintf("steps[%d]", index)
 		issues = append(issues, validateStep(step, prefix)...)
@@ -41,6 +67,28 @@ func Validate(content *schema.PipelineContent) []string {
 	for index, step := range content.OnFailure {
 		prefix := fmt.Sprintf("on_failure[%d]", index)
 		issues = append(issues, validateStep(step, prefix)...)
+
+		// On-failure steps cannot have outputs. They run after the
+		// main pipeline has failed — there are no subsequent steps to
+		// consume their outputs, and the pipeline result has conclusion
+		// "failure" which produces no pipeline-level outputs.
+		if len(step.Outputs) > 0 {
+			issues = append(issues, fmt.Sprintf("%s %q: outputs are not allowed on on_failure steps", prefix, step.Name))
+		}
+	}
+
+	// Pipeline-level output declarations.
+	for name, output := range content.Outputs {
+		prefix := fmt.Sprintf("outputs[%q]", name)
+		if !outputNamePattern.MatchString(name) {
+			issues = append(issues, fmt.Sprintf(
+				"%s: output name must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)",
+				prefix,
+			))
+		}
+		if output.Value == "" {
+			issues = append(issues, fmt.Sprintf("%s: value is required", prefix))
+		}
 	}
 
 	// Log room must be non-empty when Log is configured.
@@ -99,6 +147,14 @@ func validateStep(step schema.PipelineStep, prefix string) []string {
 		if step.GracePeriod != "" {
 			issues = append(issues, fmt.Sprintf("%s: grace_period is only valid on run steps", prefix))
 		}
+		if len(step.Outputs) > 0 {
+			issues = append(issues, fmt.Sprintf("%s: outputs are only valid on run steps", prefix))
+		}
+	}
+
+	// Validate output declarations.
+	if len(step.Outputs) > 0 {
+		issues = append(issues, validateStepOutputs(step.Outputs, prefix)...)
 	}
 
 	// Publish step must have event_type and content.
@@ -180,6 +236,42 @@ func validateAssertState(assertState *schema.PipelineAssertState, prefix string)
 		// Valid.
 	default:
 		issues = append(issues, fmt.Sprintf("%s: assert_state.on_mismatch must be \"fail\" or \"abort\", got %q", prefix, assertState.OnMismatch))
+	}
+
+	return issues
+}
+
+// validateStepOutputs validates the output declarations on a single step.
+// Parses each raw declaration (string or object form) and checks:
+//   - Output names are valid identifiers
+//   - Each output has a non-empty path
+//   - content_type is only set when artifact is true
+func validateStepOutputs(outputs map[string]json.RawMessage, prefix string) []string {
+	var issues []string
+
+	for name, raw := range outputs {
+		outputPrefix := fmt.Sprintf("%s: outputs[%q]", prefix, name)
+
+		if !outputNamePattern.MatchString(name) {
+			issues = append(issues, fmt.Sprintf(
+				"%s: output name must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)",
+				outputPrefix,
+			))
+		}
+
+		parsed, err := schema.ParseStepOutputs(map[string]json.RawMessage{name: raw})
+		if err != nil {
+			issues = append(issues, fmt.Sprintf("%s: %v", outputPrefix, err))
+			continue
+		}
+
+		output := parsed[name]
+		if strings.TrimSpace(output.Path) == "" {
+			issues = append(issues, fmt.Sprintf("%s: path is required", outputPrefix))
+		}
+		if output.ContentType != "" && !output.Artifact {
+			issues = append(issues, fmt.Sprintf("%s: content_type is only valid when artifact is true", outputPrefix))
+		}
 	}
 
 	return issues

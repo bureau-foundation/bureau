@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifact"
 	"github.com/bureau-foundation/bureau/lib/pipeline"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -145,6 +146,22 @@ func run() error {
 		defer results.Close()
 	}
 
+	// Create artifact client if the artifact service socket is available.
+	// The daemon bind-mounts the artifact socket and token into the sandbox
+	// when an artifact service is running. Pipelines that use artifact-mode
+	// outputs fail at step capture time with a clear error if this is nil.
+	var artifacts *artifact.Client
+	if artifactSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); artifactSocket != "" {
+		artifactToken := os.Getenv("BUREAU_ARTIFACT_TOKEN")
+		if artifactToken == "" {
+			return fmt.Errorf("BUREAU_ARTIFACT_SOCKET is set but BUREAU_ARTIFACT_TOKEN is not")
+		}
+		artifacts, err = artifact.NewClient(artifactSocket, artifactToken)
+		if err != nil {
+			return fmt.Errorf("creating artifact client: %w", err)
+		}
+	}
+
 	// Execute steps.
 	fmt.Printf("[pipeline] %s: starting (%d steps)\n", name, len(content.Steps))
 	pipelineStart := time.Now()
@@ -161,12 +178,12 @@ func run() error {
 				totalDuration.Milliseconds(), logger.logEventID())
 			logger.logFailed(ctx, name, step.Name, err)
 			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
-				"failure", pipelineStart, totalDuration, stepResults,
+				"failure", pipelineStart, totalDuration, stepResults, nil,
 				step.Name, err.Error())
 			return fmt.Errorf("expanding step %q: %w", step.Name, err)
 		}
 
-		result := executeStep(ctx, expandedStep, index, len(content.Steps), proxy, logger)
+		result := executeStep(ctx, expandedStep, index, len(content.Steps), proxy, artifacts, logger)
 
 		switch result.status {
 		case "aborted":
@@ -176,7 +193,7 @@ func run() error {
 			fmt.Printf("[pipeline] %s: aborted at step %q: %v\n", name, expandedStep.Name, result.err)
 			logger.logAborted(ctx, name, expandedStep.Name, result.err)
 			results.writeStep(index, expandedStep.Name, "aborted",
-				result.duration.Milliseconds(), result.err.Error())
+				result.duration.Milliseconds(), result.err.Error(), nil)
 			results.writeAborted(expandedStep.Name, result.err.Error(),
 				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
 			stepResults = append(stepResults, schema.PipelineStepResult{
@@ -187,7 +204,7 @@ func run() error {
 			})
 			totalDuration := time.Since(pipelineStart)
 			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
-				"aborted", pipelineStart, totalDuration, stepResults,
+				"aborted", pipelineStart, totalDuration, stepResults, nil,
 				expandedStep.Name, result.err.Error())
 			return nil
 
@@ -198,7 +215,7 @@ func run() error {
 				logger.logStep(ctx, index, len(content.Steps), expandedStep.Name,
 					"failed (optional)", result.duration)
 				results.writeStep(index, expandedStep.Name, "failed (optional)",
-					result.duration.Milliseconds(), result.err.Error())
+					result.duration.Milliseconds(), result.err.Error(), nil)
 				stepResults = append(stepResults, schema.PipelineStepResult{
 					Name:       expandedStep.Name,
 					Status:     "failed (optional)",
@@ -210,7 +227,7 @@ func run() error {
 					index+1, len(content.Steps), expandedStep.Name, result.err)
 				logger.logFailed(ctx, name, expandedStep.Name, result.err)
 				results.writeStep(index, expandedStep.Name, "failed",
-					result.duration.Milliseconds(), result.err.Error())
+					result.duration.Milliseconds(), result.err.Error(), nil)
 				stepResults = append(stepResults, schema.PipelineStepResult{
 					Name:       expandedStep.Name,
 					Status:     "failed",
@@ -222,34 +239,67 @@ func run() error {
 				// These are best-effort: their failures are logged but do not
 				// change the pipeline's overall outcome.
 				runOnFailureSteps(ctx, content.OnFailure, variables,
-					expandedStep.Name, result.err, proxy, logger, results)
+					expandedStep.Name, result.err, proxy, artifacts, logger, results)
 
 				totalDuration := time.Since(pipelineStart)
 				results.writeFailed(expandedStep.Name, result.err.Error(),
 					totalDuration.Milliseconds(), logger.logEventID())
 				publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
-					"failure", pipelineStart, totalDuration, stepResults,
+					"failure", pipelineStart, totalDuration, stepResults, nil,
 					expandedStep.Name, result.err.Error())
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
 			}
 
 		default:
 			results.writeStep(index, expandedStep.Name, result.status,
-				result.duration.Milliseconds(), "")
+				result.duration.Milliseconds(), "", result.outputs)
 			stepResults = append(stepResults, schema.PipelineStepResult{
 				Name:       expandedStep.Name,
 				Status:     result.status,
 				DurationMS: result.duration.Milliseconds(),
+				Outputs:    result.outputs,
 			})
+
+			// Inject step outputs as variables for subsequent steps.
+			// Variable names follow the OUTPUT_<step>_<output> convention,
+			// with dashes in step names normalized to underscores.
+			if len(result.outputs) > 0 {
+				stepPrefix := "OUTPUT_" + strings.ReplaceAll(expandedStep.Name, "-", "_")
+				for outputName, outputValue := range result.outputs {
+					variableName := stepPrefix + "_" + outputName
+					variables[variableName] = outputValue
+				}
+			}
+		}
+	}
+
+	// Resolve pipeline-level output declarations. These are variable
+	// expressions that reference step outputs (e.g.,
+	// "${OUTPUT_clone_repository_head_sha}"). Only produced on success.
+	var pipelineOutputs map[string]string
+	if len(content.Outputs) > 0 {
+		pipelineOutputs = make(map[string]string, len(content.Outputs))
+		for outputName, declaration := range content.Outputs {
+			value, err := pipeline.Expand(declaration.Value, variables)
+			if err != nil {
+				totalDuration := time.Since(pipelineStart)
+				results.writeFailed("", fmt.Sprintf("resolving pipeline output %q: %v", outputName, err),
+					totalDuration.Milliseconds(), logger.logEventID())
+				publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+					"failure", pipelineStart, totalDuration, stepResults, nil,
+					"", fmt.Sprintf("resolving pipeline output %q: %v", outputName, err))
+				return fmt.Errorf("resolving pipeline output %q: %w", outputName, err)
+			}
+			pipelineOutputs[outputName] = value
 		}
 	}
 
 	totalDuration := time.Since(pipelineStart)
 	fmt.Printf("[pipeline] %s: complete (%s)\n", name, formatDuration(totalDuration))
 	logger.logComplete(ctx, name, totalDuration)
-	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID())
+	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID(), pipelineOutputs)
 	publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
-		"success", pipelineStart, totalDuration, stepResults,
+		"success", pipelineStart, totalDuration, stepResults, pipelineOutputs,
 		"", "")
 	return nil
 }
@@ -272,6 +322,7 @@ func publishPipelineResult(
 	startedAt time.Time,
 	totalDuration time.Duration,
 	stepResults []schema.PipelineStepResult,
+	outputs map[string]string,
 	failedStep string,
 	errorMessage string,
 ) {
@@ -289,6 +340,7 @@ func publishPipelineResult(
 		DurationMS:   totalDuration.Milliseconds(),
 		StepCount:    stepCount,
 		StepResults:  stepResults,
+		Outputs:      outputs,
 		FailedStep:   failedStep,
 		ErrorMessage: errorMessage,
 		LogEventID:   logger.logEventID(),
@@ -324,6 +376,7 @@ func runOnFailureSteps(
 	failedStepName string,
 	failedError error,
 	proxy *proxyclient.Client,
+	artifacts *artifact.Client,
 	logger *threadLogger,
 	results *resultLog,
 ) {
@@ -348,7 +401,7 @@ func runOnFailureSteps(
 			continue
 		}
 
-		result := executeStep(ctx, expandedStep, index, len(steps), proxy, logger)
+		result := executeStep(ctx, expandedStep, index, len(steps), proxy, artifacts, logger)
 
 		switch result.status {
 		case "ok", "skipped":
@@ -360,7 +413,7 @@ func runOnFailureSteps(
 		}
 
 		results.writeStep(index, "on_failure:"+expandedStep.Name, result.status,
-			result.duration.Milliseconds(), "")
+			result.duration.Milliseconds(), "", nil)
 	}
 }
 

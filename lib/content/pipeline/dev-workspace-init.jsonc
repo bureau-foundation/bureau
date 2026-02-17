@@ -45,9 +45,13 @@
     },
     {
       "name": "clone-repository",
-      "run": "if [ ! -d /workspace/${PROJECT}/.bare ]; then\n  git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare\nfi",
+      "run": "if [ ! -d /workspace/${PROJECT}/.bare ]; then\n  git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare\nfi\nmkdir -p /tmp/outputs\ngit -C /workspace/${PROJECT}/.bare rev-parse HEAD > /tmp/outputs/head_sha\ngit -C /workspace/${PROJECT}/.bare symbolic-ref --short HEAD > /tmp/outputs/default_branch",
       "check": "test -d /workspace/${PROJECT}/.bare/objects",
-      "timeout": "10m"
+      "timeout": "10m",
+      "outputs": {
+        "head_sha": "/tmp/outputs/head_sha",
+        "default_branch": "/tmp/outputs/default_branch"
+      }
     },
     {
       // Run the project-level init script from the repository if it exists.
@@ -73,6 +77,17 @@
       }
     }
   ],
+
+  "outputs": {
+    "head_sha": {
+      "description": "HEAD commit SHA of the cloned repository",
+      "value": "${OUTPUT_clone_repository_head_sha}"
+    },
+    "default_branch": {
+      "description": "Default branch name of the cloned repository",
+      "value": "${OUTPUT_clone_repository_default_branch}"
+    }
+  },
 
   "on_failure": [
     {

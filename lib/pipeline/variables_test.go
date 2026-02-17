@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -738,6 +739,33 @@ func TestExpandStep(t *testing.T) {
 		}
 		if original.In[0] != "${A}" {
 			t.Errorf("original In[0] was modified to %q", original.In[0])
+		}
+	})
+
+	t.Run("output paths are expanded", func(t *testing.T) {
+		t.Parallel()
+
+		step := schema.PipelineStep{
+			Name: "build",
+			Run:  "make build",
+			Outputs: map[string]json.RawMessage{
+				"binary": json.RawMessage(`"/tmp/outputs/${PROJECT}_bin"`),
+			},
+		}
+		variables := map[string]string{"PROJECT": "myapp"}
+
+		expanded, err := ExpandStep(step, variables)
+		if err != nil {
+			t.Fatalf("ExpandStep: %v", err)
+		}
+
+		// Parse the expanded output to verify the path was expanded.
+		parsed, err := schema.ParseStepOutputs(expanded.Outputs)
+		if err != nil {
+			t.Fatalf("ParseStepOutputs: %v", err)
+		}
+		if parsed["binary"].Path != "/tmp/outputs/myapp_bin" {
+			t.Errorf("output path = %q, want %q", parsed["binary"].Path, "/tmp/outputs/myapp_bin")
 		}
 	})
 }

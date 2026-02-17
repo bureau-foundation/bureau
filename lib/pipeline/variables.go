@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -210,6 +211,29 @@ func ExpandStep(step schema.PipelineStep, variables map[string]string) (schema.P
 			expanded.NotIn = expandedNotIn
 		}
 		step.AssertState = &expanded
+	}
+
+	// Expand output path fields. Parse each raw declaration, expand
+	// the Path, and re-serialize. This ensures output file paths can
+	// reference pipeline variables (e.g., "/tmp/outputs/${PROJECT}_sha").
+	if len(step.Outputs) > 0 {
+		expandedOutputs := make(map[string]json.RawMessage, len(step.Outputs))
+		for name, raw := range step.Outputs {
+			parsed, parseErr := schema.ParseStepOutputs(map[string]json.RawMessage{name: raw})
+			if parseErr != nil {
+				return schema.PipelineStep{}, fmt.Errorf("step %q outputs[%s]: %w", step.Name, name, parseErr)
+			}
+			output := parsed[name]
+			if output.Path, err = Expand(output.Path, merged); err != nil {
+				return schema.PipelineStep{}, fmt.Errorf("step %q outputs[%s].path: %w", step.Name, name, err)
+			}
+			serialized, marshalErr := json.Marshal(output)
+			if marshalErr != nil {
+				return schema.PipelineStep{}, fmt.Errorf("step %q outputs[%s]: re-serializing expanded output: %w", step.Name, name, marshalErr)
+			}
+			expandedOutputs[name] = serialized
+		}
+		step.Outputs = expandedOutputs
 	}
 
 	step.Env = expandedEnv

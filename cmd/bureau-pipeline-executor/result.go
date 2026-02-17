@@ -63,7 +63,7 @@ func (r *resultLog) writeStart(pipeline string, stepCount int) {
 }
 
 // writeStep records the outcome of a single step.
-func (r *resultLog) writeStep(index int, name, status string, durationMS int64, stepError string) {
+func (r *resultLog) writeStep(index int, name, status string, durationMS int64, stepError string, outputs map[string]string) {
 	if r == nil {
 		return
 	}
@@ -74,11 +74,12 @@ func (r *resultLog) writeStep(index int, name, status string, durationMS int64, 
 		Status:     status,
 		DurationMS: durationMS,
 		Error:      stepError,
+		Outputs:    outputs,
 	})
 }
 
 // writeComplete records successful pipeline completion.
-func (r *resultLog) writeComplete(durationMS int64, logEventID string) {
+func (r *resultLog) writeComplete(durationMS int64, logEventID string, outputs map[string]string) {
 	if r == nil {
 		return
 	}
@@ -87,6 +88,7 @@ func (r *resultLog) writeComplete(durationMS int64, logEventID string) {
 		Status:     "ok",
 		DurationMS: durationMS,
 		LogEventID: logEventID,
+		Outputs:    outputs,
 	})
 }
 
@@ -148,20 +150,22 @@ type resultStartEntry struct {
 
 // resultStepEntry is written after each step completes (or is skipped).
 type resultStepEntry struct {
-	Type       string `json:"type"`
-	Index      int    `json:"index"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	DurationMS int64  `json:"duration_ms"`
-	Error      string `json:"error,omitempty"`
+	Type       string            `json:"type"`
+	Index      int               `json:"index"`
+	Name       string            `json:"name"`
+	Status     string            `json:"status"`
+	DurationMS int64             `json:"duration_ms"`
+	Error      string            `json:"error,omitempty"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 
 // resultCompleteEntry is the last line on successful pipeline completion.
 type resultCompleteEntry struct {
-	Type       string `json:"type"`
-	Status     string `json:"status"`
-	DurationMS int64  `json:"duration_ms"`
-	LogEventID string `json:"log_event_id"`
+	Type       string            `json:"type"`
+	Status     string            `json:"status"`
+	DurationMS int64             `json:"duration_ms"`
+	LogEventID string            `json:"log_event_id"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 
 // resultFailedEntry is the last line when the pipeline fails.

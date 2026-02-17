@@ -254,25 +254,15 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	ctx := t.Context()
 
-	// --- Resolve global rooms and grant access ---
-	// The daemon resolves the "base" template during reconciliation (needs
-	// template room membership). The pipeline executor resolves pipeline
-	// refs (dev-workspace-init, dev-workspace-deinit) via the proxy's
-	// Matrix session (needs pipeline room membership for the principal).
-	templateRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
-	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
-	}
+	// --- Resolve pipeline room for principal invitations ---
+	// The machine was invited to all global rooms (template, pipeline,
+	// system, machine, service, fleet) during provisioning. Principal
+	// accounts still need pipeline room membership for workspace
+	// setup/teardown pipelines (the pipeline executor authenticates
+	// as the principal via the proxy).
 	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
 	if err != nil {
 		t.Fatalf("resolve pipeline room: %v", err)
-	}
-
-	// Invite the machine to the template room (daemon resolves base template).
-	if err := admin.InviteUser(ctx, templateRoomID, machine.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite machine to template room: %v", err)
-		}
 	}
 
 	// --- Publish agent template ---
@@ -519,6 +509,44 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, ex
 		}
 		return state.Status == expectedStatus
 	}, fmt.Sprintf("workspace status %q in room %s", expectedStatus, roomID))
+}
+
+// waitForWorktreeStatus waits for a worktree state event
+// (m.bureau.worktree) in the workspace room to reach the expected status.
+// The state key matches the worktree path (e.g., "feature/test-branch").
+// Uses the same watch-then-check pattern as waitForWorkspaceStatus.
+func waitForWorktreeStatus(t *testing.T, session *messaging.Session, roomID, worktreePath, expectedStatus string) {
+	t.Helper()
+
+	watch := watchRoom(t, session, roomID)
+
+	// Check whether the status already matches.
+	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorktree, worktreePath)
+	if err == nil {
+		var state schema.WorktreeState
+		if json.Unmarshal(content, &state) == nil && state.Status == expectedStatus {
+			return
+		}
+	}
+
+	// Wait for the worktree status to transition via /sync.
+	watch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.EventTypeWorktree {
+			return false
+		}
+		if event.StateKey == nil || *event.StateKey != worktreePath {
+			return false
+		}
+		contentJSON, marshalError := json.Marshal(event.Content)
+		if marshalError != nil {
+			return false
+		}
+		var state schema.WorktreeState
+		if json.Unmarshal(contentJSON, &state) != nil {
+			return false
+		}
+		return state.Status == expectedStatus
+	}, fmt.Sprintf("worktree %q status %q in room %s", worktreePath, expectedStatus, roomID))
 }
 
 // verifyPipelineResult waits for and verifies the m.bureau.pipeline_result

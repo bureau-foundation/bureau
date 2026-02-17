@@ -194,6 +194,38 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 		fmt.Fprintf(os.Stderr, "  Invited to %s\n", serviceAlias)
 	}
 
+	// Template room: daemons resolve sandbox templates during reconciliation.
+	templateAlias := principal.RoomAlias(schema.RoomAliasTemplate, serverName)
+	templateRoomID, err := adminSession.ResolveAlias(ctx, templateAlias)
+	if err != nil {
+		return cli.NotFound("resolve template room %q: %w", templateAlias, err)
+	}
+	if err := adminSession.InviteUser(ctx, templateRoomID, machineUserID); err != nil {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			return cli.Internal("invite machine to template room: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", templateAlias)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Invited to %s\n", templateAlias)
+	}
+
+	// Pipeline room: daemons resolve pipeline refs when spawning ephemeral
+	// pipeline executors (e.g., worktree add/remove operations that use
+	// DirectCredentials to authenticate as the machine).
+	pipelineAlias := principal.RoomAlias(schema.RoomAliasPipeline, serverName)
+	pipelineRoomID, err := adminSession.ResolveAlias(ctx, pipelineAlias)
+	if err != nil {
+		return cli.NotFound("resolve pipeline room %q: %w", pipelineAlias, err)
+	}
+	if err := adminSession.InviteUser(ctx, pipelineRoomID, machineUserID); err != nil {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			return cli.Internal("invite machine to pipeline room: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", pipelineAlias)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Invited to %s\n", pipelineAlias)
+	}
+
 	// System room: daemons need this for token signing key retrieval.
 	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
 	systemRoomID, err := adminSession.ResolveAlias(ctx, systemAlias)

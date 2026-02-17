@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestWorkspaceCommands exercises the daemon's synchronous workspace command
@@ -578,6 +580,260 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		}
 		t.Logf("missing workspace correctly rejected: %s", errorMsg)
 	})
+}
+
+// TestWorkspaceWorktreeLifecycle exercises the full workspace-to-worktree
+// lifecycle: workspace create, worktree add (with pipeline completion),
+// host filesystem verification, worktree remove, and workspace destroy.
+//
+// This is the end-to-end test that proves:
+//   - The worktree init pipeline (dev-worktree-init) creates a git worktree
+//     inside a bwrap sandbox with workspace mounts and publishes "active" state
+//   - The worktree deinit pipeline (dev-worktree-deinit) removes the worktree
+//     and publishes "removed" state
+//   - The workspace mount chain works: host workspace dir → launcher
+//     variable expansion → bwrap bind-mount → pipeline executor → git worktree
+//   - The full lifecycle integrates cleanly: workspace create → setup →
+//     agent start → worktree add → worktree remove → workspace destroy
+func TestWorkspaceWorktreeLifecycle(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleetRoomID := defaultFleetRoomID(t)
+
+	machine := newTestMachine(t, "machine/ws-wt-lifecycle")
+	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
+		t.Fatalf("create workspace root: %v", err)
+	}
+
+	runnerEnv := findRunnerEnv(t)
+
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary:         resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:           resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
+		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
+		PipelineEnvironment:    runnerEnv,
+		FleetRoomID:            fleetRoomID,
+	})
+
+	ctx := t.Context()
+
+	// Resolve the pipeline room for principal invitations. The machine
+	// itself was invited to all global rooms (template, pipeline, system,
+	// machine, service, fleet) during provisioning (startMachineLauncher).
+	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
+
+	// --- Publish agent template ---
+	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-wt-agent")
+	if err != nil {
+		t.Fatalf("parse agent template ref: %v", err)
+	}
+	_, err = template.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
+		Description: "Long-running agent for worktree lifecycle integration tests",
+		Command:     []string{"sleep", "infinity"},
+		Environment: runnerEnv,
+		Namespaces:  &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Dest: "/tmp", Type: "tmpfs"},
+			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: "ro"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME": "/workspace",
+			"TERM": "xterm-256color",
+		},
+	}, testServerName)
+	if err != nil {
+		t.Fatalf("push agent template: %v", err)
+	}
+
+	// --- Create seed git repo ---
+	seedRepoPath := machine.WorkspaceRoot + "/seed.git"
+	initTestGitRepo(t, ctx, seedRepoPath)
+
+	// --- Register principals ---
+	setupAccount := registerPrincipal(t, "wswt/main/setup", "test-password")
+	agentAccount := registerPrincipal(t, "wswt/main/agent/0", "test-password")
+	teardownAccount := registerPrincipal(t, "wswt/main/teardown", "test-password")
+
+	// --- Push encrypted credentials ---
+	pushCredentials(t, admin, machine, setupAccount)
+	pushCredentials(t, admin, machine, agentAccount)
+	pushCredentials(t, admin, machine, teardownAccount)
+
+	// --- Invite pipeline principals to the pipeline room ---
+	for _, account := range []principalAccount{setupAccount, teardownAccount} {
+		if err := admin.InviteUser(ctx, pipelineRoomID, account.UserID); err != nil {
+			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+				t.Fatalf("invite %s to pipeline room: %v", account.Localpart, err)
+			}
+		}
+	}
+
+	// --- Phase 1: Create workspace via CLI ---
+	t.Log("phase 1: creating workspace via CLI")
+	runBureauOrFail(t, "workspace", "create", "wswt/main",
+		"--machine", machine.Name,
+		"--template", "bureau/template:test-wt-agent",
+		"--param", "repository=/workspace/seed.git",
+		"--credential-file", credentialFile,
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+	)
+
+	workspaceRoomID, err := admin.ResolveAlias(ctx, "#wswt/main:"+testServerName)
+	if err != nil {
+		t.Fatalf("resolve workspace room: %v", err)
+	}
+
+	// --- Phase 2: Wait for setup pipeline → workspace active ---
+	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", "success")
+	t.Log("workspace is active — setup pipeline completed")
+
+	// --- Phase 3: Agent starts ---
+	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
+	waitForFile(t, agentSocket)
+
+	agentProxyClient := proxyHTTPClient(agentSocket)
+	agentIdentity := proxyWhoami(t, agentProxyClient)
+	if agentIdentity != agentAccount.UserID {
+		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
+	}
+	t.Log("agent started with verified proxy identity: " + agentIdentity)
+
+	// --- Phase 4: Add worktree ---
+	t.Log("phase 4: adding worktree feature/test-branch")
+	addRequestID := "wt-add-lifecycle"
+	addWatch := watchRoom(t, admin, workspaceRoomID)
+
+	_, err = admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
+		schema.CommandMessage{
+			MsgType:   schema.MsgTypeCommand,
+			Body:      "workspace.worktree.add feature/test-branch",
+			Command:   "workspace.worktree.add",
+			Workspace: "wswt",
+			RequestID: addRequestID,
+			Parameters: map[string]any{
+				"path":   "feature/test-branch",
+				"branch": "main",
+			},
+		})
+	if err != nil {
+		t.Fatalf("send workspace.worktree.add: %v", err)
+	}
+
+	// Wait for both the accepted ack and the pipeline result.
+	addResults := addWatch.WaitForCommandResults(t, addRequestID, 2)
+	addAccepted := findAcceptedEvent(t, addResults)
+	addPipeline := findPipelineEvent(t, addResults)
+
+	addPrincipal, _ := addAccepted["result"].(map[string]any)
+	principalName, _ := addPrincipal["principal"].(string)
+	if principalName == "" {
+		t.Fatal("worktree.add accepted result has empty principal")
+	}
+	t.Logf("worktree.add accepted, executor principal: %s", principalName)
+
+	addStatus, _ := addPipeline["status"].(string)
+	if addStatus != "success" {
+		addError, _ := addPipeline["error"].(string)
+		t.Fatalf("worktree.add pipeline failed: status=%s, error=%s", addStatus, addError)
+	}
+	t.Log("worktree.add pipeline completed successfully")
+
+	// Verify the worktree state event reached "active".
+	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "active")
+	t.Log("worktree state is 'active'")
+
+	// --- Phase 5: Verify worktree on disk ---
+	worktreeDir := filepath.Join(machine.WorkspaceRoot, "wswt", "feature", "test-branch")
+	readmePath := filepath.Join(worktreeDir, "README.md")
+
+	if _, err := os.Stat(worktreeDir); err != nil {
+		t.Fatalf("worktree directory does not exist on host: %v", err)
+	}
+	if _, err := os.Stat(readmePath); err != nil {
+		t.Fatalf("README.md not found in worktree: %v", err)
+	}
+	t.Log("worktree exists on disk with README.md from seed repo")
+
+	// --- Phase 6: Remove worktree ---
+	t.Log("phase 6: removing worktree feature/test-branch")
+	removeRequestID := "wt-remove-lifecycle"
+	removeWatch := watchRoom(t, admin, workspaceRoomID)
+
+	_, err = admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
+		schema.CommandMessage{
+			MsgType:   schema.MsgTypeCommand,
+			Body:      "workspace.worktree.remove feature/test-branch",
+			Command:   "workspace.worktree.remove",
+			Workspace: "wswt",
+			RequestID: removeRequestID,
+			Parameters: map[string]any{
+				"path": "feature/test-branch",
+				"mode": "delete",
+			},
+		})
+	if err != nil {
+		t.Fatalf("send workspace.worktree.remove: %v", err)
+	}
+
+	// Wait for both the accepted ack and the pipeline result.
+	removeResults := removeWatch.WaitForCommandResults(t, removeRequestID, 2)
+	removeAccepted := findAcceptedEvent(t, removeResults)
+	removePipeline := findPipelineEvent(t, removeResults)
+
+	removePrincipal, _ := removeAccepted["result"].(map[string]any)
+	removePrincipalName, _ := removePrincipal["principal"].(string)
+	if removePrincipalName == "" {
+		t.Fatal("worktree.remove accepted result has empty principal")
+	}
+	t.Logf("worktree.remove accepted, executor principal: %s", removePrincipalName)
+
+	removeStatus, _ := removePipeline["status"].(string)
+	if removeStatus != "success" {
+		removeError, _ := removePipeline["error"].(string)
+		t.Fatalf("worktree.remove pipeline failed: status=%s, error=%s", removeStatus, removeError)
+	}
+	t.Log("worktree.remove pipeline completed successfully")
+
+	// Verify the worktree state event reached "removed".
+	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "removed")
+	t.Log("worktree state is 'removed'")
+
+	// --- Phase 7: Verify worktree removed from disk ---
+	if _, err := os.Stat(worktreeDir); !os.IsNotExist(err) {
+		t.Fatalf("worktree directory still exists after removal: %v", err)
+	}
+	t.Log("worktree directory removed from disk")
+
+	// --- Phase 8: Destroy workspace ---
+	t.Log("phase 8: destroying workspace via CLI")
+	runBureauOrFail(t, "workspace", "destroy", "wswt/main",
+		"--credential-file", credentialFile,
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+	)
+
+	waitForFileGone(t, agentSocket)
+	t.Log("agent proxy socket disappeared after workspace entered teardown")
+
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", "success")
+	t.Log("workspace lifecycle complete: create → active → worktree add → worktree remove → destroy → archived")
 }
 
 // --- Test helpers ---

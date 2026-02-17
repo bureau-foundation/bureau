@@ -126,10 +126,19 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 	startMachineDaemon(t, admin, machine, options)
 }
 
-// startMachineLauncher boots the launcher for a machine, waits for the
-// launcher socket and machine key publication, and populates the machine's
-// PublicKey and MachineRoomID fields. Does NOT start the daemon — call
-// startMachineDaemon or startMachineDaemonManual after this.
+// startMachineLauncher provisions a machine via the production CLI command
+// and boots the launcher with the resulting bootstrap config. This exercises
+// the same code path as production deployments:
+//
+//   - "bureau machine provision" registers the account, invites to all global
+//     rooms (machine, service, template, pipeline, system, fleet), and creates
+//     the per-machine config room
+//   - The launcher reads the bootstrap config, logs in with the one-time
+//     password, rotates it to a permanent password derived from the machine's
+//     private key, and publishes the machine key
+//
+// Populates machine.PublicKey and machine.MachineRoomID. Does NOT start
+// the daemon — call startMachineDaemon or startMachineDaemonManual after this.
 func startMachineLauncher(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
 	t.Helper()
 
@@ -142,49 +151,31 @@ func startMachineLauncher(t *testing.T, admin *messaging.Session, machine *testM
 
 	ctx := t.Context()
 
-	// Write the registration token to a file for the launcher.
-	tokenFile := filepath.Join(machine.StateDir, "reg-token")
-	if err := os.WriteFile(tokenFile, []byte(testRegistrationToken), 0600); err != nil {
-		t.Fatalf("write registration token: %v", err)
-	}
+	// Provision the machine via the production CLI command. This registers
+	// the account, invites to all global rooms, creates the config room,
+	// and writes a bootstrap config with the one-time password.
+	bootstrapFile := filepath.Join(machine.StateDir, "bootstrap.json")
+	runBureauOrFail(t, "machine", "provision", machine.Name,
+		"--credential-file", credentialFile,
+		"--server-name", testServerName,
+		"--fleet-room", options.FleetRoomID,
+		"--output", bootstrapFile,
+	)
 
-	// Resolve global rooms and invite the machine. The daemon joins all
-	// rooms at startup (system for token signing keys, machine for
-	// status/config, service for service directory, fleet for HA leases
-	// and service definitions). All require an admin invitation because
-	// they are private rooms.
-	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
-	if err != nil {
-		t.Fatalf("resolve system room: %v", err)
-	}
+	// Resolve the machine room for the key watch and daemon status watch.
 	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
 	if err != nil {
 		t.Fatalf("resolve machine room: %v", err)
 	}
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-	fleetRoomID := options.FleetRoomID
 	machine.MachineRoomID = machineRoomID
 
-	if err := admin.InviteUser(ctx, systemRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to system room: %v", err)
-	}
-	if err := admin.InviteUser(ctx, machineRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to machine room: %v", err)
-	}
-	if err := admin.InviteUser(ctx, serviceRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to service room: %v", err)
-	}
-	if err := admin.InviteUser(ctx, fleetRoomID, machine.UserID); err != nil {
-		t.Fatalf("invite machine to fleet room: %v", err)
-	}
-
-	// Start the launcher.
+	// Start the launcher with the bootstrap config. The launcher logs in
+	// with the one-time password from the bootstrap file, rotates it to
+	// a permanent password derived from the machine's private key, publishes
+	// the machine key to the machine room, and deletes the bootstrap file.
 	launcherArgs := []string{
 		"--homeserver", testHomeserverURL,
-		"--registration-token-file", tokenFile,
+		"--bootstrap-file", bootstrapFile,
 		"--machine-name", machine.Name,
 		"--server-name", testServerName,
 		"--run-dir", machine.RunDir,

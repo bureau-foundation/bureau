@@ -30,7 +30,7 @@ func TestMCPServer(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/mcp")
 	startMachine(t, admin, machine, machineOptions{

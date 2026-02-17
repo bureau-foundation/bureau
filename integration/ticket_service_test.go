@@ -55,7 +55,7 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 
 	ctx := t.Context()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// --- Phase 0: Boot a machine ---
 	//
@@ -389,7 +389,7 @@ func TestTicketLifecycle(t *testing.T) {
 
 	ctx := t.Context()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// --- Phase 0: Boot a machine ---
 

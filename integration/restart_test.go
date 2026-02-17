@@ -48,7 +48,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -61,6 +61,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet-room", fleetRoomID,
 		"--output", bootstrapPath,
 	)
 

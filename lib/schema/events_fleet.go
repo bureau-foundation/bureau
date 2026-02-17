@@ -647,3 +647,38 @@ type ProposedAction struct {
 	// and "move").
 	Score int `json:"score,omitempty"`
 }
+
+// FleetRoomPowerLevels returns the power level content for fleet rooms.
+// Fleet rooms are admin-controlled but allow all members (machines, fleet
+// controllers) to write fleet-specific state events: fleet services,
+// machine definitions, HA leases, fleet config, service status, and
+// fleet alerts. Administrative room events (name, join rules, power
+// levels) remain locked to admin (PL 100).
+func FleetRoomPowerLevels(adminUserID string) map[string]any {
+	events := AdminProtectedEvents()
+	for _, eventType := range []string{
+		EventTypeFleetService,
+		EventTypeMachineDefinition,
+		EventTypeFleetConfig,
+		EventTypeHALease,
+		EventTypeServiceStatus,
+		EventTypeFleetAlert,
+	} {
+		events[eventType] = 0
+	}
+
+	return map[string]any{
+		"users": map[string]any{
+			adminUserID: 100,
+		},
+		"users_default":  0,
+		"events":         events,
+		"events_default": 0,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         100,
+		"redact":         50,
+		"notifications":  map[string]any{"room": 50},
+	}
+}

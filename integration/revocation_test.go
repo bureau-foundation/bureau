@@ -109,7 +109,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Set up and start the machine.
 	machine := newTestMachine(t, machineName)
@@ -190,7 +190,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 	machineUserID := "@" + machineName + ":" + testServerName
 
 	// Set up and start the machine.

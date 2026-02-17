@@ -30,7 +30,7 @@ func TestWorkspaceCommands(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-cmds")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -312,7 +312,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-worktree")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -601,7 +601,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-wt-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {

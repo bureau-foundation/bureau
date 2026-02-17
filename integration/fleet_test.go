@@ -26,7 +26,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/test")
 	startMachine(t, admin, machine, machineOptions{
@@ -117,7 +117,7 @@ func TestPrincipalAssignment(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/sandbox")
 	startMachine(t, admin, machine, machineOptions{
@@ -157,7 +157,7 @@ func TestOperatorFlow(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/observe")
 	startMachine(t, admin, machine, machineOptions{
@@ -348,7 +348,7 @@ func TestCredentialRotation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/rotate")
 	startMachine(t, admin, machine, machineOptions{
@@ -426,7 +426,7 @@ func TestCrossMachineObservation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	ctx := t.Context()
 
@@ -622,7 +622,7 @@ func TestConfigReconciliation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/reconcile")
 	startMachine(t, admin, machine, machineOptions{

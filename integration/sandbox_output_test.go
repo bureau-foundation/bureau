@@ -29,7 +29,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/output-capture")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {

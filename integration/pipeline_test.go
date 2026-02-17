@@ -30,7 +30,7 @@ func TestPipelineExecution(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/pipeline")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -147,7 +147,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/pipeline-fail")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -254,7 +254,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/pipeline-params")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {

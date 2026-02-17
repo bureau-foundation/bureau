@@ -305,11 +305,12 @@ var standardRooms = []standardRoom{
 		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
 	},
 	{
-		alias:         "bureau/fleet",
-		displayName:   "Bureau Fleet",
-		topic:         "Fleet service definitions, machine definitions, HA leases, and alerts",
-		name:          "fleet room",
-		credentialKey: "MATRIX_FLEET_ROOM",
+		alias:           "bureau/fleet",
+		displayName:     "Bureau Fleet",
+		topic:           "Fleet service definitions, machine definitions, HA leases, and alerts",
+		name:            "fleet room",
+		credentialKey:   "MATRIX_FLEET_ROOM",
+		powerLevelsFunc: schema.FleetRoomPowerLevels,
 		memberSettableEventTypes: []string{
 			schema.EventTypeFleetService,
 			schema.EventTypeMachineDefinition,

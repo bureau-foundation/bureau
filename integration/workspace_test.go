@@ -43,7 +43,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -234,7 +234,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-cli")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {

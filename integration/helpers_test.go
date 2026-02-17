@@ -472,19 +472,19 @@ func loadCredentials(t *testing.T) map[string]string {
 
 // --- Fleet Test Helpers ---
 
-// defaultFleetRoomID reads the fleet room ID from the credential file
-// written by bureau matrix setup in TestMain. This is the shared fleet
-// room created during homeserver bootstrap. Tests that need fleet
-// isolation (e.g., fleet controller tests) should create their own
-// private fleet room instead of calling this helper.
-func defaultFleetRoomID(t *testing.T) string {
+// createFleetRoom creates a private fleet room for a single test. Each
+// test gets its own room to prevent cross-contamination between parallel
+// tests that publish fleet services or run fleet controllers.
+func createFleetRoom(t *testing.T, admin *messaging.Session) string {
 	t.Helper()
-	credentials := loadCredentials(t)
-	fleetRoomID := credentials["MATRIX_FLEET_ROOM"]
-	if fleetRoomID == "" {
-		t.Fatal("MATRIX_FLEET_ROOM missing from credential file")
+	response, err := admin.CreateRoom(t.Context(), messaging.CreateRoomRequest{
+		Preset:                    "private_chat",
+		PowerLevelContentOverride: schema.FleetRoomPowerLevels(admin.UserID()),
+	})
+	if err != nil {
+		t.Fatalf("create fleet room: %v", err)
 	}
-	return fleetRoomID
+	return response.RoomID
 }
 
 // resolvedBinary resolves a binary path from a Bazel environment variable.

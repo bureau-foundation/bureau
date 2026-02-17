@@ -38,7 +38,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	defer admin.Close()
 
 	ctx := t.Context()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine with a proxy binary so we can deploy a principal.
 	machine := newTestMachine(t, "machine/struct-api")

@@ -47,7 +47,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/policy-hr")
 	startMachine(t, admin, machine, machineOptions{
@@ -191,7 +191,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/vis-hr")
 	startMachine(t, admin, machine, machineOptions{

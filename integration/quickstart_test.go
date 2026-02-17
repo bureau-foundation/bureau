@@ -32,7 +32,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/quickstart-test")

@@ -24,7 +24,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/ha-acq")
 	startMachine(t, admin, machine, machineOptions{
@@ -124,7 +124,7 @@ func TestHALeaseFailover(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot two machines with manual daemon lifecycle so we can kill
 	// the winner mid-test. Both use startMachineLauncher +

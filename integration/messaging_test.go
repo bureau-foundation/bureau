@@ -22,7 +22,7 @@ func TestTwoAgentMessaging(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/messaging")
 	startMachine(t, admin, machine, machineOptions{

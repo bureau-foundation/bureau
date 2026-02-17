@@ -51,6 +51,8 @@ func TestMachineLifecycle(t *testing.T) {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 
+	fleetRoomID := createFleetRoom(t, admin)
+
 	// --- Phase 1: Provision via CLI ---
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
@@ -58,6 +60,7 @@ func TestMachineLifecycle(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet-room", fleetRoomID,
 		"--output", bootstrapPath,
 	)
 
@@ -165,8 +168,6 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// --- Phase 4: Normal startup (launcher + daemon from saved session) ---
 	// Use a subtest so we get clean process cleanup before Phase 6.
-	fleetRoomID := defaultFleetRoomID(t)
-
 	t.Run("RunningPhase", func(t *testing.T) {
 		startProcess(t, "launcher", launcherBinary,
 			"--homeserver", testHomeserverURL,
@@ -323,6 +324,8 @@ func TestTwoMachineFleet(t *testing.T) {
 		t.Fatalf("resolve machine room: %v", err)
 	}
 
+	twoMachineFleetRoomID := createFleetRoom(t, admin)
+
 	// --- Provision both machines ---
 	stateDirA := t.TempDir()
 	stateDirB := t.TempDir()
@@ -332,11 +335,13 @@ func TestTwoMachineFleet(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineAName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet-room", twoMachineFleetRoomID,
 		"--output", bootstrapPathA,
 	)
 	runBureauOrFail(t, "machine", "provision", machineBName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet-room", twoMachineFleetRoomID,
 		"--output", bootstrapPathB,
 	)
 	t.Log("both machines provisioned")
@@ -400,8 +405,6 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Start both launcher+daemon pairs ---
-	twoMachineFleetRoomID := defaultFleetRoomID(t)
-
 	startMachineProcesses := func(t *testing.T, machine machineSetup) {
 		t.Helper()
 		startProcess(t, machine.name+"-launcher", launcherBinary,

@@ -28,7 +28,7 @@ func TestServiceDiscovery(t *testing.T) {
 	defer admin.Close()
 
 	ctx := t.Context()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot two machines. The provider hosts the service principal. The
 	// consumer has principals that query for services through their proxies.

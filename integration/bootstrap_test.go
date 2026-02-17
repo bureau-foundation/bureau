@@ -54,11 +54,14 @@ func TestBootstrapScript(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
+	bootstrapFleetRoomID := createFleetRoom(t, admin)
+
 	// --- Provision the machine account on Matrix ---
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet-room", bootstrapFleetRoomID,
 		"--output", bootstrapPath,
 	)
 
@@ -180,8 +183,6 @@ func TestBootstrapScript(t *testing.T) {
 		if !containerHasBwrap(t, containerID) {
 			t.Skip("bwrap not available in container (needs --privileged); skipping service test")
 		}
-
-		bootstrapFleetRoomID := defaultFleetRoomID(t)
 
 		// Start launcher in the background inside the container.
 		// The launcher reads its session from /var/lib/bureau/session.json

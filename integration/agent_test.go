@@ -31,7 +31,7 @@ func TestMockAgentLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/agent-mock-test")

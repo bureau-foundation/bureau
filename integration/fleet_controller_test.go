@@ -413,7 +413,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// to #bureau/machine, and creates the per-machine config room.
 	// startMachine blocks until the first status heartbeat arrives, so
 	// the fleet controller's initial /sync will see this machine.
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	machine := newTestMachine(t, "machine/fleet-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
@@ -700,7 +700,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine with proxy support. The daemon needs the proxy
 	// binary to create sandboxes when the fleet controller places a
@@ -909,7 +909,7 @@ func TestFleetReconciliation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot two machines with proxy support.
 	machineA := newTestMachine(t, "machine/fleet-recon-a")
@@ -964,8 +964,6 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish the fleet service with Min=2. The fleet controller
 	// discovers the service via /sync, runs reconcile, detects a
 	// deficit of 2, scores both machines, and calls place() for each.
-	// AllowedMachines isolates this test from parallel tests sharing
-	// the fleet room.
 	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: schema.ReplicaSpec{Min: 2},
@@ -1067,7 +1065,7 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Minimal setup: one machine (no proxy needed), one fleet controller.
 	machine := newTestMachine(t, "machine/fleet-auth")

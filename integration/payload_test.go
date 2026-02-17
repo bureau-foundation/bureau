@@ -30,7 +30,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	defer admin.Close()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/payload-test")
@@ -223,7 +223,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	defer admin.Close()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
-	fleetRoomID := defaultFleetRoomID(t)
+	fleetRoomID := createFleetRoom(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/payload-empty")

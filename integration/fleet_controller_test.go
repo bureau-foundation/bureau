@@ -858,3 +858,161 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		}
 	})
 }
+
+// TestFleetReconciliation verifies the fleet controller's autonomous
+// reconciliation loop. Unlike TestFleetPlaceAndUnplace (which exercises
+// explicit place/unplace API calls), this test publishes a service with
+// Replicas.Min=2 and lets the reconcile loop place it on both machines
+// without any explicit placement commands.
+//
+// This proves the complete autonomous path:
+//   - Fleet controller detects a service with insufficient replicas
+//   - reconcile() scores machines and calls place() for each deficit
+//   - place() writes PrincipalAssignment to each machine's config room
+//   - Each daemon detects the config change via /sync
+//   - Each launcher creates a proxy sandbox
+//   - Both proxy sockets appear (end-to-end proof)
+func TestFleetReconciliation(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
+
+	// Boot two machines with proxy support.
+	machineA := newTestMachine(t, "machine/fleet-recon-a")
+	machineB := newTestMachine(t, "machine/fleet-recon-b")
+	options := machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
+	}
+	startMachine(t, admin, machineA, options)
+	startMachine(t, admin, machineB, options)
+
+	// Publish a test template and grant both machines access.
+	templateRef := publishTestAgentTemplate(t, admin, machineA, "fleet-recon-agent")
+	grantTemplateAccess(t, admin, machineB)
+
+	// Register the service principal and push credentials to both
+	// machines so either can create a sandbox after reconciliation.
+	serviceLocalpart := "service/stt/reconcile-test"
+	serviceAccount := registerPrincipal(t, serviceLocalpart, "fleet-recon-password")
+	pushCredentials(t, admin, machineA, serviceAccount)
+	pushCredentials(t, admin, machineB, serviceAccount)
+
+	// Push empty MachineConfig to both machines so the fleet controller
+	// can discover their config room IDs. The daemon does not publish
+	// MachineConfig at startup — it reads existing config during its
+	// reconcile loop. The fleet controller discovers config room IDs
+	// from MachineConfig state events (processMachineConfigEvent).
+	pushMachineConfig(t, admin, machineA, deploymentConfig{})
+	pushMachineConfig(t, admin, machineB, deploymentConfig{})
+
+	// Watch the fleet room BEFORE starting the fleet controller. The
+	// fleet controller posts config room and service discovery
+	// notifications to the fleet room. A single watch serves all
+	// discovery waits because WaitForEvent preserves non-matching
+	// events in its pending buffer.
+	discoverWatch := watchRoom(t, admin, fleetRoomID)
+
+	controllerName := "service/fleet/reconcile-test"
+	fc := startFleetController(t, admin, machineA, controllerName, fleetRoomID)
+
+	// Wait for the fleet controller to discover both config rooms.
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.Name)
+
+	// Publish the fleet service with Min=2. The fleet controller
+	// discovers the service via /sync, runs reconcile, detects a
+	// deficit of 2, scores both machines, and calls place() for each.
+	// AllowedMachines isolates this test from parallel tests sharing
+	// the fleet room.
+	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+		Template: templateRef,
+		Replicas: schema.ReplicaSpec{Min: 2},
+		Placement: schema.PlacementConstraints{
+			AllowedMachines: []string{machineA.Name, machineB.Name},
+		},
+		Failover: "migrate",
+		Priority: 10,
+	})
+	waitForFleetService(t, &discoverWatch, fc, serviceLocalpart)
+
+	// Wait for proxy sockets on both machines. Proxy socket existence
+	// proves the full chain: fleet controller reconcile → place() writes
+	// MachineConfig → daemon /sync → launcher sandbox creation.
+	proxySocketA := machineA.PrincipalSocketPath(serviceLocalpart)
+	proxySocketB := machineB.PrincipalSocketPath(serviceLocalpart)
+	waitForFile(t, proxySocketA)
+	waitForFile(t, proxySocketB)
+
+	// Verify both proxies serve the correct identity.
+	proxyClientA := proxyHTTPClient(proxySocketA)
+	if whoami := proxyWhoami(t, proxyClientA); whoami != serviceAccount.UserID {
+		t.Errorf("machine A proxy whoami = %q, want %q", whoami, serviceAccount.UserID)
+	}
+	proxyClientB := proxyHTTPClient(proxySocketB)
+	if whoami := proxyWhoami(t, proxyClientB); whoami != serviceAccount.UserID {
+		t.Errorf("machine B proxy whoami = %q, want %q", whoami, serviceAccount.UserID)
+	}
+
+	// Verify the fleet model reflects both placements.
+	signingKey := loadDaemonSigningKey(t, machineA)
+	authClient := fleetClient(t, fc, signingKey, fleetAllGrants())
+	ctx := t.Context()
+
+	var showService fleetShowServiceResponse
+	if err := authClient.Call(ctx, "show-service",
+		map[string]any{"service": serviceLocalpart}, &showService); err != nil {
+		t.Fatalf("show-service: %v", err)
+	}
+	if len(showService.Instances) != 2 {
+		t.Fatalf("show-service instances = %d, want 2", len(showService.Instances))
+	}
+	instanceMachines := make(map[string]bool, len(showService.Instances))
+	for _, instance := range showService.Instances {
+		instanceMachines[instance.Machine] = true
+	}
+	if !instanceMachines[machineA.Name] {
+		t.Errorf("show-service missing instance on %s", machineA.Name)
+	}
+	if !instanceMachines[machineB.Name] {
+		t.Errorf("show-service missing instance on %s", machineB.Name)
+	}
+
+	// Verify show-machine for both machines: each should have a
+	// PrincipalAssignment with the correct template, AutoStart=true,
+	// and fleet_managed label matching the controller name.
+	for _, machine := range []*testMachine{machineA, machineB} {
+		var showMachine fleetShowMachineResponse
+		if err := authClient.Call(ctx, "show-machine",
+			map[string]any{"machine": machine.Name}, &showMachine); err != nil {
+			t.Fatalf("show-machine %s: %v", machine.Name, err)
+		}
+		var foundAssignment bool
+		for _, assignment := range showMachine.Assignments {
+			if assignment.Localpart == serviceLocalpart {
+				foundAssignment = true
+				if assignment.Template != templateRef {
+					t.Errorf("machine %s assignment template = %q, want %q",
+						machine.Name, assignment.Template, templateRef)
+				}
+				if !assignment.AutoStart {
+					t.Errorf("machine %s assignment AutoStart should be true",
+						machine.Name)
+				}
+				if assignment.Labels["fleet_managed"] != controllerName {
+					t.Errorf("machine %s fleet_managed label = %q, want %q",
+						machine.Name, assignment.Labels["fleet_managed"], controllerName)
+				}
+				break
+			}
+		}
+		if !foundAssignment {
+			t.Errorf("machine %s: assignment for %q not found (got %d assignments)",
+				machine.Name, serviceLocalpart, len(showMachine.Assignments))
+		}
+	}
+}

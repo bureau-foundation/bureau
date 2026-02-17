@@ -33,8 +33,14 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	if setup.Labels["role"] != "setup" {
 		t.Errorf("setup role label = %q, want %q", setup.Labels["role"], "setup")
 	}
-	if setup.StartCondition != nil {
-		t.Error("setup principal should have no StartCondition")
+	// Setup gates on workspace status "pending" so the daemon stops it
+	// after the pipeline publishes "active" (preventing a restart loop).
+	if setup.StartCondition == nil {
+		t.Fatal("setup StartCondition is nil")
+	}
+	if setup.StartCondition.ContentMatch["status"].StringValue() != "pending" {
+		t.Errorf("setup ContentMatch[\"status\"] = %q, want %q",
+			setup.StartCondition.ContentMatch["status"].StringValue(), "pending")
 	}
 
 	// Verify the payload contains all pipeline variables needed by
@@ -126,6 +132,42 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 	}
 }
 
+func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
+	t.Parallel()
+
+	assignments := buildPrincipalAssignments(
+		"iree/amdgpu/inference",
+		"bureau/template:base",
+		1,
+		"bureau.local",
+		"machine/workstation",
+		"!room:bureau.local",
+		map[string]string{
+			"repository": "https://github.com/iree-org/iree.git",
+			"branch":     "main",
+		},
+	)
+
+	setup := assignments[0]
+	if setup.StartCondition == nil {
+		t.Fatal("setup StartCondition is nil")
+	}
+
+	condition := setup.StartCondition
+	if condition.EventType != schema.EventTypeWorkspace {
+		t.Errorf("condition EventType = %q, want %q", condition.EventType, schema.EventTypeWorkspace)
+	}
+	if condition.StateKey != "" {
+		t.Errorf("condition StateKey = %q, want empty", condition.StateKey)
+	}
+	if condition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
+		t.Errorf("condition RoomAlias = %q, want %q", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
+	}
+	if condition.ContentMatch["status"].StringValue() != "pending" {
+		t.Errorf("condition ContentMatch[\"status\"] = %q, want %q", condition.ContentMatch["status"].StringValue(), "pending")
+	}
+}
+
 func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 	t.Parallel()
 
@@ -180,9 +222,13 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 		t.Fatalf("expected 4 assignments, got %d", len(assignments))
 	}
 
-	// Setup principal has no condition.
-	if assignments[0].StartCondition != nil {
-		t.Error("setup principal should have no StartCondition")
+	// Setup gates on "pending".
+	if assignments[0].StartCondition == nil {
+		t.Fatal("setup StartCondition is nil")
+	}
+	if assignments[0].StartCondition.ContentMatch["status"].StringValue() != "pending" {
+		t.Errorf("setup ContentMatch[\"status\"] = %q, want %q",
+			assignments[0].StartCondition.ContentMatch["status"].StringValue(), "pending")
 	}
 
 	// Both agents gate on "active".

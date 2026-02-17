@@ -346,6 +346,10 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	project, _, _ := strings.Cut(alias, "/")
 
 	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
+	// Gated on status "pending" so the daemon stops it after the pipeline
+	// publishes "active". Without this condition, the reconciliation loop
+	// would restart the sandbox every time the pipeline executor exits.
+	//
 	// Payload keys are UPPERCASE to match the pipeline variable declarations
 	// in dev-workspace-init.jsonc. The pipeline_ref tells the executor which
 	// pipeline to run; all other keys become pipeline variables.
@@ -362,6 +366,12 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 				"PROJECT":           project,
 				"WORKSPACE_ROOM_ID": workspaceRoomID,
 				"MACHINE":           machine,
+			},
+			StartCondition: &schema.StartCondition{
+				EventType:    schema.EventTypeWorkspace,
+				StateKey:     "",
+				RoomAlias:    workspaceRoomAlias,
+				ContentMatch: schema.ContentMatch{"status": schema.Eq("pending")},
 			},
 		},
 	}

@@ -388,12 +388,14 @@ func TestCredentialRotation(t *testing.T) {
 	watch := watchRoom(t, admin, machine.ConfigRoomID)
 	pushCredentials(t, admin, machine, rotated)
 
-	// Wait for the daemon to complete the rotation. The daemon posts
-	// "Restarted X with new credentials" after destroying the old sandbox
-	// and creating the new one. This is a deterministic completion signal
-	// (no inode polling needed).
-	watch.WaitForMessage(t, "Restarted "+agent.Localpart+" with new credentials",
-		machine.UserID)
+	// Wait for the daemon to complete the rotation. The daemon posts a
+	// credentials_rotated notification with status "completed" after
+	// destroying the old sandbox and creating the new one.
+	waitForNotification[schema.CredentialsRotatedMessage](
+		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID,
+		func(m schema.CredentialsRotatedMessage) bool {
+			return m.Principal == agent.Localpart && m.Status == "completed"
+		}, "credentials rotation completed for "+agent.Localpart)
 
 	// Verify the restarted proxy serves the correct identity. The new proxy
 	// process holds the rotated token, so whoami still returns the same

@@ -5,6 +5,7 @@ package integration_test
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -26,11 +27,11 @@ import (
 // enforcing the new grants.
 //
 // A single roomWatch is used across all phases rather than creating a new
-// watch per phase. This eliminates sync-position races: each WaitForMessage
+// watch per phase. This eliminates sync-position races: each wait call
 // advances the watch's nextBatch monotonically, so Phase 3 can never
-// accidentally consume Phase 2's message. Grant-count matching provides
-// additional disambiguation — AllowJoin produces "(1 grants)" while
-// default-deny produces "(0 grants)".
+// accidentally consume Phase 2's message. Grant-count matching on the
+// typed GrantsUpdatedMessage provides additional disambiguation —
+// AllowJoin produces GrantCount==1 while default-deny produces GrantCount==0.
 //
 // Phase 3 uses a fresh room (room B) because the agent joined room A in
 // phase 2. The Matrix /join endpoint is idempotent for already-joined
@@ -107,8 +108,12 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 
 	// Wait for the daemon's grants hot-reload confirmation. AllowJoin
 	// synthesizes exactly 1 grant (matrix/join action), so we match on
-	// "(1 grants)" to distinguish from Phase 3's "(0 grants)".
-	watch.WaitForMessage(t, "(1 grants)", machine.UserID)
+	// GrantCount == 1 to distinguish from Phase 3's 0-grant revert.
+	waitForNotification[schema.GrantsUpdatedMessage](
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
+		func(m schema.GrantsUpdatedMessage) bool {
+			return m.GrantCount == 1
+		}, "grants updated with 1 grant")
 	t.Log("daemon confirmed grants hot-reload for AllowJoin=true")
 
 	// Now the proxy is guaranteed to enforce the new grants.
@@ -138,8 +143,12 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	})
 
 	// Wait for the daemon's grants revert confirmation. Default-deny
-	// produces 0 grants, so match on "(0 grants)".
-	watch.WaitForMessage(t, "(0 grants)", machine.UserID)
+	// produces 0 grants.
+	waitForNotification[schema.GrantsUpdatedMessage](
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
+		func(m schema.GrantsUpdatedMessage) bool {
+			return m.GrantCount == 0
+		}, "grants updated with 0 grants")
 	t.Log("daemon confirmed grants revert to default-deny")
 
 	statusCode, body = proxyTryJoinRoom(t, proxyClient, roomB.RoomID)
@@ -169,7 +178,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 // A single roomWatch is used across all phases (including the service
 // directory wait) rather than creating a new watch per phase. This
 // eliminates sync-position races: the watch's nextBatch advances
-// monotonically as each WaitForMessage returns, so later phases never
+// monotonically as each wait call returns, so later phases never
 // see earlier phases' messages.
 //
 // This proves the daemon's reconcile → resolveGrantsForProxy →
@@ -241,7 +250,11 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// deployed above, so pushServiceDirectory includes it — the message
 	// is posted after the push completes, guaranteeing the proxy has
 	// the updated directory.
-	watch.WaitForMessage(t, "added service/vis-hr/test", machine.UserID)
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &watch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		func(m schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(m.Added, "service/vis-hr/test")
+		}, "service directory update adding service/vis-hr/test")
 
 	entries := proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {
@@ -265,9 +278,12 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Wait for the daemon's grants hot-reload confirmation, then
 	// verify the service is no longer visible. The single watch's
 	// nextBatch has advanced past Phase 1's service directory message,
-	// so this WaitForMessage only sees new events.
-	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
-		machine.UserID)
+	// so this wait only sees new events.
+	waitForNotification[schema.GrantsUpdatedMessage](
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
+		func(m schema.GrantsUpdatedMessage) bool {
+			return m.Principal == "agent/vis-hr"
+		}, "grants updated for agent/vis-hr")
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 0 {
@@ -287,8 +303,11 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Wait for the daemon's grants hot-reload confirmation, then
 	// verify the service is visible again. Phase 2's grants message
 	// was already consumed above, so this matches Phase 3's message.
-	watch.WaitForMessage(t, "Authorization grants updated for agent/vis-hr",
-		machine.UserID)
+	waitForNotification[schema.GrantsUpdatedMessage](
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
+		func(m schema.GrantsUpdatedMessage) bool {
+			return m.Principal == "agent/vis-hr"
+		}, "grants updated for agent/vis-hr")
 
 	entries = proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {

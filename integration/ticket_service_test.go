@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -187,7 +188,11 @@ func TestTicketServiceEndToEnd(t *testing.T) {
 	// #bureau/service during startup. The daemon picks this up via /sync,
 	// runs syncServiceDirectory → reconcileServices, configures proxy
 	// routes for any running consumers, and posts to the config room.
-	serviceWatch.WaitForMessage(t, "added service/ticket/integ", machine.UserID)
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		func(m schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(m.Added, "service/ticket/integ")
+		}, "service directory update adding service/ticket/integ")
 
 	// Verify unauthenticated connectivity. The "status" action requires
 	// no authentication and proves the socket is reachable and CBOR is working.
@@ -513,7 +518,11 @@ func TestTicketLifecycle(t *testing.T) {
 	)
 
 	waitForFile(t, ticketSocketPath)
-	serviceWatch.WaitForMessage(t, "added service/ticket/lifecycle", machine.UserID)
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		func(m schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(m.Added, "service/ticket/lifecycle")
+		}, "service directory update adding service/ticket/lifecycle")
 
 	// --- Phase 4: Deploy PM and worker consumers ---
 	//

@@ -33,7 +33,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -326,19 +325,8 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			// service events without matching unrelated changes from
 			// other machines or tests sharing the global service room.
 			if changeCount := len(added) + len(removed) + len(updated); changeCount > 0 {
-				var parts []string
-				for _, name := range added {
-					parts = append(parts, "added "+name)
-				}
-				for _, name := range removed {
-					parts = append(parts, "removed "+name)
-				}
-				for _, name := range updated {
-					parts = append(parts, "updated "+name)
-				}
-				message := "Service directory updated: " + strings.Join(parts, ", ")
-				if _, err := d.sendMessageRetry(ctx, d.configRoomID,
-					messaging.NewTextMessage(message)); err != nil {
+				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+					schema.NewServiceDirectoryUpdatedMessage(added, removed, updated)); err != nil {
 					d.logger.Error("failed to post service directory update", "error", err)
 				}
 			}

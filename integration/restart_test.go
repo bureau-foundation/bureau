@@ -239,7 +239,12 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Verify the adoption was logged to the config room. The watch was set
 	// up before starting daemon2, so only messages from the new daemon match.
-	adoptionWatch.WaitForMessage(t, "Adopted "+principalLocalpart, machineUserID)
+	adoption := waitForNotification[schema.PrincipalAdoptedMessage](
+		t, &adoptionWatch, schema.MsgTypePrincipalAdopted, machineUserID,
+		func(m schema.PrincipalAdoptedMessage) bool {
+			return m.Principal == principalLocalpart
+		}, "adoption of "+principalLocalpart)
+	_ = adoption
 	t.Log("adoption message found in config room")
 
 	t.Log("daemon restart recovery verified: proxy undisturbed, heartbeat correct, adoption logged")

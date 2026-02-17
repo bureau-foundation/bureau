@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -69,10 +70,8 @@ func checkDaemonWatchdog(
 			"new", state.NewBinary,
 		)
 		if session != nil && configRoomID != "" {
-			session.SendMessage(context.Background(), configRoomID, messaging.NewTextMessage(
-				fmt.Sprintf("Daemon self-update succeeded: now running %s (was %s)",
-					state.NewBinary, state.PreviousBinary),
-			))
+			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
+				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "succeeded", ""))
 		}
 
 	case state.PreviousBinary:
@@ -84,10 +83,9 @@ func checkDaemonWatchdog(
 			"current", state.PreviousBinary,
 		)
 		if session != nil && configRoomID != "" {
-			session.SendMessage(context.Background(), configRoomID, messaging.NewTextMessage(
-				fmt.Sprintf("Daemon self-update failed: %s crashed or failed to start, reverted to %s",
-					state.NewBinary, state.PreviousBinary),
-			))
+			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
+				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "failed",
+					fmt.Sprintf("%s crashed or failed to start", state.NewBinary)))
 		}
 		failedPath = state.NewBinary
 
@@ -154,10 +152,8 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 	// Report to Matrix before exec. If the exec succeeds, this is the
 	// last message from the old process. The new process reports success
 	// via checkDaemonWatchdog on startup.
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Daemon self-updating: exec() %s (was %s)",
-			newBinaryPath, d.daemonBinaryPath),
-	)); err != nil {
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, "in_progress", "")); err != nil {
 		d.logger.Error("failed to post exec notification", "error", err)
 	}
 
@@ -187,10 +183,9 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 	d.failedExecPaths[newBinaryPath] = true
 
 	// Report the failure.
-	if _, sendErr := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Daemon self-update failed: exec() %s: %v (continuing with %s)",
-			newBinaryPath, err, d.daemonBinaryPath),
-	)); sendErr != nil {
+	if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, "failed",
+			fmt.Sprintf("exec() %s: %v", newBinaryPath, err))); sendErr != nil {
 		d.logger.Error("failed to post exec failure notification", "error", sendErr)
 	}
 

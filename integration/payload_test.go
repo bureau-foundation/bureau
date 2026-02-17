@@ -165,8 +165,11 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	// room. This is the synchronization point: the daemon sends this
 	// message after the IPC response confirms the file has been rewritten.
 	// The admin session watches the config room (not the agent).
-	reloadWatch.WaitForMessage(t, "Payload updated for agent/payload-test",
-		machine.UserID)
+	waitForNotification[schema.PayloadUpdatedMessage](
+		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID,
+		func(m schema.PayloadUpdatedMessage) bool {
+			return m.Principal == "agent/payload-test"
+		}, "payload updated for agent/payload-test")
 	t.Log("daemon confirmed payload hot-reload")
 
 	// Send a message to the agent. The agent re-reads payload.json
@@ -343,8 +346,11 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	// Wait for the daemon's payload hot-reload confirmation. The daemon
 	// detects the change from nil → populated and sends update-payload
 	// IPC to the launcher, which rewrites the bind-mounted file in-place.
-	reloadWatch.WaitForMessage(t, "Payload updated for agent/payload-empty",
-		machine.UserID)
+	waitForNotification[schema.PayloadUpdatedMessage](
+		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID,
+		func(m schema.PayloadUpdatedMessage) bool {
+			return m.Principal == "agent/payload-empty"
+		}, "payload updated for agent/payload-empty")
 	t.Log("daemon confirmed payload hot-reload from empty to populated")
 
 	// Trigger the agent to re-read the payload and report it.

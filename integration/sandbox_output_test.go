@@ -94,22 +94,24 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	})
 
 	// Wait for the exit notification. The daemon posts this to the
-	// config room when the sandbox exits. With our changes, it includes
-	// the captured terminal output when the exit code is non-zero.
-	exitMessage := exitWatch.WaitForMessage(t, "Captured output", machine.UserID)
+	// config room when the sandbox exits. The typed message includes
+	// exit code and captured terminal output as structured fields.
+	exitMsg := waitForNotification[schema.SandboxExitedMessage](
+		t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
+		nil, "sandbox exit notification")
 
-	// The message should contain the exit code indicator.
-	if !strings.Contains(exitMessage, "exited with code") {
-		t.Errorf("exit message missing exit code, got: %s", exitMessage)
+	// The exit code should be non-zero (bwrap failed to find the binary).
+	if exitMsg.ExitCode == 0 {
+		t.Errorf("expected non-zero exit code, got 0")
 	}
 
 	// The captured output should contain the bwrap error about the
 	// nonexistent binary. The exact wording depends on the bwrap version
 	// but all versions include the path and "No such file or directory".
-	if !strings.Contains(exitMessage, "/this/binary/does/not/exist") {
-		t.Errorf("captured output missing binary path, got: %s", exitMessage)
+	if !strings.Contains(exitMsg.CapturedOutput, "/this/binary/does/not/exist") {
+		t.Errorf("captured output missing binary path, got: %s", exitMsg.CapturedOutput)
 	}
-	if !strings.Contains(exitMessage, "No such file or directory") {
-		t.Errorf("captured output missing errno message, got: %s", exitMessage)
+	if !strings.Contains(exitMsg.CapturedOutput, "No such file or directory") {
+		t.Errorf("captured output missing errno message, got: %s", exitMsg.CapturedOutput)
 	}
 }

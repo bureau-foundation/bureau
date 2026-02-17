@@ -189,12 +189,15 @@ func TestProxyCrashRecovery(t *testing.T) {
 	}
 
 	// --- Phase 5: Verify the daemon detects the death and recovers ---
-	// watchProxyExit posts a CRITICAL message when it detects the crash,
-	// then calls reconcile() to recreate the principal, then posts an
-	// outcome message. The recovery message is the definitive signal
-	// that the full cycle (detection → cleanup → re-creation) completed.
-	watch.WaitForMessage(t, "Recovered "+principalLocalpart+" after proxy crash",
-		machineUserID)
+	// watchProxyExit detects the crash, calls reconcile() to recreate
+	// the principal, and posts a proxy_crash notification with status
+	// "recovered". This is the definitive signal that the full cycle
+	// (detection → cleanup → re-creation) completed.
+	waitForNotification[schema.ProxyCrashMessage](
+		t, &watch, schema.MsgTypeProxyCrash, machineUserID,
+		func(m schema.ProxyCrashMessage) bool {
+			return m.Principal == principalLocalpart && m.Status == "recovered"
+		}, "proxy crash recovery for "+principalLocalpart)
 	t.Log("recovery message found in config room")
 
 	// --- Phase 6: Verify the new proxy serves the correct identity ---

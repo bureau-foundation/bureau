@@ -132,9 +132,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			"principal", localpart)
 		rotatedPrincipals = append(rotatedPrincipals, localpart)
 
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("Restarting %s: credentials updated", localpart),
-		)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewCredentialsRotatedMessage(localpart, "restarting", "")); err != nil {
 			d.logger.Error("failed to post credential rotation message",
 				"principal", localpart, "error", err)
 		}
@@ -166,9 +165,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			// tokens on its next tick so they carry the updated grants.
 			d.lastTokenMint[localpart] = time.Time{}
 
-			if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-				fmt.Sprintf("Authorization grants updated for %s (%d grants)", localpart, len(newGrants)),
-			)); err != nil {
+			if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+				schema.NewGrantsUpdatedMessage(localpart, len(newGrants))); err != nil {
 				d.logger.Error("failed to post grants update confirmation",
 					"principal", localpart, "error", err)
 			}
@@ -282,10 +280,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 						"store_path", sandboxSpec.EnvironmentPath,
 						"error", err,
 					)
-					if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-						fmt.Sprintf("Failed to prefetch Nix environment for %s: %v (will retry on next reconcile cycle)",
-							localpart, err),
-					)); err != nil {
+					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+						schema.NewNixPrefetchFailedMessage(localpart, sandboxSpec.EnvironmentPath, err.Error())); err != nil {
 						d.logger.Error("failed to post nix prefetch failure notification",
 							"principal", localpart, "error", err)
 					}
@@ -323,9 +319,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"required_services", sandboxSpec.RequiredServices,
 					"error", err,
 				)
-				if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-					fmt.Sprintf("Cannot start %s: %v", localpart, err),
-				)); err != nil {
+				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+					schema.NewPrincipalStartFailedMessage(localpart, err.Error())); err != nil {
 					d.logger.Error("failed to post service resolution failure notification",
 						"principal", localpart, "error", err)
 				}
@@ -362,9 +357,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"principal", localpart,
 					"error", err,
 				)
-				if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-					fmt.Sprintf("Cannot start %s: failed to mint service tokens: %v", localpart, err),
-				)); err != nil {
+				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+					schema.NewPrincipalStartFailedMessage(localpart, fmt.Sprintf("failed to mint service tokens: %v", err))); err != nil {
 					d.logger.Error("failed to post token minting failure notification",
 						"principal", localpart, "error", err)
 				}
@@ -468,13 +462,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// Report credential rotation outcomes. Rotated principals were
 	// destroyed above and should have been recreated by the create loop.
 	for _, localpart := range rotatedPrincipals {
-		var message string
-		if d.running[localpart] {
-			message = fmt.Sprintf("Restarted %s with new credentials", localpart)
-		} else {
-			message = fmt.Sprintf("FAILED to restart %s after credential rotation", localpart)
+		status := "completed"
+		var errorMessage string
+		if !d.running[localpart] {
+			status = "failed"
+			errorMessage = "principal not in desired state after credential rotation"
 		}
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(message)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewCredentialsRotatedMessage(localpart, status, errorMessage)); err != nil {
 			d.logger.Error("failed to post credential rotation outcome",
 				"principal", localpart, "error", err)
 		}
@@ -565,10 +560,8 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
 			"principal", localpart)
 
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("Restarting %s: sandbox configuration changed (template %s)",
-				localpart, assignment.Template),
-		)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewPrincipalRestartedMessage(localpart, assignment.Template)); err != nil {
 			d.logger.Error("failed to post structural restart notification",
 				"principal", localpart, "error", err)
 		}
@@ -602,9 +595,8 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		d.lastActivityAt = d.clock.Now()
 		d.logger.Info("payload hot-reloaded", "principal", localpart)
 
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("Payload updated for %s", localpart),
-		)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewPayloadUpdatedMessage(localpart)); err != nil {
 			d.logger.Error("failed to post payload update notification",
 				"principal", localpart, "error", err)
 		}
@@ -663,9 +655,8 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, 
 		go d.watchProxyExit(proxyCtx, localpart)
 	}
 
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Adopted %s from previous daemon instance", localpart),
-	)); err != nil {
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewPrincipalAdoptedMessage(localpart)); err != nil {
 		d.logger.Error("failed to post adoption notification",
 			"principal", localpart, "error", err)
 	}
@@ -1394,21 +1385,15 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	// Post exit notification to config room. On failure, include the
 	// captured terminal output so operators can diagnose the problem
 	// from the Matrix room without needing to reproduce the failure.
-	status := "exited normally"
-	if exitCode != 0 {
-		status = fmt.Sprintf("exited with code %d", exitCode)
-		if exitDescription != "" {
-			status += fmt.Sprintf(" (%s)", exitDescription)
-		}
-	}
-	message := fmt.Sprintf("Sandbox %s %s", localpart, status)
+	// Truncate captured output to the last 50 lines for the Matrix
+	// message. The full captured output (up to 500 lines) is in the
+	// daemon log.
+	var capturedOutput string
 	if exitCode != 0 && exitOutput != "" {
-		// Truncate to the last 50 lines for the Matrix message. The
-		// full captured output (up to 500 lines) is in the daemon log.
-		truncated := tailLines(exitOutput, maxMatrixOutputLines)
-		message += fmt.Sprintf("\n\nCaptured output (last %d lines):\n%s", countLines(truncated), truncated)
+		capturedOutput = tailLines(exitOutput, maxMatrixOutputLines)
 	}
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(message)); err != nil {
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewSandboxExitedMessage(localpart, exitCode, exitDescription, capturedOutput)); err != nil {
 		d.logger.Error("failed to post sandbox exit notification",
 			"principal", localpart, "error", err)
 	}
@@ -1503,9 +1488,8 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// Prefetch all store paths so they're available locally for hashing.
 	if err := d.prefetchBureauVersion(ctx, desired); err != nil {
 		d.logger.Error("prefetching bureau version store paths", "error", err)
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("Failed to prefetch BureauVersion store paths: %v (will retry on next reconcile cycle)", err),
-		)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewBureauVersionPrefetchFailedMessage(err.Error())); err != nil {
 			d.logger.Error("failed to post bureau version prefetch failure notification", "error", err)
 		}
 		return
@@ -1589,16 +1573,9 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// Report non-daemon version changes to the config room. Daemon
 	// changes are reported by execDaemon (pre-exec message) and
 	// checkDaemonWatchdog (post-exec success/failure).
-	var summaryParts []string
-	if diff.ProxyChanged {
-		summaryParts = append(summaryParts, "proxy binary updated for future sandbox creation")
-	}
-	if diff.LauncherChanged {
-		summaryParts = append(summaryParts, "launcher exec() initiated")
-	}
-	if len(summaryParts) > 0 {
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			"BureauVersion: "+strings.Join(summaryParts, "; ")+".")); err != nil {
+	if diff.ProxyChanged || diff.LauncherChanged {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewBureauVersionReconciledMessage(diff.ProxyChanged, diff.LauncherChanged)); err != nil {
 			d.logger.Error("failed to post bureau version summary", "error", err)
 		}
 	}
@@ -1812,9 +1789,8 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	}
 	d.reconcileMu.Unlock()
 
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("CRITICAL: Proxy for %s exited unexpectedly (code %d). Sandbox destroyed, re-reconciling.", localpart, exitCode),
-	)); err != nil {
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewProxyCrashMessage(localpart, "detected", exitCode, "")); err != nil {
 		d.logger.Error("failed to post proxy crash notification",
 			"principal", localpart, "error", err)
 	}
@@ -1825,9 +1801,8 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			"principal", localpart,
 			"error", err,
 		)
-		if _, sendErr := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("FAILED to recover %s after proxy crash: %v", localpart, err),
-		)); sendErr != nil {
+		if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewProxyCrashMessage(localpart, "failed", exitCode, err.Error())); sendErr != nil {
 			d.logger.Error("failed to post proxy recovery failure notification",
 				"principal", localpart, "error", sendErr)
 		}
@@ -1836,13 +1811,14 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		recovered := d.running[localpart]
 		d.reconcileMu.Unlock()
 
-		var message string
-		if recovered {
-			message = fmt.Sprintf("Recovered %s after proxy crash", localpart)
-		} else {
-			message = fmt.Sprintf("FAILED to recover %s after proxy crash: principal not in desired state", localpart)
+		status := "recovered"
+		var errorMessage string
+		if !recovered {
+			status = "failed"
+			errorMessage = "principal not in desired state after proxy crash recovery"
 		}
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(message)); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewProxyCrashMessage(localpart, status, exitCode, errorMessage)); err != nil {
 			d.logger.Error("failed to post proxy recovery status",
 				"principal", localpart, "error", err)
 		}

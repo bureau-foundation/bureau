@@ -4,6 +4,7 @@
 package integration_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -114,7 +115,11 @@ func TestServiceDiscovery(t *testing.T) {
 	// was published, they are in d.running when pushServiceDirectory
 	// iterates — all consumer proxies have the updated directory by
 	// the time this returns.
-	serviceWatch.WaitForMessage(t, "added service/stt/test", consumer.UserID)
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+		func(m schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(m.Added, "service/stt/test")
+		}, "service directory update adding service/stt/test")
 
 	// --- Phase 3: Verify propagation and visibility isolation ---
 
@@ -205,7 +210,11 @@ func TestServiceDiscovery(t *testing.T) {
 
 		// Wait for the daemon to process the deregistration and push the
 		// empty directory to all consumer proxies.
-		deregWatch.WaitForMessage(t, "removed service/stt/test", consumer.UserID)
+		waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+			t, &deregWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+			func(m schema.ServiceDirectoryUpdatedMessage) bool {
+				return slices.Contains(m.Removed, "service/stt/test")
+			}, "service directory update removing service/stt/test")
 
 		entries := proxyServiceDiscovery(t, wideClient, "")
 		if len(entries) != 0 {
@@ -241,7 +250,11 @@ func TestServiceDiscovery(t *testing.T) {
 
 		// Wait for the consumer daemon to process the new service event
 		// and push the updated directory to all consumer proxies.
-		partialWatch.WaitForMessage(t, "added service/embedding/test", consumer.UserID)
+		waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+			t, &partialWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+			func(m schema.ServiceDirectoryUpdatedMessage) bool {
+				return slices.Contains(m.Added, "service/embedding/test")
+			}, "service directory update adding service/embedding/test")
 
 		// The narrow consumer's visibility ["service/embedding/*"] matches
 		// "service/embedding/test" but not the deregistered "service/stt/test".

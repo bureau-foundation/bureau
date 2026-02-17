@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // healthMonitor tracks a running health check goroutine for a single
@@ -251,8 +250,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if previousSpec == nil {
 		d.logger.Error("health rollback: no previous spec to roll back to",
 			"principal", localpart)
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s health check failed, no previous working configuration. Principal destroyed.", localpart))); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewHealthCheckMessage(localpart, "destroyed", "")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", localpart, "error", err)
 		}
@@ -264,8 +263,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if err != nil {
 		d.logger.Error("health rollback: cannot read credentials",
 			"principal", localpart, "error", err)
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s health rollback failed (cannot read credentials: %v). Principal destroyed.", localpart, err))); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewHealthCheckMessage(localpart, "rollback_failed", fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", localpart, "error", err)
 		}
@@ -307,8 +306,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if err != nil {
 		d.logger.Error("health rollback: create-sandbox IPC failed",
 			"principal", localpart, "error", err)
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s rollback create-sandbox failed. Principal destroyed.", localpart))); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewHealthCheckMessage(localpart, "rollback_failed", "create-sandbox IPC failed")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", localpart, "error", err)
 		}
@@ -317,8 +316,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	if !response.OK {
 		d.logger.Error("health rollback: create-sandbox rejected",
 			"principal", localpart, "error", response.Error)
-		if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-			fmt.Sprintf("CRITICAL: %s rollback create-sandbox rejected: %s. Principal destroyed.", localpart, response.Error))); err != nil {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewHealthCheckMessage(localpart, "rollback_failed", response.Error)); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", localpart, "error", err)
 		}
@@ -361,8 +360,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 		go d.watchProxyExit(proxyCtx, localpart)
 	}
 
-	if _, err := d.sendMessageRetry(ctx, d.configRoomID, messaging.NewTextMessage(
-		fmt.Sprintf("Rolled back %s to previous working configuration after health check failure.", localpart))); err != nil {
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewHealthCheckMessage(localpart, "rolled_back", "")); err != nil {
 		d.logger.Error("failed to post health rollback notification",
 			"principal", localpart, "error", err)
 	}

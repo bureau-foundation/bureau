@@ -66,39 +66,6 @@ func (d *Daemon) sendEventRetry(ctx context.Context, roomID, eventType string, c
 	return "", lastError
 }
 
-// sendMessageRetry sends a Matrix message with bounded retry on
-// transient errors. Same retry policy as sendEventRetry.
-func (d *Daemon) sendMessageRetry(ctx context.Context, roomID string, content messaging.MessageContent) (string, error) {
-	var lastError error
-	for attempt := 0; attempt < sendEventMaxAttempts; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(1<<(attempt-1)) * time.Second
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-d.clock.After(backoff):
-			}
-		}
-
-		eventID, err := d.session.SendMessage(ctx, roomID, content)
-		if err == nil {
-			return eventID, nil
-		}
-		lastError = err
-
-		if !isTransientError(err) {
-			return "", err
-		}
-
-		d.logger.Warn("transient message send failure, retrying",
-			"room_id", roomID,
-			"attempt", attempt+1,
-			"error", err,
-		)
-	}
-	return "", lastError
-}
-
 // isTransientError returns true for errors that are likely transient
 // and worth retrying: connection failures, rate limiting (429), and
 // server errors (5xx). Returns false for client errors (4xx except

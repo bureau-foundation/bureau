@@ -772,6 +772,39 @@ func (w *roomWatch) WaitForCommandResults(t *testing.T, requestID string, count 
 	return collected
 }
 
+// waitForNotification blocks until a typed notification message with the
+// given msgtype arrives from senderID in the watched room. Returns the
+// decoded message struct. The predicate is optional — pass nil to accept
+// the first matching message.
+//
+// This is the typed replacement for WaitForMessage. Tests match on struct
+// fields instead of body substrings.
+func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, senderID string, predicate func(T) bool, description string) T {
+	t.Helper()
+	var result T
+	w.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.MatrixEventTypeMessage {
+			return false
+		}
+		if event.Sender != senderID {
+			return false
+		}
+		eventMsgtype, _ := event.Content["msgtype"].(string)
+		if eventMsgtype != msgtype {
+			return false
+		}
+		contentJSON, err := json.Marshal(event.Content)
+		if err != nil {
+			return false
+		}
+		if err := json.Unmarshal(contentJSON, &result); err != nil {
+			return false
+		}
+		return predicate == nil || predicate(result)
+	}, description)
+	return result
+}
+
 // --- Proxy Test Helpers ---
 
 // proxyHTTPClient creates an HTTP client that connects through a proxy Unix

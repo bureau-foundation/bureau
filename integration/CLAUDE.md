@@ -79,13 +79,27 @@ Matrix-based waiting uses `roomWatch` methods built on `WaitForEvent`:
 - `WaitForMachineStatus(t, stateKey, predicate, description)` — typed MachineStatus
 - `WaitForCommandResults(t, requestID, count)` — collect command result events
 
+For daemon notifications (typed `m.bureau.*` messages), use the generic
+package-level function instead of `roomWatch` methods:
+
+- `waitForNotification[T](t, &watch, msgtype, senderID, predicate, description)` — typed daemon notification
+
+This filters on `msgtype` + sender, unmarshals the event content into `T`,
+and optionally applies a predicate. The predicate can be nil to accept
+the first matching message. All daemon notifications use typed structs
+and `MsgType*` constants defined in `lib/schema/events.go`.
+
 Create a watch BEFORE triggering the action, then call the appropriate
 Wait method after:
 
 ```go
 watch := watchRoom(t, admin, machine.ConfigRoomID)
 pushMachineConfig(t, admin, machine, config)  // triggers daemon action
-watch.WaitForMessage(t, "expected message", machine.UserID)
+waitForNotification[schema.GrantsUpdatedMessage](
+    t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
+    func(m schema.GrantsUpdatedMessage) bool {
+        return m.GrantCount == 1
+    }, "grants updated with 1 grant")
 ```
 
 ```go
@@ -108,18 +122,22 @@ sleep-and-retry loop.
 ### Service directory propagation
 
 Service directory changes flow through a non-Matrix path (daemon → proxy
-admin socket push), but the daemon posts a "Service directory updated"
-message to the config room after `pushServiceDirectory` completes. The
-message names each changed service (e.g., "Service directory updated:
-added service/stt/test, removed service/foo/bar"). Match on the specific
-service name to avoid cross-test interference — all daemons share
+admin socket push), but the daemon posts a typed
+`m.bureau.service_directory_updated` notification to the config room after
+`pushServiceDirectory` completes. The message includes `added`, `removed`,
+and `updated` fields listing changed service localparts. Match on the
+specific service name to avoid cross-test interference — all daemons share
 `#bureau/service` and will post to their own config rooms when any service
 changes:
 
 ```go
 serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
 admin.SendStateEvent(ctx, serviceRoomID, "m.bureau.service", "service/stt/test", content)
-serviceWatch.WaitForMessage(t, "added service/stt/test", machine.UserID)
+waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+    t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+    func(m schema.ServiceDirectoryUpdatedMessage) bool {
+        return slices.Contains(m.Added, "service/stt/test")
+    }, "service directory update adding service/stt/test")
 entries := proxyServiceDiscovery(t, proxyClient, "")
 ```
 

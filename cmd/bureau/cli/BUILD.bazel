@@ -27,6 +27,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/principal",
+        "//lib/proxyclient",
         "//lib/secret",
         "//messaging",
         "@com_github_spf13_pflag//:pflag",

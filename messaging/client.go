@@ -195,6 +195,21 @@ func (c *Client) Login(ctx context.Context, username string, password *secret.Bu
 	return c.sessionFromAuth(&authResponse)
 }
 
+// ProxySession creates a Session that relies on an external proxy for
+// credential injection. No access token is stored — the proxy intercepts
+// outgoing requests and adds the Authorization header. This is the
+// connection path for code running inside a Bureau sandbox, where
+// credentials are never exposed to the agent.
+//
+// userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local"),
+// typically obtained from the proxy's /v1/identity endpoint.
+func (c *Client) ProxySession(userID string) *Session {
+	return &Session{
+		client: c,
+		userID: userID,
+	}
+}
+
 // SessionFromToken creates a Session from an existing access token string.
 // The token is moved into mmap-backed memory (locked against swap, excluded
 // from core dumps). The original string remains on the heap briefly — it will

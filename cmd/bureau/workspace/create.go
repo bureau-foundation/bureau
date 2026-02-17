@@ -19,9 +19,12 @@ import (
 )
 
 // createParams holds the parameters for the workspace create command.
+// Alias is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode.
 type createParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
+	Alias      string   `json:"alias"       desc:"workspace alias (e.g. iree/amdgpu/inference)" required:"true"`
 	Machine    string   `json:"machine"     flag:"machine"     desc:"machine localpart to host the workspace (required; use 'local' to auto-detect from launcher session)"`
 	Template   string   `json:"template"    flag:"template"    desc:"sandbox template ref for agent principals (required, e.g., bureau/template:base)"`
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
@@ -91,11 +94,15 @@ All worktrees in a project share a single bare git object store at
 		RequiredGrants: []string{"command/workspace/create"},
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
-			if len(args) == 0 {
-				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")
-			}
-			if len(args) > 1 {
+			// In CLI mode, alias comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Alias = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
+			}
+			if params.Alias == "" {
+				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace create <alias> --machine <machine> --template <ref> [flags]")
 			}
 			if params.Machine == "" {
 				return cli.Validation("--machine is required")
@@ -107,7 +114,7 @@ All worktrees in a project share a single bare git object store at
 				return cli.Validation("--agent-count must be non-negative, got %d", params.AgentCount)
 			}
 
-			return runCreate(args[0], &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
+			return runCreate(params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
 		},
 	}
 }

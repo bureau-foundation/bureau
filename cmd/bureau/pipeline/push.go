@@ -14,10 +14,14 @@ import (
 )
 
 // pipelinePushParams holds the parameters for the pipeline push command.
+// PipelineRef and File are positional in CLI mode (args[0], args[1]) and
+// named properties in JSON/MCP mode.
 type pipelinePushParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
+	PipelineRef string `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:my-pipeline)" required:"true"`
+	File        string `json:"file"         desc:"path to local JSONC pipeline definition file" required:"true"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	DryRun      bool   `json:"dry_run"      flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
 }
 
 // pushResult is the JSON output for pipeline push.
@@ -61,12 +65,26 @@ without actually publishing.`,
 		RequiredGrants: []string{"command/pipeline/push"},
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
-			if len(args) != 2 {
+			// In CLI mode, pipeline ref and file come as positional arguments.
+			// In JSON/MCP mode, they're populated from the JSON input.
+			switch len(args) {
+			case 0:
+				// MCP path: params already populated from JSON.
+			case 2:
+				params.PipelineRef = args[0]
+				params.File = args[1]
+			default:
 				return cli.Validation("usage: bureau pipeline push [flags] <pipeline-ref> <file>")
 			}
+			if params.PipelineRef == "" {
+				return cli.Validation("pipeline reference is required\n\nusage: bureau pipeline push [flags] <pipeline-ref> <file>")
+			}
+			if params.File == "" {
+				return cli.Validation("file path is required\n\nusage: bureau pipeline push [flags] <pipeline-ref> <file>")
+			}
 
-			pipelineRefString := args[0]
-			filePath := args[1]
+			pipelineRefString := params.PipelineRef
+			filePath := params.File
 
 			// Parse the pipeline reference.
 			ref, err := schema.ParsePipelineRef(pipelineRefString)

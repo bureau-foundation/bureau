@@ -14,9 +14,13 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// sendParams holds the parameters for the matrix send command.
+// sendParams holds the parameters for the matrix send command. Room and
+// Message are positional in CLI mode (args[0], args[1]) and named
+// properties in JSON/MCP mode.
 type sendParams struct {
 	cli.SessionConfig
+	Room      string `json:"room"       desc:"room alias (#...) or room ID (!...)" required:"true"`
+	Message   string `json:"message"    desc:"message body to send" required:"true"`
 	ThreadID  string `json:"thread_id"  flag:"thread"     desc:"event ID of thread root to reply within"`
 	EventType string `json:"event_type" flag:"event-type" desc:"custom event type (default: m.room.message)"`
 	cli.JSONOutput
@@ -62,15 +66,26 @@ Bureau protocol events).`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/send"},
 		Run: func(args []string) error {
-			if len(args) < 2 {
+			// In CLI mode, room and message come as positional arguments.
+			// In JSON/MCP mode, they're populated from the JSON input.
+			switch len(args) {
+			case 0:
+				// MCP path: params already populated from JSON.
+			case 2:
+				params.Room = args[0]
+				params.Message = args[1]
+			default:
 				return cli.Validation("usage: bureau matrix send [flags] <room> <message>")
 			}
-			if len(args) > 2 {
-				return cli.Validation("unexpected argument: %s (room and message should each be a single argument)", args[2])
+			if params.Room == "" {
+				return cli.Validation("room is required\n\nusage: bureau matrix send [flags] <room> <message>")
+			}
+			if params.Message == "" {
+				return cli.Validation("message is required\n\nusage: bureau matrix send [flags] <room> <message>")
 			}
 
-			roomTarget := args[0]
-			messageBody := args[1]
+			roomTarget := params.Room
+			messageBody := params.Message
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()

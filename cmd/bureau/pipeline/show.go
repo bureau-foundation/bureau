@@ -11,9 +11,12 @@ import (
 )
 
 // pipelineShowParams holds the parameters for the pipeline show command.
+// PipelineRef is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode.
 type pipelineShowParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	PipelineRef string `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
 
 // showCommand returns the "show" subcommand for displaying a pipeline.
@@ -40,11 +43,18 @@ see is what the executor runs.`,
 		RequiredGrants: []string{"command/pipeline/show"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
-			if len(args) != 1 {
+			// In CLI mode, pipeline ref comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.PipelineRef = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("usage: bureau pipeline show [flags] <pipeline-ref>")
 			}
+			if params.PipelineRef == "" {
+				return cli.Validation("pipeline reference is required\n\nusage: bureau pipeline show [flags] <pipeline-ref>")
+			}
 
-			ref, err := schema.ParsePipelineRef(args[0])
+			ref, err := schema.ParsePipelineRef(params.PipelineRef)
 			if err != nil {
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}

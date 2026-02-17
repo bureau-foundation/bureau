@@ -14,11 +14,14 @@ import (
 )
 
 // pipelineExecuteParams holds the parameters for the pipeline execute command.
+// PipelineRef is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode.
 type pipelineExecuteParams struct {
 	cli.JSONOutput
-	Machine    string   `json:"machine"     flag:"machine"     desc:"target machine localpart (required)"`
-	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
-	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	PipelineRef string   `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
+	Machine     string   `json:"machine"      flag:"machine"     desc:"target machine localpart (required)"`
+	Param       []string `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
+	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
 
 // executeResult is the JSON output for pipeline execute.
@@ -66,14 +69,21 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		RequiredGrants: []string{"command/pipeline/execute"},
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
-			if len(args) != 1 {
+			// In CLI mode, pipeline ref comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.PipelineRef = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("usage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")
+			}
+			if params.PipelineRef == "" {
+				return cli.Validation("pipeline reference is required\n\nusage: bureau pipeline execute [flags] <pipeline-ref> --machine <machine>")
 			}
 			if params.Machine == "" {
 				return cli.Validation("--machine is required")
 			}
 
-			pipelineRefString := args[0]
+			pipelineRefString := params.PipelineRef
 
 			// Validate the pipeline ref is parseable.
 			if _, err := schema.ParsePipelineRef(pipelineRefString); err != nil {

@@ -37,8 +37,10 @@ aliases that mirror the principal naming convention:
 }
 
 // roomCreateParams holds the parameters for the matrix room create command.
+// Alias is positional in CLI mode (args[0]) and a named property in JSON/MCP mode.
 type roomCreateParams struct {
 	cli.SessionConfig
+	Alias             string   `json:"alias"              desc:"room alias localpart (e.g. bureau/machine)" required:"true"`
 	Space             string   `json:"space"              flag:"space"              desc:"parent space alias or room ID (required)"`
 	Name              string   `json:"name"               flag:"name"               desc:"room display name (defaults to alias)"`
 	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
@@ -85,13 +87,17 @@ such as m.bureau.machine_key or m.bureau.service.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/create"},
 		Run: func(args []string) error {
-			if len(args) == 0 {
-				return cli.Validation("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
-			}
-			if len(args) > 1 {
+			// In CLI mode, alias comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Alias = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			alias := args[0]
+			if params.Alias == "" {
+				return cli.Validation("room alias is required\n\nUsage: bureau matrix room create <alias> --space <space> [flags]")
+			}
+			alias := params.Alias
 
 			if params.Space == "" {
 				return cli.Validation("--space is required (rooms must belong to a space)")
@@ -326,8 +332,10 @@ func inspectRoomState(ctx context.Context, session *messaging.Session, roomID st
 }
 
 // roomDeleteParams holds the parameters for the matrix room delete command.
+// Room is positional in CLI mode (args[0]) and a named property in JSON/MCP mode.
 type roomDeleteParams struct {
 	cli.SessionConfig
+	Room string `json:"room" desc:"room alias (#...) or room ID (!...) to leave" required:"true"`
 	cli.JSONOutput
 }
 
@@ -362,13 +370,17 @@ to clear the m.space.child event in the space.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/delete"},
 		Run: func(args []string) error {
-			if len(args) == 0 {
-				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
-			}
-			if len(args) > 1 {
+			// In CLI mode, room comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Room = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			target := args[0]
+			if params.Room == "" {
+				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room delete <alias-or-id> [flags]")
+			}
+			target := params.Room
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -398,8 +410,10 @@ to clear the m.space.child event in the space.`,
 }
 
 // roomMembersParams holds the parameters for the matrix room members command.
+// Room is positional in CLI mode (args[0]) and a named property in JSON/MCP mode.
 type roomMembersParams struct {
 	cli.SessionConfig
+	Room string `json:"room" desc:"room alias (#...) or room ID (!...) to list members of" required:"true"`
 	cli.JSONOutput
 }
 
@@ -425,13 +439,17 @@ Displays a table of user ID, display name, and membership state
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/members"},
 		Run: func(args []string) error {
-			if len(args) == 0 {
-				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")
-			}
-			if len(args) > 1 {
+			// In CLI mode, room comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Room = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			target := args[0]
+			if params.Room == "" {
+				return cli.Validation("room alias or room ID is required\n\nUsage: bureau matrix room members <alias-or-id> [flags]")
+			}
+			target := params.Room
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()

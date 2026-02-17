@@ -38,9 +38,12 @@ via --credential-file or --homeserver/--token/--user-id.`,
 }
 
 // userCreateParams holds the parameters for the matrix user create command.
-// Credential-related flags are excluded from MCP schema via json:"-" since they
-// involve reading secrets from files/stdin, which is not appropriate for MCP.
+// Username is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode. Credential-related flags are excluded from MCP schema via
+// json:"-" since they involve reading secrets from files/stdin, which is
+// not appropriate for MCP.
 type userCreateParams struct {
+	Username              string `json:"username"    desc:"Matrix username to register" required:"true"`
 	CredentialFile        string `json:"-"           flag:"credential-file"         desc:"path to Bureau credential file from 'bureau matrix setup' (provides homeserver URL and registration token)"`
 	HomeserverURL         string `json:"-"           flag:"homeserver"              desc:"Matrix homeserver URL (overrides credential file; default http://localhost:6167)"`
 	RegistrationTokenFile string `json:"-"           flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin (overrides credential file)"`
@@ -106,13 +109,17 @@ and proceeds directly to ensuring room membership.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/create"},
 		Run: func(args []string) error {
-			if len(args) < 1 {
-				return cli.Validation("username is required\n\nUsage: bureau matrix user create <username> [flags]")
-			}
-			username := args[0]
-			if len(args) > 1 {
+			// In CLI mode, username comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Username = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
+			if params.Username == "" {
+				return cli.Validation("username is required\n\nUsage: bureau matrix user create <username> [flags]")
+			}
+			username := params.Username
 			if params.Operator && params.CredentialFile == "" {
 				return cli.Validation("--operator requires --credential-file (needed for admin session and Bureau room discovery)")
 			}
@@ -542,9 +549,11 @@ func listAllMembers(ctx context.Context, session *messaging.Session, jsonOutput 
 }
 
 // userInviteParams holds the parameters for the matrix user invite command.
+// UserID is positional in CLI mode (args[0]) and a named property in JSON/MCP mode.
 type userInviteParams struct {
 	cli.SessionConfig
-	Room string `json:"room" flag:"room" desc:"room alias or ID to invite the user to (required)"`
+	UserID string `json:"user_id" desc:"Matrix user ID to invite (e.g. @alice:bureau.local)" required:"true"`
+	Room   string `json:"room"    flag:"room" desc:"room alias or ID to invite the user to (required)"`
 	cli.JSONOutput
 }
 
@@ -575,13 +584,17 @@ func userInviteCommand() *cli.Command {
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/invite"},
 		Run: func(args []string) error {
-			if len(args) < 1 {
-				return cli.Validation("usage: bureau matrix user invite <user-id> --room <room>")
-			}
-			if len(args) > 1 {
+			// In CLI mode, user ID comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.UserID = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			targetUserID := args[0]
+			if params.UserID == "" {
+				return cli.Validation("user ID is required\n\nusage: bureau matrix user invite <user-id> --room <room>")
+			}
+			targetUserID := params.UserID
 
 			if params.Room == "" {
 				return cli.Validation("--room is required")
@@ -618,10 +631,12 @@ func userInviteCommand() *cli.Command {
 }
 
 // userKickParams holds the parameters for the matrix user kick command.
+// UserID is positional in CLI mode (args[0]) and a named property in JSON/MCP mode.
 type userKickParams struct {
 	cli.SessionConfig
-	Room   string `json:"room"   flag:"room"   desc:"room alias or ID to kick the user from (required)"`
-	Reason string `json:"reason" flag:"reason" desc:"reason for the kick"`
+	UserID string `json:"user_id" desc:"Matrix user ID to kick (e.g. @bob:bureau.local)" required:"true"`
+	Room   string `json:"room"    flag:"room"   desc:"room alias or ID to kick the user from (required)"`
+	Reason string `json:"reason"  flag:"reason" desc:"reason for the kick"`
 	cli.JSONOutput
 }
 
@@ -656,13 +671,17 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/kick"},
 		Run: func(args []string) error {
-			if len(args) < 1 {
-				return cli.Validation("usage: bureau matrix user kick <user-id> --room <room>")
-			}
-			if len(args) > 1 {
+			// In CLI mode, user ID comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.UserID = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			targetUserID := args[0]
+			if params.UserID == "" {
+				return cli.Validation("user ID is required\n\nusage: bureau matrix user kick <user-id> --room <room>")
+			}
+			targetUserID := params.UserID
 
 			if params.Room == "" {
 				return cli.Validation("--room is required")

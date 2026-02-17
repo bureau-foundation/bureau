@@ -16,8 +16,11 @@ import (
 const defaultOutDir = "/var/bureau/environment"
 
 // buildParams holds the parameters for the environment build command.
+// Profile is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode.
 type buildParams struct {
 	cli.JSONOutput
+	Profile       string   `json:"profile"         desc:"Nix profile name to build" required:"true"`
 	FlakeRef      string   `json:"flake_ref"       flag:"flake"          desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
 	OutLink       string   `json:"-"               flag:"out-link"       desc:"output symlink path (default: /var/bureau/environment/<profile>)"`
 	OverrideInput []string `json:"override_input"  flag:"override-input" desc:"override a flake input (format: name=flakeref)"`
@@ -67,11 +70,18 @@ with symlinks into /nix/store for all packages in the profile.`,
 			},
 		},
 		Run: func(args []string) error {
-			if len(args) != 1 {
+			// In CLI mode, profile comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.Profile = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("usage: bureau environment build <profile>")
 			}
+			if params.Profile == "" {
+				return cli.Validation("profile is required\n\nusage: bureau environment build <profile>")
+			}
 
-			profile := args[0]
+			profile := params.Profile
 
 			outLink := params.OutLink
 			if outLink == "" {

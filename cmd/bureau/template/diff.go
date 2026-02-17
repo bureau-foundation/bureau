@@ -15,9 +15,13 @@ import (
 )
 
 // templateDiffParams holds the parameters for the template diff command.
+// TemplateRef and File are positional in CLI mode (args[0], args[1]) and
+// named properties in JSON/MCP mode.
 type templateDiffParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	TemplateRef string `json:"template_ref" desc:"template reference (e.g. iree/template:amdgpu-developer)" required:"true"`
+	File        string `json:"file"         desc:"path to local template file to compare against" required:"true"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
 
 // diffResult is the JSON output for template diff.
@@ -55,12 +59,26 @@ content, not the resolved inheritance chain — use "bureau template show
 		RequiredGrants: []string{"command/template/diff"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
-			if len(args) != 2 {
+			// In CLI mode, template ref and file come as positional arguments.
+			// In JSON/MCP mode, they're populated from the JSON input.
+			switch len(args) {
+			case 0:
+				// MCP path: params already populated from JSON.
+			case 2:
+				params.TemplateRef = args[0]
+				params.File = args[1]
+			default:
 				return cli.Validation("usage: bureau template diff [flags] <template-ref> <file>")
 			}
+			if params.TemplateRef == "" {
+				return cli.Validation("template reference is required\n\nusage: bureau template diff [flags] <template-ref> <file>")
+			}
+			if params.File == "" {
+				return cli.Validation("file path is required\n\nusage: bureau template diff [flags] <template-ref> <file>")
+			}
 
-			templateRefString := args[0]
-			filePath := args[1]
+			templateRefString := params.TemplateRef
+			filePath := params.File
 
 			// Parse the template reference.
 			ref, err := schema.ParseTemplateRef(templateRefString)

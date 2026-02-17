@@ -34,9 +34,13 @@ state key defaults to "" (empty string) when not specified.`,
 }
 
 // stateGetParams holds the parameters for the matrix state get command.
+// Room and EventType are positional in CLI mode and named properties in
+// JSON/MCP mode.
 type stateGetParams struct {
 	cli.SessionConfig
-	StateKey string `json:"state_key" flag:"key" desc:"state key for the event (default: empty string)"`
+	Room      string `json:"room"       desc:"room alias (#...) or room ID (!...)" required:"true"`
+	EventType string `json:"event_type" desc:"state event type to fetch (omit for all state)"`
+	StateKey  string `json:"state_key"  flag:"key" desc:"state key for the event (default: empty string)"`
 }
 
 // stateGetCommand returns the "get" subcommand under "state".
@@ -72,14 +76,22 @@ or machine ID as the state key.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/get"},
 		Run: func(args []string) error {
-			if len(args) < 1 {
+			// In CLI mode, room and optional event type come as positional
+			// arguments. In JSON/MCP mode, they're populated from JSON input.
+			switch len(args) {
+			case 0:
+				// MCP path: params already populated from JSON.
+			case 1:
+				params.Room = args[0]
+			case 2:
+				params.Room = args[0]
+				params.EventType = args[1]
+			default:
 				return cli.Validation("usage: bureau matrix state get [flags] <room> [<event-type>]")
 			}
-			if len(args) > 2 {
-				return cli.Validation("unexpected argument: %s", args[2])
+			if params.Room == "" {
+				return cli.Validation("room is required\n\nusage: bureau matrix state get [flags] <room> [<event-type>]")
 			}
-
-			roomTarget := args[0]
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -89,12 +101,12 @@ or machine ID as the state key.`,
 				return cli.Internal("connect: %w", err)
 			}
 
-			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
+			roomID, err := resolveRoom(ctx, matrixSession, params.Room)
 			if err != nil {
 				return err
 			}
 
-			if len(args) == 1 {
+			if params.EventType == "" {
 				// No event type: get all state.
 				events, err := matrixSession.GetRoomState(ctx, roomID)
 				if err != nil {
@@ -104,9 +116,7 @@ or machine ID as the state key.`,
 			}
 
 			// Specific event type with optional --key.
-			eventType := args[1]
-
-			content, err := matrixSession.GetStateEvent(ctx, roomID, eventType, params.StateKey)
+			content, err := matrixSession.GetStateEvent(ctx, roomID, params.EventType, params.StateKey)
 			if err != nil {
 				return cli.Internal("get state event: %w", err)
 			}
@@ -116,10 +126,15 @@ or machine ID as the state key.`,
 }
 
 // stateSetParams holds the parameters for the matrix state set command.
+// Room, EventType, and Body are positional in CLI mode and named
+// properties in JSON/MCP mode.
 type stateSetParams struct {
 	cli.SessionConfig
-	StateKey string `json:"state_key" flag:"key"   desc:"state key for the event (default: empty string)"`
-	UseStdin bool   `json:"use_stdin" flag:"stdin"  desc:"read JSON body from stdin instead of positional argument"`
+	Room      string `json:"room"       desc:"room alias (#...) or room ID (!...)" required:"true"`
+	EventType string `json:"event_type" desc:"state event type to set" required:"true"`
+	Body      string `json:"body"       desc:"JSON body for the state event content"`
+	StateKey  string `json:"state_key"  flag:"key"   desc:"state key for the event (default: empty string)"`
+	UseStdin  bool   `json:"use_stdin"  flag:"stdin"  desc:"read JSON body from stdin instead of positional argument"`
 	cli.JSONOutput
 }
 
@@ -161,17 +176,32 @@ specific state key.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/set"},
 		Run: func(args []string) error {
-			if len(args) < 2 {
+			// In CLI mode, room, event type, and optional body come as
+			// positional arguments. In JSON/MCP mode, they're populated
+			// from JSON input.
+			switch {
+			case len(args) == 0:
+				// MCP path: params already populated from JSON.
+			case len(args) >= 2 && len(args) <= 3:
+				params.Room = args[0]
+				params.EventType = args[1]
+				if len(args) == 3 {
+					params.Body = args[2]
+				}
+			default:
 				return cli.Validation("usage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
 			}
-
-			roomTarget := args[0]
-			eventType := args[1]
+			if params.Room == "" {
+				return cli.Validation("room is required\n\nusage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
+			}
+			if params.EventType == "" {
+				return cli.Validation("event type is required\n\nusage: bureau matrix state set [flags] <room> <event-type> [<json-body>]")
+			}
 
 			var jsonBody string
 			if params.UseStdin {
-				if len(args) > 2 {
-					return cli.Validation("unexpected argument %q: --stdin reads body from stdin, not positional args", args[2])
+				if params.Body != "" {
+					return cli.Validation("--stdin and body argument/field are mutually exclusive")
 				}
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -179,13 +209,10 @@ specific state key.`,
 				}
 				jsonBody = string(data)
 			} else {
-				if len(args) < 3 {
-					return cli.Validation("missing JSON body (provide as last argument or use --stdin)")
+				if params.Body == "" {
+					return cli.Validation("missing JSON body (provide as last argument, body field, or use --stdin)")
 				}
-				if len(args) > 3 {
-					return cli.Validation("unexpected argument: %s", args[3])
-				}
-				jsonBody = args[2]
+				jsonBody = params.Body
 			}
 
 			// Validate that the body is valid JSON before sending.
@@ -202,12 +229,12 @@ specific state key.`,
 				return cli.Internal("connect: %w", err)
 			}
 
-			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)
+			roomID, err := resolveRoom(ctx, matrixSession, params.Room)
 			if err != nil {
 				return err
 			}
 
-			eventID, err := matrixSession.SendStateEvent(ctx, roomID, eventType, params.StateKey, content)
+			eventID, err := matrixSession.SendStateEvent(ctx, roomID, params.EventType, params.StateKey, content)
 			if err != nil {
 				return cli.Internal("set state event: %w", err)
 			}

@@ -10,10 +10,13 @@ import (
 )
 
 // templateShowParams holds the parameters for the template show command.
+// TemplateRef is positional in CLI mode (args[0]) and a named property in
+// JSON/MCP mode.
 type templateShowParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
-	Raw        bool   `json:"raw"         flag:"raw"         desc:"show the template as stored, without resolving inheritance"`
+	TemplateRef string `json:"template_ref" desc:"template reference (e.g. bureau/template:base-networked)" required:"true"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	Raw         bool   `json:"raw"          flag:"raw"         desc:"show the template as stored, without resolving inheritance"`
 }
 
 // showCommand returns the "show" subcommand for displaying a template.
@@ -44,11 +47,18 @@ template overrides versus what it inherits.`,
 		RequiredGrants: []string{"command/template/show"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
-			if len(args) != 1 {
+			// In CLI mode, template ref comes as a positional argument.
+			// In JSON/MCP mode, it's populated from the JSON input.
+			if len(args) == 1 {
+				params.TemplateRef = args[0]
+			} else if len(args) > 1 {
 				return cli.Validation("usage: bureau template show [flags] <template-ref>")
 			}
+			if params.TemplateRef == "" {
+				return cli.Validation("template reference is required\n\nusage: bureau template show [flags] <template-ref>")
+			}
 
-			templateRefString := args[0]
+			templateRefString := params.TemplateRef
 
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {

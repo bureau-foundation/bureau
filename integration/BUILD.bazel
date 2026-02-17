@@ -52,6 +52,7 @@ go_test(
         "//cmd/bureau",
         "//cmd/bureau-agent",
         "//cmd/bureau-agent-mock",
+        "//cmd/bureau-agent-service",
         "//cmd/bureau-daemon",
         "//cmd/bureau-fleet-controller",
         "//cmd/bureau-launcher",
@@ -62,6 +63,7 @@ go_test(
         "//cmd/bureau-ticket-service",
     ],
     env = {
+        "AGENT_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-agent-service:bureau-agent-service)",
         "BUREAU_AGENT_BINARY": "$(rlocationpath //cmd/bureau-agent:bureau-agent)",
         "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",

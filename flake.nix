@@ -246,6 +246,7 @@
           "bureau-proxy-call"
           "bureau-observe-relay"
           "bureau-pipeline-executor"
+          "bureau-agent-service"
           "bureau-artifact-service"
           "bureau-ticket-service"
           "bureau-test-agent"
@@ -265,6 +266,7 @@
           "bureau-sandbox"
           "bureau-observe-relay"
           "bureau-credentials"
+          "bureau-agent-service"
           "bureau-artifact-service"
           "bureau-ticket-service"
         ];
@@ -298,9 +300,7 @@
             # deploying Bureau on a machine or running locally.
             bureau-host-env = pkgs.buildEnv {
               name = "bureau-host-env";
-              paths =
-                map (name: self.packages.${system}.${name}) hostBinaries
-                ++ self.lib.bureauRuntime pkgs;
+              paths = map (name: self.packages.${system}.${name}) hostBinaries ++ self.lib.bureauRuntime pkgs;
             };
 
             # Bureau's own tools for agents running inside sandboxes. The

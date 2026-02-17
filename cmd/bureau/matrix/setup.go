@@ -29,8 +29,8 @@ import (
 // secrets from files/stdin.
 type setupParams struct {
 	HomeserverURL         string   `json:"-"            flag:"homeserver"              desc:"Matrix homeserver URL" default:"http://localhost:6167"`
-	RegistrationTokenFile string   `json:"-"            flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin (required)"`
-	CredentialFile        string   `json:"-"            flag:"credential-file"         desc:"path to write Bureau credentials (required)"`
+	RegistrationTokenFile string   `json:"-"            flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin"`
+	CredentialFile        string   `json:"-"            flag:"credential-file"         desc:"path to Bureau credentials file (read on re-run, written on first run; required)"`
 	ServerName            string   `json:"server_name"  flag:"server-name"             desc:"Matrix server name for constructing user/room IDs" default:"bureau.local"`
 	AdminUsername         string   `json:"admin_user"   flag:"admin-user"              desc:"admin account username" default:"bureau-admin"`
 	InviteUsers           []string `json:"invite_users" flag:"invite"                  desc:"Matrix user ID to invite to all Bureau rooms (repeatable)"`
@@ -79,16 +79,31 @@ Standard rooms created:
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
-			if params.RegistrationTokenFile == "" {
-				return cli.Validation("--registration-token-file is required (use - for stdin)")
-			}
 			if params.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
 
-			registrationToken, err := secret.ReadFromPath(params.RegistrationTokenFile)
-			if err != nil {
-				return cli.Internal("read registration token: %w", err)
+			var registrationToken *secret.Buffer
+			if params.RegistrationTokenFile != "" {
+				var err error
+				registrationToken, err = secret.ReadFromPath(params.RegistrationTokenFile)
+				if err != nil {
+					return cli.Internal("read registration token: %w", err)
+				}
+			} else {
+				// No --registration-token-file: read from the credential file.
+				credentials, err := cli.ReadCredentialFile(params.CredentialFile)
+				if err != nil {
+					return cli.Validation("--registration-token-file not provided and credential file unreadable: %w", err)
+				}
+				token := credentials["MATRIX_REGISTRATION_TOKEN"]
+				if token == "" {
+					return cli.Validation("--registration-token-file is required (credential file has no MATRIX_REGISTRATION_TOKEN)")
+				}
+				registrationToken, err = secret.NewFromString(token)
+				if err != nil {
+					return cli.Internal("protecting registration token from credential file: %w", err)
+				}
 			}
 			defer registrationToken.Close()
 

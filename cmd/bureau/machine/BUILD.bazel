@@ -12,6 +12,7 @@ go_library(
         "list.go",
         "provision.go",
         "revoke.go",
+        "rooms.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/machine",
     visibility = ["//visibility:public"],

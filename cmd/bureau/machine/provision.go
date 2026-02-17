@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -40,8 +41,8 @@ func provisionCommand() *cli.Command {
 
 This creates the machine's Matrix account with a random one-time password,
 sets up its per-machine config room, and invites it to the global rooms
-(machines, services). The output is a bootstrap config file that should
-be transferred to the new machine.
+(system, machine, service, template, pipeline, fleet). The output is a
+bootstrap config file that should be transferred to the new machine.
 
 On the new machine, start the launcher with --bootstrap-file to complete
 registration. The launcher will log in with the one-time password, generate
@@ -52,7 +53,12 @@ useless.
 This is more secure than passing the registration token to every machine,
 because the registration token derives admin access to the entire deployment.
 The one-time password only grants access to a single machine account and
-is immediately rotated.`,
+is immediately rotated.
+
+If a machine was previously decommissioned and the account already exists,
+provision verifies it has been fully decommissioned (zero Bureau room
+memberships, cleared state events) before re-provisioning. This prevents
+accidental or intentional spoofing of active machines.`,
 		Usage: "bureau machine provision <machine-name> [flags]",
 		Examples: []cli.Example{
 			{
@@ -152,11 +158,36 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 	})
 	if registerError != nil {
 		if messaging.IsMatrixError(registerError, messaging.ErrCodeUserInUse) {
-			return cli.Conflict("machine account %s already exists (use 'bureau machine decommission' first to re-provision)", machineUserID)
+			// Account already exists. This is safe to proceed only if the
+			// machine has been fully decommissioned: zero Bureau room
+			// memberships and cleared state events. Otherwise it could be
+			// an active machine or a partially decommissioned one.
+			fmt.Fprintf(os.Stderr, "  Account already exists — verifying decommission status...\n")
+			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machineUserID, machineName, serverName); err != nil {
+				return err
+			}
+			// Decommission verified. Reset the password to our one-time
+			// password so the bootstrap file will work.
+			adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+			if err != nil {
+				return cli.Internal("create admin session for password reset: %w", err)
+			}
+			resetErr := adminSession.ResetUserPassword(ctx, machineUserID, oneTimePassword.String(), true)
+			adminSession.Close()
+			if resetErr != nil {
+				if messaging.IsMatrixError(resetErr, messaging.ErrCodeUnrecognized) {
+					return cli.Internal("this homeserver does not support admin password reset (Synapse admin API) — "+
+						"the decommissioned machine name %q cannot be reused; choose a new machine name", machineName)
+				}
+				return cli.Internal("reset password for re-provisioned machine: %w", resetErr)
+			}
+			fmt.Fprintf(os.Stderr, "  Password reset for re-provisioning\n")
+		} else {
+			return cli.Internal("register machine account: %w", registerError)
 		}
-		return cli.Internal("register machine account: %w", registerError)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Account created: %s\n", machineUserID)
 	}
-	fmt.Fprintf(os.Stderr, "  Account created: %s\n", machineUserID)
 
 	// Get an admin session for room management.
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
@@ -165,102 +196,53 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 	}
 	defer adminSession.Close()
 
-	// Invite the machine to the global rooms.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
-	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
-	if err != nil {
-		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
-	}
-	if err := adminSession.InviteUser(ctx, machineRoomID, machineUserID); err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return cli.Internal("invite machine to machine room: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", machineAlias)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", machineAlias)
+	// Resolve all global Bureau rooms and invite the machine to each.
+	globalRooms, _, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
+	if len(resolveErrors) > 0 {
+		// All global rooms must be resolvable for provisioning. Unlike
+		// decommission (where best-effort is acceptable), a provision that
+		// skips rooms would produce a machine that can't fully participate.
+		return cli.NotFound("cannot resolve all Bureau rooms: %v", resolveErrors[0])
 	}
 
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
-	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
-	if err != nil {
-		return cli.NotFound("resolve service room %q: %w", serviceAlias, err)
-	}
-	if err := adminSession.InviteUser(ctx, serviceRoomID, machineUserID); err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return cli.Internal("invite machine to service room: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", serviceAlias)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", serviceAlias)
-	}
-
-	// Template room: daemons resolve sandbox templates during reconciliation.
-	templateAlias := principal.RoomAlias(schema.RoomAliasTemplate, serverName)
-	templateRoomID, err := adminSession.ResolveAlias(ctx, templateAlias)
-	if err != nil {
-		return cli.NotFound("resolve template room %q: %w", templateAlias, err)
-	}
-	if err := adminSession.InviteUser(ctx, templateRoomID, machineUserID); err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return cli.Internal("invite machine to template room: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", templateAlias)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", templateAlias)
-	}
-
-	// Pipeline room: daemons resolve pipeline refs when spawning ephemeral
-	// pipeline executors (e.g., worktree add/remove operations that use
-	// DirectCredentials to authenticate as the machine).
-	pipelineAlias := principal.RoomAlias(schema.RoomAliasPipeline, serverName)
-	pipelineRoomID, err := adminSession.ResolveAlias(ctx, pipelineAlias)
-	if err != nil {
-		return cli.NotFound("resolve pipeline room %q: %w", pipelineAlias, err)
-	}
-	if err := adminSession.InviteUser(ctx, pipelineRoomID, machineUserID); err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return cli.Internal("invite machine to pipeline room: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", pipelineAlias)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", pipelineAlias)
-	}
-
-	// System room: daemons need this for token signing key retrieval.
-	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
-	systemRoomID, err := adminSession.ResolveAlias(ctx, systemAlias)
-	if err != nil {
-		return cli.NotFound("resolve system room %q: %w", systemAlias, err)
-	}
-	if err := adminSession.InviteUser(ctx, systemRoomID, machineUserID); err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return cli.Internal("invite machine to system room: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  Already invited to %s\n", systemAlias)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Invited to %s\n", systemAlias)
-	}
-
-	// Fleet room: needed for HA leases and service definitions.
-	if fleetRoom != "" {
-		fleetRoomID, err := resolveRoomTarget(ctx, adminSession, fleetRoom, serverName)
-		if err != nil {
-			return cli.NotFound("resolve fleet room %q: %w", fleetRoom, err)
-		}
-		if err := adminSession.InviteUser(ctx, fleetRoomID, machineUserID); err != nil {
+	for _, room := range globalRooms {
+		fullAlias := principal.RoomAlias(room.alias, serverName)
+		if err := adminSession.InviteUser(ctx, room.roomID, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-				return cli.Internal("invite machine to fleet room: %w", err)
+				return cli.Internal("invite machine to %s: %w", fullAlias, err)
 			}
-			fmt.Fprintf(os.Stderr, "  Already invited to fleet room %s\n", fleetRoom)
+			fmt.Fprintf(os.Stderr, "  Already invited to %s\n", fullAlias)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Invited to fleet room %s\n", fleetRoom)
+			fmt.Fprintf(os.Stderr, "  Invited to %s\n", fullAlias)
+		}
+	}
+
+	// Fleet room invite (optional, specified by flag). The fleet room is
+	// already in machineGlobalRooms and gets resolved above. The --fleet-room
+	// flag allows overriding with a non-default fleet room alias or ID.
+	if fleetRoom != "" {
+		// Check if the specified fleet room differs from the default.
+		defaultFleetAlias := principal.RoomAlias(schema.RoomAliasFleet, serverName)
+		if fleetRoom != defaultFleetAlias {
+			fleetRoomID, err := resolveRoomTarget(ctx, adminSession, fleetRoom, serverName)
+			if err != nil {
+				return cli.NotFound("resolve fleet room %q: %w", fleetRoom, err)
+			}
+			if err := adminSession.InviteUser(ctx, fleetRoomID, machineUserID); err != nil {
+				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+					return cli.Internal("invite machine to fleet room: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "  Already invited to fleet room %s\n", fleetRoom)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Invited to fleet room %s\n", fleetRoom)
+			}
 		}
 	}
 
 	// Create the per-machine config room. The admin creates it (not the
 	// machine) so the admin has PL 100 from the start. The machine account
 	// is invited.
-	configAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
 	configAliasLocalpart := principal.RoomAliasLocalpart(configAlias)
 
 	fmt.Fprintf(os.Stderr, "Creating config room %s...\n", configAlias)
@@ -274,7 +256,21 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 	})
 	if createError != nil {
 		if messaging.IsMatrixError(createError, messaging.ErrCodeRoomInUse) {
-			fmt.Fprintf(os.Stderr, "  Config room already exists\n")
+			// Config room already exists from a previous provision. Resolve
+			// it and re-invite the machine (it was kicked during decommission).
+			fmt.Fprintf(os.Stderr, "  Config room already exists, re-inviting machine...\n")
+			configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
+			if err != nil {
+				return cli.Internal("resolve existing config room %q: %w", configAlias, err)
+			}
+			if err := adminSession.InviteUser(ctx, configRoomID, machineUserID); err != nil {
+				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+					return cli.Internal("re-invite machine to config room: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "  Already invited to config room\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "  Re-invited to config room\n")
+			}
 		} else {
 			return cli.Internal("create config room: %w", createError)
 		}
@@ -312,6 +308,96 @@ func runProvision(machineName, credentialFile, serverName, fleetRoom, outputPath
 	fmt.Fprintf(os.Stderr, "  bureau-launcher --bootstrap-file <config> --first-boot-only\n")
 	fmt.Fprintf(os.Stderr, "\nThe one-time password will be rotated on first boot.\n")
 
+	return nil
+}
+
+// verifyFullDecommission checks that a machine account has been fully
+// decommissioned: zero active memberships in all Bureau rooms, and cleared
+// machine_key and machine_status state events.
+//
+// This is the security gate for re-provisioning. Without it, provision
+// could be used to take over an active machine's identity by resetting
+// its password and re-bootstrapping.
+func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID, adminToken, machineUserID, machineName, serverName string) error {
+	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	if err != nil {
+		return cli.Internal("create admin session for decommission check: %w", err)
+	}
+	defer adminSession.Close()
+
+	// Resolve all global Bureau rooms.
+	globalRooms, failedRooms, _ := resolveGlobalRooms(ctx, adminSession, serverName)
+	if len(failedRooms) > 0 {
+		// If we can't resolve all rooms, we can't verify full decommission.
+		// Fail-safe: refuse re-provisioning.
+		var failedNames []string
+		for _, room := range failedRooms {
+			failedNames = append(failedNames, room.displayName)
+		}
+		return cli.Internal("cannot verify decommission: unable to resolve rooms [%s] — cannot confirm machine has zero Bureau memberships",
+			strings.Join(failedNames, ", "))
+	}
+
+	// Check for active memberships in all global rooms.
+	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, globalRooms)
+
+	// Also check the config room.
+	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
+	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
+	if err == nil {
+		configResolved := resolvedRoom{
+			machineRoom: machineRoom{alias: schema.ConfigRoomAlias(machineName), displayName: "config room"},
+			roomID:      configRoomID,
+		}
+		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
+		activeRooms = append(activeRooms, configActive...)
+	}
+	// Config room not existing is fine — it means decommission cleaned it up or
+	// it was never created (half-baked provision).
+
+	if len(activeRooms) > 0 {
+		fmt.Fprintf(os.Stderr, "  Machine still has active membership in %d Bureau room(s):\n", len(activeRooms))
+		for _, room := range activeRooms {
+			fmt.Fprintf(os.Stderr, "    - %s (%s)\n", room.displayName, room.roomID)
+		}
+		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s' first",
+			machineUserID, machineName)
+	}
+
+	// Check that machine_key and machine_status are cleared.
+	var machineRoomID string
+	for _, room := range globalRooms {
+		if room.alias == schema.RoomAliasMachine {
+			machineRoomID = room.roomID
+			break
+		}
+	}
+
+	events, err := adminSession.GetRoomState(ctx, machineRoomID)
+	if err != nil {
+		return cli.Internal("cannot read machine room state to verify decommission: %w", err)
+	}
+
+	for _, event := range events {
+		if event.StateKey == nil || *event.StateKey != machineName {
+			continue
+		}
+		if event.Type != schema.EventTypeMachineKey && event.Type != schema.EventTypeMachineStatus {
+			continue
+		}
+		// Check if content is non-empty (not cleared).
+		contentBytes, err := json.Marshal(event.Content)
+		if err != nil {
+			continue
+		}
+		content := string(contentBytes)
+		if content != "{}" && content != "null" && content != "" {
+			return cli.Conflict("machine account %s has active %s state event — run 'bureau machine decommission %s' first",
+				machineUserID, event.Type, machineName)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "  Decommission verified: zero memberships, cleared state\n")
 	return nil
 }
 

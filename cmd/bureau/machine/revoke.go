@@ -154,11 +154,22 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 	// Layer 2: Clean up state events and kick from rooms.
 	fmt.Fprintf(os.Stderr, "\nLayer 2: Clearing state and revoking access...\n")
 
-	// Resolve the machine room.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
-	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
-	if err != nil {
-		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
+	// Resolve all global Bureau rooms.
+	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
+	for index, room := range failedRooms {
+		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
+	}
+
+	// Find the machine room for state event cleanup.
+	var machineRoomID string
+	for _, room := range globalRooms {
+		if room.alias == schema.RoomAliasMachine {
+			machineRoomID = room.roomID
+			break
+		}
+	}
+	if machineRoomID == "" {
+		return cli.NotFound("machine room could not be resolved — cannot clear machine state")
 	}
 
 	// Clear machine_key and machine_status.
@@ -179,7 +190,7 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 	// Resolve the config room and collect affected principals.
 	var principals []string
 	var credentialKeys []string
-	configAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -214,24 +225,14 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 		}
 	}
 
-	// Kick from global rooms.
-	err = adminSession.KickUser(ctx, machineRoomID, machineUserID, "machine credentials revoked")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not kick from machine room: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Kicked from %s\n", machineAlias)
-	}
-
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
-	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not resolve service room: %v\n", err)
-	} else {
-		err = adminSession.KickUser(ctx, serviceRoomID, machineUserID, "machine credentials revoked")
+	// Kick from all global Bureau rooms.
+	for _, room := range globalRooms {
+		fullAlias := principal.RoomAlias(room.alias, serverName)
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from service room: %v\n", err)
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", fullAlias, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", serviceAlias)
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", fullAlias)
 		}
 	}
 
@@ -253,7 +254,7 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not publish revocation event: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Published credential revocation event to %s\n", machineAlias)
+		fmt.Fprintf(os.Stderr, "  Published credential revocation event to machine room\n")
 	}
 
 	// Print summary.

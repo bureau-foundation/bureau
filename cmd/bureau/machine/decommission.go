@@ -34,11 +34,16 @@ func decommissionCommand() *cli.Command {
 
 This removes the machine's key and status from the machine room, clears
 its config room state events (machine_config, credentials), and kicks
-the machine account from all Bureau rooms.
+the machine account from all Bureau rooms (system, machine, service,
+template, pipeline, fleet, and the per-machine config room).
 
 After decommission, the machine name can be re-provisioned with
 "bureau machine provision". The machine's Matrix account remains on the
-homeserver but is kicked from all Bureau rooms and its keys are cleared.`,
+homeserver but has zero Bureau room memberships and no active state.
+
+The command verifies cleanup at the end. If any Bureau room membership
+remains (due to a homeserver issue or race condition), it reports the
+failure explicitly.`,
 		Usage: "bureau machine decommission <machine-name> [flags]",
 		Examples: []cli.Example{
 			{
@@ -104,30 +109,42 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 	fmt.Fprintf(os.Stderr, "Decommissioning %s (%s)...\n", machineName, machineUserID)
 
+	// Resolve all global Bureau rooms the machine should be in.
+	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
+	for index, room := range failedRooms {
+		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
+	}
+
 	// Clear machine_key and machine_status state events in the machine room.
 	// Sending empty content effectively "deletes" state events in Matrix.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
-	machineRoomID, err := adminSession.ResolveAlias(ctx, machineAlias)
-	if err != nil {
-		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
+	// We need the machine room ID, which we already resolved above.
+	var machineRoomID string
+	for _, room := range globalRooms {
+		if room.alias == schema.RoomAliasMachine {
+			machineRoomID = room.roomID
+			break
+		}
+	}
+	if machineRoomID == "" {
+		return cli.NotFound("machine room could not be resolved — cannot clear machine state")
 	}
 
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_key from %s\n", machineAlias)
+		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
 	}
 
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineName, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_status from %s\n", machineAlias)
+		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
 	}
 
-	// Clean up the config room: clear machine_config and all credentials.
-	configAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	// Clean up the per-machine config room: clear state events and kick.
+	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -158,27 +175,42 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 		}
 	}
 
-	// Kick from global rooms.
-	err = adminSession.KickUser(ctx, machineRoomID, machineUserID, "machine decommissioned")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not kick from machine room: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Kicked from %s\n", machineAlias)
-	}
-
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
-	serviceRoomID, err := adminSession.ResolveAlias(ctx, serviceAlias)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not resolve service room: %v\n", err)
-	} else {
-		err = adminSession.KickUser(ctx, serviceRoomID, machineUserID, "machine decommissioned")
+	// Kick from all global Bureau rooms.
+	for _, room := range globalRooms {
+		fullAlias := principal.RoomAlias(room.alias, serverName)
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from service room: %v\n", err)
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", fullAlias, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", serviceAlias)
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", fullAlias)
 		}
 	}
 
+	// Verify: check that the machine has zero active memberships in Bureau
+	// rooms. This catches cases where a kick silently failed or a race
+	// condition left stale membership.
+	fmt.Fprintf(os.Stderr, "\nVerifying cleanup...\n")
+	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, globalRooms)
+
+	// Also check the config room if it exists.
+	if configRoomID != "" {
+		configResolved := resolvedRoom{
+			machineRoom: machineRoom{alias: schema.ConfigRoomAlias(machineName), displayName: "config room"},
+			roomID:      configRoomID,
+		}
+		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
+		activeRooms = append(activeRooms, configActive...)
+	}
+
+	if len(activeRooms) > 0 {
+		fmt.Fprintf(os.Stderr, "  FAILED: machine still has active membership in %d room(s):\n", len(activeRooms))
+		for _, room := range activeRooms {
+			fmt.Fprintf(os.Stderr, "    - %s (%s)\n", room.displayName, room.roomID)
+		}
+		return cli.Internal("decommission incomplete: machine still has %d active room membership(s) — re-provisioning will not be possible until these are cleared", len(activeRooms))
+	}
+
+	fmt.Fprintf(os.Stderr, "  All Bureau room memberships cleared\n")
 	fmt.Fprintf(os.Stderr, "\nMachine %s decommissioned.\n", machineName)
 	fmt.Fprintf(os.Stderr, "To re-provision, run: bureau machine provision %s --credential-file <creds>\n", machineName)
 

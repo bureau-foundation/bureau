@@ -281,6 +281,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			)
 
 			if d.applyPipelineExecutorOverlay(sandboxSpec) {
+				d.pipelineExecutors[localpart] = true
 				d.logger.Info("applied pipeline executor overlay",
 					"principal", localpart,
 					"template", assignment.Template,
@@ -510,8 +511,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	}
 
 	// Destroy sandboxes for principals that should not be running.
+	// Pipeline executor principals are exempt: they manage their own
+	// lifecycle (run steps, publish results, exit). Killing them when
+	// their start condition becomes unsatisfied races with the pipeline
+	// itself — the pipeline may publish the state change that
+	// invalidated its condition (e.g., teardown sets workspace status
+	// to "archived", making the "destroying" start condition false).
+	// The daemon will clean up pipeline executors when their sandbox
+	// exits via watchSandboxExit.
 	for localpart := range d.running {
 		if _, shouldRun := desired[localpart]; shouldRun {
+			continue
+		}
+		if d.pipelineExecutors[localpart] {
 			continue
 		}
 
@@ -1343,6 +1355,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
 
 	d.revokeAndCleanupTokens(ctx, localpart)
 	delete(d.running, localpart)
+	delete(d.pipelineExecutors, localpart)
 	delete(d.exitWatchers, localpart)
 	delete(d.proxyExitWatchers, localpart)
 	delete(d.lastSpecs, localpart)
@@ -1403,6 +1416,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		d.stopLayoutWatcher(localpart)
 		d.revokeAndCleanupTokens(ctx, localpart)
 		delete(d.running, localpart)
+		delete(d.pipelineExecutors, localpart)
 		delete(d.exitWatchers, localpart)
 		delete(d.proxyExitWatchers, localpart)
 		delete(d.lastSpecs, localpart)

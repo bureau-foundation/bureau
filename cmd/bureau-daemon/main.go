@@ -282,6 +282,7 @@ func run() error {
 		failedExecPaths:        make(map[string]bool),
 		startFailures:          make(map[string]*startFailure),
 		running:                make(map[string]bool),
+		pipelineExecutors:      make(map[string]bool),
 		exitWatchers:           make(map[string]context.CancelFunc),
 		proxyExitWatchers:      make(map[string]context.CancelFunc),
 		lastCredentials:        make(map[string]string),
@@ -536,6 +537,20 @@ type Daemon struct {
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are principal localparts.
 	running map[string]bool
+
+	// pipelineExecutors tracks running principals that are pipeline
+	// executor sandboxes (created via applyPipelineExecutorOverlay).
+	// These principals manage their own lifecycle: they run a pipeline,
+	// publish results, and exit. The reconcile loop must NOT kill them
+	// when their start condition becomes unsatisfied, because the
+	// pipeline itself may have published the state change that
+	// invalidated the condition (e.g., a teardown pipeline sets
+	// workspace status to "archived", which makes the teardown's
+	// "destroying" start condition false). Killing a pipeline executor
+	// mid-execution leaves the workspace in a stuck state with no
+	// pipeline_result event. Pipeline executors are removed from this
+	// set when their sandbox exits (in watchSandboxExit).
+	pipelineExecutors map[string]bool
 
 	// lastCredentials stores the ciphertext from the most recently
 	// deployed m.bureau.credentials state event for each running

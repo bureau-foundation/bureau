@@ -250,6 +250,34 @@
           "bureau-ticket-service"
           "bureau-test-agent"
         ];
+
+        # Bureau binaries that run on the host outside sandboxes: the
+        # daemon, launcher, and everything the launcher spawns (proxy,
+        # sandbox creator, observation relay, bridge) plus the CLI and
+        # managed services. Includes bubblewrap and tmux which the
+        # launcher needs for namespace creation and terminal observation.
+        hostBinaries = [
+          "bureau"
+          "bureau-daemon"
+          "bureau-launcher"
+          "bureau-proxy"
+          "bureau-bridge"
+          "bureau-sandbox"
+          "bureau-observe-relay"
+          "bureau-credentials"
+          "bureau-artifact-service"
+          "bureau-ticket-service"
+        ];
+
+        # Bureau binaries for use inside sandboxes by agents and
+        # pipelines. The CLI lets agents interact with Bureau, proxy-call
+        # makes HTTP requests through the per-sandbox credential proxy,
+        # and the pipeline executor runs structured step sequences.
+        sandboxBinaries = [
+          "bureau"
+          "bureau-proxy-call"
+          "bureau-pipeline-executor"
+        ];
       in
       {
         packages =
@@ -261,6 +289,28 @@
           )
           // {
             default = self.packages.${system}.bureau;
+
+            # All Bureau host binaries in a single environment. The launcher
+            # finds bureau-proxy, bureau-sandbox, and bureau-observe-relay
+            # next to its own binary (same bin/ directory in the store
+            # path), so PATH-based resolution is unnecessary. Use this for
+            # deploying Bureau on a machine or running locally.
+            bureau-host-env = pkgs.buildEnv {
+              name = "bureau-host-env";
+              paths =
+                map (name: self.packages.${system}.${name}) hostBinaries
+                ++ self.lib.bureauRuntime pkgs;
+            };
+
+            # Bureau's own tools for agents running inside sandboxes. The
+            # runner-env packages below provide general-purpose tools
+            # (shell, git, language runtimes); this provides the Bureau-
+            # specific binaries that agents use to interact with the
+            # platform.
+            bureau-sandbox-env = pkgs.buildEnv {
+              name = "bureau-sandbox-env";
+              paths = map (name: self.packages.${system}.${name}) sandboxBinaries;
+            };
 
             # Minimal environment for Bureau's own CI and Buildbarn runners.
             # Contains only Bureau's sandbox runtime deps (bubblewrap, tmux).

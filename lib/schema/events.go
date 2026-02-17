@@ -1165,6 +1165,14 @@ type WorkspaceState struct {
 	// workspace data lives on.
 	Machine string `json:"machine"`
 
+	// WorkspacePath is the absolute filesystem path of the workspace
+	// on the host machine (e.g., "/var/bureau/workspace/iree"). Present
+	// when the workspace is "active" — the setup pipeline sets it after
+	// creating the project directory. Empty for "pending" (workspace not
+	// yet created), "teardown", "archived", and "removed" (workspace no
+	// longer exists at this path).
+	WorkspacePath string `json:"workspace_path,omitempty"`
+
 	// TeardownMode specifies how the teardown principal should handle
 	// the workspace data. Set by "bureau workspace destroy --mode".
 	// Valid values: "archive" (move to .archive/), "delete" (remove).

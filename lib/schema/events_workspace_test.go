@@ -297,10 +297,11 @@ func TestWorktreeConfigOmitsEmptyDescription(t *testing.T) {
 
 func TestWorkspaceStateRoundTrip(t *testing.T) {
 	original := WorkspaceState{
-		Status:    "active",
-		Project:   "iree",
-		Machine:   "workstation",
-		UpdatedAt: "2026-02-10T12:00:00Z",
+		Status:        "active",
+		Project:       "iree",
+		Machine:       "workstation",
+		WorkspacePath: "/var/bureau/workspace/iree",
+		UpdatedAt:     "2026-02-10T12:00:00Z",
 	}
 
 	data, err := json.Marshal(original)
@@ -315,6 +316,7 @@ func TestWorkspaceStateRoundTrip(t *testing.T) {
 	assertField(t, raw, "status", "active")
 	assertField(t, raw, "project", "iree")
 	assertField(t, raw, "machine", "workstation")
+	assertField(t, raw, "workspace_path", "/var/bureau/workspace/iree")
 	assertField(t, raw, "updated_at", "2026-02-10T12:00:00Z")
 	if _, exists := raw["archive_path"]; exists {
 		t.Error("archive_path should be omitted when empty")
@@ -326,6 +328,28 @@ func TestWorkspaceStateRoundTrip(t *testing.T) {
 	}
 	if decoded != original {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestWorkspaceStatePendingOmitsWorkspacePath(t *testing.T) {
+	original := WorkspaceState{
+		Status:    "pending",
+		Project:   "iree",
+		Machine:   "workstation",
+		UpdatedAt: "2026-02-10T12:00:00Z",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["workspace_path"]; exists {
+		t.Error("workspace_path should be omitted when empty (pending status)")
 	}
 }
 

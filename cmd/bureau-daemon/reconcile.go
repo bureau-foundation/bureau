@@ -861,6 +861,14 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 	}
 	spec.EnvironmentVariables["BUREAU_SANDBOX"] = "1"
 
+	// Inject WORKSPACE_PATH so pipelines can include the host-side
+	// absolute path in Matrix events. Agents and CLIs can't derive
+	// this from the project name alone because the workspace root is
+	// a per-machine daemon configuration (--workspace-root flag).
+	if project, ok := spec.Payload["PROJECT"].(string); ok && project != "" {
+		spec.Payload["WORKSPACE_PATH"] = filepath.Join(d.workspaceRoot, project)
+	}
+
 	// Apply the pipeline environment (Nix store path providing git, sh,
 	// etc.) only when the template didn't already specify one.
 	if d.pipelineEnvironment != "" && spec.EnvironmentPath == "" {

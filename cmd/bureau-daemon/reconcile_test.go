@@ -2038,6 +2038,15 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 				t.Errorf("EnvironmentPath = %q, want %q",
 					test.spec.EnvironmentPath, test.wantEnvironmentPath)
 			}
+
+			// Verify WORKSPACE_PATH injection when PROJECT is in the payload.
+			if project, ok := test.spec.Payload["PROJECT"].(string); ok && project != "" {
+				wantPath := test.workspaceRoot + "/" + project
+				gotPath, _ := test.spec.Payload["WORKSPACE_PATH"].(string)
+				if gotPath != wantPath {
+					t.Errorf("WORKSPACE_PATH = %q, want %q", gotPath, wantPath)
+				}
+			}
 		})
 	}
 }

@@ -35,6 +35,10 @@
     "MACHINE": {
       "description": "Machine localpart identifying the host (set by the daemon)",
       "required": true
+    },
+    "WORKSPACE_PATH": {
+      "description": "Absolute host-side filesystem path of the workspace (injected by the daemon from --workspace-root + PROJECT)",
+      "required": true
     }
   },
 
@@ -72,7 +76,8 @@
         "content": {
           "status": "active",
           "project": "${PROJECT}",
-          "machine": "${MACHINE}"
+          "machine": "${MACHINE}",
+          "workspace_path": "${WORKSPACE_PATH}"
         }
       }
     }

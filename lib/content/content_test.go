@@ -52,7 +52,7 @@ func verifyDevWorkspaceInit(t *testing.T, p Pipeline) {
 	}
 
 	// Verify required variables are declared.
-	requiredVariables := []string{"REPOSITORY", "PROJECT", "WORKSPACE_ROOM_ID", "MACHINE"}
+	requiredVariables := []string{"REPOSITORY", "PROJECT", "WORKSPACE_ROOM_ID", "MACHINE", "WORKSPACE_PATH"}
 	for _, name := range requiredVariables {
 		variable, exists := p.Content.Variables[name]
 		if !exists {

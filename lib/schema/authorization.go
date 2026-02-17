@@ -32,6 +32,14 @@ const (
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #bureau/system
 	EventTypeTokenSigningKey = "m.bureau.token_signing_key"
+
+	// EventTypeAudit is a timeline event recording an authorization
+	// decision. Posted by the daemon to the per-machine config room
+	// for denials and sensitive grants. Timeline event (not state) —
+	// each decision is a distinct occurrence, not a replacement.
+	//
+	// Room: #bureau/config/<machine>
+	EventTypeAudit = "m.bureau.audit"
 )
 
 // Authorization source constants identify where a policy entry came from
@@ -230,4 +238,72 @@ type TokenSigningKeyContent struct {
 
 	// Machine is the machine localpart that owns this signing key.
 	Machine string `json:"machine"`
+}
+
+// AuditDecision identifies what happened in an audit event.
+type AuditDecision string
+
+const (
+	// AuditAllow means the action was permitted.
+	AuditAllow AuditDecision = "allow"
+
+	// AuditDeny means the action was denied.
+	AuditDeny AuditDecision = "deny"
+
+	// AuditGrantCreated means a temporal grant was created.
+	AuditGrantCreated AuditDecision = "grant_created"
+
+	// AuditGrantRevoked means a temporal grant was revoked.
+	AuditGrantRevoked AuditDecision = "grant_revoked"
+
+	// AuditGrantExpired means a temporal grant expired.
+	AuditGrantExpired AuditDecision = "grant_expired"
+)
+
+// AuditEventContent is the content of an EventTypeAudit timeline event.
+// Posted by the daemon to the per-machine config room for authorization
+// denials and sensitive grants.
+type AuditEventContent struct {
+	// Decision is what happened: allow, deny, or a grant lifecycle event.
+	Decision AuditDecision `json:"decision"`
+
+	// Actor is the localpart of the principal that attempted the action.
+	Actor string `json:"actor"`
+
+	// Action is the authorization action that was checked (e.g.,
+	// "observe/read-write", "credential/provision/key/FORGEJO_TOKEN").
+	Action string `json:"action"`
+
+	// Target is the localpart of the principal or resource being acted
+	// on. Empty for self-service actions.
+	Target string `json:"target,omitempty"`
+
+	// Reason describes why the check was denied. Empty for allow
+	// decisions and grant lifecycle events.
+	Reason string `json:"reason,omitempty"`
+
+	// EnforcementPoint identifies where the check happened (e.g.,
+	// "daemon/observe", "daemon/temporal_grant").
+	EnforcementPoint string `json:"enforcement_point"`
+
+	// Machine is the machine localpart where the check occurred.
+	Machine string `json:"machine"`
+
+	// MatchedGrant is the grant that matched, if any.
+	MatchedGrant *Grant `json:"matched_grant,omitempty"`
+
+	// MatchedDenial is the denial that fired, if any.
+	MatchedDenial *Denial `json:"matched_denial,omitempty"`
+
+	// MatchedAllowance is the allowance that matched, if any.
+	MatchedAllowance *Allowance `json:"matched_allowance,omitempty"`
+
+	// MatchedAllowanceDenial is the allowance denial that fired, if any.
+	MatchedAllowanceDenial *AllowanceDenial `json:"matched_allowance_denial,omitempty"`
+
+	// Ticket is the ticket reference for grant lifecycle events.
+	Ticket string `json:"ticket,omitempty"`
+
+	// ExpiresAt is the grant expiry for grant lifecycle events.
+	ExpiresAt string `json:"expires_at,omitempty"`
 }

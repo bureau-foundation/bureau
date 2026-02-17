@@ -57,15 +57,24 @@ func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedM
 	}
 
 	// All observation requires an "observe" allowance on the target.
-	if !authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart) {
+	observeResult := authorization.TargetCheck(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart)
+	if !observeResult.Allowed {
+		d.postAuditDeny(observerLocalpart, "observe", principalLocalpart,
+			"daemon/observe", observeResult.Reason,
+			observeResult.MatchedAllowance, observeResult.MatchedAllowanceDenial)
 		return observeAuthorization{Allowed: false}
 	}
 
 	// Determine the granted mode.
 	grantedMode := requestedMode
 	if requestedMode == "readwrite" {
-		if !authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe/read-write", principalLocalpart) {
+		rwResult := authorization.TargetCheck(d.authorizationIndex, observerLocalpart, "observe/read-write", principalLocalpart)
+		if !rwResult.Allowed {
 			grantedMode = "readonly"
+		} else {
+			// observe/read-write is a sensitive action — log the grant.
+			d.postAuditAllow(observerLocalpart, "observe/read-write", principalLocalpart,
+				"daemon/observe", rwResult.MatchedAllowance)
 		}
 	}
 

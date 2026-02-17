@@ -208,6 +208,73 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	}
 }
 
+// TargetResult describes the outcome of a target-side authorization
+// check. Provides the deny reason and matched rules for audit logging.
+type TargetResult struct {
+	// Allowed is true if the target's allowances permit the action.
+	Allowed bool
+
+	// Reason describes why the check was denied. Only meaningful when
+	// Allowed is false.
+	Reason DenyReason
+
+	// MatchedAllowance is the allowance that matched, if any.
+	MatchedAllowance *schema.Allowance
+
+	// MatchedAllowanceDenial is the allowance denial that fired, if
+	// any. Only set when Reason is ReasonAllowanceDenied.
+	MatchedAllowanceDenial *schema.AllowanceDenial
+}
+
+// TargetCheck checks whether a target's allowances permit an actor to
+// perform an action, returning the full evaluation trace. This is the
+// result-returning variant of TargetAllows — use it when the deny
+// reason and matched rules are needed for audit logging.
+func TargetCheck(index *Index, actor, action, target string) TargetResult {
+	index.mu.RLock()
+	defer index.mu.RUnlock()
+	return targetCheckLocked(index, actor, action, target)
+}
+
+// targetCheckLocked is the lock-free implementation of TargetCheck.
+// Caller must hold index.mu.RLock.
+func targetCheckLocked(index *Index, actor, action, target string) TargetResult {
+	// Find a matching allowance on the target.
+	allowances := index.allowances[target]
+	var matchedAllowance *schema.Allowance
+	for i := range allowances {
+		if allowanceMatches(allowances[i], action, actor) {
+			matchedAllowance = &allowances[i]
+			break
+		}
+	}
+
+	if matchedAllowance == nil {
+		return TargetResult{
+			Allowed: false,
+			Reason:  ReasonNoAllowance,
+		}
+	}
+
+	// Check target allowance denials.
+	for i := range index.allowanceDenials[target] {
+		denial := &index.allowanceDenials[target][i]
+		if allowanceDenialMatches(*denial, action, actor) {
+			return TargetResult{
+				Allowed:                false,
+				Reason:                 ReasonAllowanceDenied,
+				MatchedAllowance:       matchedAllowance,
+				MatchedAllowanceDenial: denial,
+			}
+		}
+	}
+
+	return TargetResult{
+		Allowed:          true,
+		MatchedAllowance: matchedAllowance,
+	}
+}
+
 // TargetAllows checks whether a target's allowances permit an actor to
 // perform an action. This evaluates only the target side of the
 // authorization model: allowances and allowance denials.
@@ -221,33 +288,49 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 // principal's allowances determine who may observe.
 //
 // Returns false if the target has no matching allowance, or if a
-// matching allowance denial overrides it.
+// matching allowance denial overrides it. Use TargetCheck when the
+// deny reason and matched rules are needed for audit logging.
 func TargetAllows(index *Index, actor, action, target string) bool {
-	index.mu.RLock()
-	defer index.mu.RUnlock()
+	return TargetCheck(index, actor, action, target).Allowed
+}
 
-	// Find a matching allowance on the target.
-	allowances := index.allowances[target]
-	matched := false
-	for i := range allowances {
-		if allowanceMatches(allowances[i], action, actor) {
-			matched = true
-			break
+// GrantsResult describes the outcome of a grants-only authorization
+// check. Provides the matched grant for audit logging.
+type GrantsResult struct {
+	// Allowed is true if a matching non-expired grant was found.
+	Allowed bool
+
+	// MatchedGrant is the grant that matched, if any. Nil when denied.
+	MatchedGrant *schema.Grant
+}
+
+// GrantsCheck checks whether a slice of grants authorizes a specific
+// action on a specific target, returning the matched grant. This is
+// the result-returning variant of GrantsAllow — use it when the
+// matched grant is needed for audit logging.
+//
+// Same matching semantics as GrantsAllow: no denials, no allowances.
+func GrantsCheck(grants []schema.Grant, action, target string) GrantsResult {
+	return GrantsCheckAt(grants, action, target, time.Now())
+}
+
+// GrantsCheckAt is like GrantsCheck but accepts an explicit time for
+// expiry checks.
+func GrantsCheckAt(grants []schema.Grant, action, target string, now time.Time) GrantsResult {
+	for i := range grants {
+		grant := &grants[i]
+		if !grantMatches(*grant, action, target) {
+			continue
 		}
-	}
-
-	if !matched {
-		return false
-	}
-
-	// Check target allowance denials.
-	for _, denial := range index.allowanceDenials[target] {
-		if allowanceDenialMatches(denial, action, actor) {
-			return false
+		if grant.ExpiresAt != "" {
+			expiresAt, err := time.Parse(time.RFC3339, grant.ExpiresAt)
+			if err != nil || !now.Before(expiresAt) {
+				continue
+			}
 		}
+		return GrantsResult{Allowed: true, MatchedGrant: grant}
 	}
-
-	return true
+	return GrantsResult{Allowed: false}
 }
 
 // GrantsAllow checks whether a slice of grants authorizes a specific
@@ -261,24 +344,14 @@ func TargetAllows(index *Index, actor, action, target string) bool {
 // principal). The daemon pre-filters grants to the service's namespace
 // when minting the token, so the service only needs to check whether
 // the embedded grants cover the requested operation.
+//
+// Use GrantsCheck when the matched grant is needed for audit logging.
 func GrantsAllow(grants []schema.Grant, action, target string) bool {
-	return GrantsAllowAt(grants, action, target, time.Now())
+	return GrantsCheck(grants, action, target).Allowed
 }
 
 // GrantsAllowAt is like GrantsAllow but accepts an explicit time for
 // expiry checks.
 func GrantsAllowAt(grants []schema.Grant, action, target string, now time.Time) bool {
-	for _, grant := range grants {
-		if !grantMatches(grant, action, target) {
-			continue
-		}
-		if grant.ExpiresAt != "" {
-			expiresAt, err := time.Parse(time.RFC3339, grant.ExpiresAt)
-			if err != nil || !now.Before(expiresAt) {
-				continue
-			}
-		}
-		return true
-	}
-	return false
+	return GrantsCheckAt(grants, action, target, now).Allowed
 }

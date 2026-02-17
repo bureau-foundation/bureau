@@ -444,11 +444,6 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// request path, so it works regardless of how the service is named.
 	if strings.HasPrefix(servicePath, "/_matrix/") {
 		if blocked, reason := h.checkMatrixPolicy(r.Method, servicePath); blocked {
-			h.logger.Warn("matrix policy blocked request",
-				"method", r.Method,
-				"path", servicePath,
-				"reason", reason,
-			)
 			http.Error(w, reason, http.StatusForbidden)
 			return
 		}
@@ -499,9 +494,15 @@ func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason s
 
 	// Matrix operations are self-service (empty target) — the principal
 	// is acting on infrastructure, not on another principal.
-	if authorization.GrantsAllow(grants, action, "") {
+	result := authorization.GrantsCheck(grants, action, "")
+	if result.Allowed {
 		return false, ""
 	}
+	h.logger.Warn("authorization denied matrix request",
+		"action", action,
+		"method", method,
+		"path", path,
+	)
 	return true, fmt.Sprintf("authorization: no grant for action %q", action)
 }
 

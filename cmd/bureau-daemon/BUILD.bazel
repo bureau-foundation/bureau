@@ -7,6 +7,7 @@ go_library(
     name = "bureau-daemon_lib",
     srcs = [
         "admin.go",
+        "audit.go",
         "bureau_version.go",
         "command.go",
         "doc.go",
@@ -73,6 +74,7 @@ go_test(
     name = "bureau-daemon_test",
     srcs = [
         "admin_test.go",
+        "audit_test.go",
         "bureau_version_test.go",
         "command_test.go",
         "composition_test.go",

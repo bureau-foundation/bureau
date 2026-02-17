@@ -538,3 +538,162 @@ func TestDenyReasonString(t *testing.T) {
 		}
 	}
 }
+
+func TestTargetCheck_Allow(t *testing.T) {
+	index := NewIndex()
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+		},
+	})
+
+	result := TargetCheck(index, "ops/alice", "observe", "agent/alpha")
+	if !result.Allowed {
+		t.Errorf("got denied (%v), want allowed", result.Reason)
+	}
+	if result.MatchedAllowance == nil {
+		t.Error("MatchedAllowance is nil on allow")
+	}
+}
+
+func TestTargetCheck_NoAllowance(t *testing.T) {
+	index := NewIndex()
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+
+	result := TargetCheck(index, "ops/alice", "observe", "agent/alpha")
+	if result.Allowed {
+		t.Error("got allowed, want denied")
+	}
+	if result.Reason != ReasonNoAllowance {
+		t.Errorf("reason = %v, want %v", result.Reason, ReasonNoAllowance)
+	}
+}
+
+func TestTargetCheck_AllowanceDenial(t *testing.T) {
+	index := NewIndex()
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+		},
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe"}, Actors: []string{"ops/untrusted"}},
+		},
+	})
+
+	result := TargetCheck(index, "ops/untrusted", "observe", "agent/alpha")
+	if result.Allowed {
+		t.Error("got allowed, want denied")
+	}
+	if result.Reason != ReasonAllowanceDenied {
+		t.Errorf("reason = %v, want %v", result.Reason, ReasonAllowanceDenied)
+	}
+	if result.MatchedAllowance == nil {
+		t.Error("MatchedAllowance is nil (should show what was overridden)")
+	}
+	if result.MatchedAllowanceDenial == nil {
+		t.Error("MatchedAllowanceDenial is nil")
+	}
+}
+
+func TestTargetCheck_ConsistentWithTargetAllows(t *testing.T) {
+	// Verify TargetCheck and TargetAllows always agree.
+	index := NewIndex()
+	index.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+		Allowances: []schema.Allowance{
+			{Actions: []string{"observe"}, Actors: []string{"ops/**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/alice"}},
+		},
+		AllowanceDenials: []schema.AllowanceDenial{
+			{Actions: []string{"observe"}, Actors: []string{"ops/untrusted"}},
+		},
+	})
+
+	cases := []struct {
+		actor  string
+		action string
+	}{
+		{"ops/alice", "observe"},
+		{"ops/alice", "observe/read-write"},
+		{"ops/bob", "observe"},
+		{"ops/bob", "observe/read-write"},
+		{"ops/untrusted", "observe"},
+		{"dev/coder", "observe"},
+	}
+
+	for _, tt := range cases {
+		boolResult := TargetAllows(index, tt.actor, tt.action, "agent/alpha")
+		checkResult := TargetCheck(index, tt.actor, tt.action, "agent/alpha")
+		if boolResult != checkResult.Allowed {
+			t.Errorf("TargetAllows(%q, %q) = %v but TargetCheck.Allowed = %v",
+				tt.actor, tt.action, boolResult, checkResult.Allowed)
+		}
+	}
+}
+
+func TestGrantsCheck_Allow(t *testing.T) {
+	grants := []schema.Grant{
+		{Actions: []string{"ticket/create", "ticket/assign"}},
+		{Actions: []string{"observe"}, Targets: []string{"bureau/dev/**"}},
+	}
+
+	result := GrantsCheck(grants, "ticket/create", "")
+	if !result.Allowed {
+		t.Error("got denied, want allowed")
+	}
+	if result.MatchedGrant == nil {
+		t.Error("MatchedGrant is nil on allow")
+	}
+}
+
+func TestGrantsCheck_Deny(t *testing.T) {
+	grants := []schema.Grant{
+		{Actions: []string{"ticket/create"}},
+	}
+
+	result := GrantsCheck(grants, "fleet/assign", "")
+	if result.Allowed {
+		t.Error("got allowed, want denied")
+	}
+	if result.MatchedGrant != nil {
+		t.Error("MatchedGrant should be nil on deny")
+	}
+}
+
+func TestGrantsCheck_ConsistentWithGrantsAllow(t *testing.T) {
+	grants := []schema.Grant{
+		{Actions: []string{"ticket/create", "ticket/assign"}},
+		{Actions: []string{"observe"}, Targets: []string{"bureau/dev/**"}},
+	}
+
+	cases := []struct {
+		action string
+		target string
+	}{
+		{"ticket/create", ""},
+		{"ticket/close", ""},
+		{"observe", "bureau/dev/coder/0"},
+		{"observe", "iree/agent"},
+		{"fleet/assign", ""},
+	}
+
+	for _, tt := range cases {
+		boolResult := GrantsAllow(grants, tt.action, tt.target)
+		checkResult := GrantsCheck(grants, tt.action, tt.target)
+		if boolResult != checkResult.Allowed {
+			t.Errorf("GrantsAllow(%q, %q) = %v but GrantsCheck.Allowed = %v",
+				tt.action, tt.target, boolResult, checkResult.Allowed)
+		}
+	}
+}
+
+func TestGrantsCheckAt_Expired(t *testing.T) {
+	grants := []schema.Grant{
+		{Actions: []string{"ticket/create"}, ExpiresAt: "2020-01-01T00:00:00Z"},
+	}
+
+	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	result := GrantsCheckAt(grants, "ticket/create", "", checkTime)
+	if result.Allowed {
+		t.Error("expired grant should not match")
+	}
+}

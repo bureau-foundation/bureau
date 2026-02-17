@@ -774,6 +774,81 @@ completes the target side.
 
 ---
 
+## Audit Logging
+
+Authorization decisions need to be inspectable without SSHing into
+every machine in a fleet. The daemon posts audit events to Matrix so
+sysadmins can review denials and sensitive grants from any client.
+
+### What gets logged
+
+Not all authorization decisions are worth recording. Service directory
+filtering runs on every `/v1/services` request per service entry —
+logging each hidden entry would overwhelm any log with no diagnostic
+value. Routine successful grants (`matrix/join`, `ticket/list`) are
+similarly high-volume and low-signal.
+
+The audit log captures two categories:
+
+- **Denials of attempted actions.** An agent tried to do something and
+  was blocked. Either a misconfiguration or an unauthorized attempt —
+  both warrant investigation.
+- **Successful checks of sensitive actions.** High-privilege operations
+  where an audit trail matters: `credential/provision/**`,
+  `interrupt/**`, `fleet/**`, `observe/read-write`, and
+  `grant/approve/**`. This set is defined in code, not configuration —
+  what counts as "sensitive" is a security decision, not an operational
+  knob.
+
+Grant lifecycle events (temporal grant creation, expiry, revocation)
+are also logged as audit events since they represent dynamic privilege
+changes.
+
+### Where audit events live
+
+Audit events are `m.bureau.audit` timeline events in the per-machine
+config room (`#bureau/config/<machine>`). Config rooms are the right
+location because:
+
+- The audience is already correct — admin, machine daemon, fleet
+  controllers.
+- The authorization policy that produced the decision is in the same
+  room (`m.bureau.machine_config`), so denials have full context
+  without room-hopping.
+- Each machine's volume scales with its own principal count and denial
+  rate, not the fleet's.
+
+Fleet-wide inspection is a client concern: a `bureau audit` command
+aggregates across config rooms by enumerating machines and filtering
+events.
+
+Only the daemon posts audit events to Matrix — it is the process with
+a Matrix session and access to the config room. The proxy and services
+(which enforce authorization independently) log denials locally via
+slog in structured format. They have no Matrix session and no need for
+one: proxy denials reflect grants the daemon already computed, and
+service denials reflect token grants the daemon already minted. Both
+are visible through `bureau auth check` without a Matrix round-trip.
+
+### API design
+
+The authorization package provides result-returning variants of the
+boolean check functions (`TargetCheck`, `GrantsCheck`) that return
+the deny reason and matched rules alongside the decision. The daemon
+uses these for observation and cross-principal authorization where
+the full trace feeds the audit event. The existing boolean functions
+(`TargetAllows`, `GrantsAllow`) remain for call sites that don't need
+the trace, like list filtering where logging every hidden entry would
+be noise.
+
+Audit event posting is asynchronous — the authorization decision
+returns immediately, and a goroutine posts the event to Matrix with
+retry. If the homeserver is unavailable, the event is logged locally
+and the Matrix post is dropped. Authorization is never delayed by
+Matrix availability.
+
+---
+
 ## Relationship to Other Design Documents
 
 - **[credentials.md](credentials.md)** — credential provisioning

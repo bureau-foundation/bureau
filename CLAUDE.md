@@ -133,6 +133,31 @@ Integration tests must pass before every commit. Run them after any change to:
 daemon, launcher, proxy, messaging, pipeline executor, workspace handling,
 observation, templates, schema, or bootstrap logic. When in doubt, run them.
 
+## Diagnosing runtime failures
+
+When a test fails, hangs, or produces unexpected behavior:
+
+1. **Read the test output or log file. Not source code. The log file.**
+2. In your response, write the last successful log line and identify the
+   gap — what should have happened next but didn't.
+3. Only then may you read the specific function identified by the gap —
+   not its callers, not its callees, not "related" code.
+4. If you have read more than 3 source files without a fix, you have
+   left the diagnostic path. Stop, re-read the logs, and start over
+   from step 1.
+
+Reading source code to theorize about runtime behavior is not diagnosis.
+It is procrastination that feels like work. Bureau is built to be
+diagnosed from logs and Matrix events alone. If you can't diagnose a
+failure from logs, the logging is insufficient — fix the logging first,
+re-run, and read the new logs. That logging improvement is part of the
+fix, not throwaway debug output.
+
+Make small changes and run tests after each one. Do not batch large sets
+of changes (new types, new methods, rewritten helpers, updated callers)
+and run the test for the first time only after all of it. Each change
+should be validated before the next one builds on it.
+
 ## Security principles
 
 Bureau runs untrusted code. Every design decision must account for this.

@@ -1,0 +1,26 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "llm",
+    srcs = [
+        "anthropic.go",
+        "doc.go",
+        "provider.go",
+        "sse.go",
+        "types.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/llm",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "llm_test",
+    srcs = [
+        "anthropic_test.go",
+        "sse_test.go",
+    ],
+    embed = [":llm"],
+)

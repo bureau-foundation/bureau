@@ -445,6 +445,81 @@ func captureRun(run func([]string) error) (string, error) {
 	return string(captured.data), runErr
 }
 
+// ToolExport describes a tool for callers that need tool metadata
+// without going through the MCP JSON-RPC protocol. The native Bureau
+// agent uses this to build LLM tool definitions from the same
+// discovery and authorization logic as the MCP server.
+type ToolExport struct {
+	// Name is the underscore-joined command path (e.g., "bureau_ticket_list").
+	Name string
+
+	// Description is the human-readable tool description.
+	Description string
+
+	// InputSchema is the JSON Schema for the tool's parameters,
+	// serialized as JSON.
+	InputSchema json.RawMessage
+}
+
+// AuthorizedTools returns tool metadata for all tools that pass
+// authorization checks. Used by the native agent to build the LLM
+// tool catalog from the same discovery and grant-filtering logic
+// as the MCP JSON-RPC tools/list endpoint.
+func (s *Server) AuthorizedTools() []ToolExport {
+	var exports []ToolExport
+	for i := range s.tools {
+		t := &s.tools[i]
+		if !s.toolAuthorized(t) {
+			continue
+		}
+		schemaJSON, err := json.Marshal(t.inputSchema)
+		if err != nil {
+			// Schema generation is deterministic — if it marshaled
+			// once during discovery, it will marshal again. A failure
+			// here would indicate a programming error, not a runtime
+			// condition.
+			continue
+		}
+		exports = append(exports, ToolExport{
+			Name:        t.name,
+			Description: t.description,
+			InputSchema: schemaJSON,
+		})
+	}
+	return exports
+}
+
+// CallTool executes a tool by name with the given JSON arguments,
+// using the same parameter zeroing, default application, JSON overlay,
+// and stdout capture as the MCP tools/call endpoint. Returns the
+// captured output text and whether the tool reported an error.
+//
+// A non-nil error return indicates an infrastructure failure (unknown
+// tool, authorization denied) — not a tool execution failure. Tool
+// execution failures are indicated by isError=true with the error
+// message included in the output string.
+func (s *Server) CallTool(name string, arguments json.RawMessage) (output string, isError bool, err error) {
+	t, ok := s.toolsByName[name]
+	if !ok {
+		return "", false, fmt.Errorf("unknown tool: %s", name)
+	}
+	if !s.toolAuthorized(t) {
+		return "", false, fmt.Errorf("tool not authorized: %s", name)
+	}
+
+	out, runErr := s.executeTool(t, arguments)
+	if runErr != nil {
+		// Combine captured output and error message into a single
+		// string, matching the behavior of buildToolResult for MCP.
+		if out != "" {
+			out += "\n"
+		}
+		out += runErr.Error()
+		return out, true, nil
+	}
+	return out, false, nil
+}
+
 // discoverTools walks the command tree recursively, collecting leaf
 // commands that have both Params and Run as MCP tools.
 func discoverTools(command *cli.Command, path []string, tools *[]tool) {

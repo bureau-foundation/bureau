@@ -1759,3 +1759,144 @@ func TestIsMetaTool(t *testing.T) {
 		t.Error("isMetaTool(test_echo) = true, want false")
 	}
 }
+
+// --- Tests for exported API (used by bureau-agent) ---
+
+func TestServer_AuthorizedTools_WildcardGrants(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	exports := server.AuthorizedTools()
+
+	// The test tree has 4 tools with RequiredGrants (echo, fail, format, list).
+	if len(exports) != 4 {
+		t.Fatalf("AuthorizedTools() returned %d tools, want 4", len(exports))
+	}
+
+	names := make(map[string]bool)
+	for _, export := range exports {
+		names[export.Name] = true
+		if export.Description == "" {
+			t.Errorf("tool %q has empty Description", export.Name)
+		}
+		// InputSchema must be valid JSON.
+		var schemaMap map[string]any
+		if err := json.Unmarshal(export.InputSchema, &schemaMap); err != nil {
+			t.Errorf("tool %q InputSchema is not valid JSON: %v", export.Name, err)
+		}
+	}
+
+	for _, expected := range []string{"test_echo", "test_fail", "test_format", "test_list"} {
+		if !names[expected] {
+			t.Errorf("missing tool %q in AuthorizedTools()", expected)
+		}
+	}
+}
+
+func TestServer_AuthorizedTools_FilteredByGrants(t *testing.T) {
+	root := testCommandTree()
+	// Only grant access to echo.
+	server := NewServer(root, []schema.Grant{
+		{Actions: []string{"command/test/echo"}},
+	})
+
+	exports := server.AuthorizedTools()
+	if len(exports) != 1 {
+		t.Fatalf("AuthorizedTools() returned %d tools, want 1", len(exports))
+	}
+	if exports[0].Name != "test_echo" {
+		t.Errorf("tool name = %q, want %q", exports[0].Name, "test_echo")
+	}
+}
+
+func TestServer_AuthorizedTools_EmptyGrants(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, nil)
+
+	exports := server.AuthorizedTools()
+	if len(exports) != 0 {
+		t.Errorf("AuthorizedTools() returned %d tools with nil grants, want 0", len(exports))
+	}
+}
+
+func TestServer_CallTool_Success(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool("test_echo", json.RawMessage(`{"message":"hello"}`))
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if isError {
+		t.Errorf("isError = true, want false")
+	}
+	if strings.TrimSpace(output) != "hello" {
+		t.Errorf("output = %q, want %q", strings.TrimSpace(output), "hello")
+	}
+}
+
+func TestServer_CallTool_ToolError(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool("test_fail", json.RawMessage(`{"reason":"test"}`))
+	if err != nil {
+		t.Fatalf("CallTool infrastructure error: %v", err)
+	}
+	if !isError {
+		t.Error("isError = false, want true")
+	}
+	if !strings.Contains(output, "intentional failure") {
+		t.Errorf("output = %q, should contain 'intentional failure'", output)
+	}
+}
+
+func TestServer_CallTool_UnknownTool(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	_, _, err := server.CallTool("nonexistent_tool", nil)
+	if err == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(err.Error(), "unknown tool") {
+		t.Errorf("error = %q, should contain 'unknown tool'", err.Error())
+	}
+}
+
+func TestServer_CallTool_UnauthorizedTool(t *testing.T) {
+	root := testCommandTree()
+	// Only authorize echo, not fail.
+	server := NewServer(root, []schema.Grant{
+		{Actions: []string{"command/test/echo"}},
+	})
+
+	_, _, err := server.CallTool("test_fail", nil)
+	if err == nil {
+		t.Fatal("expected error for unauthorized tool")
+	}
+	if !strings.Contains(err.Error(), "not authorized") {
+		t.Errorf("error = %q, should contain 'not authorized'", err.Error())
+	}
+}
+
+func TestServer_CallTool_JSONOutput(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool("test_format", json.RawMessage(`{"value":"test123"}`))
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if isError {
+		t.Errorf("isError = true, want false")
+	}
+	// The format command with JSON output mode should produce JSON.
+	var result formatOutput
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v (output: %q)", err, output)
+	}
+	if result.Value != "test123" {
+		t.Errorf("result.Value = %q, want %q", result.Value, "test123")
+	}
+}

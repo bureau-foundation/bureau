@@ -1,0 +1,44 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-agent_lib",
+    srcs = [
+        "driver.go",
+        "loop.go",
+        "main.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd/bureau/commands",
+        "//cmd/bureau/mcp",
+        "//lib/agent",
+        "//lib/llm",
+        "//lib/proxyclient",
+    ],
+)
+
+go_binary(
+    name = "bureau-agent",
+    embed = [":bureau-agent_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-agent_test",
+    srcs = [
+        "driver_test.go",
+        "loop_test.go",
+    ],
+    embed = [":bureau-agent_lib"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//cmd/bureau/mcp",
+        "//lib/agent",
+        "//lib/llm",
+        "//lib/schema",
+    ],
+)

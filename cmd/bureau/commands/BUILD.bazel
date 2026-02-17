@@ -1,0 +1,30 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "commands",
+    srcs = ["commands.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/commands",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/artifact",
+        "//cmd/bureau/auth",
+        "//cmd/bureau/cbor",
+        "//cmd/bureau/cli",
+        "//cmd/bureau/credential",
+        "//cmd/bureau/environment",
+        "//cmd/bureau/fleet",
+        "//cmd/bureau/machine",
+        "//cmd/bureau/matrix",
+        "//cmd/bureau/mcp",
+        "//cmd/bureau/observe",
+        "//cmd/bureau/pipeline",
+        "//cmd/bureau/quickstart",
+        "//cmd/bureau/template",
+        "//cmd/bureau/ticket",
+        "//cmd/bureau/workspace",
+        "//lib/version",
+    ],
+)

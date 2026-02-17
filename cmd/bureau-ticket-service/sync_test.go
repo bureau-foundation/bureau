@@ -6,8 +6,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -329,4 +331,94 @@ func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 	if _, exists := ts.rooms["!room:local"]; exists {
 		t.Fatal("room should have been removed after tombstone")
 	}
+}
+
+// TestConcurrentSyncAndReads exercises the race between handleSync
+// (which writes to the index) and concurrent read handlers (which
+// iterate the index). Before the addition of mu to TicketService,
+// this test panicked with "concurrent map read and map write" under
+// the race detector. Now it verifies the RWMutex serialization.
+func TestConcurrentSyncAndReads(t *testing.T) {
+	ts := newTestService()
+	ts.rooms["!room:local"] = newTrackedRoom(map[string]schema.TicketContent{
+		"tkt-1": {Version: 1, Title: "existing", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+	})
+
+	ctx := context.Background()
+	const iterations = 100
+
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+
+	var workers sync.WaitGroup
+
+	// Reader goroutine: calls index.List via the locked path.
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		startBarrier.Wait()
+		for range iterations {
+			ts.mu.RLock()
+			state, exists := ts.rooms["!room:local"]
+			if exists {
+				state.index.List(ticket.Filter{})
+				state.index.Ready()
+				state.index.Stats()
+			}
+			ts.mu.RUnlock()
+		}
+	}()
+
+	// Writer goroutine: simulates sync loop indexing new events.
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		startBarrier.Wait()
+		for i := range iterations {
+			syncResponse := &messaging.SyncResponse{
+				Rooms: messaging.RoomsSection{
+					Join: map[string]messaging.JoinedRoom{
+						"!room:local": {
+							Timeline: messaging.TimelineSection{
+								Events: []messaging.Event{{
+									Type:     schema.EventTypeTicket,
+									StateKey: stringPtr(ticketIDForIteration(i)),
+									Content: map[string]any{
+										"version":    float64(1),
+										"title":      "synced ticket",
+										"status":     "open",
+										"type":       "task",
+										"created_at": "2026-01-02T00:00:00Z",
+										"updated_at": "2026-01-02T00:00:00Z",
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+			ts.handleSync(ctx, syncResponse)
+		}
+	}()
+
+	// Release all goroutines simultaneously.
+	startBarrier.Done()
+	workers.Wait()
+
+	// Verify the final state is consistent: should have the original
+	// ticket plus all synced tickets.
+	state := ts.rooms["!room:local"]
+	if state == nil {
+		t.Fatal("room state should exist")
+	}
+	// At least the original ticket plus some synced ones.
+	if state.index.Len() < 2 {
+		t.Fatalf("expected at least 2 tickets, got %d", state.index.Len())
+	}
+}
+
+// ticketIDForIteration returns a unique ticket ID for the given
+// iteration index in the concurrency test.
+func ticketIDForIteration(iteration int) string {
+	return fmt.Sprintf("tkt-sync-%04d", iteration)
 }

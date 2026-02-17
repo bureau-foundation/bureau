@@ -228,8 +228,14 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID string, st
 }
 
 // handleSync processes an incremental /sync response. Called by the
-// sync loop for each response.
+// sync loop for each response. Holds a write lock for the entire
+// batch because it reads and writes both the rooms map and ticket
+// indexes (indexing events, evaluating gates, processing config
+// changes, handling leaves).
 func (ts *TicketService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
 	// Accept invites to new rooms.
 	if len(response.Rooms.Invite) > 0 {
 		acceptedRooms := service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)

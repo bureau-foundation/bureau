@@ -379,8 +379,12 @@ func (ts *TicketService) satisfyGate(
 
 // evaluateTimerGates checks all pending timer gates across all rooms
 // for expiration. A timer gate is satisfied when the current time
-// exceeds CreatedAt + Duration.
+// exceeds CreatedAt + Duration. Holds a write lock because gate
+// satisfaction modifies the index via satisfyGate.
 func (ts *TicketService) evaluateTimerGates(ctx context.Context) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
 	now := ts.clock.Now()
 
 	for roomID, state := range ts.rooms {

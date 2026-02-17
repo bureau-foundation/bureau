@@ -18,43 +18,68 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
 
+// withReadLock wraps an authenticated handler with a read lock on
+// the service's shared state. Use for query handlers that only read
+// the rooms map and ticket indexes.
+func (ts *TicketService) withReadLock(handler service.AuthActionFunc) service.AuthActionFunc {
+	return func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		ts.mu.RLock()
+		defer ts.mu.RUnlock()
+		return handler(ctx, token, raw)
+	}
+}
+
+// withWriteLock wraps an authenticated handler with a write lock on
+// the service's shared state. Use for mutation handlers that modify
+// ticket indexes or the rooms map. The write lock is held for the
+// entire handler including the Matrix SendStateEvent call to prevent
+// read-modify-write races between concurrent mutations.
+func (ts *TicketService) withWriteLock(handler service.AuthActionFunc) service.AuthActionFunc {
+	return func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+		ts.mu.Lock()
+		defer ts.mu.Unlock()
+		return handler(ctx, token, raw)
+	}
+}
+
 // registerActions registers all socket API actions on the server.
 // Actions are grouped by category following the design in tickets.md.
 //
-// The "status" action is unauthenticated (pure liveness check).
-// All other actions use HandleAuth and require a valid service token.
+// The "status" action is unauthenticated (pure liveness check) and
+// does not access shared state, so it needs no locking. All other
+// actions use HandleAuth and are wrapped with withReadLock (query)
+// or withWriteLock (mutation) to serialize access to rooms and
+// ticket indexes.
 func (ts *TicketService) registerActions(server *service.SocketServer) {
-	// Liveness health check — no authentication required. Returns
-	// only uptime; no room or ticket information is disclosed.
+	// Liveness health check — no authentication required, no shared
+	// state access. Only reads immutable fields (clock, startedAt).
 	server.Handle("status", ts.handleStatus)
 
-	// Authenticated diagnostic action — returns the same information
-	// that the old unauthenticated status action returned (room
-	// counts, ticket counts, per-room summaries). Requires a valid
-	// service token with any ticket/* grant.
-	server.HandleAuth("info", ts.handleInfo)
+	// Authenticated diagnostic action — reads rooms and indexes.
+	server.HandleAuth("info", ts.withReadLock(ts.handleInfo))
 
-	// Query actions — all authenticated, all read-only.
-	server.HandleAuth("list", ts.handleList)
-	server.HandleAuth("ready", ts.handleReady)
-	server.HandleAuth("blocked", ts.handleBlocked)
-	server.HandleAuth("ranked", ts.handleRanked)
-	server.HandleAuth("show", ts.handleShow)
-	server.HandleAuth("children", ts.handleChildren)
-	server.HandleAuth("grep", ts.handleGrep)
-	server.HandleAuth("stats", ts.handleStats)
-	server.HandleAuth("deps", ts.handleDeps)
-	server.HandleAuth("epic-health", ts.handleEpicHealth)
+	// Query actions — read lock, all read-only.
+	server.HandleAuth("list", ts.withReadLock(ts.handleList))
+	server.HandleAuth("ready", ts.withReadLock(ts.handleReady))
+	server.HandleAuth("blocked", ts.withReadLock(ts.handleBlocked))
+	server.HandleAuth("ranked", ts.withReadLock(ts.handleRanked))
+	server.HandleAuth("show", ts.withReadLock(ts.handleShow))
+	server.HandleAuth("children", ts.withReadLock(ts.handleChildren))
+	server.HandleAuth("grep", ts.withReadLock(ts.handleGrep))
+	server.HandleAuth("stats", ts.withReadLock(ts.handleStats))
+	server.HandleAuth("deps", ts.withReadLock(ts.handleDeps))
+	server.HandleAuth("epic-health", ts.withReadLock(ts.handleEpicHealth))
 
-	// Mutation actions — all authenticated, all write to Matrix.
-	server.HandleAuth("create", ts.handleCreate)
-	server.HandleAuth("update", ts.handleUpdate)
-	server.HandleAuth("close", ts.handleClose)
-	server.HandleAuth("reopen", ts.handleReopen)
-	server.HandleAuth("batch-create", ts.handleBatchCreate)
-	server.HandleAuth("import", ts.handleImport)
-	server.HandleAuth("resolve-gate", ts.handleResolveGate)
-	server.HandleAuth("update-gate", ts.handleUpdateGate)
+	// Mutation actions — write lock, all write to Matrix and update
+	// the local index.
+	server.HandleAuth("create", ts.withWriteLock(ts.handleCreate))
+	server.HandleAuth("update", ts.withWriteLock(ts.handleUpdate))
+	server.HandleAuth("close", ts.withWriteLock(ts.handleClose))
+	server.HandleAuth("reopen", ts.withWriteLock(ts.handleReopen))
+	server.HandleAuth("batch-create", ts.withWriteLock(ts.handleBatchCreate))
+	server.HandleAuth("import", ts.withWriteLock(ts.handleImport))
+	server.HandleAuth("resolve-gate", ts.withWriteLock(ts.handleResolveGate))
+	server.HandleAuth("update-gate", ts.withWriteLock(ts.handleUpdateGate))
 }
 
 // statusResponse is the response to the "status" action. Contains

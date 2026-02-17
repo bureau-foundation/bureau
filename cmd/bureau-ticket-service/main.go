@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -218,7 +219,21 @@ func run() error {
 }
 
 // TicketService is the core service state.
+//
+// Concurrent access from socket handlers, the sync loop, and the
+// timer ticker is serialized by mu. Read-only handlers hold a read
+// lock; mutation handlers, the sync loop, and the timer ticker hold
+// a write lock. The wrappers withReadLock and withWriteLock apply
+// the appropriate lock at handler registration time so individual
+// handlers do not need to manage locking themselves.
 type TicketService struct {
+	// mu serializes access to rooms, aliasCache, and every Index
+	// reachable through rooms. Socket handlers run in per-connection
+	// goroutines, the sync loop and timer ticker each run in their
+	// own goroutines, and all three paths read or mutate the same
+	// shared state.
+	mu sync.RWMutex
+
 	session  *messaging.Session
 	writer   matrixWriter
 	resolver aliasResolver
@@ -232,7 +247,7 @@ type TicketService struct {
 	startedAt     time.Time
 
 	// rooms maps room IDs to per-room state. Only rooms with
-	// m.bureau.ticket_config are tracked here.
+	// m.bureau.ticket_config are tracked here. Protected by mu.
 	rooms map[string]*roomState
 
 	// aliasCache maps room aliases to resolved room IDs. Used by
@@ -241,6 +256,7 @@ type TicketService struct {
 	// lifetime; stale entries are harmless (alias changes cause a
 	// new room ID that won't match the old one, and the gate won't
 	// fire — operator action is needed anyway when aliases change).
+	// Protected by mu.
 	aliasCache map[string]string
 
 	logger *slog.Logger

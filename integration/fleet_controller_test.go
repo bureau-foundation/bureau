@@ -6,8 +6,10 @@ package integration_test
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -1015,4 +1017,131 @@ func TestFleetReconciliation(t *testing.T) {
 				machine.Name, serviceLocalpart, len(showMachine.Assignments))
 		}
 	}
+}
+
+// TestFleetAuthorizationDenied verifies the fleet controller's security
+// boundary: unauthenticated requests are rejected for authenticated
+// endpoints, tokens with empty grants deny everything, and narrow grants
+// only authorize their specific actions.
+//
+// This is the authorization complement to TestFleetControllerLifecycle
+// (which proves the happy path with full grants). Together they verify
+// that the fleet API is both functional and secure.
+func TestFleetAuthorizationDenied(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleetRoomID := defaultFleetRoomID(t)
+
+	// Minimal setup: one machine (no proxy needed), one fleet controller.
+	machine := newTestMachine(t, "machine/fleet-auth")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		FleetRoomID:    fleetRoomID,
+	})
+
+	controllerName := "service/fleet/auth-test"
+	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	signingKey := loadDaemonSigningKey(t, machine)
+	ctx := t.Context()
+
+	// assertServiceError verifies that err is a *service.ServiceError
+	// whose Message contains the expected substring. This distinguishes
+	// auth errors from connection errors or parameter validation errors.
+	assertServiceError := func(t *testing.T, err error, action, expectedSubstring string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected error, got nil", action)
+		}
+		var serviceErr *service.ServiceError
+		if !errors.As(err, &serviceErr) {
+			t.Fatalf("%s: expected *service.ServiceError, got %T: %v", action, err, err)
+		}
+		if !strings.Contains(serviceErr.Message, expectedSubstring) {
+			t.Errorf("%s: expected %q in error, got %q", action, expectedSubstring, serviceErr.Message)
+		}
+	}
+
+	// All authenticated fleet actions. Status is deliberately excluded
+	// because it is the only unauthenticated endpoint.
+	authenticatedActions := []string{
+		"info", "list-machines", "list-services", "show-machine",
+		"show-service", "place", "unplace", "plan", "machine-health",
+	}
+
+	t.Run("Unauthenticated", func(t *testing.T) {
+		client := fleetClient(t, fc, nil, nil)
+
+		// Status is the only unauthenticated endpoint — it must
+		// succeed without a token.
+		var status fleetStatusResponse
+		if err := client.Call(ctx, "status", nil, &status); err != nil {
+			t.Fatalf("status should succeed without auth: %v", err)
+		}
+
+		// Every authenticated endpoint rejects a missing token.
+		for _, action := range authenticatedActions {
+			err := client.Call(ctx, action, nil, nil)
+			assertServiceError(t, err, action, "authentication required")
+		}
+	})
+
+	t.Run("EmptyGrants", func(t *testing.T) {
+		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{})
+
+		// A valid token with zero grants is denied for every
+		// authenticated action. This verifies default-deny: token
+		// verification passes but the handler's requireGrant check
+		// rejects because no grant matches.
+		for _, action := range authenticatedActions {
+			err := client.Call(ctx, action, nil, nil)
+			assertServiceError(t, err, action, "access denied")
+		}
+	})
+
+	t.Run("NarrowExactGrant", func(t *testing.T) {
+		// Grant only "fleet/info" — an exact match for a single action.
+		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{
+			{Actions: []string{"fleet/info"}},
+		})
+
+		// The granted action succeeds.
+		var info fleetInfoResponse
+		if err := client.Call(ctx, "info", nil, &info); err != nil {
+			t.Fatalf("info with fleet/info grant: %v", err)
+		}
+
+		// Actions outside the exact grant are denied.
+		for _, action := range []string{"list-machines", "list-services",
+			"show-machine", "place"} {
+			err := client.Call(ctx, action, nil, nil)
+			assertServiceError(t, err, action, "access denied")
+		}
+	})
+
+	t.Run("NarrowWildcardGrant", func(t *testing.T) {
+		// Grant "fleet/list-*" — single-segment wildcard that matches
+		// list-machines and list-services but not show-machine or info.
+		client := fleetClient(t, fc, signingKey, []servicetoken.Grant{
+			{Actions: []string{"fleet/list-*"}},
+		})
+
+		// Both list actions match the wildcard pattern.
+		var machines fleetListMachinesResponse
+		if err := client.Call(ctx, "list-machines", nil, &machines); err != nil {
+			t.Fatalf("list-machines with fleet/list-* grant: %v", err)
+		}
+		var services fleetListServicesResponse
+		if err := client.Call(ctx, "list-services", nil, &services); err != nil {
+			t.Fatalf("list-services with fleet/list-* grant: %v", err)
+		}
+
+		// Actions outside the wildcard pattern are denied.
+		for _, action := range []string{"info", "show-machine", "place"} {
+			err := client.Call(ctx, action, nil, nil)
+			assertServiceError(t, err, action, "access denied")
+		}
+	})
 }

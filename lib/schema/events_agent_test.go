@@ -211,12 +211,24 @@ func TestAgentSessionContentForwardCompatibility(t *testing.T) {
 
 func TestAgentContextContentRoundTrip(t *testing.T) {
 	original := AgentContextContent{
-		Version:            1,
-		ContextArtifactRef: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-		SessionID:          "session-12345",
-		MessageCount:       42,
-		TokenCount:         150000,
-		UpdatedAt:          "2026-02-17T11:30:00Z",
+		Version: 1,
+		Entries: map[string]ContextEntry{
+			"conversation": {
+				ArtifactRef:  "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+				Size:         524288,
+				ContentType:  "application/json",
+				ModifiedAt:   "2026-02-17T11:30:00Z",
+				SessionID:    "session-12345",
+				MessageCount: 42,
+				TokenCount:   150000,
+			},
+			"summary/2026-02-17": {
+				ArtifactRef: "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2",
+				Size:        1024,
+				ContentType: "text/markdown",
+				ModifiedAt:  "2026-02-17T12:00:00Z",
+			},
+		},
 	}
 
 	data, err := json.Marshal(original)
@@ -229,8 +241,15 @@ func TestAgentContextContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "version", float64(1))
-	assertField(t, raw, "message_count", float64(42))
-	assertField(t, raw, "token_count", float64(150000))
+
+	// Verify the entries map is present and has the right keys.
+	entries, ok := raw["entries"].(map[string]any)
+	if !ok {
+		t.Fatal("entries field missing or not a map")
+	}
+	if len(entries) != 2 {
+		t.Errorf("entries has %d keys, want 2", len(entries))
+	}
 
 	var decoded AgentContextContent
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -256,13 +275,38 @@ func TestAgentContextContentOmitsEmptyOptionals(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
+	if _, exists := raw["entries"]; exists {
+		t.Error("entries should be omitted when nil, but is present")
+	}
+}
+
+func TestContextEntryOmitsEmptyOptionals(t *testing.T) {
+	// A non-conversation entry should omit session_id, message_count,
+	// and token_count when they are zero-valued.
+	entry := ContextEntry{
+		ArtifactRef: "abc123",
+		Size:        1024,
+		ContentType: "text/markdown",
+		ModifiedAt:  "2026-02-17T12:00:00Z",
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
 	for _, field := range []string{
-		"context_artifact_ref",
 		"session_id",
-		"updated_at",
+		"message_count",
+		"token_count",
 	} {
 		if _, exists := raw[field]; exists {
-			t.Errorf("%s should be omitted when empty, but is present", field)
+			t.Errorf("%s should be omitted when zero, but is present", field)
 		}
 	}
 }
@@ -279,13 +323,18 @@ func TestAgentContextContentValidate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "valid_with_context",
+			name: "valid_with_entries",
 			content: AgentContextContent{
-				Version:            1,
-				ContextArtifactRef: "abc123",
-				SessionID:          "session-42",
-				MessageCount:       10,
-				TokenCount:         50000,
+				Version: 1,
+				Entries: map[string]ContextEntry{
+					"conversation": {
+						ArtifactRef: "abc123",
+						Size:        1024,
+						ContentType: "application/json",
+						ModifiedAt:  "2026-02-17T11:30:00Z",
+						SessionID:   "session-42",
+					},
+				},
 			},
 			wantErr: "",
 		},
@@ -295,12 +344,43 @@ func TestAgentContextContentValidate(t *testing.T) {
 			wantErr: "version must be >= 1",
 		},
 		{
-			name: "artifact_ref_without_session_id",
+			name: "entry_missing_artifact_ref",
 			content: AgentContextContent{
-				Version:            1,
-				ContextArtifactRef: "abc123",
+				Version: 1,
+				Entries: map[string]ContextEntry{
+					"conversation": {
+						ContentType: "application/json",
+						ModifiedAt:  "2026-02-17T11:30:00Z",
+					},
+				},
 			},
-			wantErr: "session_id is required when context_artifact_ref is set",
+			wantErr: "artifact_ref is required",
+		},
+		{
+			name: "entry_missing_content_type",
+			content: AgentContextContent{
+				Version: 1,
+				Entries: map[string]ContextEntry{
+					"notes/arch": {
+						ArtifactRef: "abc123",
+						ModifiedAt:  "2026-02-17T11:30:00Z",
+					},
+				},
+			},
+			wantErr: "content_type is required",
+		},
+		{
+			name: "entry_missing_modified_at",
+			content: AgentContextContent{
+				Version: 1,
+				Entries: map[string]ContextEntry{
+					"notes/arch": {
+						ArtifactRef: "abc123",
+						ContentType: "text/markdown",
+					},
+				},
+			},
+			wantErr: "modified_at is required",
 		},
 	}
 
@@ -352,6 +432,44 @@ func TestAgentContextContentCanModify(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAgentContextContentForwardCompatibility(t *testing.T) {
+	v2JSON := `{
+		"version": 2,
+		"entries": {
+			"conversation": {
+				"artifact_ref": "abc123",
+				"size": 1024,
+				"content_type": "application/json",
+				"modified_at": "2026-02-17T11:30:00Z"
+			}
+		},
+		"new_v2_field": "unknown to v1"
+	}`
+
+	var content AgentContextContent
+	if err := json.Unmarshal([]byte(v2JSON), &content); err != nil {
+		t.Fatalf("Unmarshal v2 event: %v", err)
+	}
+
+	if content.Version != 2 {
+		t.Errorf("Version = %d, want 2", content.Version)
+	}
+	if len(content.Entries) != 1 {
+		t.Errorf("Entries has %d keys, want 1", len(content.Entries))
+	}
+
+	if err := content.CanModify(); err == nil {
+		t.Fatal("CanModify() = nil for v2 event, want error")
+	}
+
+	remarshaled, _ := json.Marshal(content)
+	var raw map[string]any
+	json.Unmarshal(remarshaled, &raw)
+	if _, exists := raw["new_v2_field"]; exists {
+		t.Error("new_v2_field survived round-trip through v1 struct (unexpected)")
 	}
 }
 

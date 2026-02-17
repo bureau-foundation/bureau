@@ -122,41 +122,67 @@ func (content *AgentSessionContent) CanModify() error {
 }
 
 // AgentContextContent is the content of an EventTypeAgentContext state
-// event. Tracks the LLM conversation context for session resumption.
+// event. Acts as a key-value index mapping named context keys to
+// artifact refs. Keys are hierarchical strings using forward-slash
+// separators (e.g., "conversation", "summary/2026-02-16",
+// "notes/architecture"). Values are artifact refs plus summary metadata,
+// stored as ContextEntry structs.
 //
-// The conversation context itself (the full messages array) is stored
-// as an artifact. This event holds only the ref and summary metadata
-// needed to decide whether to resume and how large the context is.
+// The agent service is a metadata index — callers store content in the
+// artifact service directly and then pass the resulting ref to the agent
+// service via set-context. This keeps the agent service ephemeral
+// (no artifact client dependency) and enforces write-through ordering:
+// content exists in the artifact service before the ref appears here.
 type AgentContextContent struct {
 	// Version is the schema version (see AgentContextVersion).
 	// Code that modifies this event must call CanModify() first; if
 	// Version exceeds AgentContextVersion, the modification is
-	// refused to prevent silent field loss.
+	// refused to prevent silent field loss. Readers may process any
+	// version (unknown fields are harmlessly ignored by Go's JSON
+	// unmarshaler).
 	Version int `json:"version"`
 
-	// ContextArtifactRef is the artifact ref (BLAKE3 hex hash)
-	// pointing to the serialized LLM conversation context. The format
-	// is a JSON array of message objects (matching the provider's
-	// message schema). The agent service writes this at session end
-	// for resume.
-	ContextArtifactRef string `json:"context_artifact_ref,omitempty"`
+	// Entries maps context keys to their artifact metadata. Keys are
+	// hierarchical strings with forward-slash separators. An empty
+	// map means no context has been stored for this principal.
+	Entries map[string]ContextEntry `json:"entries,omitempty"`
+}
 
-	// SessionID is the session that produced this context snapshot.
-	// Used for consistency checking during resume — if the session ID
-	// doesn't match expectations, the context may be stale or from a
-	// different session lineage.
+// ContextEntry describes a single named context artifact in the index.
+// The artifact content itself lives in the artifact service; this entry
+// holds only the ref and enough metadata for callers to decide whether
+// to fetch the full content.
+type ContextEntry struct {
+	// ArtifactRef is the artifact ref (BLAKE3 hex hash or short ref)
+	// pointing to the content in the artifact service.
+	ArtifactRef string `json:"artifact_ref"`
+
+	// Size is the uncompressed content size in bytes.
+	Size int64 `json:"size"`
+
+	// ContentType is the MIME type of the stored content (e.g.,
+	// "application/json", "text/markdown").
+	ContentType string `json:"content_type"`
+
+	// ModifiedAt is the ISO 8601 timestamp when this entry was last
+	// written or updated.
+	ModifiedAt string `json:"modified_at"`
+
+	// SessionID is the session that produced this context entry.
+	// Required for conversation context entries (key "conversation")
+	// where it enables consistency checking during resume. Optional
+	// for other entry types.
 	SessionID string `json:"session_id,omitempty"`
 
 	// MessageCount is the number of messages in the stored context.
-	MessageCount int `json:"message_count"`
+	// Only meaningful for conversation context entries; zero for
+	// other types.
+	MessageCount int `json:"message_count,omitempty"`
 
-	// TokenCount is the approximate token count of the stored context.
-	// This is the estimate from the context manager, not a precise
-	// count from the tokenizer.
-	TokenCount int64 `json:"token_count"`
-
-	// UpdatedAt is the ISO 8601 timestamp of the last context update.
-	UpdatedAt string `json:"updated_at,omitempty"`
+	// TokenCount is the approximate token count of the stored
+	// context. Only meaningful for conversation context entries;
+	// zero for other types.
+	TokenCount int64 `json:"token_count,omitempty"`
 }
 
 // Validate checks that all required fields are present and well-formed.
@@ -164,10 +190,24 @@ func (content *AgentContextContent) Validate() error {
 	if content.Version < 1 {
 		return fmt.Errorf("agent context: version must be >= 1, got %d", content.Version)
 	}
-	// If a context artifact ref is set, the session ID that produced
-	// it must also be recorded for consistency checking.
-	if content.ContextArtifactRef != "" && content.SessionID == "" {
-		return errors.New("agent context: session_id is required when context_artifact_ref is set")
+	for key, entry := range content.Entries {
+		if err := entry.Validate(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Validate checks that all required fields of a ContextEntry are present.
+func (entry *ContextEntry) Validate(key string) error {
+	if entry.ArtifactRef == "" {
+		return fmt.Errorf("agent context: entry %q: artifact_ref is required", key)
+	}
+	if entry.ContentType == "" {
+		return fmt.Errorf("agent context: entry %q: content_type is required", key)
+	}
+	if entry.ModifiedAt == "" {
+		return fmt.Errorf("agent context: entry %q: modified_at is required", key)
 	}
 	return nil
 }

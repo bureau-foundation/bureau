@@ -47,6 +47,10 @@
 //   - status: health check (unauthenticated)
 //   - get-session: read session state for a principal
 //   - start-session: mark a session as active
-//   - end-session: mark a session as complete, store log artifact
+//   - end-session: mark a session as complete, store log artifact ref
+//   - set-context: write a named context entry (artifact ref + metadata)
+//   - get-context: read a single context entry by key
+//   - delete-context: remove a context entry
+//   - list-context: list context entries, optionally filtered by key prefix
 //   - get-metrics: read aggregated metrics for a principal
 package main

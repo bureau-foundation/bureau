@@ -26,8 +26,10 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	// Empty ICE config means host candidates only (loopback).
-	config := ICEConfig{}
+	// Loopback-only: restricts ICE candidate gathering to the lo interface,
+	// avoiding 52+ virtual interfaces that would each add 200ms of failed
+	// connectivity checks.
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	// Transport A (client/dialer side).
 	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
@@ -88,7 +90,7 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	config := ICEConfig{}
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
@@ -137,7 +139,7 @@ func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 func TestWebRTCTransport_ConcurrentDials(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	config := ICEConfig{}
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
@@ -202,7 +204,7 @@ func TestWebRTCTransport_Address(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/workstation", ICEConfig{}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "machine/workstation", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	defer wt.Close()
 
 	if address := wt.Address(); address != "machine/workstation" {
@@ -216,7 +218,7 @@ func TestWebRTCTransport_DialAfterClose(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	wt.Close()
 
 	_, err := wt.DialContext(context.Background(), "machine/beta")
@@ -231,7 +233,7 @@ func TestWebRTCTransport_DialAfterClose(t *testing.T) {
 func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	config := ICEConfig{}
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
 	defer transportA.Close()
@@ -294,7 +296,7 @@ func TestWebRTCTransport_UpdateICEConfig(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	defer wt.Close()
 
 	// Initially empty.
@@ -310,7 +312,7 @@ func TestWebRTCTransport_UpdateICEConfig(t *testing.T) {
 		Password: "pass",
 		URIs:     []string{"turn:turn.local:3478"},
 		TTL:      86400,
-	}))
+	}, LoopbackInterfaceFilter))
 
 	wt.configMu.RLock()
 	if len(wt.iceConfig.Servers) != 1 {
@@ -409,7 +411,7 @@ func TestMemorySignaler_IndependentConsumers(t *testing.T) {
 func TestWebRTCTransport_AuthenticatedConnection(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	config := ICEConfig{}
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	publicKeyAlpha, privateKeyAlpha, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -469,7 +471,7 @@ func TestWebRTCTransport_AuthenticatedConnection(t *testing.T) {
 func TestWebRTCTransport_AuthenticationFailure(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	config := ICEConfig{}
+	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	publicKeyAlpha, privateKeyAlpha, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

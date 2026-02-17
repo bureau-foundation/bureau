@@ -74,6 +74,25 @@ func matchAnswerKey(stateKey, localpart string) (string, bool) {
 	return peer, true
 }
 
+// SignalNotifier is an optional interface that Signaler implementations
+// can provide to enable event-driven signaling. When the signaler
+// supports notifications, the transport wakes immediately on new signals
+// instead of waiting for the next poll interval.
+//
+// MemorySignaler implements this for instant wakeup in tests.
+// MatrixSignaler does not — it falls back to periodic polling.
+type SignalNotifier interface {
+	// Subscribe returns a channel that receives a value whenever new
+	// signals are published. The channel is buffered (size 1) and sends
+	// are non-blocking, so missed notifications are harmless — the
+	// transport always calls Poll to get the actual data.
+	//
+	// Each call returns a new independent channel. The caller does not
+	// need to unsubscribe; the channel is simply abandoned when no
+	// longer needed.
+	Subscribe() <-chan struct{}
+}
+
 // SignalMessage represents a signaling message (offer or answer).
 type SignalMessage struct {
 	// PeerLocalpart is the machine localpart of the other party.

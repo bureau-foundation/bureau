@@ -9,18 +9,27 @@ import (
 	"time"
 )
 
-// Compile-time interface check.
-var _ Signaler = (*MemorySignaler)(nil)
+// Compile-time interface checks.
+var (
+	_ Signaler       = (*MemorySignaler)(nil)
+	_ SignalNotifier = (*MemorySignaler)(nil)
+)
 
 // MemorySignaler is an in-process Signaler for tests. Offers and answers
 // are exchanged through an internal map, bypassing Matrix entirely. Two
 // WebRTCTransport instances sharing the same MemorySignaler can establish
 // PeerConnections without any network signaling.
+//
+// MemorySignaler also implements SignalNotifier — subscribers are woken
+// immediately when signals are published, eliminating poll latency in tests.
 type MemorySignaler struct {
 	mu       sync.Mutex
 	offers   map[string]SignalMessage // key: "offerer|target"
 	answers  map[string]SignalMessage // key: "offerer|target"
 	lastSeen map[string]time.Time     // key: "offerer|target" — tracks per-consumer state
+
+	subscriberMu sync.Mutex
+	subscribers  []chan struct{}
 }
 
 // NewMemorySignaler creates a new in-process signaler.
@@ -32,29 +41,55 @@ func NewMemorySignaler() *MemorySignaler {
 	}
 }
 
+// Subscribe returns a channel that receives a value whenever a new offer
+// or answer is published. See SignalNotifier for semantics.
+func (s *MemorySignaler) Subscribe() <-chan struct{} {
+	channel := make(chan struct{}, 1)
+	s.subscriberMu.Lock()
+	s.subscribers = append(s.subscribers, channel)
+	s.subscriberMu.Unlock()
+	return channel
+}
+
+// notifySubscribers wakes all subscribers. Non-blocking send: if a
+// subscriber hasn't consumed the previous notification, the new one
+// is dropped (the subscriber will Poll on wakeup anyway).
+func (s *MemorySignaler) notifySubscribers() {
+	s.subscriberMu.Lock()
+	defer s.subscriberMu.Unlock()
+	for _, channel := range s.subscribers {
+		select {
+		case channel <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *MemorySignaler) PublishOffer(_ context.Context, localpart, targetLocalpart, sdp string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := localpart + signalingSeparator + targetLocalpart
 	s.offers[key] = SignalMessage{
 		PeerLocalpart: localpart,
 		SDP:           sdp,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	s.mu.Unlock()
+
+	s.notifySubscribers()
 	return nil
 }
 
 func (s *MemorySignaler) PublishAnswer(_ context.Context, offererLocalpart, localpart, sdp string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := offererLocalpart + signalingSeparator + localpart
 	s.answers[key] = SignalMessage{
 		PeerLocalpart: localpart,
 		SDP:           sdp,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	s.mu.Unlock()
+
+	s.notifySubscribers()
 	return nil
 }
 
@@ -74,12 +109,12 @@ func (s *MemorySignaler) pollSignals(localpart string, store map[string]SignalMe
 
 	var messages []SignalMessage
 
-	for key, msg := range store {
+	for key, message := range store {
 		if _, ok := match(key, localpart); !ok {
 			continue
 		}
 
-		timestamp, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
+		timestamp, err := time.Parse(time.RFC3339Nano, message.Timestamp)
 		if err != nil {
 			continue
 		}
@@ -90,7 +125,7 @@ func (s *MemorySignaler) pollSignals(localpart string, store map[string]SignalMe
 		}
 		s.lastSeen[seenKey] = timestamp
 
-		messages = append(messages, msg)
+		messages = append(messages, message)
 	}
 
 	return messages, nil

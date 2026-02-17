@@ -38,10 +38,6 @@ const answerPollInterval = 500 * time.Millisecond
 // answerTimeout is the maximum time to wait for an SDP answer before giving up.
 const answerTimeout = 30 * time.Second
 
-// iceConnectTimeout is the maximum time to wait for a PeerConnection to
-// reach the Connected state after setting the remote description.
-const iceConnectTimeout = 30 * time.Second
-
 // WebRTCTransport provides daemon-to-daemon communication over WebRTC
 // data channels. It implements both Listener and Dialer because both
 // directions share the same pool of PeerConnections.
@@ -380,10 +376,31 @@ func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerStat
 }
 
 // waitForAnswer polls the signaler for an SDP answer from the specified peer.
+// When the signaler implements SignalNotifier, checks happen immediately on
+// each notification rather than waiting for the next poll interval.
 func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerLocalpart string) (string, error) {
+	var notifications <-chan struct{}
+	if notifier, ok := wt.signaler.(SignalNotifier); ok {
+		notifications = notifier.Subscribe()
+	}
+
 	deadline := time.After(answerTimeout)
 	ticker := time.NewTicker(answerPollInterval)
 	defer ticker.Stop()
+
+	checkAnswers := func() (string, bool) {
+		answers, err := wt.signaler.PollAnswers(ctx, wt.localpart)
+		if err != nil {
+			wt.logger.Warn("polling for SDP answer failed", "error", err)
+			return "", false
+		}
+		for _, answer := range answers {
+			if answer.PeerLocalpart == peerLocalpart {
+				return answer.SDP, true
+			}
+		}
+		return "", false
+	}
 
 	for {
 		select {
@@ -394,15 +411,12 @@ func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerLocalpart stri
 		case <-wt.closed:
 			return "", net.ErrClosed
 		case <-ticker.C:
-			answers, err := wt.signaler.PollAnswers(ctx, wt.localpart)
-			if err != nil {
-				wt.logger.Warn("polling for SDP answer failed", "error", err)
-				continue
+			if sdp, ok := checkAnswers(); ok {
+				return sdp, nil
 			}
-			for _, answer := range answers {
-				if answer.PeerLocalpart == peerLocalpart {
-					return answer.SDP, nil
-				}
+		case <-notifications:
+			if sdp, ok := checkAnswers(); ok {
+				return sdp, nil
 			}
 		}
 	}
@@ -410,7 +424,16 @@ func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerLocalpart stri
 
 // signalingPoller runs in the background and checks for incoming SDP offers
 // from peer daemons.
+//
+// When the signaler implements SignalNotifier (e.g., MemorySignaler in
+// tests), the poller wakes immediately on new signals. Otherwise it falls
+// back to periodic polling at signalingPollInterval.
 func (wt *WebRTCTransport) signalingPoller(ctx context.Context) {
+	var notifications <-chan struct{}
+	if notifier, ok := wt.signaler.(SignalNotifier); ok {
+		notifications = notifier.Subscribe()
+	}
+
 	ticker := time.NewTicker(signalingPollInterval)
 	defer ticker.Stop()
 
@@ -421,6 +444,8 @@ func (wt *WebRTCTransport) signalingPoller(ctx context.Context) {
 		case <-wt.closed:
 			return
 		case <-ticker.C:
+			wt.processInboundOffers(ctx)
+		case <-notifications:
 			wt.processInboundOffers(ctx)
 		}
 	}
@@ -849,6 +874,7 @@ func (wt *WebRTCTransport) newPeerConnection() (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{
 		ICEServers: wt.iceConfig.Servers,
 	}
+	interfaceFilter := wt.iceConfig.InterfaceFilter
 	wt.configMu.RUnlock()
 
 	// Use a SettingEngine to enable data channel detach (required for
@@ -858,6 +884,11 @@ func (wt *WebRTCTransport) newPeerConnection() (*webrtc.PeerConnection, error) {
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.DetachDataChannels()
 	settingEngine.SetIncludeLoopbackCandidate(true)
+
+	if interfaceFilter == nil {
+		return nil, fmt.Errorf("ICEConfig.InterfaceFilter is required — use LoopbackInterfaceFilter for tests or ExcludeVirtualInterfaceFilter for production")
+	}
+	settingEngine.SetInterfaceFilter(interfaceFilter)
 
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 	return api.NewPeerConnection(config)

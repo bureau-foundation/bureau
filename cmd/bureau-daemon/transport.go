@@ -39,7 +39,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 		d.logger.Warn("failed to fetch TURN credentials, using host candidates only", "error", err)
 		// Proceed without TURN — host/srflx candidates may suffice on LAN.
 	}
-	iceConfig := transport.ICEConfigFromTURN(turn)
+	iceConfig := transport.ICEConfigFromTURN(turn, transport.ExcludeVirtualInterfaceFilter)
 
 	// Create the Matrix signaler for SDP exchange.
 	signaler := transport.NewMatrixSignaler(d.session, d.machineRoomID, d.logger)
@@ -170,7 +170,7 @@ func (d *Daemon) refreshTURNCredentials(ctx context.Context, webrtcTransport *tr
 				d.logger.Warn("TURN credential refresh failed", "error", err)
 				continue
 			}
-			webrtcTransport.UpdateICEConfig(transport.ICEConfigFromTURN(turn))
+			webrtcTransport.UpdateICEConfig(transport.ICEConfigFromTURN(turn, transport.ExcludeVirtualInterfaceFilter))
 			d.logger.Debug("TURN credentials refreshed")
 		}
 	}

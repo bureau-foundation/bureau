@@ -28,6 +28,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -617,6 +618,18 @@ func findPipelineEvent(t *testing.T, events []messaging.Event) map[string]any {
 
 // --- Pipeline Test Helpers ---
 
+// runnerEnvOnce caches the result of the single nix build invocation so
+// parallel tests don't each spawn their own nix build process. Under
+// --runs_per_test=10 with 4 pipeline-using tests per process, the
+// uncached version created 40 concurrent nix build calls that contended
+// on the Nix daemon's store lock.
+var (
+	runnerEnvOnce      sync.Once
+	runnerEnvPath      string
+	runnerEnvSkipReason string // non-empty means skip (Nix unavailable or build failed)
+	runnerEnvFatalMsg  string // non-empty means fatal (broken Nix derivation)
+)
+
 // findRunnerEnv builds the Nix integration-test-env and returns the store
 // path. The integration-test-env provides a shell and coreutils needed by
 // sandbox commands (pipeline steps, workspace scripts) inside bwrap sandboxes.
@@ -626,39 +639,57 @@ func findPipelineEvent(t *testing.T, events []messaging.Event) map[string]any {
 func findRunnerEnv(t *testing.T) string {
 	t.Helper()
 
-	// The nix binary is at a well-known path, not necessarily in PATH
-	// when running under Bazel.
-	nixBinary := "/nix/var/nix/profiles/default/bin/nix"
-	if _, err := os.Stat(nixBinary); err != nil {
-		t.Skip("nix not available: integration tests requiring sandbox environments need Nix")
-	}
-
-	cmd := exec.Command(nixBinary, "build", ".#integration-test-env",
-		"--print-out-paths", "--no-link")
-	cmd.Dir = workspaceRoot
-	output, err := cmd.Output()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			t.Skipf("nix build .#integration-test-env failed: %v\nstderr: %s", err, exitError.Stderr)
+	runnerEnvOnce.Do(func() {
+		// The nix binary is at a well-known path, not necessarily in PATH
+		// when running under Bazel.
+		nixBinary := "/nix/var/nix/profiles/default/bin/nix"
+		if _, err := os.Stat(nixBinary); err != nil {
+			runnerEnvSkipReason = "nix not available: integration tests requiring sandbox environments need Nix"
+			return
 		}
-		t.Skipf("nix build .#integration-test-env failed: %v", err)
-	}
 
-	storePath := strings.TrimSpace(string(output))
-	if storePath == "" {
-		t.Skip("nix build .#integration-test-env produced empty output")
-	}
+		cmd := exec.Command(nixBinary, "build", ".#integration-test-env",
+			"--print-out-paths", "--no-link")
+		cmd.Dir = workspaceRoot
+		output, err := cmd.Output()
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed: %v\nstderr: %s", err, exitError.Stderr)
+			} else {
+				runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed: %v", err)
+			}
+			return
+		}
 
-	// Verify the store path has the expected bin directory with a shell.
-	binDirectory := filepath.Join(storePath, "bin")
-	if _, err := os.Stat(binDirectory); err != nil {
-		t.Fatalf("integration-test-env bin directory missing at %s: %v", binDirectory, err)
-	}
-	if _, err := os.Stat(filepath.Join(binDirectory, "sh")); err != nil {
-		t.Fatalf("integration-test-env missing sh: %v", err)
-	}
+		storePath := strings.TrimSpace(string(output))
+		if storePath == "" {
+			runnerEnvSkipReason = "nix build .#integration-test-env produced empty output"
+			return
+		}
 
-	return storePath
+		// Verify the store path has the expected bin directory with a shell.
+		// These are fatal (not skip) because a successfully-built derivation
+		// missing its binaries indicates a broken flake output.
+		binDirectory := filepath.Join(storePath, "bin")
+		if _, err := os.Stat(binDirectory); err != nil {
+			runnerEnvFatalMsg = fmt.Sprintf("integration-test-env bin directory missing at %s: %v", binDirectory, err)
+			return
+		}
+		if _, err := os.Stat(filepath.Join(binDirectory, "sh")); err != nil {
+			runnerEnvFatalMsg = fmt.Sprintf("integration-test-env missing sh: %v", err)
+			return
+		}
+
+		runnerEnvPath = storePath
+	})
+
+	if runnerEnvFatalMsg != "" {
+		t.Fatal(runnerEnvFatalMsg)
+	}
+	if runnerEnvSkipReason != "" {
+		t.Skip(runnerEnvSkipReason)
+	}
+	return runnerEnvPath
 }
 
 // initTestGitRepo creates a regular git repo with one commit on a "main"

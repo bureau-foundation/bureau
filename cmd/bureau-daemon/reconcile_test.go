@@ -2051,6 +2051,53 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 	}
 }
 
+// TestReconcileNoConfig verifies that reconcile handles the M_NOT_FOUND
+// case gracefully — when no MachineConfig state event exists in the config
+// room, the daemon should succeed (treating it as "nothing to do") rather
+// than failing.
+func TestReconcileNoConfig(t *testing.T) {
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = "machine/test"
+	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.serverName = "bureau.local"
+	daemon.configRoomID = "!config:test"
+	daemon.machineRoomID = "!machine:test"
+	daemon.serviceRoomID = "!service:test"
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	// The mock has no state event for m.bureau.machine_config, so the
+	// mock returns M_NOT_FOUND. Reconcile should treat this as "no config yet"
+	// and return nil.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile with no config should succeed, got: %v", err)
+	}
+
+	if len(daemon.running) != 0 {
+		t.Errorf("no principals should be running, got %d", len(daemon.running))
+	}
+}
+
 func TestTailLines(t *testing.T) {
 	tests := []struct {
 		name  string

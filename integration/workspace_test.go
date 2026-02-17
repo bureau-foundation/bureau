@@ -4,14 +4,13 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"os"
-	"runtime"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -278,29 +277,39 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	// --- Publish agent template ---
 	// The agent principal needs a sandbox command that stays alive. The
-	// runner environment provides coreutils (including sleep).
-	_, err = admin.SendStateEvent(ctx, templateRoomID,
-		schema.EventTypeTemplate, "test-ws-agent", schema.TemplateContent{
-			Description: "Long-running agent for workspace CLI integration tests",
-			Command:     []string{"sleep", "infinity"},
-			Environment: runnerEnv,
-			Namespaces:  &schema.TemplateNamespaces{PID: true},
-			Security: &schema.TemplateSecurity{
-				NewSession:    true,
-				DieWithParent: true,
-				NoNewPrivs:    true,
-			},
-			Filesystem: []schema.TemplateMount{
-				{Dest: "/tmp", Type: "tmpfs"},
-			},
-			CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-			EnvironmentVariables: map[string]string{
-				"HOME": "/workspace",
-				"TERM": "xterm-256color",
-			},
-		})
+	// runner environment provides coreutils (including sleep). Uses the
+	// production template.Push path to exercise room resolution and
+	// state event publication identically to "bureau template push".
+	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-ws-agent")
 	if err != nil {
-		t.Fatalf("publish agent template: %v", err)
+		t.Fatalf("parse agent template ref: %v", err)
+	}
+	_, err = template.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
+		Description: "Long-running agent for workspace CLI integration tests",
+		Command:     []string{"sleep", "infinity"},
+		Environment: runnerEnv,
+		Namespaces:  &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Dest: "/tmp", Type: "tmpfs"},
+			// Mount the workspace root read-only so the agent can access
+			// project directories created by the setup pipeline. The
+			// launcher expands ${WORKSPACE_ROOT} to the machine's actual
+			// workspace directory at sandbox creation time.
+			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: "ro"},
+		},
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME": "/workspace",
+			"TERM": "xterm-256color",
+		},
+	}, testServerName)
+	if err != nil {
+		t.Fatalf("push agent template: %v", err)
 	}
 
 	// --- Create seed git repo ---
@@ -347,8 +356,8 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 		"--server-name", testServerName,
 	)
 
-	// Resolve the workspace room created by the CLI so we can poll its
-	// status and pass it to waitForWorkspaceStatus.
+	// Resolve the workspace room created by the CLI so we can watch its
+	// status transitions.
 	workspaceRoomID, err := admin.ResolveAlias(ctx, "#wscli/main:"+testServerName)
 	if err != nil {
 		t.Fatalf("resolve workspace room created by CLI: %v", err)
@@ -361,13 +370,50 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// sandbox. The executor runs dev-workspace-init: clones the seed repo,
 	// publishes workspace status "active".
 	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active", 120*time.Second)
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active")
 	t.Log("workspace status is 'active' — setup pipeline completed")
 
-	// --- Phase 3: Verify agent started ---
+	// Verify the pipeline published a structured result. This catches
+	// pipelines that change status but fail partway through — the result
+	// event records the conclusion and per-step outcomes.
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", "success")
+
+	// Verify the workspace state event contains the expected content.
+	// The pipeline publishes this via Matrix (not filesystem), so reading
+	// it back from Matrix state proves the pipeline's publish step
+	// executed correctly and the data is available to other systems.
+	workspaceStateRaw, err := admin.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
+	if err != nil {
+		t.Fatalf("read workspace state after setup: %v", err)
+	}
+	var activeState schema.WorkspaceState
+	if err := json.Unmarshal(workspaceStateRaw, &activeState); err != nil {
+		t.Fatalf("unmarshal workspace state: %v", err)
+	}
+	if activeState.Project != "wscli" {
+		t.Errorf("workspace state project = %q, want %q", activeState.Project, "wscli")
+	}
+	if activeState.Machine != machine.Name {
+		t.Errorf("workspace state machine = %q, want %q", activeState.Machine, machine.Name)
+	}
+	t.Logf("workspace state verified: project=%s, machine=%s, status=%s", activeState.Project, activeState.Machine, activeState.Status)
+
+	// --- Phase 3: Verify agent started and its proxy works ---
 	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
 	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
+
+	// Verify the agent's proxy correctly injects credentials by calling
+	// whoami through the proxy. This proves the full chain: daemon reads
+	// encrypted credentials from Matrix → decrypts with machine key →
+	// passes to launcher → launcher configures proxy → proxy injects
+	// token on HTTP requests.
+	agentProxyClient := proxyHTTPClient(agentSocket)
+	agentIdentity := proxyWhoami(t, agentProxyClient)
+	if agentIdentity != agentAccount.UserID {
+		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
+	}
+	t.Log("agent proxy identity verified: " + agentIdentity)
 
 	// --- Phase 4: Destroy workspace via CLI ---
 	t.Log("phase 4: running 'bureau workspace destroy'")
@@ -382,8 +428,11 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
 	// Teardown pipeline (dev-workspace-deinit) runs and publishes "archived".
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived", 30*time.Second)
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived")
 	t.Log("workspace status is 'archived' — teardown pipeline completed")
+
+	// Verify teardown pipeline published a successful result.
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", "success")
 
 	t.Log("full CLI-driven workspace lifecycle verified: create → active → destroy → archived")
 }
@@ -421,49 +470,117 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 	return response.RoomID
 }
 
-// waitForWorkspaceStatus polls the workspace room for the
-// m.bureau.workspace state event until its status field matches the
-// expected value or the context expires. Uses the test context for
-// timeout bounding instead of wall-clock deadlines.
-func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, expectedStatus string, timeout time.Duration) {
+// waitForWorkspaceStatus waits for the workspace room's m.bureau.workspace
+// state event to reach the expected status. Uses Matrix /sync long-polling
+// (via room watch) instead of polling GetStateEvent — the server holds the
+// connection until events arrive, consuming zero CPU while waiting.
+//
+// The watch is created BEFORE checking current state, so events that arrive
+// between the GetStateEvent check and the first /sync are not lost.
+// Bounded by t.Context() (test timeout), not an explicit deadline.
+func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, expectedStatus string) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), timeout)
-	defer cancel()
+	// Create the watch first to capture the sync stream position. Events
+	// arriving after this point are guaranteed to be delivered by
+	// WaitForEvent, even if they arrive before we check GetStateEvent.
+	watch := watchRoom(t, session, roomID)
 
-	for {
-		content, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
-		if err == nil {
-			var state schema.WorkspaceState
-			if unmarshalError := json.Unmarshal(content, &state); unmarshalError == nil {
-				if state.Status == expectedStatus {
-					return
-				}
-			}
+	// Check whether the status already matches. This handles the case
+	// where the pipeline completed before we started watching (the setup
+	// pipeline is fast and may finish before the test resolves the room
+	// alias and calls this function).
+	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorkspace, "")
+	if err == nil {
+		var state schema.WorkspaceState
+		if json.Unmarshal(content, &state) == nil && state.Status == expectedStatus {
+			return
 		}
-		if ctx.Err() != nil {
-			// Read the current status for the error message.
-			currentStatus := "(unknown)"
-			if content != nil {
-				var state schema.WorkspaceState
-				if json.Unmarshal(content, &state) == nil {
-					currentStatus = state.Status
-				}
-			}
-			// Read pipeline_result state events for diagnostic detail.
-			// Both init and deinit pipelines publish results; dump
-			// whichever exist to help identify which step failed.
-			diagCtx, diagCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer diagCancel()
-			for _, pipelineName := range []string{"dev-workspace-init", "dev-workspace-deinit"} {
-				resultContent, resultError := session.GetStateEvent(diagCtx, roomID, schema.EventTypePipelineResult, pipelineName)
-				if resultError == nil {
-					t.Logf("pipeline_result (%s): %s", pipelineName, string(resultContent))
-				}
-			}
-			t.Fatalf("timed out after %s waiting for workspace status %q in room %s (current: %s)",
-				timeout, expectedStatus, roomID, currentStatus)
-		}
-		runtime.Gosched()
 	}
+
+	// Wait for the workspace status to transition via /sync. The predicate
+	// filters for workspace state events with the expected status, ignoring
+	// intermediate transitions (e.g., "pending" → "active" when waiting for
+	// "active", or "teardown" events when waiting for "archived").
+	watch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.EventTypeWorkspace {
+			return false
+		}
+		if event.StateKey == nil || *event.StateKey != "" {
+			return false
+		}
+		contentJSON, marshalError := json.Marshal(event.Content)
+		if marshalError != nil {
+			return false
+		}
+		var state schema.WorkspaceState
+		if json.Unmarshal(contentJSON, &state) != nil {
+			return false
+		}
+		return state.Status == expectedStatus
+	}, fmt.Sprintf("workspace status %q in room %s", expectedStatus, roomID))
+}
+
+// verifyPipelineResult waits for and verifies the m.bureau.pipeline_result
+// state event published by the pipeline executor. The result event is
+// published AFTER the pipeline's own publish steps (e.g., workspace status
+// "active"), so it may not exist yet when the workspace status watch returns.
+// Uses the same watch-then-check pattern as waitForWorkspaceStatus.
+func verifyPipelineResult(t *testing.T, session *messaging.Session, roomID, pipelineName, expectedConclusion string) {
+	t.Helper()
+
+	// Set up watch before checking current state, same as waitForWorkspaceStatus.
+	watch := watchRoom(t, session, roomID)
+
+	// Check if the result already exists.
+	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypePipelineResult, pipelineName)
+	if err == nil {
+		checkPipelineResultContent(t, content, pipelineName, expectedConclusion)
+		return
+	}
+
+	// Wait for the pipeline_result state event to arrive.
+	raw := watch.WaitForStateEvent(t, schema.EventTypePipelineResult, pipelineName)
+	checkPipelineResultContent(t, raw, pipelineName, expectedConclusion)
+}
+
+// checkPipelineResultContent unmarshals and verifies the pipeline result
+// content. Separated from verifyPipelineResult so both the immediate-check
+// and sync-wait paths share the same validation logic.
+func checkPipelineResultContent(t *testing.T, content json.RawMessage, pipelineName, expectedConclusion string) {
+	t.Helper()
+
+	var result schema.PipelineResultContent
+	if err := json.Unmarshal(content, &result); err != nil {
+		t.Fatalf("unmarshal pipeline_result for %q: %v", pipelineName, err)
+	}
+
+	if result.Conclusion != expectedConclusion {
+		t.Errorf("pipeline %q conclusion = %q, want %q", pipelineName, result.Conclusion, expectedConclusion)
+		if result.FailedStep != "" {
+			t.Errorf("  failed step: %s", result.FailedStep)
+		}
+		if result.ErrorMessage != "" {
+			t.Errorf("  error: %s", result.ErrorMessage)
+		}
+		for _, step := range result.StepResults {
+			t.Logf("  step %q: %s (%dms)", step.Name, step.Status, step.DurationMS)
+		}
+	}
+
+	if result.PipelineRef == "" {
+		t.Errorf("pipeline %q result has empty pipeline_ref", pipelineName)
+	}
+	if result.StepCount < 1 {
+		t.Errorf("pipeline %q result has step_count = %d, want >= 1", pipelineName, result.StepCount)
+	}
+	if result.StartedAt == "" {
+		t.Errorf("pipeline %q result has empty started_at", pipelineName)
+	}
+	if result.CompletedAt == "" {
+		t.Errorf("pipeline %q result has empty completed_at", pipelineName)
+	}
+
+	t.Logf("pipeline %q: conclusion=%s, steps=%d, duration=%dms",
+		pipelineName, result.Conclusion, result.StepCount, result.DurationMS)
 }

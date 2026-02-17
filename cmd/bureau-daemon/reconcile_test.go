@@ -1475,7 +1475,7 @@ func TestMintServiceTokens(t *testing.T) {
 	}
 
 	// Verify the token file exists.
-	tokenPath := filepath.Join(tokenDir, "ticket")
+	tokenPath := filepath.Join(tokenDir, "ticket.token")
 	tokenBytes, err := os.ReadFile(tokenPath)
 	if err != nil {
 		t.Fatalf("reading token file: %v", err)
@@ -1575,7 +1575,7 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 
 	// Verify both token files exist.
 	for _, role := range []string{"ticket", "artifact"} {
-		tokenPath := filepath.Join(tokenDir, role)
+		tokenPath := filepath.Join(tokenDir, role+".token")
 		if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
 			t.Errorf("token file for %q should exist", role)
 		}

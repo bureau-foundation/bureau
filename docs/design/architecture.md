@@ -211,12 +211,12 @@ under `/run/bureau/`:
 ├── proxy.sock                  Credential injection proxy (HTTP)
 ├── payload.json                Principle configuration (read-only)
 ├── trigger.json                Triggering event content (read-only, conditional)
-├── tokens/                     Service identity tokens
-│   ├── <role>                  One file per required service
-│   └── ...
 └── service/
     ├── <role>.sock             One socket per required service
-    └── ...
+    ├── ...
+    └── token/
+        ├── <role>.token        Identity token per required service
+        └── ...
 ```
 
 Plus the workspace at `/workspace/` (writable git worktree, if the
@@ -263,27 +263,24 @@ The pipeline executor exposes top-level keys from trigger.json as
 `EVENT_status`). This connects the triggering event to pipeline
 variable substitution.
 
-### tokens/
-
-Directory containing per-service bearer tokens. Each file is named
-after the service role (e.g., `ticket`, `artifact`) and contains raw
-bytes: a CBOR-encoded token payload with the principal's identity and
-pre-resolved grants, followed by a 64-byte Ed25519 signature.
-
-The principle processes read the appropriate token file as opaque bytes before
-each service request and includes it in the request. The service verifies
-the signature, checks expiry, and uses the embedded grants for
-authorization.
-
-The daemon refreshes tokens before they expire by writing new files to
-the host-side token directory (directory-bind-mounted, so updates
-appear immediately inside the sandbox).
-
 ### service/
 
-Unix sockets connecting to Bureau services, one per required service
-role. The layout is flat: `/run/bureau/service/<role>.sock`. The
-template's `RequiredServices` list determines which sockets appear.
+Unix sockets and identity tokens for Bureau services, grouped under the
+service directory. Sockets live at the top level
+(`/run/bureau/service/<role>.sock`) and identity tokens live in a `token/`
+subdirectory (`/run/bureau/service/token/<role>.token`). The template's
+`RequiredServices` list determines which entries appear.
+
+Each token file contains raw bytes: a CBOR-encoded token payload with
+the principal's identity and pre-resolved grants, followed by a
+64-byte Ed25519 signature. The principal reads the appropriate token
+file as opaque bytes before each service request and includes it in
+the request. The service verifies the signature, checks expiry, and
+uses the embedded grants for authorization.
+
+The daemon refreshes tokens before they expire by writing new files to
+the host-side service directory (directory-bind-mounted, so updates
+appear immediately inside the sandbox).
 
 Bureau-internal services use CBOR request-response. External service
 sockets (proxied) use HTTP. The principle doesn't need to know which
@@ -560,7 +557,7 @@ request-response cycle:
    item's length is encoded in its header, so no framing protocol is
    needed beyond what CBOR provides. The request includes an `action`
    field (string identifying the operation) and a `token` field (raw
-   bytes from `/run/bureau/tokens/<role>`, for authenticated operations)
+   bytes from `/run/bureau/service/token/<role>.token`, for authenticated operations)
 3. Server decodes the request, dispatches on `action`, verifies the
    token if the action requires authentication
 4. Server writes a single CBOR item as the response

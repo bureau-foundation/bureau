@@ -238,9 +238,9 @@ What the sandbox deliberately exposes:
   what it should do
 - `/run/bureau/trigger.json` — the event that started this principal
   (when launched by a StartCondition)
-- `/run/bureau/tokens/<role>` — service identity tokens for
-  authenticating to Bureau services
 - `/run/bureau/service/<role>.sock` — direct sockets to Bureau services
+- `/run/bureau/service/token/<role>.token` — service identity tokens for
+  authenticating to Bureau services, in the token subdirectory
 - `/workspace/` — a writable git worktree (for principals that need one)
 - Inherited file descriptors (stdin/stdout/stderr) — this is how
   observation works; the PTY crosses the namespace boundary via fd
@@ -576,7 +576,7 @@ The principal never knows the difference.
 Callers authenticate to Bureau-internal services via service identity
 tokens: CBOR-encoded payloads carrying the caller's identity and
 pre-resolved grants, signed with Ed25519. The daemon mints tokens at
-sandbox creation time and writes them to `/run/bureau/tokens/<role>`.
+sandbox creation time and writes them to `/run/bureau/service/token/<role>.token`.
 The principal reads the token file as opaque bytes and includes it in
 each service request. The service verifies the signature, checks
 expiry, and uses the embedded grants for authorization.
@@ -693,7 +693,7 @@ A coding agent working on a ticket:
 ```
 Template published to #bureau/template
   → daemon reconciles, creates sandbox via launcher
-  → sandbox gets proxy.sock, payload.json, tokens/, service/ticket.sock
+  → sandbox gets proxy.sock, payload.json, service/ticket.sock, service/token/ticket.token
   → agent reads payload, claims ticket via ticket service socket
   → agent reads workspace, makes changes
   → agent calls external APIs through proxy (credentials injected)

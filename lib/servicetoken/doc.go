@@ -29,7 +29,7 @@
 // # Token lifecycle
 //
 //   - Daemon mints tokens at sandbox creation (one per required service)
-//   - Tokens are written to /run/bureau/tokens/<service-role> inside the sandbox
+//   - Tokens are written to /run/bureau/service/token/<service-role>.token inside the sandbox
 //   - Agents read the token file before each service request
 //   - Daemon refreshes tokens at 80% of the TTL (atomic write + rename)
 //   - Services reject expired tokens unconditionally

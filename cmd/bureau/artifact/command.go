@@ -28,11 +28,11 @@ import (
 
 // Sandbox-standard paths for the artifact service role. When an agent
 // declares required_services: ["artifact"], the daemon bind-mounts the
-// artifact service socket at this path and writes a service token to
-// the tokens directory.
+// artifact service socket and writes a service token in the token
+// subdirectory.
 const (
 	sandboxSocketPath = "/run/bureau/service/artifact.sock"
-	sandboxTokenPath  = "/run/bureau/tokens/artifact"
+	sandboxTokenPath  = "/run/bureau/service/token/artifact.token"
 )
 
 // Command returns the top-level "artifact" command with all subcommands.
@@ -134,9 +134,10 @@ func defaultArtifactSocketPath() string {
 }
 
 // defaultArtifactTokenPath returns the default artifact service token path.
-// Inside a sandbox, the daemon-provisioned token at /run/bureau/tokens/artifact
-// is used. Outside a sandbox, the same path is returned as a fallback
-// (it will only exist if the daemon minted tokens for this principal).
+// Inside a sandbox, the daemon-provisioned token at
+// /run/bureau/service/token/artifact.token is used. Outside a sandbox,
+// the same path is returned as a fallback (it will only exist if the
+// daemon minted tokens for this principal).
 func defaultArtifactTokenPath() string {
 	if _, err := os.Stat(sandboxTokenPath); err == nil {
 		return sandboxTokenPath

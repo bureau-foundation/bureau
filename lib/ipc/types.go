@@ -76,9 +76,11 @@ type Request struct {
 
 	// TokenDirectory is the host-side directory containing pre-minted
 	// service tokens for this principal. When non-empty, the launcher
-	// bind-mounts it read-only at /run/bureau/tokens/ inside the sandbox.
-	// Each file in the directory is named by service role (e.g., "ticket",
-	// "artifact") and contains the raw signed token bytes.
+	// bind-mounts it read-only at /run/bureau/service/token/ inside
+	// the sandbox. Each file is named <role>.token (e.g., "ticket.token",
+	// "artifact.token") and contains the raw signed token bytes. The
+	// directory mount ensures atomic token refresh (write+rename on
+	// host) is visible inside the sandbox via VFS path traversal.
 	TokenDirectory string `cbor:"token_directory,omitempty"`
 
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"

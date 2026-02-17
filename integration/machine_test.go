@@ -591,13 +591,13 @@ func joinConfigRoom(t *testing.T, admin *messaging.Session, configRoomID string,
 
 // readDaemonMintedToken reads a daemon-minted service token from the
 // machine's state directory. The daemon writes tokens to
-// <stateDir>/tokens/<localpart>/<role> during sandbox provisioning.
+// <stateDir>/tokens/<localpart>/<role>.token during sandbox provisioning.
 // Call this after the proxy socket appears (which proves the daemon
 // completed sandbox creation including token minting).
 func readDaemonMintedToken(t *testing.T, machine *testMachine, localpart, serviceRole string) []byte {
 	t.Helper()
 
-	tokenPath := filepath.Join(machine.StateDir, "tokens", localpart, serviceRole)
+	tokenPath := filepath.Join(machine.StateDir, "tokens", localpart, serviceRole+".token")
 	token, err := os.ReadFile(tokenPath)
 	if err != nil {
 		t.Fatalf("read daemon-minted %s token for %s at %s: %v", serviceRole, localpart, tokenPath, err)

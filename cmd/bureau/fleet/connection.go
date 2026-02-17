@@ -14,11 +14,11 @@ import (
 
 // Sandbox-standard paths for the fleet service role. When an agent
 // declares required_services: ["fleet"], the daemon bind-mounts the
-// fleet controller socket at this path and writes a service token to
-// the tokens directory.
+// fleet controller socket and writes a service token in the token
+// subdirectory.
 const (
 	sandboxSocketPath = "/run/bureau/service/fleet.sock"
-	sandboxTokenPath  = "/run/bureau/tokens/fleet"
+	sandboxTokenPath  = "/run/bureau/service/token/fleet.token"
 )
 
 // defaultFleetSocketPath returns the default fleet controller socket path.
@@ -34,9 +34,10 @@ func defaultFleetSocketPath() string {
 }
 
 // defaultFleetTokenPath returns the default fleet service token path.
-// Inside a sandbox, the daemon-provisioned token at /run/bureau/tokens/fleet
-// is used. Outside a sandbox, the same path is returned as a fallback
-// (it will only exist if the daemon minted tokens for this principal).
+// Inside a sandbox, the daemon-provisioned token at
+// /run/bureau/service/token/fleet.token is used. Outside a sandbox,
+// the same path is returned as a fallback (it will only exist if the
+// daemon minted tokens for this principal).
 func defaultFleetTokenPath() string {
 	if _, err := os.Stat(sandboxTokenPath); err == nil {
 		return sandboxTokenPath

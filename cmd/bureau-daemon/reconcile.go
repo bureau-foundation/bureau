@@ -374,8 +374,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		// Mint service tokens for each role. The tokens carry pre-resolved
 		// grants scoped to the service namespace. Written to disk and
-		// bind-mounted read-only at /run/bureau/tokens/ so the agent can
-		// authenticate to services without a daemon round-trip.
+		// bind-mounted read-only at /run/bureau/service/token/ so the agent
+		// can authenticate to services without a daemon round-trip.
 		var tokenDirectory string
 		var mintedTokens []activeToken
 		if len(allServiceRoles) > 0 {
@@ -1163,8 +1163,8 @@ const tokenTTL = 5 * time.Minute
 // mintServiceTokens mints a signed service token for each required
 // service and writes them to disk. Returns the host-side directory path
 // containing the token files (suitable for bind-mounting into the sandbox
-// at /run/bureau/tokens/) and the list of minted token entries for
-// tracking by the caller.
+// at /run/bureau/service/token/) and the list of minted token entries
+// for tracking by the caller.
 //
 // For each required service role:
 //   - Resolves the principal's grants from the authorization index
@@ -1244,7 +1244,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 			return "", nil, fmt.Errorf("minting token for service %q: %w", role, err)
 		}
 
-		tokenPath := filepath.Join(tokenDir, role)
+		tokenPath := filepath.Join(tokenDir, role+".token")
 		if err := atomicWriteFile(tokenPath, tokenBytes, 0600); err != nil {
 			return "", nil, fmt.Errorf("writing token for service %q: %w", role, err)
 		}

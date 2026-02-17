@@ -19,7 +19,7 @@ import (
 // credentialServiceRole is the service role name for the daemon's
 // credential provisioning socket. Principals with credential/* grants
 // get this socket mounted at /run/bureau/service/credential.sock
-// and a service token at /run/bureau/tokens/credential.
+// and a service token at /run/bureau/service/token/credential.token.
 const credentialServiceRole = "credential"
 
 // provisionRequest holds the fields decoded from the CBOR request body

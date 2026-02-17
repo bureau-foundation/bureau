@@ -1214,8 +1214,8 @@ func (l *Launcher) handleProvisionCredential(request *IPCRequest) IPCResponse {
 // read-only at /run/bureau/trigger.json inside the sandbox. Service mounts
 // are bind-mounted read-write at /run/bureau/service/<role>.sock, giving
 // the sandboxed process direct access to Bureau services. When tokenDirectory
-// is non-empty, it is bind-mounted read-only at /run/bureau/tokens/, providing
-// the agent with pre-minted service authentication tokens.
+// is non-empty, it is bind-mounted read-only at /run/bureau/service/token/,
+// providing <role>.token files for service authentication.
 //
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
@@ -1311,15 +1311,16 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		})
 	}
 
-	// Bind-mount the token directory into the sandbox. The daemon writes
-	// pre-minted service tokens (one file per required service role) to
-	// this directory. Agents read tokens from /run/bureau/tokens/<role>
-	// before each service request. Read-only: the daemon owns token
-	// lifecycle (minting, refresh, revocation).
+	// Bind-mount the token directory into the sandbox at
+	// /run/bureau/service/token/. This directory contains <role>.token
+	// files written by the daemon. The directory mount (not individual
+	// file mounts) ensures atomic token refresh (write+rename on host)
+	// is visible inside the sandbox via VFS path traversal. Read-only:
+	// the daemon owns token lifecycle (minting, refresh, revocation).
 	if tokenDirectory != "" {
 		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
 			Source: tokenDirectory,
-			Dest:   "/run/bureau/tokens",
+			Dest:   "/run/bureau/service/token",
 			Mode:   sandbox.MountModeRO,
 		})
 	}

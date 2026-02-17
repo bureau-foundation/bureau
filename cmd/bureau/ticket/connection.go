@@ -16,11 +16,11 @@ import (
 
 // Sandbox-standard paths for the ticket service role. When an agent
 // declares required_services: ["ticket"], the daemon bind-mounts the
-// ticket service socket at this path and writes a service token to
-// the tokens directory.
+// ticket service socket and writes a service token in the token
+// subdirectory.
 const (
 	sandboxSocketPath = "/run/bureau/service/ticket.sock"
-	sandboxTokenPath  = "/run/bureau/tokens/ticket"
+	sandboxTokenPath  = "/run/bureau/service/token/ticket.token"
 )
 
 // TicketConnection manages socket and token flags for ticket commands.
@@ -66,9 +66,10 @@ func defaultTicketSocketPath() string {
 }
 
 // defaultTicketTokenPath returns the default ticket service token path.
-// Inside a sandbox, the daemon-provisioned token at /run/bureau/tokens/ticket
-// is used. Outside a sandbox, the same path is returned as a fallback
-// (it will only exist if the daemon minted tokens for this principal).
+// Inside a sandbox, the daemon-provisioned token at
+// /run/bureau/service/token/ticket.token is used. Outside a sandbox,
+// the same path is returned as a fallback (it will only exist if the
+// daemon minted tokens for this principal).
 func defaultTicketTokenPath() string {
 	if _, err := os.Stat(sandboxTokenPath); err == nil {
 		return sandboxTokenPath

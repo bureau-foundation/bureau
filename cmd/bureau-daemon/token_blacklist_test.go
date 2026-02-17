@@ -121,7 +121,7 @@ func TestRevokeAndCleanupTokens_RemovesDirectory(t *testing.T) {
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	tokenPath := filepath.Join(tokenDir, "ticket")
+	tokenPath := filepath.Join(tokenDir, "ticket.token")
 	if err := os.WriteFile(tokenPath, []byte("token-bytes"), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

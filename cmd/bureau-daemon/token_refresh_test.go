@@ -342,7 +342,7 @@ func TestTokenRefreshCandidates(t *testing.T) {
 func readAndVerifyToken(t *testing.T, tokenDirectory, role string, publicKey ed25519.PublicKey, now time.Time) *servicetoken.Token {
 	t.Helper()
 
-	tokenPath := filepath.Join(tokenDirectory, role)
+	tokenPath := filepath.Join(tokenDirectory, role+".token")
 	tokenBytes, err := os.ReadFile(tokenPath)
 	if err != nil {
 		t.Fatalf("reading token file %s: %v", tokenPath, err)

@@ -112,7 +112,7 @@ implies only read-only observation (not `observe/read-write`). The
 Every Bureau service defines its action namespace under a prefix
 matching its service role — the string used for token audience, socket
 path (`/run/bureau/service/<role>.sock`), and token file path
-(`/run/bureau/tokens/<role>`). The ticket service owns `ticket/*`,
+(`/run/bureau/service/token/<role>.token`). The ticket service owns `ticket/*`,
 the artifact service owns `artifact/*`, the fleet controller owns
 `fleet/*`.
 
@@ -434,9 +434,10 @@ Ed25519 signature over that payload. Ed25519 signatures are always
 exactly 64 bytes, so the split point is deterministic. No header, no
 base64 — the algorithm is fixed and the signature size is constant.
 
-On disk, tokens live at `/run/bureau/tokens/<service-role>` inside the
-sandbox. The agent reads the file as opaque bytes and includes them in
-service requests. The agent never parses the token.
+On disk, tokens live at `/run/bureau/service/token/<service-role>.token`
+inside the sandbox, in the token subdirectory under the service directory.
+The agent reads the file as opaque bytes and includes them in service
+requests. The agent never parses the token.
 
 ### Signing key
 
@@ -458,12 +459,17 @@ different purposes and live in different processes.
 required service, audience-scoped so a token stolen from one service
 socket cannot be replayed against another.
 
-**Delivery**: the daemon writes token files to a per-sandbox directory
-on the host filesystem. The launcher bind-mounts this directory
-read-only at `/run/bureau/tokens/` inside the sandbox. The mount is a
-directory mount (not individual file mounts), which means the daemon
-can write new files to the host-side directory after sandbox creation
-and they appear inside the sandbox immediately.
+**Delivery**: the daemon writes token files to a `token/` subdirectory
+within the per-sandbox service directory on the host filesystem. The
+launcher bind-mounts the service directory at `/run/bureau/service/`
+inside the sandbox with sockets at the top level and the `token/`
+subdirectory read-only. Tokens live in a separate subdirectory because
+bwrap cannot create socket mount points inside a read-only directory —
+the token directory is mounted read-only while the parent directory
+needs to accommodate socket bind mounts. The directory mount means
+the daemon can write new token files to the host-side `token/`
+directory after sandbox creation and they appear inside the sandbox
+immediately.
 
 **Refresh**: the daemon writes a new token file before the current one
 expires (at ~80% of the TTL). The write is atomic (write to temp file,

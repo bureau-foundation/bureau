@@ -368,7 +368,7 @@ func TestMergeMountDeduplication(t *testing.T) {
 	child := &schema.TemplateContent{
 		Filesystem: []schema.TemplateMount{
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=128M"},
-			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
 		},
 	}
 

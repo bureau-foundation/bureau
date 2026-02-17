@@ -20,7 +20,7 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 			"BUREAU_SANDBOX": "1",
 		},
 		Filesystem: []TemplateMount{
-			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
 			{Source: "/nix", Dest: "/nix", Mode: "ro", Optional: true},
 		},
@@ -88,7 +88,7 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 		t.Fatalf("filesystem count = %d, want 3", len(filesystem))
 	}
 	firstMount := filesystem[0].(map[string]any)
-	assertField(t, firstMount, "source", "${WORKTREE}")
+	assertField(t, firstMount, "source", "${WORKSPACE_ROOT}/${PROJECT}")
 	assertField(t, firstMount, "dest", "/workspace")
 	assertField(t, firstMount, "mode", "rw")
 
@@ -181,8 +181,8 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 	if len(decoded.Filesystem) != 3 {
 		t.Fatalf("Filesystem count = %d, want 3", len(decoded.Filesystem))
 	}
-	if decoded.Filesystem[0].Source != "${WORKTREE}" || decoded.Filesystem[0].Dest != "/workspace" {
-		t.Errorf("Filesystem[0]: got source=%q dest=%q, want source=${WORKTREE} dest=/workspace",
+	if decoded.Filesystem[0].Source != "${WORKSPACE_ROOT}/${PROJECT}" || decoded.Filesystem[0].Dest != "/workspace" {
+		t.Errorf("Filesystem[0]: got source=%q dest=%q, want source=${WORKSPACE_ROOT}/${PROJECT} dest=/workspace",
 			decoded.Filesystem[0].Source, decoded.Filesystem[0].Dest)
 	}
 	if decoded.Filesystem[2].Optional != true {

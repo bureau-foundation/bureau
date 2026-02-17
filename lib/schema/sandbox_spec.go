@@ -56,9 +56,10 @@ type SandboxSpec struct {
 	// EnvironmentVariables is the complete set of environment variables
 	// for the sandbox process, after merging template variables with
 	// PrincipalAssignment.ExtraEnvironmentVariables. Variable references
-	// (${WORKTREE}, ${TERM}, etc.) have NOT been expanded — the launcher
-	// expands them at sandbox creation time when the concrete values are
-	// known.
+	// (${WORKSPACE_ROOT}, ${PROJECT}, ${TERM}, etc.) have NOT been
+	// expanded — the launcher expands them at sandbox creation time when
+	// concrete values are known. Workspace variables (PROJECT,
+	// WORKTREE_PATH) are extracted from SandboxSpec.Payload.
 	EnvironmentVariables map[string]string `json:"environment_variables,omitempty"`
 
 	// EnvironmentPath is the Nix store path providing the sandbox's

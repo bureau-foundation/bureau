@@ -342,8 +342,11 @@ func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias,
 func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine, workspaceRoomID string, params map[string]string) []schema.PrincipalAssignment {
 	workspaceRoomAlias := principal.RoomAlias(alias, serverName)
 
-	// Derive the project name from the alias (first path segment).
-	project, _, _ := strings.Cut(alias, "/")
+	// Derive workspace path components from the alias. The first segment
+	// is the project name; everything after is the worktree path (if any).
+	// These flow into PrincipalAssignment.Payload so the launcher can
+	// expand ${PROJECT} and ${WORKTREE_PATH} in template mount paths.
+	project, worktreePath, _ := strings.Cut(alias, "/")
 
 	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
 	// Gated on status "pending" so the daemon stops it after the pipeline
@@ -377,13 +380,23 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	}
 
 	// Agent principals: wait for workspace to become active before starting.
+	// Payload carries PROJECT (and WORKTREE_PATH when the alias includes a
+	// worktree component) so the launcher can expand these variables in the
+	// agent's template mount paths (e.g., ${WORKSPACE_ROOT}/${PROJECT}).
 	for index := 0; index < agentCount; index++ {
 		agentLocalpart := alias + "/agent/" + strconv.Itoa(index)
+		agentPayload := map[string]any{
+			"PROJECT": project,
+		}
+		if worktreePath != "" {
+			agentPayload["WORKTREE_PATH"] = worktreePath
+		}
 		assignments = append(assignments, schema.PrincipalAssignment{
 			Localpart: agentLocalpart,
 			Template:  agentTemplate,
 			AutoStart: true,
 			Labels:    map[string]string{"role": "agent"},
+			Payload:   agentPayload,
 			ExtraEnvironmentVariables: map[string]string{
 				"WORKSPACE_ALIAS": alias,
 			},

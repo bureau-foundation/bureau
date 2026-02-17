@@ -1247,10 +1247,19 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"MACHINE_NAME":   l.machineName,
 		"SERVER_NAME":    l.serverName,
 	}
-	project, worktreePath := workspaceContext(principalLocalpart)
-	if project != "" {
-		vars["PROJECT"] = project
-		vars["WORKTREE_PATH"] = worktreePath
+	// Extract workspace variables from the payload. The daemon populates
+	// these for workspace principals via PrincipalAssignment.Payload;
+	// non-workspace principals have no PROJECT in their payload and
+	// template variables referencing ${PROJECT} will remain unexpanded
+	// (causing a mount error, which is correct — only workspace principals
+	// should use workspace templates).
+	if spec.Payload != nil {
+		if project, ok := spec.Payload["PROJECT"].(string); ok && project != "" {
+			vars["PROJECT"] = project
+		}
+		if worktreePath, ok := spec.Payload["WORKTREE_PATH"].(string); ok && worktreePath != "" {
+			vars["WORKTREE_PATH"] = worktreePath
+		}
 	}
 	profile = vars.ExpandProfile(profile)
 

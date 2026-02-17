@@ -878,7 +878,10 @@ type TemplateContent struct {
 	// EnvironmentVariables are environment variables set inside the sandbox.
 	// During inheritance, child values override parent values for the same
 	// key. Values may contain ${VARIABLE} references expanded at sandbox
-	// creation time (e.g., "${WORKTREE}" for the host worktree path).
+	// creation time. Available variables include ${WORKSPACE_ROOT},
+	// ${PROJECT}, ${WORKTREE_PATH}, ${CACHE_ROOT}, ${PROXY_SOCKET},
+	// ${TERM}, ${MACHINE_NAME}, and ${SERVER_NAME}. Workspace variables
+	// (PROJECT, WORKTREE_PATH) are populated from the principal's payload.
 	EnvironmentVariables map[string]string `json:"environment_variables,omitempty"`
 
 	// Filesystem is the list of mount points for the sandbox. During
@@ -986,7 +989,7 @@ type HealthCheck struct {
 // The daemon converts between the two during template resolution.
 type TemplateMount struct {
 	// Source is the host path to mount. Supports ${VARIABLE} expansion
-	// (e.g., "${WORKTREE}" for the principal's worktree directory).
+	// (e.g., "${WORKSPACE_ROOT}/${PROJECT}" for a project workspace directory).
 	// Empty when Type is "tmpfs" or other virtual filesystem.
 	Source string `json:"source,omitempty"`
 

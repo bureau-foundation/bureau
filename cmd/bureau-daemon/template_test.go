@@ -232,7 +232,7 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc123-agent-env",
 		Filesystem: []schema.TemplateMount{
-			{Source: "${WORKTREE}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
 		},
 		EnvironmentVariables: map[string]string{
 			"PATH": "/usr/local/bin:/usr/bin:/bin", // Override parent PATH

@@ -500,71 +500,11 @@ func TestIsShellSafe(t *testing.T) {
 	}
 }
 
-func TestWorkspaceContext(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name             string
-		localpart        string
-		wantProject      string
-		wantWorktreePath string
-	}{
-		{
-			name:             "three-segment principal",
-			localpart:        "iree/amdgpu/pm",
-			wantProject:      "iree",
-			wantWorktreePath: "amdgpu/pm",
-		},
-		{
-			name:             "two-segment principal",
-			localpart:        "iree/main",
-			wantProject:      "iree",
-			wantWorktreePath: "main",
-		},
-		{
-			name:             "deep principal path",
-			localpart:        "iree/amdgpu/inference/coordinator",
-			wantProject:      "iree",
-			wantWorktreePath: "amdgpu/inference/coordinator",
-		},
-		{
-			name:             "single-segment principal",
-			localpart:        "sysadmin",
-			wantProject:      "",
-			wantWorktreePath: "",
-		},
-		{
-			name:             "service principal",
-			localpart:        "service/stt/whisper",
-			wantProject:      "service",
-			wantWorktreePath: "stt/whisper",
-		},
-		{
-			name:             "machine principal",
-			localpart:        "machine/workstation",
-			wantProject:      "machine",
-			wantWorktreePath: "workstation",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			project, worktreePath := workspaceContext(tt.localpart)
-			if project != tt.wantProject {
-				t.Errorf("project = %q, want %q", project, tt.wantProject)
-			}
-			if worktreePath != tt.wantWorktreePath {
-				t.Errorf("worktreePath = %q, want %q", worktreePath, tt.wantWorktreePath)
-			}
-		})
-	}
-}
-
 // TestSpecToProfile_WorkspaceVariableExpansion verifies that the full pipeline
 // of specToProfile + variable expansion resolves workspace template variables
-// in filesystem mounts, environment values, and create_dirs.
+// in filesystem mounts, environment values, and create_dirs. Workspace
+// variables (PROJECT, WORKTREE_PATH) come from the SandboxSpec payload,
+// populated by workspace create and passed through the daemon's IPC.
 func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 	t.Parallel()
 
@@ -600,6 +540,11 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 		CreateDirs: []string{
 			"${WORKSPACE_ROOT}/${PROJECT}/${WORKTREE_PATH}/.local",
 		},
+		// Payload carries workspace variables from PrincipalAssignment.
+		Payload: map[string]any{
+			"PROJECT":       "iree",
+			"WORKTREE_PATH": "amdgpu/pm",
+		},
 	}
 
 	// Step 1: Convert to profile (no expansion yet).
@@ -612,10 +557,14 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 		"PROXY_SOCKET":   "/run/bureau/principal/iree/amdgpu/pm.sock",
 		"TERM":           "xterm-256color",
 	}
-	project, worktreePath := workspaceContext("iree/amdgpu/pm")
-	if project != "" {
-		vars["PROJECT"] = project
-		vars["WORKTREE_PATH"] = worktreePath
+	// Extract workspace variables from the payload (mirrors buildSandboxCommand).
+	if spec.Payload != nil {
+		if project, ok := spec.Payload["PROJECT"].(string); ok && project != "" {
+			vars["PROJECT"] = project
+		}
+		if worktreePath, ok := spec.Payload["WORKTREE_PATH"].(string); ok && worktreePath != "" {
+			vars["WORKTREE_PATH"] = worktreePath
+		}
 	}
 	expanded := vars.ExpandProfile(profile)
 
@@ -704,16 +653,12 @@ func TestSpecToProfile_CacheRootVariableExpansion(t *testing.T) {
 
 	profile := specToProfile(spec, "/run/bureau/principal/bureau/sysadmin.sock")
 
+	// Sysadmin has no workspace payload — only base variables are available.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
 		"CACHE_ROOT":     "/var/bureau/cache",
 		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
 		"TERM":           "xterm-256color",
-	}
-	project, worktreePath := workspaceContext("bureau/sysadmin")
-	if project != "" {
-		vars["PROJECT"] = project
-		vars["WORKTREE_PATH"] = worktreePath
 	}
 	expanded := vars.ExpandProfile(profile)
 
@@ -745,12 +690,12 @@ func TestSpecToProfile_CacheRootVariableExpansion(t *testing.T) {
 	}
 }
 
-// TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars verifies that
-// single-segment principals (no slash) leave workspace variable references
-// unexpanded. Templates that incorrectly reference ${PROJECT} for such
-// principals will produce literal ${PROJECT} in paths, causing mount
-// failures — which is the correct behavior (fail loud, not silent).
-func TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars(t *testing.T) {
+// TestSpecToProfile_NoPayloadLeavesWorkspaceVarsUnexpanded verifies that
+// principals without workspace payload entries leave ${PROJECT} and
+// ${WORKTREE_PATH} unexpanded. Templates that incorrectly reference these
+// variables for non-workspace principals will produce literal strings in
+// paths, causing mount failures — which is correct (fail loud, not silent).
+func TestSpecToProfile_NoPayloadLeavesWorkspaceVarsUnexpanded(t *testing.T) {
 	t.Parallel()
 
 	spec := &schema.SandboxSpec{
@@ -762,20 +707,16 @@ func TestSpecToProfile_SingleSegmentPrincipalNoWorkspaceVars(t *testing.T) {
 				Mode:   "rw",
 			},
 		},
+		// No payload — non-workspace principal.
 	}
 
 	profile := specToProfile(spec, "/run/bureau/principal/sysadmin.sock")
 
-	// Build variables for a single-segment principal.
+	// No workspace payload means no PROJECT or WORKTREE_PATH variables.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
 		"CACHE_ROOT":     "/var/bureau/cache",
 		"PROXY_SOCKET":   "/run/bureau/principal/sysadmin.sock",
-	}
-	project, worktreePath := workspaceContext("sysadmin")
-	if project != "" {
-		vars["PROJECT"] = project
-		vars["WORKTREE_PATH"] = worktreePath
 	}
 	expanded := vars.ExpandProfile(profile)
 

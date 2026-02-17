@@ -18,6 +18,8 @@
 //   - [EventTypeLayout] -- tmux session structure for observation
 //   - [EventTypeTicket], [EventTypeTicketConfig] -- work item tracking
 //   - [EventTypeArtifactScope] -- artifact service integration config
+//   - [EventTypeAgentSession], [EventTypeAgentContext],
+//     [EventTypeAgentMetrics] -- agent service state
 //
 // [SandboxSpec] is the fully-resolved sandbox configuration sent over
 // the daemon-to-launcher IPC socket. [TemplateRef] and

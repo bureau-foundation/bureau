@@ -9,6 +9,7 @@ go_library(
         "authorization.go",
         "doc.go",
         "events.go",
+        "events_agent.go",
         "events_fleet.go",
         "events_revocation.go",
         "match.go",
@@ -25,6 +26,7 @@ go_test(
     name = "schema_test",
     srcs = [
         "authorization_test.go",
+        "events_agent_test.go",
         "events_artifact_test.go",
         "events_fleet_test.go",
         "events_machine_test.go",

@@ -376,6 +376,21 @@ const (
 	// PipelineResultContent events. Increment when adding fields that
 	// existing code must not silently drop during read-modify-write.
 	PipelineResultContentVersion = 1
+
+	// AgentSessionVersion is the current schema version for
+	// AgentSessionContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentSessionVersion = 1
+
+	// AgentContextVersion is the current schema version for
+	// AgentContextContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentContextVersion = 1
+
+	// AgentMetricsVersion is the current schema version for
+	// AgentMetricsContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentMetricsVersion = 1
 )
 
 // MachineKey is the content of an EventTypeMachineKey state event.

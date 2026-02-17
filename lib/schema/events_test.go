@@ -801,6 +801,15 @@ func TestVersionConstants(t *testing.T) {
 	if TicketConfigVersion < 1 {
 		t.Errorf("TicketConfigVersion = %d, must be >= 1", TicketConfigVersion)
 	}
+	if AgentSessionVersion < 1 {
+		t.Errorf("AgentSessionVersion = %d, must be >= 1", AgentSessionVersion)
+	}
+	if AgentContextVersion < 1 {
+		t.Errorf("AgentContextVersion = %d, must be >= 1", AgentContextVersion)
+	}
+	if AgentMetricsVersion < 1 {
+		t.Errorf("AgentMetricsVersion = %d, must be >= 1", AgentMetricsVersion)
+	}
 }
 
 // --------------------------------------------------------------------

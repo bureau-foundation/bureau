@@ -216,6 +216,26 @@ func newMockToolSequence(t *testing.T, steps []mockToolStep) *mockToolSequenceSe
 			return
 		}
 
+		// Zero steps: return a single text response and signal completion.
+		if len(steps) == 0 {
+			if current > 0 {
+				t.Errorf("mock: unexpected request %d (no steps configured, only 1 text response expected)", current)
+				http.Error(writer, "unexpected request", http.StatusInternalServerError)
+				return
+			}
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "end_turn",
+				InputTokens:  100,
+				OutputTokens: 20,
+				Content: []json.RawMessage{
+					json.RawMessage(`{"type":"text","text":"Hello! I'm a mock response."}`),
+				},
+			})
+			close(allDone)
+			return
+		}
+
 		stepIndex := current / 2
 		isToolResult := current%2 == 1
 

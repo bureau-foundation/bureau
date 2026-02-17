@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/credential"
@@ -502,6 +503,180 @@ func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachi
 	return proxySockets
 }
 
+// agentOptions configures deployAgent and agentTemplateContent. Binary and
+// Localpart are required for deployAgent; agentTemplateContent only reads
+// template-relevant fields (Binary, TemplateName, RequiredServices, ExtraEnv).
+type agentOptions struct {
+	// Binary is the agent binary path. Required.
+	Binary string
+
+	// Localpart is the principal localpart (e.g., "agent/mock-test").
+	// Required for deployAgent. Must be unique across the test suite
+	// (tests run in parallel and share one homeserver).
+	Localpart string
+
+	// TemplateName overrides the template state key. Default: Localpart
+	// with "/" replaced by "-".
+	TemplateName string
+
+	// RequiredServices lists services the template declares (e.g., ["ticket"]).
+	RequiredServices []string
+
+	// ExtraEnv adds environment variables beyond the standard base set
+	// (HOME, TERM, BUREAU_PROXY_SOCKET, BUREAU_MACHINE_NAME, BUREAU_SERVER_NAME).
+	ExtraEnv map[string]string
+
+	// Authorization is the per-principal authorization policy.
+	Authorization *schema.AuthorizationPolicy
+
+	// Payload is the per-instance payload merged over template defaults.
+	Payload map[string]any
+
+	// SkipConfigRoomJoin skips inviting/joining the agent to the config
+	// room. Most agents need membership to post messages (agent-ready,
+	// agent-complete). Set to true for agents that don't.
+	SkipConfigRoomJoin bool
+
+	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
+	// Set to true for agents expected to exit/fail before posting ready.
+	SkipWaitForReady bool
+}
+
+// agentDeployment holds the result of deployAgent: account details, socket
+// paths, and template reference for test assertions and post-deployment
+// interactions (e.g., registering mock LLM services on the admin socket).
+type agentDeployment struct {
+	Account         principalAccount
+	TemplateRef     string
+	ProxySocketPath string
+	AdminSocketPath string
+}
+
+// agentTemplateContent builds a schema.TemplateContent for an agent binary
+// with the standard Bureau sandbox base configuration. All agent templates
+// share the same Namespaces, Security, Filesystem, CreateDirs, and base
+// environment variables — this function defines that base exactly once.
+//
+// Caller-specified overrides (RequiredServices, ExtraEnv) are merged on top.
+// The binary is bind-mounted read-only into the sandbox at its host path.
+func agentTemplateContent(binary string, options agentOptions) schema.TemplateContent {
+	templateName := options.TemplateName
+	if templateName == "" && options.Localpart != "" {
+		templateName = strings.ReplaceAll(options.Localpart, "/", "-")
+	}
+
+	description := "Agent template"
+	if templateName != "" {
+		description = "Agent template for " + templateName
+	}
+
+	environmentVariables := map[string]string{
+		"HOME":                "/workspace",
+		"TERM":                "xterm-256color",
+		"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+		"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+		"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+	}
+	for key, value := range options.ExtraEnv {
+		environmentVariables[key] = value
+	}
+
+	return schema.TemplateContent{
+		Description:      description,
+		Command:          []string{binary},
+		RequiredServices: options.RequiredServices,
+		Namespaces:       &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: []schema.TemplateMount{
+			{Source: binary, Dest: binary, Mode: "ro"},
+			{Dest: "/tmp", Type: "tmpfs"},
+		},
+		CreateDirs:           []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: environmentVariables,
+	}
+}
+
+// deployAgent performs the full agent deployment flow: publish template,
+// register principal, push credentials, join config room, push machine
+// config, wait for proxy socket, and wait for agent-ready. Returns the
+// deployment details for post-deployment interactions.
+//
+// This is the single-function equivalent of the 11-step sequence that
+// tests previously inlined. For multi-agent deployments (multiple
+// principals sharing one template), use agentTemplateContent directly
+// with the lower-level helpers.
+func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, options agentOptions) agentDeployment {
+	t.Helper()
+
+	if options.Binary == "" {
+		t.Fatal("agentOptions.Binary is required")
+	}
+	if options.Localpart == "" {
+		t.Fatal("agentOptions.Localpart is required")
+	}
+
+	ctx := t.Context()
+
+	// Derive template name from localpart if not explicitly set.
+	templateName := options.TemplateName
+	if templateName == "" {
+		templateName = strings.ReplaceAll(options.Localpart, "/", "-")
+	}
+
+	// Publish the template via the production path.
+	grantTemplateAccess(t, admin, machine)
+
+	ref, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	if err != nil {
+		t.Fatalf("parse template ref for %q: %v", templateName, err)
+	}
+	_, err = template.Push(ctx, admin, ref,
+		agentTemplateContent(options.Binary, options), testServerName)
+	if err != nil {
+		t.Fatalf("push agent template %q: %v", templateName, err)
+	}
+
+	// Register the principal and push credentials.
+	account := registerPrincipal(t, options.Localpart, options.Localpart+"-test-pw")
+	pushCredentials(t, admin, machine, account)
+
+	// Join config room so the agent can post messages (agent-ready,
+	// agent-complete, text responses).
+	if !options.SkipConfigRoomJoin {
+		joinConfigRoom(t, admin, machine.ConfigRoomID, account)
+	}
+
+	// Set up watch BEFORE pushing config so we don't miss agent-ready.
+	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:       account,
+			Template:      ref.String(),
+			Payload:       options.Payload,
+			Authorization: options.Authorization,
+		}},
+	})
+
+	proxySocketPath := machine.PrincipalSocketPath(account.Localpart)
+	waitForFile(t, proxySocketPath)
+
+	if !options.SkipWaitForReady {
+		readyWatch.WaitForMessage(t, "agent-ready", account.UserID)
+	}
+
+	return agentDeployment{
+		Account:         account,
+		TemplateRef:     ref.String(),
+		ProxySocketPath: proxySocketPath,
+		AdminSocketPath: machine.PrincipalAdminSocketPath(account.Localpart),
+	}
+}
+
 // grantTemplateAccess resolves the #bureau/template room and invites the
 // machine so the daemon can read templates during config reconciliation.
 // Returns the template room ID for tests that need to publish custom
@@ -539,30 +714,9 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *t
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
 
-	_, err = template.Push(t.Context(), admin, ref, schema.TemplateContent{
-		Description: "Test agent for " + templateName,
-		Command:     []string{testAgentBinary},
-		Namespaces: &schema.TemplateNamespaces{
-			PID: true,
-		},
-		Security: &schema.TemplateSecurity{
-			NewSession:    true,
-			DieWithParent: true,
-			NoNewPrivs:    true,
-		},
-		Filesystem: []schema.TemplateMount{
-			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
-		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                "/workspace",
-			"TERM":                "xterm-256color",
-			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-		},
-	}, testServerName)
+	_, err = template.Push(t.Context(), admin, ref,
+		agentTemplateContent(testAgentBinary, agentOptions{TemplateName: templateName}),
+		testServerName)
 	if err != nil {
 		t.Fatalf("push test agent template %q: %v", templateName, err)
 	}

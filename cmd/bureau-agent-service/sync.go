@@ -71,6 +71,19 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 		return "", err
 	}
 
+	// Accept pending invites from before service startup.
+	if len(response.Rooms.Invite) > 0 {
+		acceptedRooms := service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
+		for _, roomID := range acceptedRooms {
+			if roomID == agentService.configRoomID {
+				agentService.mutex.Lock()
+				agentService.configRoomJoined = true
+				agentService.mutex.Unlock()
+				agentService.logger.Info("joined config room via invite during initial sync", "config_room", roomID)
+			}
+		}
+	}
+
 	agentService.mutex.Lock()
 	defer agentService.mutex.Unlock()
 
@@ -83,6 +96,7 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 	agentService.logger.Info("initial sync complete",
 		"since_token", sinceToken,
 		"config_room", agentService.configRoomID,
+		"config_room_joined", agentService.configRoomJoined,
 	)
 
 	return sinceToken, nil
@@ -90,6 +104,22 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 
 // handleSync processes incremental /sync responses.
 func (agentService *AgentService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
+	// Accept pending invites. The daemon invites the service to config
+	// rooms when resolving room service bindings during principal
+	// deployment. The service may also be invited to additional rooms
+	// by operators.
+	if len(response.Rooms.Invite) > 0 {
+		acceptedRooms := service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
+		for _, roomID := range acceptedRooms {
+			if roomID == agentService.configRoomID {
+				agentService.mutex.Lock()
+				agentService.configRoomJoined = true
+				agentService.mutex.Unlock()
+				agentService.logger.Info("joined config room via invite", "config_room", roomID)
+			}
+		}
+	}
+
 	agentService.mutex.Lock()
 	defer agentService.mutex.Unlock()
 

@@ -14,8 +14,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
-
-	template "github.com/bureau-foundation/bureau/lib/template"
 )
 
 // TestNativeAgentEndToEnd exercises the bureau-agent binary running in a
@@ -54,90 +52,21 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Publish a template for bureau-agent. No payload prompt — the agent
-	// waits for a Matrix message before calling the LLM.
-	agentBinary := testutil.DataBinary(t, "BUREAU_AGENT_BINARY")
-	grantTemplateAccess(t, admin, machine)
-
-	ref, err := schema.ParseTemplateRef("bureau/template:native-agent-test")
-	if err != nil {
-		t.Fatalf("parse template ref: %v", err)
-	}
-	_, err = template.Push(ctx, admin, ref, schema.TemplateContent{
-		Description: "Native agent for end-to-end testing",
-		Command:     []string{agentBinary},
-		Namespaces: &schema.TemplateNamespaces{
-			PID: true,
-		},
-		Security: &schema.TemplateSecurity{
-			NewSession:    true,
-			DieWithParent: true,
-			NoNewPrivs:    true,
-		},
-		Filesystem: []schema.TemplateMount{
-			{Source: agentBinary, Dest: agentBinary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
-		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                    "/workspace",
-			"TERM":                    "xterm-256color",
-			"BUREAU_PROXY_SOCKET":     "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME":     "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":      "${SERVER_NAME}",
+	// Deploy bureau-agent with LLM config and MCP tool grants.
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:    testutil.DataBinary(t, "BUREAU_AGENT_BINARY"),
+		Localpart: "agent/native-e2e-test",
+		ExtraEnv: map[string]string{
 			"BUREAU_AGENT_MODEL":      "mock-model",
 			"BUREAU_AGENT_SERVICE":    "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS": "1024",
 		},
-	}, testServerName)
-	if err != nil {
-		t.Fatalf("push native-agent template: %v", err)
-	}
-
-	// Register the agent principal with grants for MCP tool execution.
-	agent := registerPrincipal(t, "agent/native-e2e-test", "test-password")
-	pushCredentials(t, admin, machine, agent)
-
-	// The agent sends messages to the config room (via bureau_matrix_send
-	// through the proxy). Set up membership before the sandbox starts.
-	if err := admin.InviteUser(ctx, machine.ConfigRoomID, agent.UserID); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite agent to config room: %v", err)
-		}
-	}
-	agentSession := principalSession(t, agent)
-	if _, err := agentSession.JoinRoom(ctx, machine.ConfigRoomID); err != nil {
-		t.Fatalf("agent join config room: %v", err)
-	}
-	agentSession.Close()
-
-	// Set up room watch BEFORE deploying so we don't miss agent-ready.
-	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	// Deploy with command/** grants so the agent can execute MCP tools.
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account:  agent,
-			Template: "bureau/template:native-agent-test",
-			Authorization: &schema.AuthorizationPolicy{
-				Grants: []schema.Grant{
-					{Actions: []string{"command/**"}},
-				},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"command/**"}},
 			},
-		}},
+		},
 	})
-
-	// Wait for proxy socket (sandbox created, proxy running).
-	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
-	waitForFile(t, proxySocketPath)
-	t.Logf("proxy socket appeared: %s", proxySocketPath)
-
-	// Wait for "agent-ready". This means:
-	// - Proxy is running (BuildContext succeeded)
-	// - Message pump has captured its /sync position
-	// - Any message sent now will be delivered to the agent
-	readyWatch.WaitForMessage(t, "agent-ready", agent.UserID)
-	t.Log("agent sent ready signal — pump is listening")
 
 	// Start the mock Anthropic server AFTER agent-ready (proxy is confirmed
 	// running) and BEFORE sending the Matrix message (which triggers the
@@ -147,9 +76,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	mock := newMockAnthropicToolSequence(t, machine.ConfigRoomID)
 
 	// Register the mock on the proxy's admin socket.
-	adminSocketPath := machine.PrincipalAdminSocketPath(agent.Localpart)
-	registerProxyHTTPService(t, adminSocketPath, "anthropic", mock.URL)
-	t.Logf("mock Anthropic registered on admin socket: %s", adminSocketPath)
+	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.URL)
 
 	// Send a Matrix message to the agent. This is the first prompt:
 	// the agent loop picks it up from stdin and calls the LLM.
@@ -164,7 +91,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	// 3. Agent executes bureau_matrix_send via MCP → tool sends message to
 	//    Matrix through the proxy-routed client (zero credentials in sandbox)
 	// 4. This assertion catches the message from step 3
-	responseWatch.WaitForMessage(t, "echo result: hello", agent.UserID)
+	responseWatch.WaitForMessage(t, "echo result: hello", agent.Account.UserID)
 	t.Log("bureau_matrix_send tool posted message — proxy pipeline verified")
 
 	// Wait for the mock to confirm the second LLM call completed. This

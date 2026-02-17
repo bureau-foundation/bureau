@@ -110,9 +110,14 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 	// --- Config room tests ---
 	// Power levels: admin=100, machine=50, agent=0
-	// events_default: 100, state_default: 100
+	// events_default: 100, state_default: 0
 	// m.bureau.machine_config: 50, m.bureau.credentials: 100
 	// m.bureau.layout: 0, m.room.message: 0
+	//
+	// state_default is 0 so that services invited to config rooms can
+	// write their own state events (session lifecycle, metrics, context
+	// index) without hardcoding every service event type. Room membership
+	// is the authorization boundary — only admin/machine can invite.
 
 	t.Run("ConfigRoom", func(t *testing.T) {
 		t.Run("AdminCanSetConfig", func(t *testing.T) {
@@ -151,14 +156,19 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			}
 		})
 
-		t.Run("AgentCannotSetArbitraryState", func(t *testing.T) {
-			// events_default is 100 in config rooms, so unlisted state event
-			// types require PL 100.
+		t.Run("MemberCanSetArbitraryBureauState", func(t *testing.T) {
+			// state_default is 0 in config rooms: any member can publish
+			// state events for types not explicitly restricted. This allows
+			// services (agent, ticket, etc.) to write their own state events
+			// without hardcoding every service event type in the power level
+			// map. Room membership is the authorization boundary.
 			_, err := agentSession.SendStateEvent(ctx, configRoom.RoomID,
-				"m.bureau.unknown_type", "test-key", map[string]any{
-					"data": "should be rejected",
+				"m.bureau.service_defined_type", "test-key", map[string]any{
+					"data": "service can write this",
 				})
-			assertForbidden(t, err, "agent (PL 0) setting unlisted state event (events_default: 100)")
+			if err != nil {
+				t.Fatalf("member should be able to set arbitrary Bureau state (state_default: 0): %v", err)
+			}
 		})
 
 		t.Run("MachineCanSetLayout", func(t *testing.T) {

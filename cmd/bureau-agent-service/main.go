@@ -108,21 +108,35 @@ func run() error {
 		return fmt.Errorf("resolving system room: %w", err)
 	}
 
-	// Resolve and join the machine config room. Agent state events
-	// live here as state events keyed by principal localpart.
+	// Resolve the machine config room. Agent state events live here as
+	// state events keyed by principal localpart. The service may not be
+	// invited yet — the daemon invites services when it resolves room
+	// service bindings during principal deployment. If the join fails,
+	// the service continues startup and accepts the invite via the sync
+	// loop when it arrives.
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("resolving config room alias %q: %w", configRoomAlias, err)
 	}
+	configRoomJoined := false
 	if _, err := session.JoinRoom(ctx, configRoomID); err != nil {
-		return fmt.Errorf("joining config room %s: %w", configRoomID, err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			logger.Info("config room not yet accessible, will join when invited",
+				"config_room", configRoomID,
+			)
+		} else {
+			return fmt.Errorf("joining config room %s: %w", configRoomID, err)
+		}
+	} else {
+		configRoomJoined = true
 	}
 
 	logger.Info("rooms ready",
 		"service_room", serviceRoomID,
 		"system_room", systemRoomID,
 		"config_room", configRoomID,
+		"config_room_joined", configRoomJoined,
 	)
 
 	// Load the daemon's token signing public key for authenticating
@@ -143,14 +157,15 @@ func run() error {
 	}
 
 	agentService := &AgentService{
-		session:       session,
-		clock:         clk,
-		principalName: principalName,
-		machineName:   machineName,
-		serverName:    serverName,
-		configRoomID:  configRoomID,
-		startedAt:     clk.Now(),
-		logger:        logger,
+		session:          session,
+		clock:            clk,
+		principalName:    principalName,
+		machineName:      machineName,
+		serverName:       serverName,
+		configRoomID:     configRoomID,
+		configRoomJoined: configRoomJoined,
+		startedAt:        clk.Now(),
+		logger:           logger,
 	}
 
 	// Register in #bureau/service so daemons can discover us.
@@ -230,11 +245,12 @@ type AgentService struct {
 	session *messaging.Session
 	clock   clock.Clock
 
-	principalName string
-	machineName   string
-	serverName    string
-	configRoomID  string
-	startedAt     time.Time
+	principalName    string
+	machineName      string
+	serverName       string
+	configRoomID     string
+	configRoomJoined bool
+	startedAt        time.Time
 
 	logger *slog.Logger
 }

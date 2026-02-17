@@ -18,6 +18,7 @@ go_test(
     size = "medium",
     timeout = "short",  # 60s hard limit — all integration tests must complete in under 40s
     srcs = [
+        "agent_service_test.go",
         "agent_test.go",
         "bootstrap_test.go",
         "config_hotreload_test.go",

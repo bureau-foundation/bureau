@@ -52,7 +52,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	ticketServiceAccount := registerPrincipal(t, ticketServiceLocalpart, "ticket-svc-password")
 
 	ticketStateDir := t.TempDir()
-	writeTicketServiceSession(t, ticketStateDir, ticketServiceAccount)
+	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
 
 	systemRoomID, serviceRoomID := resolveGlobalRooms(t, admin)
 	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, serviceRoomID)
@@ -88,70 +88,22 @@ func TestTicketServiceAgent(t *testing.T) {
 
 	// --- Deploy agent with bureau-agent + mock LLM ---
 
-	agentBinary := testutil.DataBinary(t, "BUREAU_AGENT_BINARY")
-	grantTemplateAccess(t, admin, machine)
-
-	ref, err := schema.ParseTemplateRef("bureau/template:ticket-agent-test")
-	if err != nil {
-		t.Fatalf("parse template ref: %v", err)
-	}
-	_, err = template.Push(ctx, admin, ref, schema.TemplateContent{
-		Description:      "Agent with ticket service access",
-		Command:          []string{agentBinary},
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:           testutil.DataBinary(t, "BUREAU_AGENT_BINARY"),
+		Localpart:        "agent/ticket-e2e",
 		RequiredServices: []string{"ticket"},
-		Namespaces:       &schema.TemplateNamespaces{PID: true},
-		Security: &schema.TemplateSecurity{
-			NewSession:    true,
-			DieWithParent: true,
-			NoNewPrivs:    true,
-		},
-		Filesystem: []schema.TemplateMount{
-			{Source: agentBinary, Dest: agentBinary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
-		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                    "/workspace",
-			"TERM":                    "xterm-256color",
-			"BUREAU_PROXY_SOCKET":     "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME":     "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":      "${SERVER_NAME}",
+		ExtraEnv: map[string]string{
 			"BUREAU_AGENT_MODEL":      "mock-model",
 			"BUREAU_AGENT_SERVICE":    "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS": "1024",
 		},
-	}, testServerName)
-	if err != nil {
-		t.Fatalf("push ticket-agent template: %v", err)
-	}
-
-	agent := registerPrincipal(t, "agent/ticket-e2e", "agent-password")
-	pushCredentials(t, admin, machine, agent)
-
-	// Config room membership so the agent can post messages.
-	joinConfigRoom(t, admin, machine.ConfigRoomID, agent)
-
-	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account:  agent,
-			Template: "bureau/template:ticket-agent-test",
-			Payload: map[string]any{
-				"WORKSPACE_ROOM_ID": projectRoomID,
+		Payload: map[string]any{"WORKSPACE_ROOM_ID": projectRoomID},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"command/ticket/**", "ticket/**"}},
 			},
-			Authorization: &schema.AuthorizationPolicy{
-				Grants: []schema.Grant{
-					{Actions: []string{"command/ticket/**", "ticket/**"}},
-				},
-			},
-		}},
+		},
 	})
-
-	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
-	waitForFile(t, proxySocketPath)
-	readyWatch.WaitForMessage(t, "agent-ready", agent.UserID)
-	t.Log("agent ready — proxy socket and message pump confirmed")
 
 	// Register mock Anthropic that directs the agent to create a ticket.
 	mock := newMockToolSequence(t, []mockToolStep{{
@@ -166,8 +118,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		},
 	}})
 
-	adminSocketPath := machine.PrincipalAdminSocketPath(agent.Localpart)
-	registerProxyHTTPService(t, adminSocketPath, "anthropic", mock.URL)
+	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.URL)
 
 	// Send prompt to trigger the agent loop.
 	projectWatch := watchRoom(t, admin, projectRoomID)
@@ -175,14 +126,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		t.Fatalf("sending prompt to agent: %v", err)
 	}
 
-	// Wait for the mock to complete (agent executed the tool and sent
-	// tool_result back to LLM).
-	select {
-	case <-mock.AllStepsCompleted:
-		t.Log("mock LLM cycle completed")
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for mock LLM to complete")
-	}
+	waitForMockCompletion(t, mock)
 
 	// --- Verification via Matrix state events ---
 	//
@@ -248,7 +192,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	ticketServiceAccount := registerPrincipal(t, ticketServiceLocalpart, "ticket-lifecycle-pw")
 
 	ticketStateDir := t.TempDir()
-	writeTicketServiceSession(t, ticketStateDir, ticketServiceAccount)
+	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
 
 	systemRoomID, serviceRoomID := resolveGlobalRooms(t, admin)
 	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, serviceRoomID)
@@ -299,32 +243,15 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
-	_, err = template.Push(ctx, admin, ref, schema.TemplateContent{
-		Description:      "Agent with ticket service access",
-		Command:          []string{agentBinary},
+	_, err = template.Push(ctx, admin, ref, agentTemplateContent(agentBinary, agentOptions{
+		TemplateName:     "ticket-lifecycle-agent",
 		RequiredServices: []string{"ticket"},
-		Namespaces:       &schema.TemplateNamespaces{PID: true},
-		Security: &schema.TemplateSecurity{
-			NewSession:    true,
-			DieWithParent: true,
-			NoNewPrivs:    true,
-		},
-		Filesystem: []schema.TemplateMount{
-			{Source: agentBinary, Dest: agentBinary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
-		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                    "/workspace",
-			"TERM":                    "xterm-256color",
-			"BUREAU_PROXY_SOCKET":     "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME":     "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":      "${SERVER_NAME}",
+		ExtraEnv: map[string]string{
 			"BUREAU_AGENT_MODEL":      "mock-model",
 			"BUREAU_AGENT_SERVICE":    "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS": "1024",
 		},
-	}, testServerName)
+	}), testServerName)
 	if err != nil {
 		t.Fatalf("push ticket-lifecycle-agent template: %v", err)
 	}
@@ -729,9 +656,10 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 // --- Shared helpers for ticket tests ---
 
-// writeTicketServiceSession writes a session.json file for the ticket
-// service to the given state directory.
-func writeTicketServiceSession(t *testing.T, stateDir string, account principalAccount) {
+// writeServiceSession writes a session.json file for a Bureau service
+// to the given state directory. The service loads its Matrix credentials
+// from this file via service.LoadSession.
+func writeServiceSession(t *testing.T, stateDir string, account principalAccount) {
 	t.Helper()
 
 	sessionData := service.SessionData{

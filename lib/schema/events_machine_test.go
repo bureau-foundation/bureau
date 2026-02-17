@@ -760,8 +760,15 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		}
 	}
 
+	// State default is 0: room members (services, agents) can write
+	// arbitrary state event types. Room membership is the authorization
+	// boundary, not per-event-type power levels.
+	if levels["state_default"] != 0 {
+		t.Errorf("state_default = %v, want 0", levels["state_default"])
+	}
+
 	// Administrative actions require power level 100.
-	for _, field := range []string{"state_default", "ban", "kick", "redact"} {
+	for _, field := range []string{"ban", "kick", "redact"} {
 		if levels[field] != 100 {
 			t.Errorf("%s = %v, want 100", field, levels[field])
 		}

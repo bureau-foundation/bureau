@@ -324,7 +324,25 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		summary = sessionLog.Summary()
 	}
 
-	// Post completion summary to config room.
+	// End the agent service session before posting the completion
+	// summary. This ensures that by the time "agent-complete" is
+	// visible to observers via /sync, the session and metrics state
+	// events have already been written by the agent service. Runs
+	// regardless of whether the agent process succeeded or failed —
+	// the session is over and its metrics should be recorded. Errors
+	// are logged but do not mask the agent's own exit status.
+	if agentServiceClient != nil {
+		endRequest := EndSessionRequestFromSummary(sessionID, summary, "")
+		if endError := agentServiceClient.EndSession(ctx, endRequest); endError != nil {
+			logger.Error("ending agent service session", "error", endError)
+		} else {
+			logger.Info("agent service session ended", "session_id", sessionID)
+		}
+	}
+
+	// Post completion summary to config room. This is the last action
+	// the agent takes — observers use "agent-complete" as a signal
+	// that all cleanup (including agent service session end) is done.
 	if sessionLog != nil {
 		summaryMessage := formatSummary(summary, processError)
 		logger.Info("posting completion summary",
@@ -337,19 +355,6 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		)
 		if _, sendError := proxy.SendTextMessage(ctx, agentContext.ConfigRoomID, summaryMessage); sendError != nil {
 			logger.Warn("failed to send completion summary", "error", sendError)
-		}
-	}
-
-	// End the agent service session, recording metrics. This runs
-	// regardless of whether the agent process succeeded or failed —
-	// the session is over and its metrics should be recorded. Errors
-	// here are logged but do not mask the agent's own exit status.
-	if agentServiceClient != nil {
-		endRequest := EndSessionRequestFromSummary(sessionID, summary, "")
-		if endError := agentServiceClient.EndSession(ctx, endRequest); endError != nil {
-			logger.Error("ending agent service session", "error", endError)
-		} else {
-			logger.Info("agent service session ended", "session_id", sessionID)
 		}
 	}
 

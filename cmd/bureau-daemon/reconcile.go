@@ -1138,6 +1138,17 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 			return "", fmt.Errorf("invalid service principal %q for role %q in room %s: %w", binding.Principal, role, roomID, err)
 		}
 
+		// Ensure the service is a member of the room where its binding
+		// was found. Services need room membership to write state events
+		// (session lifecycle, metrics, context index, etc.). The invite
+		// is idempotent — M_FORBIDDEN means the service is already
+		// joined or the invite is otherwise redundant.
+		if inviteErr := d.session.InviteUser(ctx, roomID, binding.Principal); inviteErr != nil {
+			if !messaging.IsMatrixError(inviteErr, "M_FORBIDDEN") {
+				return "", fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, roomID, inviteErr)
+			}
+		}
+
 		// Derive the host-side socket path from the service principal's
 		// localpart. For local services this is the actual proxy socket;
 		// for remote services (future) the daemon would create a tunnel

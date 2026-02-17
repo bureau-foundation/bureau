@@ -2181,7 +2181,7 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 		"users_default":  0,
 		"events":         events,
 		"events_default": 100,
-		"state_default":  100,
+		"state_default":  0,
 		"ban":            100,
 		"kick":           100,
 		"invite":         50,

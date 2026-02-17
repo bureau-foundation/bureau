@@ -229,6 +229,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
+		// Skip principals in backoff from a previous start failure.
+		// Event-driven clearing (config change, service sync, sandbox
+		// exit) resets the backoff so retries happen immediately when
+		// the root cause may have been resolved.
+		if failure := d.startFailures[localpart]; failure != nil {
+			if d.clock.Now().Before(failure.nextRetryAt) {
+				d.logger.Debug("principal in start backoff, skipping",
+					"principal", localpart,
+					"category", failure.category,
+					"attempts", failure.attempts,
+					"retry_at", failure.nextRetryAt,
+				)
+				continue
+			}
+		}
+
 		d.logger.Info("starting principal", "principal", localpart)
 
 		// Read the credentials for this principal.
@@ -236,9 +252,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				d.logger.Warn("no credentials found for principal, skipping", "principal", localpart)
+				d.recordStartFailure(localpart, failureCategoryCredentials, "no credentials provisioned")
 				continue
 			}
 			d.logger.Error("reading credentials", "principal", localpart, "error", err)
+			d.recordStartFailure(localpart, failureCategoryCredentials, err.Error())
 			continue
 		}
 
@@ -251,6 +269,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
 			if err != nil {
 				d.logger.Error("resolving template", "principal", localpart, "template", assignment.Template, "error", err)
+				d.recordStartFailure(localpart, failureCategoryTemplate, err.Error())
 				continue
 			}
 			resolvedTemplate = template
@@ -272,7 +291,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			// Ensure the Nix environment's store path (and its full
 			// transitive closure) exists locally before handing the
 			// spec to the launcher. On failure, skip this principal
-			// — the reconcile loop retries on the next sync cycle.
+			// with exponential backoff until a config change clears it.
 			if sandboxSpec.EnvironmentPath != "" {
 				if err := d.prefetchEnvironment(ctx, sandboxSpec.EnvironmentPath); err != nil {
 					d.logger.Error("prefetching nix environment",
@@ -280,10 +299,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 						"store_path", sandboxSpec.EnvironmentPath,
 						"error", err,
 					)
-					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-						schema.NewNixPrefetchFailedMessage(localpart, sandboxSpec.EnvironmentPath, err.Error())); err != nil {
-						d.logger.Error("failed to post nix prefetch failure notification",
-							"principal", localpart, "error", err)
+					isFirstFailure := d.startFailures[localpart] == nil
+					d.recordStartFailure(localpart, failureCategoryNixPrefetch, err.Error())
+					if isFirstFailure {
+						if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+							schema.NewNixPrefetchFailedMessage(localpart, sandboxSpec.EnvironmentPath, err.Error())); err != nil {
+							d.logger.Error("failed to post nix prefetch failure notification",
+								"principal", localpart, "error", err)
+						}
 					}
 					continue
 				}
@@ -319,10 +342,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"required_services", sandboxSpec.RequiredServices,
 					"error", err,
 				)
-				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-					schema.NewPrincipalStartFailedMessage(localpart, err.Error())); err != nil {
-					d.logger.Error("failed to post service resolution failure notification",
-						"principal", localpart, "error", err)
+				isFirstFailure := d.startFailures[localpart] == nil
+				d.recordStartFailure(localpart, failureCategoryServiceResolution, err.Error())
+				if isFirstFailure {
+					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+						schema.NewPrincipalStartFailedMessage(localpart, err.Error())); err != nil {
+						d.logger.Error("failed to post service resolution failure notification",
+							"principal", localpart, "error", err)
+					}
 				}
 				continue
 			}
@@ -357,10 +384,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"principal", localpart,
 					"error", err,
 				)
-				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-					schema.NewPrincipalStartFailedMessage(localpart, fmt.Sprintf("failed to mint service tokens: %v", err))); err != nil {
-					d.logger.Error("failed to post token minting failure notification",
-						"principal", localpart, "error", err)
+				isFirstFailure := d.startFailures[localpart] == nil
+				d.recordStartFailure(localpart, failureCategoryTokenMinting, err.Error())
+				if isFirstFailure {
+					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+						schema.NewPrincipalStartFailedMessage(localpart, fmt.Sprintf("failed to mint service tokens: %v", err))); err != nil {
+						d.logger.Error("failed to post token minting failure notification",
+							"principal", localpart, "error", err)
+					}
 				}
 				continue
 			}
@@ -386,13 +417,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
+			d.recordStartFailure(localpart, failureCategoryLauncherIPC, err.Error())
 			continue
 		}
 		if !response.OK {
 			d.logger.Error("create-sandbox rejected", "principal", localpart, "error", response.Error)
+			d.recordStartFailure(localpart, failureCategoryLauncherIPC, response.Error)
 			continue
 		}
 
+		d.clearStartFailure(localpart)
 		d.running[localpart] = true
 		d.lastCredentials[localpart] = credentials.Ciphertext
 		d.lastObserveAllowances[localpart] = d.authorizationIndex.Allowances(localpart)
@@ -1380,6 +1414,11 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		delete(d.lastObserveAllowances, localpart)
 		d.lastActivityAt = d.clock.Now()
 	}
+	// Clear start failure backoff so the re-reconciliation below can
+	// immediately attempt to restart the principal. Without this, a
+	// principal that previously failed to start (different error),
+	// then succeeded, then crashed would inherit stale backoff state.
+	d.clearStartFailure(localpart)
 	d.reconcileMu.Unlock()
 
 	// Post exit notification to config room. On failure, include the
@@ -1787,6 +1826,8 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 		d.logger.Error("proxy exit handler: failed to destroy sandbox",
 			"principal", localpart, "error", err)
 	}
+	// Clear start failure backoff so crash-restart is immediate.
+	d.clearStartFailure(localpart)
 	d.reconcileMu.Unlock()
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,

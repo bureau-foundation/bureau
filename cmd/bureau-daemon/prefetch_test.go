@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/nix"
@@ -306,7 +307,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 
 	// Start with prefetch that always fails.
 	prefetchError := fmt.Errorf("connection to attic refused")
-	daemon, _ := newTestDaemon(t)
+	daemon, fakeClock := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.machineName = machineName
@@ -355,6 +356,8 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	messagesMu.Unlock()
 
 	// Second reconcile: prefetch succeeds, principal should start.
+	// Advance past the start failure backoff so the principal is retried.
+	fakeClock.Advance(2 * time.Second)
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}

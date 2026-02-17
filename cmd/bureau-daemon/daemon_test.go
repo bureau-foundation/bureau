@@ -39,6 +39,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		// All map fields — adding a new map to Daemon means adding
 		// it here so no test panics on nil map write.
 		failedExecPaths:       make(map[string]bool),
+		startFailures:         make(map[string]*startFailure),
 		running:               make(map[string]bool),
 		exitWatchers:          make(map[string]context.CancelFunc),
 		proxyExitWatchers:     make(map[string]context.CancelFunc),

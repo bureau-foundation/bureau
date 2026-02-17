@@ -306,6 +306,13 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 
 	if needsReconcile {
 		d.logger.Info("state changed, reconciling")
+		// Config or workspace state changed — clear all start failure
+		// backoffs so the reconcile below can immediately retry principals
+		// that were blocked by a now-potentially-resolved issue (new
+		// credentials provisioned, template updated, config changed, etc.).
+		d.reconcileMu.Lock()
+		d.clearStartFailures()
+		d.reconcileMu.Unlock()
 		if err := d.reconcile(ctx); err != nil {
 			d.logger.Error("reconciliation failed", "error", err)
 		}
@@ -338,6 +345,20 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
 					schema.NewServiceDirectoryUpdatedMessage(added, removed, updated)); err != nil {
 					d.logger.Error("failed to post service directory update", "error", err)
+				}
+			}
+
+			// Service directory changed — clear service resolution
+			// failures and trigger reconcile if any principals were
+			// blocked waiting for a service that may now be available.
+			d.reconcileMu.Lock()
+			cleared := d.clearStartFailuresByCategory(failureCategoryServiceResolution)
+			d.reconcileMu.Unlock()
+			if cleared > 0 && !needsReconcile {
+				d.logger.Info("service directory change cleared start failures, reconciling",
+					"cleared_count", cleared)
+				if err := d.reconcile(ctx); err != nil {
+					d.logger.Error("reconciliation after service sync failed", "error", err)
 				}
 			}
 		}

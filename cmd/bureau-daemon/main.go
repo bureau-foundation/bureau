@@ -280,6 +280,7 @@ func run() error {
 		previousCgroupCPU:      make(map[string]*cgroupCPUReading),
 		cgroupPathFunc:         cgroupDefaultPath,
 		failedExecPaths:        make(map[string]bool),
+		startFailures:          make(map[string]*startFailure),
 		running:                make(map[string]bool),
 		exitWatchers:           make(map[string]context.CancelFunc),
 		proxyExitWatchers:      make(map[string]context.CancelFunc),
@@ -501,6 +502,24 @@ type Daemon struct {
 	// loops where the daemon repeatedly tries to exec a broken binary on
 	// every reconcile cycle. Keyed by desired daemon store path.
 	failedExecPaths map[string]bool
+
+	// startFailures tracks principals whose sandbox creation failed on a
+	// previous reconcile cycle. Each entry records the failure category,
+	// error message, attempt count, and a computed next-retry time using
+	// exponential backoff (1s, 2s, 4s, 8s, 16s, capped at 30s). The
+	// "create missing" pass in reconcile() skips principals whose
+	// nextRetryAt is still in the future, preventing a tight retry loop
+	// when a failure is persistent (e.g., service not yet registered,
+	// credentials not yet provisioned).
+	//
+	// Entries are cleared by event-driven signals: config room state
+	// changes clear all entries (the config may have changed); service
+	// directory syncs clear entries with category "service_resolution"
+	// (the missing service may have appeared). watchSandboxExit and
+	// watchProxyExit also clear entries so crash-restart isn't delayed.
+	//
+	// Protected by reconcileMu (same as running, lastSpecs, etc.).
+	startFailures map[string]*startFailure
 
 	// execFunc replaces the current process with a new binary. Defaults
 	// to syscall.Exec. Tests override this to capture the exec call
@@ -779,6 +798,109 @@ type Daemon struct {
 	reconcileNotify chan struct{}
 
 	logger *slog.Logger
+}
+
+// startFailureCategory classifies why a principal failed to start, so
+// event-driven clearing can target the right subset of failures. For
+// example, a service directory sync only clears "service_resolution"
+// failures, not credential or template failures.
+type startFailureCategory string
+
+const (
+	failureCategoryCredentials       startFailureCategory = "credentials"
+	failureCategoryTemplate          startFailureCategory = "template"
+	failureCategoryNixPrefetch       startFailureCategory = "nix_prefetch"
+	failureCategoryServiceResolution startFailureCategory = "service_resolution"
+	failureCategoryTokenMinting      startFailureCategory = "token_minting"
+	failureCategoryLauncherIPC       startFailureCategory = "launcher_ipc"
+)
+
+// startFailure records a failed sandbox creation attempt for exponential
+// backoff. The daemon skips principals whose nextRetryAt is in the future
+// during the "create missing" reconcile pass.
+type startFailure struct {
+	category    startFailureCategory
+	message     string
+	failedAt    time.Time
+	attempts    int
+	nextRetryAt time.Time
+}
+
+// startFailureBackoffBase is the initial backoff duration after the first
+// failure. Subsequent failures double the backoff up to startFailureBackoffCap.
+const startFailureBackoffBase = 1 * time.Second
+
+// startFailureBackoffCap is the maximum backoff duration. Once reached,
+// retries occur at this fixed interval until the failure is cleared by an
+// event-driven signal (config change, service directory update, etc.).
+const startFailureBackoffCap = 30 * time.Second
+
+// recordStartFailure records or updates a start failure for the given
+// principal with exponential backoff. On the first failure for a principal,
+// the backoff is startFailureBackoffBase (1s). Each subsequent failure
+// doubles the backoff up to startFailureBackoffCap (30s).
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) recordStartFailure(localpart string, category startFailureCategory, message string) {
+	now := d.clock.Now()
+	existing := d.startFailures[localpart]
+	attempts := 1
+	if existing != nil {
+		attempts = existing.attempts + 1
+	}
+
+	backoff := startFailureBackoffBase
+	for range attempts - 1 {
+		backoff *= 2
+		if backoff > startFailureBackoffCap {
+			backoff = startFailureBackoffCap
+			break
+		}
+	}
+
+	d.startFailures[localpart] = &startFailure{
+		category:    category,
+		message:     message,
+		failedAt:    now,
+		attempts:    attempts,
+		nextRetryAt: now.Add(backoff),
+	}
+}
+
+// clearStartFailures removes all start failure entries, allowing immediate
+// retry on the next reconcile cycle. Called when config room state changes
+// (the config may have fixed the root cause) or when a sandbox exits
+// unexpectedly (crash-restart should not be delayed by a previous failure).
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) clearStartFailures() {
+	clear(d.startFailures)
+}
+
+// clearStartFailuresByCategory removes start failure entries matching the
+// given category. Returns the number of entries cleared. Used for targeted
+// clearing: e.g., a service directory sync clears only service resolution
+// failures, not credential or template failures.
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) clearStartFailuresByCategory(category startFailureCategory) int {
+	cleared := 0
+	for localpart, failure := range d.startFailures {
+		if failure.category == category {
+			delete(d.startFailures, localpart)
+			cleared++
+		}
+	}
+	return cleared
+}
+
+// clearStartFailure removes the start failure entry for a single principal.
+// Called when a principal starts successfully or when its sandbox exits
+// (the exit watcher should not inherit stale backoff state).
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) clearStartFailure(localpart string) {
+	delete(d.startFailures, localpart)
 }
 
 // notifyReconcile sends a non-blocking signal on reconcileNotify.

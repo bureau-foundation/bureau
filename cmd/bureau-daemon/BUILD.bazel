@@ -97,6 +97,7 @@ go_test(
         "services_test.go",
         "shutdown_test.go",
         "start_condition_test.go",
+        "start_failure_test.go",
         "sync_test.go",
         "template_test.go",
         "token_blacklist_test.go",

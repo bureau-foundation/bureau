@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/llm"
+	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -26,13 +27,23 @@ type mockProvider struct {
 	// calls return the last response.
 	responses []*llm.Response
 	callCount int
+
+	// lastRequest captures the most recent request for assertions.
+	lastRequest llm.Request
+
+	// allRequests captures every request in order.
+	allRequests []llm.Request
 }
 
 func (provider *mockProvider) Complete(ctx context.Context, request llm.Request) (*llm.Response, error) {
+	provider.lastRequest = request
+	provider.allRequests = append(provider.allRequests, request)
 	return provider.nextResponse(), nil
 }
 
 func (provider *mockProvider) Stream(ctx context.Context, request llm.Request) (*llm.EventStream, error) {
+	provider.lastRequest = request
+	provider.allRequests = append(provider.allRequests, request)
 	response := provider.nextResponse()
 
 	// Build the sequence of stream events that reproduce this response.
@@ -103,14 +114,15 @@ func TestAgentLoop_TextResponse(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "You are a test agent.",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       stdoutWriter,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "You are a test agent.",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Hello, agent!")
 	}()
 
@@ -213,14 +225,15 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "You are a test agent.",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       stdoutWriter,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "You are a test agent.",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Echo hello for me")
 	}()
 
@@ -322,14 +335,15 @@ func TestAgentLoop_MessageInjection(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       stdoutWriter,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Hello")
 	}()
 
@@ -405,14 +419,15 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       io.Discard,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         io.Discard,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "test")
 	}()
 
@@ -458,14 +473,15 @@ func TestAgentLoop_EmptyPromptWaitsForMessage(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       stdoutWriter,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "") // Empty initial prompt.
 	}()
 
@@ -549,14 +565,15 @@ func TestAgentLoop_EmptyPromptStdinClosed(t *testing.T) {
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- runAgentLoop(context.Background(), &agentLoopConfig{
-			provider:     provider,
-			tools:        toolServer,
-			model:        "mock-model",
-			systemPrompt: "",
-			maxTokens:    1024,
-			stdin:        stdinReader,
-			stdout:       io.Discard,
-			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         io.Discard,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "") // Empty initial prompt.
 	}()
 
@@ -571,6 +588,152 @@ func TestAgentLoop_EmptyPromptStdinClosed(t *testing.T) {
 		t.Errorf("LLM called %d times, want 0", provider.callCount)
 	}
 }
+
+// TestAgentLoop_ContextTruncation verifies that when a truncating
+// context manager is used with a small token budget, the LLM receives
+// fewer messages than were appended, and a context_truncated system
+// event is emitted.
+func TestAgentLoop_ContextTruncation(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			// Turn 1 response.
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("Response 1")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 50, OutputTokens: 10},
+			},
+			// Turn 2 response.
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("Response 2")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 50, OutputTokens: 10},
+			},
+			// Turn 3 response.
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("Response 3")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 50, OutputTokens: 10},
+			},
+		},
+	}
+
+	root := &cli.Command{Name: "test"}
+	toolServer := mcp.NewServer(root, nil)
+
+	// The mock estimator returns 100 tokens per message. A budget of
+	// 350 allows at most 3 messages (300 tokens). The conversation
+	// is 3 turns = 6 messages total. By turn 3, the context manager
+	// has 5 messages in its history (500 tokens > 350), forcing it
+	// to evict the middle turn group (turn 2, 2 messages) and send
+	// only 3 messages to the LLM.
+	estimator := &testTokenEstimator{tokensPerMessage: 100}
+	contextManager := llmcontext.NewTruncating(350, estimator)
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: contextManager,
+			model:          "mock-model",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, "Turn 1 prompt")
+	}()
+
+	scanner := bufio.NewScanner(stdoutReader)
+
+	// Turn 1: manager has 1 message (100 tokens ≤ 350). No truncation.
+	for scanner.Scan() {
+		var event loopEvent
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event.Type == "response" && event.Content == "Response 1" {
+			break
+		}
+	}
+	// After turn 1: manager has 2 messages [user, asst] = 200 tokens.
+
+	// Inject turn 2. Manager gets 3 messages [user, asst, user] = 300 tokens ≤ 350.
+	fmt.Fprintln(stdinWriter, "Turn 2 prompt")
+	for scanner.Scan() {
+		var event loopEvent
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event.Type == "response" && event.Content == "Response 2" {
+			break
+		}
+	}
+	// After turn 2: manager has 4 messages = 400 tokens.
+
+	// Inject turn 3. Manager now has 5 messages = 500 tokens > 350.
+	// Messages() must evict the middle turn group (turn 2: user+asst)
+	// to get back under budget: 3 messages = 300 tokens ≤ 350.
+	fmt.Fprintln(stdinWriter, "Turn 3 prompt")
+
+	var sawTruncation bool
+	for scanner.Scan() {
+		var event loopEvent
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event.Type == "system" && event.Subtype == "context_truncated" {
+			sawTruncation = true
+		}
+		if event.Type == "response" && event.Content == "Response 3" {
+			break
+		}
+	}
+
+	if !sawTruncation {
+		t.Error("expected context_truncated system event, but none was emitted")
+	}
+
+	// The 3rd LLM call must have received fewer messages than the 5
+	// that were appended before it. The truncating manager should have
+	// evicted turn 2 (2 messages), leaving 3 messages.
+	if len(provider.allRequests) < 3 {
+		t.Fatalf("expected at least 3 LLM calls, got %d", len(provider.allRequests))
+	}
+	thirdCallMessageCount := len(provider.allRequests[2].Messages)
+	if thirdCallMessageCount != 3 {
+		t.Errorf("third LLM call received %d messages, want 3 (after truncating turn 2)", thirdCallMessageCount)
+	}
+
+	// Verify the first two calls were untruncated.
+	if firstCallCount := len(provider.allRequests[0].Messages); firstCallCount != 1 {
+		t.Errorf("first LLM call received %d messages, want 1", firstCallCount)
+	}
+	if secondCallCount := len(provider.allRequests[1].Messages); secondCallCount != 3 {
+		t.Errorf("second LLM call received %d messages, want 3", secondCallCount)
+	}
+
+	stdinWriter.Close()
+	err := <-loopDone
+	if err != nil {
+		t.Errorf("loop returned error: %v", err)
+	}
+}
+
+// testTokenEstimator returns a deterministic token count based on
+// message count, making truncation tests predictable. This mirrors
+// the mockTokenEstimator in the context package tests.
+type testTokenEstimator struct {
+	tokensPerMessage int
+}
+
+func (estimator *testTokenEstimator) EstimateTokens(messages []llm.Message) int {
+	return len(messages) * estimator.tokensPerMessage
+}
+
+func (estimator *testTokenEstimator) RecordUsage(_ []llm.Message, _ int64) {}
 
 // testEchoCommandTree creates a command tree with a single echo tool.
 func testEchoCommandTree() *cli.Command {

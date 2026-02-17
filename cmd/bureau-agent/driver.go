@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/agent"
 	"github.com/bureau-foundation/bureau/lib/llm"
+	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 )
 
@@ -71,6 +72,43 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		maxTokens = parsed
 	}
 
+	// Compute the context window from the model registry with an
+	// optional override. The context window determines how much
+	// conversation history the agent can maintain before truncation.
+	contextWindow := llmcontext.ContextWindowForModel(model)
+	if contextWindowEnv := os.Getenv("BUREAU_AGENT_CONTEXT_WINDOW"); contextWindowEnv != "" {
+		parsed, parseErr := strconv.Atoi(contextWindowEnv)
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("parsing BUREAU_AGENT_CONTEXT_WINDOW=%q: %w", contextWindowEnv, parseErr)
+		}
+		contextWindow = parsed
+	}
+
+	// Build the token budget and context manager. The budget reserves
+	// space for max output tokens and system prompt overhead, leaving
+	// the remainder for conversation messages.
+	budget := llmcontext.Budget{
+		ContextWindow:   contextWindow,
+		MaxOutputTokens: maxTokens,
+	}
+	messageBudget := budget.MessageTokenBudget()
+	if messageBudget <= 0 {
+		return nil, nil, fmt.Errorf(
+			"context budget exhausted: context window %d tokens, max output %d tokens, "+
+				"leaving %d tokens for messages (need > 0)",
+			contextWindow, maxTokens, messageBudget)
+	}
+
+	estimator := llmcontext.NewCharEstimator()
+	contextManager := llmcontext.NewTruncating(messageBudget, estimator)
+
+	driver.logger.Info("context management configured",
+		"model", model,
+		"context_window", contextWindow,
+		"max_output_tokens", maxTokens,
+		"message_budget", messageBudget,
+	)
+
 	// Read provider selection from environment.
 	providerName := os.Getenv("BUREAU_AGENT_PROVIDER")
 	if providerName == "" {
@@ -121,14 +159,15 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		defer stdoutWriter.Close()
 
 		loopErr := runAgentLoop(loopCtx, &agentLoopConfig{
-			provider:     provider,
-			tools:        mcpServer,
-			model:        model,
-			systemPrompt: systemPrompt,
-			maxTokens:    maxTokens,
-			stdin:        stdinReader,
-			stdout:       stdoutWriter,
-			logger:       driver.logger,
+			provider:       provider,
+			tools:          mcpServer,
+			contextManager: contextManager,
+			model:          model,
+			systemPrompt:   systemPrompt,
+			maxTokens:      maxTokens,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         driver.logger,
 		}, config.Prompt)
 
 		process.mutex.Lock()

@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/llm"
+	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 )
 
 // agentLoopConfig holds the dependencies for the agent loop.
@@ -22,6 +23,12 @@ type agentLoopConfig struct {
 
 	// tools is the MCP server providing tool discovery and execution.
 	tools *mcp.Server
+
+	// contextManager controls how conversation history is stored,
+	// windowed, and prepared for LLM requests. Different implementations
+	// provide different strategies: unbounded (no management), truncating
+	// (drop oldest turns), or future strategies like summarization.
+	contextManager llmcontext.Manager
 
 	// model is the LLM model identifier (e.g., "claude-sonnet-4-5-20250929").
 	model string
@@ -74,9 +81,8 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 	// a wasted LLM call. This also ensures the first LLM call only
 	// happens after the test (or production caller) has had a chance to
 	// register any required services on the proxy.
-	var messages []llm.Message
 	if initialPrompt != "" {
-		messages = []llm.Message{llm.UserMessage(initialPrompt)}
+		config.contextManager.Append(llm.UserMessage(initialPrompt))
 	} else {
 		config.logger.Info("no initial prompt, waiting for first message")
 		if !waitForMessage(ctx, scanner) {
@@ -86,9 +92,14 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		firstMessage := scanner.Text()
 		config.logger.Info("first message received", "length", len(firstMessage))
 		encoder.Encode(loopEvent{Type: "prompt", Content: firstMessage, Source: "injected"})
-		messages = []llm.Message{llm.UserMessage(firstMessage)}
+		config.contextManager.Append(llm.UserMessage(firstMessage))
 	}
 
+	// totalAppended tracks total messages added to the context manager.
+	// Comparing this with len(messages) from Messages() detects when
+	// truncation has occurred, without requiring type assertions on the
+	// Manager implementation.
+	var totalAppended int64 = 1
 	var totalTurns int64
 
 	for {
@@ -97,14 +108,48 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		}
 
 		totalTurns++
+
+		// Get the windowed conversation from the context manager.
+		// The manager may truncate older turn groups to fit within
+		// the token budget.
+		messages, contextErr := config.contextManager.Messages(ctx)
+		if contextErr != nil {
+			config.logger.Warn("context budget exceeded after truncation",
+				"error", contextErr,
+				"appended", totalAppended,
+				"windowed", len(messages),
+			)
+			encoder.Encode(loopEvent{
+				Type:    "system",
+				Subtype: "context_truncated",
+				Message: contextErr.Error(),
+			})
+		} else if int64(len(messages)) < totalAppended {
+			config.logger.Info("context truncated to fit budget",
+				"appended", totalAppended,
+				"windowed", len(messages),
+				"evicted_messages", totalAppended-int64(len(messages)),
+			)
+			encoder.Encode(loopEvent{
+				Type:    "system",
+				Subtype: "context_truncated",
+				Message: fmt.Sprintf("evicted %d messages to fit context budget (%d appended, %d sent)",
+					totalAppended-int64(len(messages)), totalAppended, len(messages)),
+			})
+		}
+
 		config.logger.Info("starting turn", "turn", totalTurns, "messages", len(messages))
 
-		// Call the LLM with the current conversation and tool catalog.
+		// Call the LLM with the windowed conversation and tool catalog.
 		response, err := callLLM(ctx, config, messages, toolDefinitions)
 		if err != nil {
 			encoder.Encode(loopEvent{Type: "error", Message: err.Error()})
 			return fmt.Errorf("LLM call failed on turn %d: %w", totalTurns, err)
 		}
+
+		// Feed actual token usage back to the context manager for
+		// estimator calibration.
+		config.contextManager.RecordUsage(response.Usage)
 
 		// Emit per-turn metrics.
 		encoder.Encode(loopEvent{
@@ -117,10 +162,11 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		})
 
 		// Append the assistant's response to the conversation.
-		messages = append(messages, llm.Message{
+		config.contextManager.Append(llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: response.Content,
 		})
+		totalAppended++
 
 		// Check whether the response contains tool calls.
 		toolUses := response.ToolUses()
@@ -140,7 +186,8 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 			config.logger.Info("message injected", "length", len(injectedMessage))
 			encoder.Encode(loopEvent{Type: "prompt", Content: injectedMessage, Source: "injected"})
 
-			messages = append(messages, llm.UserMessage(injectedMessage))
+			config.contextManager.Append(llm.UserMessage(injectedMessage))
+			totalAppended++
 			continue
 		}
 
@@ -150,7 +197,8 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 
 		// Append tool results as a user message and loop back for
 		// the LLM to process them.
-		messages = append(messages, llm.ToolResultMessage(results...))
+		config.contextManager.Append(llm.ToolResultMessage(results...))
+		totalAppended++
 	}
 }
 

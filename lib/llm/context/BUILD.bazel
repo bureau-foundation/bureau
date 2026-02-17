@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "context",
+    srcs = [
+        "doc.go",
+        "estimator.go",
+        "manager.go",
+        "model.go",
+        "truncating.go",
+        "turn_group.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/llm/context",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/llm"],
+)
+
+go_test(
+    name = "context_test",
+    srcs = [
+        "estimator_test.go",
+        "manager_test.go",
+        "model_test.go",
+        "truncating_test.go",
+        "turn_group_test.go",
+    ],
+    embed = [":context"],
+    deps = ["//lib/llm"],
+)

@@ -17,6 +17,7 @@ go_library(
         "//cmd/bureau/mcp",
         "//lib/agent",
         "//lib/llm",
+        "//lib/llm/context",
         "//lib/proxyclient",
     ],
 )
@@ -39,6 +40,7 @@ go_test(
         "//cmd/bureau/mcp",
         "//lib/agent",
         "//lib/llm",
+        "//lib/llm/context",
         "//lib/schema",
     ],
 )

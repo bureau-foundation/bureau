@@ -30,6 +30,8 @@ go_test(
         "machine_test.go",
         "mcp_test.go",
         "messaging_test.go",
+        "mock_llm_test.go",
+        "native_agent_test.go",
         "payload_test.go",
         "pipeline_test.go",
         "powerlevel_test.go",
@@ -48,6 +50,7 @@ go_test(
     data = [
         "//:MODULE.bazel",
         "//cmd/bureau",
+        "//cmd/bureau-agent",
         "//cmd/bureau-agent-mock",
         "//cmd/bureau-daemon",
         "//cmd/bureau-fleet-controller",
@@ -59,6 +62,7 @@ go_test(
         "//cmd/bureau-ticket-service",
     ],
     env = {
+        "BUREAU_AGENT_BINARY": "$(rlocationpath //cmd/bureau-agent:bureau-agent)",
         "BUREAU_BINARY": "$(rlocationpath //cmd/bureau:bureau)",
         "DAEMON_BINARY": "$(rlocationpath //cmd/bureau-daemon:bureau-daemon)",
         "FLEET_CONTROLLER_BINARY": "$(rlocationpath //cmd/bureau-fleet-controller:bureau-fleet-controller)",

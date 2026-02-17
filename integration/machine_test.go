@@ -48,6 +48,14 @@ func (m *testMachine) PrincipalSocketPath(localpart string) string {
 	return principal.RunDirSocketPath(m.RunDir, localpart)
 }
 
+// PrincipalAdminSocketPath returns the admin socket path for a principal
+// on this machine. The admin socket is on the host side (not
+// bind-mounted into the sandbox) and is used by the daemon and tests
+// to register services on the proxy.
+func (m *testMachine) PrincipalAdminSocketPath(localpart string) string {
+	return principal.RunDirAdminSocketPath(m.RunDir, localpart)
+}
+
 // machineOptions configures process binaries and daemon settings for
 // startMachine. LauncherBinary, DaemonBinary, and FleetRoomID are
 // required; the rest are optional and conditionally passed as CLI flags.

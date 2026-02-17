@@ -2266,7 +2266,7 @@ type CommandResultMessage struct {
 	Result     json.RawMessage      `json:"result,omitempty"`
 	Error      string               `json:"error,omitempty"`
 	ExitCode   *int                 `json:"exit_code,omitempty"`
-	DurationMS int64                `json:"duration_ms,omitempty"`
+	DurationMS int64                `json:"duration_ms"`
 	Steps      []PipelineStepResult `json:"steps,omitempty"`
 	Outputs    map[string]string    `json:"outputs,omitempty"`
 	LogEventID string               `json:"log_event_id,omitempty"`

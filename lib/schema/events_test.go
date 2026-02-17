@@ -547,8 +547,9 @@ func TestCommandResultMessageSuccessRoundTrip(t *testing.T) {
 	assertField(t, raw, "status", "success")
 	assertField(t, raw, "request_id", "req-a7f3")
 
-	// Optional error/pipeline fields should be omitted.
-	for _, field := range []string{"error", "exit_code", "duration_ms", "steps", "log_event_id", "principal"} {
+	// Optional error/pipeline fields should be omitted. Note: duration_ms
+	// is always present (0 means sub-millisecond), so it is not in this list.
+	for _, field := range []string{"error", "exit_code", "steps", "log_event_id", "principal"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("field %q should be omitted from success result", field)
 		}

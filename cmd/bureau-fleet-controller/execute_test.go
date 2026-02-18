@@ -214,9 +214,13 @@ func TestBuildAssignment(t *testing.T) {
 	definition := &schema.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
 		Replicas: schema.ReplicaSpec{Min: 2},
+		Payload:  json.RawMessage(`{"model":"whisper-large","language":"en"}`),
 	}
 
-	assignment := fc.buildAssignment("service/stt/whisper", definition)
+	assignment, err := fc.buildAssignment("service/stt/whisper", definition)
+	if err != nil {
+		t.Fatalf("buildAssignment: %v", err)
+	}
 
 	if assignment.Localpart != "service/stt/whisper" {
 		t.Errorf("localpart = %q, want service/stt/whisper", assignment.Localpart)
@@ -229,6 +233,102 @@ func TestBuildAssignment(t *testing.T) {
 	}
 	if assignment.Labels["fleet_managed"] != "service/fleet/prod" {
 		t.Errorf("fleet_managed label = %q, want service/fleet/prod", assignment.Labels["fleet_managed"])
+	}
+	if assignment.Payload == nil {
+		t.Fatal("Payload should be propagated from definition")
+	}
+	if assignment.Payload["model"] != "whisper-large" {
+		t.Errorf("Payload[model] = %v, want whisper-large", assignment.Payload["model"])
+	}
+	if assignment.Payload["language"] != "en" {
+		t.Errorf("Payload[language] = %v, want en", assignment.Payload["language"])
+	}
+}
+
+func TestBuildAssignmentMalformedPayload(t *testing.T) {
+	fc, _ := newExecuteTestController()
+
+	definition := &schema.FleetServiceContent{
+		Template: "bureau/template:worker",
+		Replicas: schema.ReplicaSpec{Min: 1},
+		Payload:  json.RawMessage(`not valid json`),
+	}
+
+	_, err := fc.buildAssignment("service/worker", definition)
+	if err == nil {
+		t.Fatal("expected error for malformed payload")
+	}
+}
+
+func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
+	fc, _ := newExecuteTestController()
+
+	definition := &schema.FleetServiceContent{
+		Template: "bureau/template:ticket-service",
+		Replicas: schema.ReplicaSpec{Min: 1},
+		MatrixPolicy: &schema.MatrixPolicy{
+			AllowJoin:   true,
+			AllowInvite: true,
+		},
+		ServiceVisibility: []string{"service/**"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"ticket/create", "ticket/update"}},
+			},
+		},
+	}
+
+	assignment, err := fc.buildAssignment("service/ticket", definition)
+	if err != nil {
+		t.Fatalf("buildAssignment: %v", err)
+	}
+
+	if assignment.MatrixPolicy == nil {
+		t.Fatal("MatrixPolicy should be propagated from definition")
+	}
+	if !assignment.MatrixPolicy.AllowJoin {
+		t.Error("MatrixPolicy.AllowJoin should be true")
+	}
+	if !assignment.MatrixPolicy.AllowInvite {
+		t.Error("MatrixPolicy.AllowInvite should be true")
+	}
+
+	if len(assignment.ServiceVisibility) != 1 || assignment.ServiceVisibility[0] != "service/**" {
+		t.Errorf("ServiceVisibility = %v, want [service/**]", assignment.ServiceVisibility)
+	}
+
+	if assignment.Authorization == nil {
+		t.Fatal("Authorization should be propagated from definition")
+	}
+	if len(assignment.Authorization.Grants) != 1 {
+		t.Fatalf("expected 1 grant, got %d", len(assignment.Authorization.Grants))
+	}
+	if assignment.Authorization.Grants[0].Actions[0] != "ticket/create" {
+		t.Errorf("grant action = %q, want ticket/create", assignment.Authorization.Grants[0].Actions[0])
+	}
+}
+
+func TestBuildAssignmentNilAuthorization(t *testing.T) {
+	fc, _ := newExecuteTestController()
+
+	definition := &schema.FleetServiceContent{
+		Template: "bureau/template:worker",
+		Replicas: schema.ReplicaSpec{Min: 1},
+	}
+
+	assignment, err := fc.buildAssignment("service/worker", definition)
+	if err != nil {
+		t.Fatalf("buildAssignment: %v", err)
+	}
+
+	if assignment.MatrixPolicy != nil {
+		t.Errorf("MatrixPolicy should be nil when not set on definition, got %+v", assignment.MatrixPolicy)
+	}
+	if assignment.ServiceVisibility != nil {
+		t.Errorf("ServiceVisibility should be nil when not set on definition, got %v", assignment.ServiceVisibility)
+	}
+	if assignment.Authorization != nil {
+		t.Errorf("Authorization should be nil when not set on definition, got %+v", assignment.Authorization)
 	}
 }
 

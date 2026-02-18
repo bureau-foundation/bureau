@@ -62,15 +62,43 @@ func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalp
 // buildAssignment constructs a PrincipalAssignment for a fleet-managed
 // service. The assignment is tagged with the fleet controller's
 // principalName so it can identify its own assignments later.
-func (fc *FleetController) buildAssignment(serviceLocalpart string, definition *schema.FleetServiceContent) schema.PrincipalAssignment {
+// Authorization fields (MatrixPolicy, ServiceVisibility, Authorization)
+// and Payload are propagated from the fleet service definition.
+func (fc *FleetController) buildAssignment(serviceLocalpart string, definition *schema.FleetServiceContent) (schema.PrincipalAssignment, error) {
+	// FleetServiceContent.Payload is json.RawMessage (opaque Matrix
+	// storage) while PrincipalAssignment.Payload is map[string]any
+	// (Go-side manipulation). Convert here.
+	payload, err := fleetPayloadToMap(definition.Payload)
+	if err != nil {
+		return schema.PrincipalAssignment{}, fmt.Errorf("parsing payload for %s: %w", serviceLocalpart, err)
+	}
+
 	return schema.PrincipalAssignment{
-		Localpart: serviceLocalpart,
-		Template:  definition.Template,
-		AutoStart: true,
+		Localpart:         serviceLocalpart,
+		Template:          definition.Template,
+		AutoStart:         true,
+		Payload:           payload,
+		MatrixPolicy:      definition.MatrixPolicy,
+		ServiceVisibility: definition.ServiceVisibility,
+		Authorization:     definition.Authorization,
 		Labels: map[string]string{
 			"fleet_managed": fc.principalName,
 		},
+	}, nil
+}
+
+// fleetPayloadToMap converts a json.RawMessage payload from a
+// FleetServiceContent to the map[string]any used by PrincipalAssignment.
+// Returns nil if the input is nil or empty.
+func fleetPayloadToMap(raw json.RawMessage) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
 	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("parsing fleet service payload: %w", err)
+	}
+	return result, nil
 }
 
 // place assigns a fleet service to a machine by adding a
@@ -105,7 +133,10 @@ func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineL
 		return err
 	}
 
-	assignment := fc.buildAssignment(serviceLocalpart, serviceState.definition)
+	assignment, err := fc.buildAssignment(serviceLocalpart, serviceState.definition)
+	if err != nil {
+		return err
+	}
 	config.Principals = append(config.Principals, assignment)
 
 	eventID, err := fc.writeMachineConfig(ctx, machineLocalpart, config)

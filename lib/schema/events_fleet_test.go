@@ -255,6 +255,99 @@ func TestFleetServiceContentWithPayload(t *testing.T) {
 	}
 }
 
+func TestFleetServiceContentWithAuthorization(t *testing.T) {
+	service := FleetServiceContent{
+		Template:  "bureau/template:ticket-service",
+		Replicas:  ReplicaSpec{Min: 1},
+		Placement: PlacementConstraints{},
+		Failover:  "migrate",
+		MatrixPolicy: &MatrixPolicy{
+			AllowJoin:       true,
+			AllowInvite:     true,
+			AllowRoomCreate: false,
+		},
+		ServiceVisibility: []string{"service/**"},
+		Authorization: &AuthorizationPolicy{
+			Grants: []Grant{
+				{Actions: []string{"ticket/create", "ticket/update"}},
+			},
+		},
+	}
+
+	data, err := json.Marshal(service)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["matrix_policy"]; !exists {
+		t.Error("matrix_policy should be present in JSON")
+	}
+	visibility, ok := raw["service_visibility"].([]any)
+	if !ok || len(visibility) != 1 {
+		t.Errorf("service_visibility = %v, want [service/**]", raw["service_visibility"])
+	}
+	if _, exists := raw["authorization"]; !exists {
+		t.Error("authorization should be present in JSON")
+	}
+
+	var decoded FleetServiceContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.MatrixPolicy == nil {
+		t.Fatal("MatrixPolicy should not be nil after round-trip")
+	}
+	if !decoded.MatrixPolicy.AllowJoin {
+		t.Error("MatrixPolicy.AllowJoin should be true after round-trip")
+	}
+	if !decoded.MatrixPolicy.AllowInvite {
+		t.Error("MatrixPolicy.AllowInvite should be true after round-trip")
+	}
+	if len(decoded.ServiceVisibility) != 1 || decoded.ServiceVisibility[0] != "service/**" {
+		t.Errorf("ServiceVisibility = %v, want [service/**]", decoded.ServiceVisibility)
+	}
+	if decoded.Authorization == nil {
+		t.Fatal("Authorization should not be nil after round-trip")
+	}
+	if len(decoded.Authorization.Grants) != 1 {
+		t.Fatalf("Grants count = %d, want 1", len(decoded.Authorization.Grants))
+	}
+}
+
+func TestFleetServiceContentOmitsNilAuthorization(t *testing.T) {
+	service := FleetServiceContent{
+		Template:  "bureau/template:worker",
+		Replicas:  ReplicaSpec{Min: 1},
+		Placement: PlacementConstraints{},
+		Failover:  "none",
+	}
+
+	data, err := json.Marshal(service)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["matrix_policy"]; exists {
+		t.Error("matrix_policy should be omitted when nil")
+	}
+	if _, exists := raw["service_visibility"]; exists {
+		t.Error("service_visibility should be omitted when nil")
+	}
+	if _, exists := raw["authorization"]; exists {
+		t.Error("authorization should be omitted when nil")
+	}
+}
+
 func TestMachineDefinitionContentRoundTrip(t *testing.T) {
 	original := MachineDefinitionContent{
 		Provider: "local",

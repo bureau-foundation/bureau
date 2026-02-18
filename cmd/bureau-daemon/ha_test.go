@@ -285,6 +285,10 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 		Template:  "bureau/template:fleet-controller",
 		HAClass:   "critical",
 		Placement: schema.PlacementConstraints{},
+		MatrixPolicy: &schema.MatrixPolicy{
+			AllowJoin: true,
+		},
+		ServiceVisibility: []string{"service/**"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -333,7 +337,8 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machineName)
 	}
 
-	// Verify the config room has the PrincipalAssignment.
+	// Verify the config room has the PrincipalAssignment with authorization
+	// fields propagated from the FleetServiceContent definition.
 	raw, err = daemon.session.GetStateEvent(ctx, daemon.configRoomID,
 		schema.EventTypeMachineConfig, daemon.machineName)
 	if err != nil {
@@ -353,6 +358,15 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 			}
 			if !principal.AutoStart {
 				t.Error("principal should have AutoStart=true")
+			}
+			if principal.MatrixPolicy == nil {
+				t.Fatal("MatrixPolicy should be propagated from fleet service definition")
+			}
+			if !principal.MatrixPolicy.AllowJoin {
+				t.Error("MatrixPolicy.AllowJoin should be true")
+			}
+			if len(principal.ServiceVisibility) != 1 || principal.ServiceVisibility[0] != "service/**" {
+				t.Errorf("ServiceVisibility = %v, want [service/**]", principal.ServiceVisibility)
 			}
 		}
 	}

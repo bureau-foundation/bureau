@@ -422,10 +422,13 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 	}
 
 	assignment := schema.PrincipalAssignment{
-		Localpart: serviceLocalpart,
-		Template:  definition.Template,
-		AutoStart: true,
-		Payload:   payload,
+		Localpart:         serviceLocalpart,
+		Template:          definition.Template,
+		AutoStart:         true,
+		Payload:           payload,
+		MatrixPolicy:      definition.MatrixPolicy,
+		ServiceVisibility: definition.ServiceVisibility,
+		Authorization:     definition.Authorization,
 	}
 
 	w.writePrincipalAssignment(ctx, serviceLocalpart, assignment)

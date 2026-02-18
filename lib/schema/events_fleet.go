@@ -181,6 +181,32 @@ type FleetServiceContent struct {
 	// generates.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
+	// MatrixPolicy controls which self-service Matrix operations principals
+	// created from this fleet service can perform (join rooms, invite
+	// others, create rooms). Propagated to each PrincipalAssignment that
+	// the fleet controller or HA watchdog creates. When nil, the principal
+	// cannot change its own room membership (default-deny).
+	//
+	// Ignored when Authorization is set — the full authorization policy
+	// takes precedence, matching PrincipalAssignment semantics.
+	MatrixPolicy *MatrixPolicy `json:"matrix_policy,omitempty"`
+
+	// ServiceVisibility is a list of glob patterns controlling which
+	// services principals created from this fleet service can discover
+	// via GET /v1/services. Propagated to each PrincipalAssignment.
+	// An empty or nil list means the principal cannot see any services
+	// (default-deny).
+	//
+	// Ignored when Authorization is set.
+	ServiceVisibility []string `json:"service_visibility,omitempty"`
+
+	// Authorization is the full authorization policy for principals
+	// created from this fleet service. Propagated to each
+	// PrincipalAssignment. When set, the daemon uses it for all
+	// authorization decisions and ignores MatrixPolicy and
+	// ServiceVisibility (matching PrincipalAssignment semantics).
+	Authorization *AuthorizationPolicy `json:"authorization,omitempty"`
+
 	// ManagedBy is set by the fleet controller when it claims management
 	// of this service definition. Contains the fleet controller's
 	// localpart. Read-only from the user's perspective — the fleet

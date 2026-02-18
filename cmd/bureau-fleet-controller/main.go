@@ -243,7 +243,7 @@ func run() error {
 type FleetController struct {
 	mu sync.Mutex
 
-	session     *messaging.Session
+	session     *messaging.DirectSession
 	configStore configStore
 	clock       clock.Clock
 
@@ -276,7 +276,7 @@ type FleetController struct {
 
 // resolveMachineRoom resolves the #bureau/machine room alias and joins
 // it. Returns the room ID.
-func resolveMachineRoom(ctx context.Context, session *messaging.Session, serverName string) (string, error) {
+func resolveMachineRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
 	alias := principal.RoomAlias(schema.RoomAliasMachine, serverName)
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {

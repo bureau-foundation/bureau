@@ -55,6 +55,12 @@ func (m *mockProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch {
+	case r.Method == "GET" && r.URL.Path == "/v1/identity":
+		json.NewEncoder(w).Encode(map[string]string{
+			"user_id":     m.whoamiUserID,
+			"server_name": "bureau.local",
+		})
+
 	case r.Method == "GET" && r.URL.Path == "/v1/matrix/whoami":
 		json.NewEncoder(w).Encode(map[string]string{
 			"user_id": m.whoamiUserID,
@@ -573,6 +579,10 @@ type failingMessageProxy struct {
 func (m *failingMessageProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	if r.Method == "GET" && r.URL.Path == "/v1/identity" {
+		json.NewEncoder(w).Encode(map[string]string{"user_id": m.whoamiUserID, "server_name": "bureau.local"})
+		return
+	}
 	if r.Method == "GET" && r.URL.Path == "/v1/matrix/whoami" {
 		json.NewEncoder(w).Encode(map[string]string{"user_id": m.whoamiUserID})
 		return

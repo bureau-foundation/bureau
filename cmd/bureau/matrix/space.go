@@ -262,7 +262,11 @@ reclaim the room.`,
 				return err
 			}
 
-			if err := sess.LeaveRoom(ctx, roomID); err != nil {
+			directSession, ok := sess.(*messaging.DirectSession)
+			if !ok {
+				return cli.Validation("space leave requires operator credentials (not available inside sandboxes)")
+			}
+			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
 				return cli.Internal("leave space: %w", err)
 			}
 
@@ -347,7 +351,7 @@ Displays a table of user ID, display name, and membership state
 // inspectSpaceState fetches room state and determines whether the room is a
 // space. Returns (isSpace, name, canonicalAlias). If the room state cannot be
 // fetched, returns (false, "", "").
-func inspectSpaceState(ctx context.Context, session *messaging.Session, roomID string) (bool, string, string) {
+func inspectSpaceState(ctx context.Context, session messaging.Session, roomID string) (bool, string, string) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return false, "", ""

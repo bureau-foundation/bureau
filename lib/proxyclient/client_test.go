@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // testServer creates a test HTTP server that mimics the proxy API and
@@ -380,7 +381,7 @@ func TestSync(t *testing.T) {
 	client := testServer(t, mux)
 
 	// Initial sync with timeout=0.
-	response, err := client.Sync(context.Background(), SyncOptions{Timeout: 0})
+	response, err := client.Sync(context.Background(), messaging.SyncOptions{Timeout: 0, SetTimeout: true})
 	if err != nil {
 		t.Fatalf("initial Sync: %v", err)
 	}
@@ -392,9 +393,10 @@ func TestSync(t *testing.T) {
 	}
 
 	// Incremental sync with the since token.
-	response, err = client.Sync(context.Background(), SyncOptions{
-		Since:   "s_initial",
-		Timeout: 30000,
+	response, err = client.Sync(context.Background(), messaging.SyncOptions{
+		Since:      "s_initial",
+		Timeout:    30000,
+		SetTimeout: true,
 	})
 	if err != nil {
 		t.Fatalf("incremental Sync: %v", err)
@@ -434,7 +436,7 @@ func TestSyncError(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	_, err := client.Sync(context.Background(), SyncOptions{Timeout: 0})
+	_, err := client.Sync(context.Background(), messaging.SyncOptions{Timeout: 0, SetTimeout: true})
 	if err == nil {
 		t.Fatal("expected error for 401 response")
 	}
@@ -459,5 +461,304 @@ func TestServerName(t *testing.T) {
 	client := New("/tmp/nonexistent.sock", "bureau.local")
 	if client.ServerName() != "bureau.local" {
 		t.Errorf("ServerName = %q, want bureau.local", client.ServerName())
+	}
+}
+
+func TestJoinedRooms(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/joined-rooms", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string][]string{
+			"joined_rooms": {"!room1:test.local", "!room2:test.local"},
+		})
+	})
+
+	client := testServer(t, mux)
+	rooms, err := client.JoinedRooms(context.Background())
+	if err != nil {
+		t.Fatalf("JoinedRooms: %v", err)
+	}
+	if len(rooms) != 2 {
+		t.Fatalf("got %d rooms, want 2", len(rooms))
+	}
+	if rooms[0] != "!room1:test.local" {
+		t.Errorf("rooms[0] = %q, want !room1:test.local", rooms[0])
+	}
+}
+
+func TestGetRoomState(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/room-state", func(writer http.ResponseWriter, request *http.Request) {
+		room := request.URL.Query().Get("room")
+		if room != "!room1:test.local" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `[{"type":"m.room.topic","state_key":"","sender":"@admin:test.local","content":{"topic":"test topic"}}]`)
+	})
+
+	client := testServer(t, mux)
+	events, err := client.GetRoomState(context.Background(), "!room1:test.local")
+	if err != nil {
+		t.Fatalf("GetRoomState: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != "m.room.topic" {
+		t.Errorf("event type = %q, want m.room.topic", events[0].Type)
+	}
+}
+
+func TestGetRoomMembers(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/room-members", func(writer http.ResponseWriter, request *http.Request) {
+		room := request.URL.Query().Get("room")
+		if room != "!room1:test.local" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"chunk":[{"type":"m.room.member","state_key":"@agent/test:test.local","sender":"@admin:test.local","content":{"membership":"join","displayname":"Test Agent"}}]}`)
+	})
+
+	client := testServer(t, mux)
+	members, err := client.GetRoomMembers(context.Background(), "!room1:test.local")
+	if err != nil {
+		t.Fatalf("GetRoomMembers: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("got %d members, want 1", len(members))
+	}
+	if members[0].UserID != "@agent/test:test.local" {
+		t.Errorf("UserID = %q, want @agent/test:test.local", members[0].UserID)
+	}
+	if members[0].DisplayName != "Test Agent" {
+		t.Errorf("DisplayName = %q, want Test Agent", members[0].DisplayName)
+	}
+	if members[0].Membership != "join" {
+		t.Errorf("Membership = %q, want join", members[0].Membership)
+	}
+}
+
+func TestRoomMessages(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/messages", func(writer http.ResponseWriter, request *http.Request) {
+		room := request.URL.Query().Get("room")
+		if room != "!room1:test.local" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"start":"s1","end":"s2","chunk":[{"type":"m.room.message","sender":"@admin:test.local","content":{"msgtype":"m.text","body":"hello"}}]}`)
+	})
+
+	client := testServer(t, mux)
+	response, err := client.RoomMessages(context.Background(), "!room1:test.local", messaging.RoomMessagesOptions{
+		Direction: "b",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("RoomMessages: %v", err)
+	}
+	if response.Start != "s1" {
+		t.Errorf("Start = %q, want s1", response.Start)
+	}
+	if response.End != "s2" {
+		t.Errorf("End = %q, want s2", response.End)
+	}
+	if len(response.Chunk) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(response.Chunk))
+	}
+}
+
+func TestThreadMessages(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/thread-messages", func(writer http.ResponseWriter, request *http.Request) {
+		room := request.URL.Query().Get("room")
+		thread := request.URL.Query().Get("thread")
+		if room != "!room1:test.local" || thread != "$root" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"chunk":[{"type":"m.room.message","sender":"@agent:test.local","content":{"msgtype":"m.text","body":"reply"}}],"next_batch":"nb1"}`)
+	})
+
+	client := testServer(t, mux)
+	response, err := client.ThreadMessages(context.Background(), "!room1:test.local", "$root", messaging.ThreadMessagesOptions{
+		Limit: 25,
+	})
+	if err != nil {
+		t.Fatalf("ThreadMessages: %v", err)
+	}
+	if len(response.Chunk) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(response.Chunk))
+	}
+	if response.NextBatch != "nb1" {
+		t.Errorf("NextBatch = %q, want nb1", response.NextBatch)
+	}
+}
+
+func TestGetDisplayName(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/display-name", func(writer http.ResponseWriter, request *http.Request) {
+		userID := request.URL.Query().Get("user")
+		if userID != "@agent/test:test.local" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"displayname":"Test Agent"}`)
+	})
+
+	client := testServer(t, mux)
+	displayName, err := client.GetDisplayName(context.Background(), "@agent/test:test.local")
+	if err != nil {
+		t.Fatalf("GetDisplayName: %v", err)
+	}
+	if displayName != "Test Agent" {
+		t.Errorf("DisplayName = %q, want Test Agent", displayName)
+	}
+}
+
+func TestGetDisplayNameNotFound(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/display-name", func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(writer).Encode(map[string]string{"error": "not found"})
+	})
+
+	client := testServer(t, mux)
+	_, err := client.GetDisplayName(context.Background(), "@nonexistent:test.local")
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+}
+
+func TestCreateRoom(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/matrix/room", func(writer http.ResponseWriter, request *http.Request) {
+		var body messaging.CreateRoomRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]string{"room_id": "!created:test.local"})
+	})
+
+	client := testServer(t, mux)
+	response, err := client.CreateRoom(context.Background(), messaging.CreateRoomRequest{
+		Name: "Test Room",
+	})
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	if response.RoomID != "!created:test.local" {
+		t.Errorf("RoomID = %q, want !created:test.local", response.RoomID)
+	}
+}
+
+func TestJoinRoom(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/matrix/join", func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Room string `json:"room"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]string{"room_id": body.Room})
+	})
+
+	client := testServer(t, mux)
+	roomID, err := client.JoinRoom(context.Background(), "!target:test.local")
+	if err != nil {
+		t.Fatalf("JoinRoom: %v", err)
+	}
+	if roomID != "!target:test.local" {
+		t.Errorf("RoomID = %q, want !target:test.local", roomID)
+	}
+}
+
+func TestInviteUser(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/matrix/invite", func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Room   string `json:"room"`
+			UserID string `json:"user_id"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if body.Room == "" || body.UserID == "" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Write([]byte("{}"))
+	})
+
+	client := testServer(t, mux)
+	err := client.InviteUser(context.Background(), "!room1:test.local", "@other:test.local")
+	if err != nil {
+		t.Fatalf("InviteUser: %v", err)
+	}
+}
+
+func TestSendEvent(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/matrix/event", func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Room      string `json:"room"`
+			EventType string `json:"event_type"`
+			Content   any    `json:"content"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if body.Room == "" || body.EventType == "" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]string{"event_id": "$evt789"})
+	})
+
+	client := testServer(t, mux)
+	eventID, err := client.SendEvent(context.Background(), "!room1:test.local", "m.bureau.test", map[string]string{"key": "value"})
+	if err != nil {
+		t.Fatalf("SendEvent: %v", err)
+	}
+	if eventID != "$evt789" {
+		t.Errorf("EventID = %q, want $evt789", eventID)
 	}
 }

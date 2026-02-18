@@ -582,7 +582,7 @@ type managedSandbox struct {
 // workspaceRoot, cacheRoot, binaryHash, binaryPath) are set before the listener starts
 // and are safe to read without the lock.
 type Launcher struct {
-	session       *messaging.Session
+	session       *messaging.DirectSession
 	keypair       *sealed.Keypair
 	machineName   string
 	serverName    string
@@ -1413,7 +1413,7 @@ func listenSocket(socketPath string) (net.Listener, error) {
 
 // registerOrLogin registers a new account, or logs in if it already exists.
 // Password and registrationToken are read but not closed — the caller retains ownership.
-func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.Session, error) {
+func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.DirectSession, error) {
 	session, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          username,
 		Password:          password,

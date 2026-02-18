@@ -295,7 +295,7 @@ func (s *pipelineTestState) handleSendEvent(writer http.ResponseWriter, request 
 // newPipelineTestSession creates a mock Matrix session connected to the
 // test server. Returns the session and sets BUREAU_SESSION_FILE so that
 // cli.ConnectOperator() finds it.
-func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.Session {
+func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
 	t.Cleanup(server.Close)

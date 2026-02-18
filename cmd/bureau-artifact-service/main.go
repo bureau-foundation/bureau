@@ -357,7 +357,7 @@ type ArtifactService struct {
 	cache          *artifact.Cache            // nil if no cache directory configured
 	authConfig     *service.AuthConfig        // nil in tests that don't exercise auth
 	encryptionKeys *artifact.EncryptionKeySet // nil if no encryption key provided (local-only mode)
-	session        *messaging.Session
+	session        *messaging.DirectSession
 	clock          clock.Clock
 
 	principalName string

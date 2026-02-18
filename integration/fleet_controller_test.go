@@ -122,7 +122,7 @@ type fleetController struct {
 // Matrix account, writes session credentials, invites the service principal
 // to the required rooms (fleet, machine, service, system), and starts the
 // binary. Returns after the socket file appears on disk.
-func startFleetController(t *testing.T, admin *messaging.Session, machine *testMachine, controllerName, fleetRoomID string) *fleetController {
+func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName, fleetRoomID string) *fleetController {
 	t.Helper()
 
 	ctx := t.Context()
@@ -221,7 +221,7 @@ func fleetClient(t *testing.T, fc *fleetController, token []byte) *service.Servi
 
 // publishFleetService publishes a FleetServiceContent state event to
 // the fleet room. The state key is the service localpart.
-func publishFleetService(t *testing.T, admin *messaging.Session, fleetRoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
+func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
 	t.Helper()
 
 	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
@@ -234,7 +234,7 @@ func publishFleetService(t *testing.T, admin *messaging.Session, fleetRoomID, se
 // config room and grants it PL 50 so it can read/write MachineConfig for
 // placement. The admin (PL 100) reads current power levels, adds the fleet
 // controller at PL 50, and writes the updated power levels back.
-func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.Session, fc *fleetController, machine *testMachine) {
+func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSession, fc *fleetController, machine *testMachine) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -349,7 +349,7 @@ func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetControlle
 // get a daemon-minted fleet service token, which the test uses to
 // authenticate fleet controller API calls. Returns the template
 // reference string.
-func publishFleetOperatorTemplate(t *testing.T, admin *messaging.Session, machine *testMachine) string {
+func publishFleetOperatorTemplate(t *testing.T, admin *messaging.DirectSession, machine *testMachine) string {
 	t.Helper()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
@@ -396,7 +396,7 @@ func publishFleetOperatorTemplate(t *testing.T, admin *messaging.Session, machin
 // token. The principal uses the fleet operator template which has
 // RequiredServices: ["fleet"], so the daemon mints a fleet token with
 // the filtered grants.
-func deployFleetOperator(t *testing.T, admin *messaging.Session, machine *testMachine, localpart, templateRef string, grants []string) []byte {
+func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, machine *testMachine, localpart, templateRef string, grants []string) []byte {
 	t.Helper()
 
 	account := registerPrincipal(t, localpart, localpart+"-password")
@@ -422,7 +422,7 @@ func deployFleetOperator(t *testing.T, admin *messaging.Session, machine *testMa
 // reads this binding on demand when resolving RequiredServices during
 // sandbox creation — the binding must exist before any principal with
 // RequiredServices: ["fleet"] is deployed.
-func publishFleetServiceBinding(t *testing.T, admin *messaging.Session, machine *testMachine, fc *fleetController) {
+func publishFleetServiceBinding(t *testing.T, admin *messaging.DirectSession, machine *testMachine, fc *fleetController) {
 	t.Helper()
 
 	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,

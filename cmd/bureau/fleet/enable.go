@@ -233,7 +233,7 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 // Active machines are discovered from m.bureau.machine_key state events in
 // #bureau/machine. Machines with empty key content (decommissioned) are
 // skipped. Returns the number of config rooms successfully updated.
-func publishFleetBindings(ctx context.Context, session *messaging.Session, serviceUserID, serverName string) (int, error) {
+func publishFleetBindings(ctx context.Context, session messaging.Session, serviceUserID, serverName string) (int, error) {
 	machineAlias := schema.FullRoomAlias(schema.RoomAliasMachine, serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
@@ -281,7 +281,7 @@ func publishFleetBindings(ctx context.Context, session *messaging.Session, servi
 // publishFleetAssignment adds the fleet controller to the machine's
 // MachineConfig via read-modify-write. AutoStart is false because the
 // fleet controller binary is externally managed.
-func publishFleetAssignment(ctx context.Context, session *messaging.Session, host, servicePrincipal, name, serverName string) error {
+func publishFleetAssignment(ctx context.Context, session messaging.Session, host, servicePrincipal, name, serverName string) error {
 	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {

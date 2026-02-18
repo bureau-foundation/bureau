@@ -234,7 +234,7 @@ type TicketService struct {
 	// shared state.
 	mu sync.RWMutex
 
-	session  *messaging.Session
+	session  *messaging.DirectSession
 	writer   matrixWriter
 	resolver aliasResolver
 	clock    clock.Clock

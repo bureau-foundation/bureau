@@ -411,7 +411,7 @@ func runBureauOrFail(t *testing.T, args ...string) string {
 
 // adminSession creates an authenticated Matrix session using the credentials
 // written by setup. The caller must close the returned session.
-func adminSession(t *testing.T) *messaging.Session {
+func adminSession(t *testing.T) *messaging.DirectSession {
 	t.Helper()
 
 	credentials := loadCredentials(t)
@@ -475,7 +475,7 @@ func loadCredentials(t *testing.T) map[string]string {
 // createFleetRoom creates a private fleet room for a single test. Each
 // test gets its own room to prevent cross-contamination between parallel
 // tests that publish fleet services or run fleet controllers.
-func createFleetRoom(t *testing.T, admin *messaging.Session) string {
+func createFleetRoom(t *testing.T, admin *messaging.DirectSession) string {
 	t.Helper()
 	response, err := admin.CreateRoom(t.Context(), messaging.CreateRoomRequest{
 		Preset:                    "private_chat",
@@ -747,7 +747,7 @@ func initTestGitRepo(t *testing.T, ctx context.Context, directory string) {
 // client-side sleep or polling interval. Waits are bounded by t.Context()
 // (test timeout).
 type roomWatch struct {
-	session   *messaging.Session
+	session   *messaging.DirectSession
 	roomID    string
 	nextBatch string            // sync token capturing the stream position at watch creation
 	pending   []messaging.Event // events received from sync but not yet consumed by a Wait call
@@ -755,7 +755,7 @@ type roomWatch struct {
 
 // watchRoom captures the current position in the Matrix sync stream. The
 // returned roomWatch only sees events arriving after this call returns.
-func watchRoom(t *testing.T, session *messaging.Session, roomID string) roomWatch {
+func watchRoom(t *testing.T, session *messaging.DirectSession, roomID string) roomWatch {
 	t.Helper()
 	response, err := session.Sync(t.Context(), messaging.SyncOptions{
 		SetTimeout: true,

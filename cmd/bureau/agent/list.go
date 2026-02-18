@@ -165,7 +165,7 @@ func runList(params agentListParams) error {
 // readAgentServiceState reads the agent session and metrics state events
 // for a given location. Returns nil for either if not found or on error
 // (best-effort enrichment).
-func readAgentServiceState(ctx context.Context, session *messaging.Session, location principal.Location) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
+func readAgentServiceState(ctx context.Context, session messaging.Session, location principal.Location) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
 	localpart := location.Assignment.Localpart
 	roomID := location.ConfigRoomID
 

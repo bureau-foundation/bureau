@@ -432,7 +432,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 // createTestWorkspaceRoom creates a workspace room for integration tests.
 // The room is created with WorkspaceRoomPowerLevels, the machine is invited,
 // and the room is added as a child of the Bureau space.
-func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, machineUserID, adminUserID, spaceRoomID string) string {
+func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias, machineUserID, adminUserID, spaceRoomID string) string {
 	t.Helper()
 
 	ctx := t.Context()
@@ -468,7 +468,7 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.Session, alias, mach
 // The watch is created BEFORE checking current state, so events that arrive
 // between the GetStateEvent check and the first /sync are not lost.
 // Bounded by t.Context() (test timeout), not an explicit deadline.
-func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, expectedStatus string) {
+func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, roomID, expectedStatus string) {
 	t.Helper()
 
 	// Create the watch first to capture the sync stream position. Events
@@ -515,7 +515,7 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.Session, roomID, ex
 // (m.bureau.worktree) in the workspace room to reach the expected status.
 // The state key matches the worktree path (e.g., "feature/test-branch").
 // Uses the same watch-then-check pattern as waitForWorkspaceStatus.
-func waitForWorktreeStatus(t *testing.T, session *messaging.Session, roomID, worktreePath, expectedStatus string) {
+func waitForWorktreeStatus(t *testing.T, session *messaging.DirectSession, roomID, worktreePath, expectedStatus string) {
 	t.Helper()
 
 	watch := watchRoom(t, session, roomID)
@@ -554,7 +554,7 @@ func waitForWorktreeStatus(t *testing.T, session *messaging.Session, roomID, wor
 // published AFTER the pipeline's own publish steps (e.g., workspace status
 // "active"), so it may not exist yet when the workspace status watch returns.
 // Uses the same watch-then-check pattern as waitForWorkspaceStatus.
-func verifyPipelineResult(t *testing.T, session *messaging.Session, roomID, pipelineName, expectedConclusion string) {
+func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID, pipelineName, expectedConclusion string) {
 	t.Helper()
 
 	// Set up watch before checking current state, same as waitForWorkspaceStatus.

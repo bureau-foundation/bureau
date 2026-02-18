@@ -136,7 +136,7 @@ func (state *templateTestState) handleGetStateEvent(writer http.ResponseWriter, 
 }
 
 // newTemplateTestSession creates a messaging session pointing at the mock server.
-func newTemplateTestSession(t *testing.T, state *templateTestState) *messaging.Session {
+func newTemplateTestSession(t *testing.T, state *templateTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
 	t.Cleanup(server.Close)

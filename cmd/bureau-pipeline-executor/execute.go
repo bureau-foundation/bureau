@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
-	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // defaultStepTimeout is used when a step does not specify its own timeout.
@@ -44,7 +44,7 @@ type stepResult struct {
 //
 // The artifacts client may be nil — artifact-mode outputs will fail with
 // a clear error if the artifact service is not available.
-func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, proxy *proxyclient.Client, artifacts *artifact.Client, logger *threadLogger) stepResult {
+func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, session messaging.Session, artifacts *artifact.Client, logger *threadLogger) stepResult {
 	startTime := time.Now()
 
 	// Parse timeout.
@@ -146,12 +146,7 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 			}
 		}
 	} else if step.Publish != nil {
-		_, err := proxy.PutState(stepContext, proxyclient.PutStateRequest{
-			Room:      step.Publish.Room,
-			EventType: step.Publish.EventType,
-			StateKey:  step.Publish.StateKey,
-			Content:   step.Publish.Content,
-		})
+		_, err := session.SendStateEvent(stepContext, step.Publish.Room, step.Publish.EventType, step.Publish.StateKey, step.Publish.Content)
 		if err != nil {
 			return stepResult{
 				status:   "failed",
@@ -160,7 +155,7 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 			}
 		}
 	} else if step.AssertState != nil {
-		assertResult := executeAssertState(stepContext, step.AssertState, proxy)
+		assertResult := executeAssertState(stepContext, step.AssertState, session)
 		if assertResult.err != nil {
 			return stepResult{
 				status:   assertResult.status,
@@ -211,9 +206,9 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 //
 // The "fail" status (default) means the assertion is a hard requirement that
 // was not met, and the pipeline should report failure.
-func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, proxy *proxyclient.Client) stepResult {
+func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, session messaging.Session) stepResult {
 	// Read the state event.
-	rawContent, err := proxy.GetState(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
+	rawContent, err := session.GetStateEvent(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
 	if err != nil {
 		return stepResult{
 			status: "failed",

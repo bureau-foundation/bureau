@@ -8,7 +8,10 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-test-agent",
     visibility = ["//visibility:private"],
-    deps = ["//lib/proxyclient"],
+    deps = [
+        "//lib/proxyclient",
+        "//messaging",
+    ],
 )
 
 go_binary(

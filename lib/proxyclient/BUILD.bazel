@@ -5,18 +5,28 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "proxyclient",
-    srcs = ["client.go"],
+    srcs = [
+        "client.go",
+        "proxy_session.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/proxyclient",
     visibility = ["//visibility:public"],
     deps = [
         "//lib/netutil",
         "//lib/schema",
+        "//messaging",
     ],
 )
 
 go_test(
     name = "proxyclient_test",
-    srcs = ["client_test.go"],
+    srcs = [
+        "client_test.go",
+        "proxy_session_test.go",
+    ],
     embed = [":proxyclient"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/schema",
+        "//messaging",
+    ],
 )

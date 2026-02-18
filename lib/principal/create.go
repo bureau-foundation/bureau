@@ -23,7 +23,7 @@ import (
 // credential.Provision under the hood. This function type breaks the import
 // cycle between lib/principal (which defines Create) and lib/credential
 // (which implements the encryption and publishing workflow).
-type ProvisionFunc func(ctx context.Context, session *messaging.Session, machineName, principalLocalpart, serverName string, credentials map[string]string) (configRoomID string, err error)
+type ProvisionFunc func(ctx context.Context, session messaging.Session, machineName, principalLocalpart, serverName string, credentials map[string]string) (configRoomID string, err error)
 
 // CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
@@ -117,7 +117,7 @@ type CreateResult struct {
 // If the account already exists (M_USER_IN_USE), Create returns an error.
 // Re-provisioning an existing principal requires explicit credential rotation
 // via bureau credential provision.
-func Create(ctx context.Context, client *messaging.Client, session *messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (*CreateResult, error) {
+func Create(ctx context.Context, client *messaging.Client, session messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (*CreateResult, error) {
 	if err := ValidateLocalpart(params.MachineName); err != nil {
 		return nil, fmt.Errorf("invalid machine name: %w", err)
 	}
@@ -228,7 +228,7 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 // assignPrincipal reads the current MachineConfig, merges the new
 // PrincipalAssignment, and publishes the updated config. If the principal
 // is already assigned, its entry is updated in place.
-func assignPrincipal(ctx context.Context, session *messaging.Session, configRoomID string, params CreateParams) (string, error) {
+func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID string, params CreateParams) (string, error) {
 	var config schema.MachineConfig
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, params.MachineName)
 	if err == nil {

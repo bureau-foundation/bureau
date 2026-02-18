@@ -128,7 +128,7 @@ func loadMatrixConfig(configPath, serverName string) (*matrixConfig, error) {
 }
 
 // createSession creates an authenticated Matrix session from the config.
-func createSession(config *matrixConfig) (*messaging.Session, error) {
+func createSession(config *matrixConfig) (*messaging.DirectSession, error) {
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: config.HomeserverURL,
 		Logger:        slog.Default(),

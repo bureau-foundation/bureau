@@ -242,7 +242,7 @@ func run() error {
 type AgentService struct {
 	mutex sync.RWMutex
 
-	session *messaging.Session
+	session *messaging.DirectSession
 	clock   clock.Clock
 
 	principalName    string

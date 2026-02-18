@@ -93,12 +93,12 @@ func (c *Client) ServerVersions(ctx context.Context) (*ServerVersionsResponse, e
 }
 
 // Register creates a new account using token-authenticated registration (MSC3231).
-// Returns a Session for the newly created account.
+// Returns a DirectSession for the newly created account.
 //
 // The registration flow uses the User-Interactive Authentication API (UIAA):
 //   - First request returns 401 with available flows.
 //   - Second request includes the auth stage with the registration token.
-func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Session, error) {
+func (c *Client) Register(ctx context.Context, request RegisterRequest) (*DirectSession, error) {
 	if request.Username == "" {
 		return nil, fmt.Errorf("messaging: username is required for registration")
 	}
@@ -167,9 +167,9 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (*Sessio
 	return c.sessionFromAuth(&authResponse)
 }
 
-// Login authenticates with username and password, returning a Session.
+// Login authenticates with username and password, returning a DirectSession.
 // The password Buffer is read but not closed — the caller retains ownership.
-func (c *Client) Login(ctx context.Context, username string, password *secret.Buffer) (*Session, error) {
+func (c *Client) Login(ctx context.Context, username string, password *secret.Buffer) (*DirectSession, error) {
 	if username == "" {
 		return nil, fmt.Errorf("messaging: username is required for login")
 	}
@@ -203,7 +203,7 @@ func (c *Client) Login(ctx context.Context, username string, password *secret.Bu
 	return c.sessionFromAuth(&authResponse)
 }
 
-// ProxySession creates a Session that relies on an external proxy for
+// ProxySession creates a DirectSession that relies on an external proxy for
 // credential injection. No access token is stored — the proxy intercepts
 // outgoing requests and adds the Authorization header. This is the
 // connection path for code running inside a Bureau sandbox, where
@@ -211,14 +211,14 @@ func (c *Client) Login(ctx context.Context, username string, password *secret.Bu
 //
 // userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local"),
 // typically obtained from the proxy's /v1/identity endpoint.
-func (c *Client) ProxySession(userID string) *Session {
-	return &Session{
+func (c *Client) ProxySession(userID string) *DirectSession {
+	return &DirectSession{
 		client: c,
 		userID: userID,
 	}
 }
 
-// SessionFromToken creates a Session from an existing access token string.
+// SessionFromToken creates a DirectSession from an existing access token string.
 // The token is moved into mmap-backed memory (locked against swap, excluded
 // from core dumps). The original string remains on the heap briefly — it will
 // be collected by the GC, but the mmap buffer is the durable copy.
@@ -226,25 +226,25 @@ func (c *Client) ProxySession(userID string) *Session {
 // This does NOT validate the token — the first API call will fail if invalid.
 // userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local").
 //
-// The caller must call Close on the returned Session when done.
-func (c *Client) SessionFromToken(userID, accessToken string) (*Session, error) {
+// The caller must call Close on the returned DirectSession when done.
+func (c *Client) SessionFromToken(userID, accessToken string) (*DirectSession, error) {
 	tokenBuffer, err := secret.NewFromBytes([]byte(accessToken))
 	if err != nil {
 		return nil, fmt.Errorf("messaging: protecting access token: %w", err)
 	}
-	return &Session{
+	return &DirectSession{
 		client:      c,
 		accessToken: tokenBuffer,
 		userID:      userID,
 	}, nil
 }
 
-func (c *Client) sessionFromAuth(auth *AuthResponse) (*Session, error) {
+func (c *Client) sessionFromAuth(auth *AuthResponse) (*DirectSession, error) {
 	tokenBuffer, err := secret.NewFromBytes([]byte(auth.AccessToken))
 	if err != nil {
 		return nil, fmt.Errorf("messaging: protecting access token: %w", err)
 	}
-	return &Session{
+	return &DirectSession{
 		client:      c,
 		accessToken: tokenBuffer,
 		userID:      auth.UserID,

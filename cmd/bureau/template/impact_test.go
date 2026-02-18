@@ -218,7 +218,7 @@ func (s *impactTestState) handleGetStateEvent(writer http.ResponseWriter, path s
 	writer.Write(content)
 }
 
-func newImpactTestSession(t *testing.T, state *impactTestState) *messaging.Session {
+func newImpactTestSession(t *testing.T, state *impactTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
 	t.Cleanup(server.Close)

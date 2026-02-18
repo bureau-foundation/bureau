@@ -27,6 +27,7 @@ go_library(
         "//lib/netutil",
         "//lib/schema",
         "//lib/secret",
+        "//messaging",
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )

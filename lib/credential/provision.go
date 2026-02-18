@@ -73,7 +73,7 @@ type ProvisionResult struct {
 //
 // The session must have permission to read the machine room (for the public
 // key) and write state events to the config room.
-func Provision(ctx context.Context, session *messaging.Session, params ProvisionParams) (*ProvisionResult, error) {
+func Provision(ctx context.Context, session messaging.Session, params ProvisionParams) (*ProvisionResult, error) {
 	if err := principal.ValidateLocalpart(params.MachineName); err != nil {
 		return nil, fmt.Errorf("invalid machine name: %w", err)
 	}

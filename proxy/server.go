@@ -70,6 +70,16 @@ func NewServer(config ServerConfig) (*Server, error) {
 	agentMux.HandleFunc("GET /v1/matrix/state", handler.HandleMatrixGetState)
 	agentMux.HandleFunc("POST /v1/matrix/state", handler.HandleMatrixPutState)
 	agentMux.HandleFunc("POST /v1/matrix/message", handler.HandleMatrixSendMessage)
+	agentMux.HandleFunc("GET /v1/matrix/joined-rooms", handler.HandleMatrixJoinedRooms)
+	agentMux.HandleFunc("GET /v1/matrix/room-state", handler.HandleMatrixGetRoomState)
+	agentMux.HandleFunc("GET /v1/matrix/room-members", handler.HandleMatrixGetRoomMembers)
+	agentMux.HandleFunc("GET /v1/matrix/messages", handler.HandleMatrixMessages)
+	agentMux.HandleFunc("GET /v1/matrix/thread-messages", handler.HandleMatrixThreadMessages)
+	agentMux.HandleFunc("GET /v1/matrix/display-name", handler.HandleMatrixGetDisplayName)
+	agentMux.HandleFunc("POST /v1/matrix/room", handler.HandleMatrixCreateRoom)
+	agentMux.HandleFunc("POST /v1/matrix/join", handler.HandleMatrixJoinRoom)
+	agentMux.HandleFunc("POST /v1/matrix/invite", handler.HandleMatrixInviteUser)
+	agentMux.HandleFunc("POST /v1/matrix/event", handler.HandleMatrixSendEvent)
 	agentMux.HandleFunc("/http/", handler.HandleHTTPProxy)
 
 	server := &Server{

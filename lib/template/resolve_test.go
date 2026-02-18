@@ -123,7 +123,7 @@ func (state *templateTestState) handleGetStateEvent(writer http.ResponseWriter, 
 	writer.Write(content)
 }
 
-func newTestSession(t *testing.T, state *templateTestState) *messaging.Session {
+func newTestSession(t *testing.T, state *templateTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
 	t.Cleanup(server.Close)

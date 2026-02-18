@@ -1356,7 +1356,7 @@ func TestExecuteFixes(t *testing.T) {
 		{
 			Name: "check2", Status: statusFail, Message: "broken",
 			FixHint: "fix it",
-			fix: func(ctx context.Context, session *messaging.Session) error {
+			fix: func(ctx context.Context, session messaging.Session) error {
 				called = true
 				return nil
 			},
@@ -1385,7 +1385,7 @@ func TestExecuteFixes(t *testing.T) {
 
 func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
 	results := []checkResult{
-		failWithFix("check1", "broken", "fix it", func(ctx context.Context, session *messaging.Session) error {
+		failWithFix("check1", "broken", "fix it", func(ctx context.Context, session messaging.Session) error {
 			t.Error("fix should not be called in dry-run mode")
 			return nil
 		}),
@@ -1554,7 +1554,7 @@ func TestRunDoctor_FleetBindings_NoController(t *testing.T) {
 }
 
 func TestFailWithFix(t *testing.T) {
-	result := failWithFix("test", "broken", "repair it", func(ctx context.Context, session *messaging.Session) error {
+	result := failWithFix("test", "broken", "repair it", func(ctx context.Context, session messaging.Session) error {
 		return nil
 	})
 	if result.Status != statusFail {

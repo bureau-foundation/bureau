@@ -208,7 +208,7 @@ func matchStateEventCondition(gate *schema.TicketGate, event messaging.Event) bo
 // --- Cross-room gate evaluation ---
 
 // aliasResolver resolves Matrix room aliases to room IDs. The
-// *messaging.Session implements this interface. Tests substitute a
+// *messaging.DirectSession implements this interface. Tests substitute a
 // fake implementation.
 type aliasResolver interface {
 	ResolveAlias(ctx context.Context, alias string) (string, error)

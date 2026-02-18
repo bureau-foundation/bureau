@@ -270,7 +270,7 @@ and proceeds directly to ensuring room membership.`,
 // (from the credential file) handles invites; the user's own session
 // handles joins. Each step is idempotent: already-invited users skip
 // the invite, already-joined users skip the join.
-func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID string, userSession *messaging.Session) error {
+func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID string, userSession *messaging.DirectSession) error {
 	adminUserID := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
@@ -457,7 +457,7 @@ authenticated user has joined.`,
 }
 
 // listRoomMembers lists members of a single room, resolving aliases as needed.
-func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAlias string, jsonOutput *cli.JSONOutput) error {
+func listRoomMembers(ctx context.Context, session messaging.Session, roomIDOrAlias string, jsonOutput *cli.JSONOutput) error {
 	roomID, err := resolveRoom(ctx, session, roomIDOrAlias)
 	if err != nil {
 		return err
@@ -490,7 +490,7 @@ func listRoomMembers(ctx context.Context, session *messaging.Session, roomIDOrAl
 
 // listAllMembers aggregates unique members across all joined rooms, fetching
 // display names for each unique user.
-func listAllMembers(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
+func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *cli.JSONOutput) error {
 	rooms, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return cli.Internal("get joined rooms: %w", err)
@@ -704,7 +704,11 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				return err
 			}
 
-			if err := sess.KickUser(ctx, roomID, targetUserID, params.Reason); err != nil {
+			directSession, ok := sess.(*messaging.DirectSession)
+			if !ok {
+				return cli.Validation("user kick requires operator credentials (not available inside sandboxes)")
+			}
+			if err := directSession.KickUser(ctx, roomID, targetUserID, params.Reason); err != nil {
 				return cli.Internal("kick user: %w", err)
 			}
 

@@ -18,7 +18,7 @@ import (
 //
 // Used by CLI commands that perform operator-level Matrix operations
 // (listing templates, fetching pipelines, pushing state events, etc.).
-func ConnectOperator() (context.Context, context.CancelFunc, *messaging.Session, error) {
+func ConnectOperator() (context.Context, context.CancelFunc, messaging.Session, error) {
 	operatorSession, err := LoadSession()
 	if err != nil {
 		return nil, nil, nil, err

@@ -224,7 +224,7 @@ type roomEntry struct {
 
 // listSpaceChildren lists rooms that are children of a space by reading
 // m.space.child state events from the space, then inspecting each child.
-func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTarget string, jsonOutput *cli.JSONOutput) error {
+func listSpaceChildren(ctx context.Context, session messaging.Session, spaceTarget string, jsonOutput *cli.JSONOutput) error {
 	spaceRoomID, err := resolveRoom(ctx, session, spaceTarget)
 	if err != nil {
 		return cli.NotFound("resolve space: %w", err)
@@ -269,7 +269,7 @@ func listSpaceChildren(ctx context.Context, session *messaging.Session, spaceTar
 }
 
 // listAllRooms lists all joined rooms that are not spaces.
-func listAllRooms(ctx context.Context, session *messaging.Session, jsonOutput *cli.JSONOutput) error {
+func listAllRooms(ctx context.Context, session messaging.Session, jsonOutput *cli.JSONOutput) error {
 	roomIDs, err := session.JoinedRooms(ctx)
 	if err != nil {
 		return cli.Internal("list joined rooms: %w", err)
@@ -305,7 +305,7 @@ func listAllRooms(ctx context.Context, session *messaging.Session, jsonOutput *c
 // inspectRoomState fetches room state and extracts name, canonical alias,
 // and topic. Returns empty strings for fields that aren't set or if the
 // room state can't be fetched.
-func inspectRoomState(ctx context.Context, session *messaging.Session, roomID string) (name, alias, topic string) {
+func inspectRoomState(ctx context.Context, session messaging.Session, roomID string) (name, alias, topic string) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return "", "", ""
@@ -395,7 +395,11 @@ to clear the m.space.child event in the space.`,
 				return err
 			}
 
-			if err := sess.LeaveRoom(ctx, roomID); err != nil {
+			directSession, ok := sess.(*messaging.DirectSession)
+			if !ok {
+				return cli.Validation("room leave requires operator credentials (not available inside sandboxes)")
+			}
+			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
 				return cli.Internal("leave room: %w", err)
 			}
 

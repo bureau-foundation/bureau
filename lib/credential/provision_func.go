@@ -15,7 +15,7 @@ import (
 // provisioning workflow (machine key lookup, age encryption, state event
 // publishing) into the function signature that principal.Create expects.
 func AsProvisionFunc() principal.ProvisionFunc {
-	return func(ctx context.Context, session *messaging.Session, machineName, localpart, serverName string, credentials map[string]string) (string, error) {
+	return func(ctx context.Context, session messaging.Session, machineName, localpart, serverName string, credentials map[string]string) (string, error) {
 		result, err := Provision(ctx, session, ProvisionParams{
 			MachineName: machineName,
 			Principal:   localpart,

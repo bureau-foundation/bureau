@@ -33,7 +33,7 @@ type Location struct {
 // is provided directly).
 //
 // Returns an error if the principal is not found on any machine.
-func Resolve(ctx context.Context, session *messaging.Session, localpart, machineName, serverName string) (*Location, int, error) {
+func Resolve(ctx context.Context, session messaging.Session, localpart, machineName, serverName string) (*Location, int, error) {
 	if machineName != "" {
 		location, err := readFromMachine(ctx, session, localpart, machineName, serverName)
 		if err != nil {
@@ -63,7 +63,7 @@ func Resolve(ctx context.Context, session *messaging.Session, localpart, machine
 // If machineName is empty, enumerates all machines from #bureau/machine
 // and reads each machine's config. Returns the total number of machines
 // scanned in the second return value.
-func List(ctx context.Context, session *messaging.Session, machineName, serverName string) ([]Location, int, error) {
+func List(ctx context.Context, session messaging.Session, machineName, serverName string) ([]Location, int, error) {
 	if machineName != "" {
 		locations, err := listOnMachine(ctx, session, machineName, serverName)
 		if err != nil {
@@ -94,7 +94,7 @@ func List(ctx context.Context, session *messaging.Session, machineName, serverNa
 
 // readFromMachine reads a specific machine's config and finds the
 // named principal.
-func readFromMachine(ctx context.Context, session *messaging.Session, localpart, machineName, serverName string) (*Location, error) {
+func readFromMachine(ctx context.Context, session messaging.Session, localpart, machineName, serverName string) (*Location, error) {
 	configRoomID, config, err := readMachineConfig(ctx, session, machineName, serverName)
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func readFromMachine(ctx context.Context, session *messaging.Session, localpart,
 }
 
 // listOnMachine reads a machine's config and returns all assignments.
-func listOnMachine(ctx context.Context, session *messaging.Session, machineName, serverName string) ([]Location, error) {
+func listOnMachine(ctx context.Context, session messaging.Session, machineName, serverName string) ([]Location, error) {
 	configRoomID, config, err := readMachineConfig(ctx, session, machineName, serverName)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func listOnMachine(ctx context.Context, session *messaging.Session, machineName,
 
 // readMachineConfig resolves a machine's config room and reads its
 // MachineConfig state event.
-func readMachineConfig(ctx context.Context, session *messaging.Session, machineName, serverName string) (string, *schema.MachineConfig, error) {
+func readMachineConfig(ctx context.Context, session messaging.Session, machineName, serverName string) (string, *schema.MachineConfig, error) {
 	configAlias := RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
@@ -159,7 +159,7 @@ func readMachineConfig(ctx context.Context, session *messaging.Session, machineN
 // enumerateMachines reads #bureau/machine room state to find all machine
 // localparts. Machines publish m.bureau.machine_status state events keyed
 // by their localpart.
-func enumerateMachines(ctx context.Context, session *messaging.Session, serverName string) ([]string, error) {
+func enumerateMachines(ctx context.Context, session messaging.Session, serverName string) ([]string, error) {
 	machineAlias := RoomAlias(schema.RoomAliasMachine, serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {

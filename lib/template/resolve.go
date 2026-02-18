@@ -25,7 +25,7 @@ import (
 // appears on the current resolution stack, an error is returned. Diamond
 // inheritance (two parents sharing a common ancestor) is valid and handled
 // efficiently via a resolution cache.
-func Resolve(ctx context.Context, session *messaging.Session, templateRef string, serverName string) (*schema.TemplateContent, error) {
+func Resolve(ctx context.Context, session messaging.Session, templateRef string, serverName string) (*schema.TemplateContent, error) {
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
 		return nil, fmt.Errorf("parsing template reference %q: %w", templateRef, err)
@@ -44,7 +44,7 @@ func Resolve(ctx context.Context, session *messaging.Session, templateRef string
 // re-fetch or re-resolve the same template. stack tracks the current
 // resolution path for cycle detection: a ref appearing in stack means
 // we are already resolving it (a cycle).
-func resolve(ctx context.Context, session *messaging.Session, ref schema.TemplateRef, serverName string, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
+func resolve(ctx context.Context, session messaging.Session, ref schema.TemplateRef, serverName string, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
 	refString := ref.String()
 
 	// Check resolution cache first (handles diamond inheritance).
@@ -102,7 +102,7 @@ func resolve(ctx context.Context, session *messaging.Session, ref schema.Templat
 // Fetch resolves a single template reference to its content. It resolves
 // the room alias to a room ID, then fetches the m.bureau.template state
 // event for the template name. No inheritance resolution is performed.
-func Fetch(ctx context.Context, session *messaging.Session, ref schema.TemplateRef, serverName string) (*schema.TemplateContent, error) {
+func Fetch(ctx context.Context, session messaging.Session, ref schema.TemplateRef, serverName string) (*schema.TemplateContent, error) {
 	roomAlias := ref.RoomAlias(serverName)
 	roomID, err := session.ResolveAlias(ctx, roomAlias)
 	if err != nil {

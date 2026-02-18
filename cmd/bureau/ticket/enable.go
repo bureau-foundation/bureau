@@ -265,7 +265,7 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 }
 
 // getSpaceChildren returns the room IDs of all child rooms in a space.
-func getSpaceChildren(ctx context.Context, session *messaging.Session, spaceRoomID string) ([]string, error) {
+func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomID string) ([]string, error) {
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
 		return nil, cli.Internal("fetching space state: %w", err)
@@ -291,7 +291,7 @@ func getSpaceChildren(ctx context.Context, session *messaging.Session, spaceRoom
 // rebuildAuthorizationIndex processes ALL principals regardless of
 // AutoStart, so the service appears in the authorization index for
 // grant resolution and service token minting.
-func publishPrincipalAssignment(ctx context.Context, session *messaging.Session, host, servicePrincipal, space, serverName string) error {
+func publishPrincipalAssignment(ctx context.Context, session messaging.Session, host, servicePrincipal, space, serverName string) error {
 	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
@@ -342,7 +342,7 @@ func publishPrincipalAssignment(ctx context.Context, session *messaging.Session,
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
-func configureRoom(ctx context.Context, session *messaging.Session, roomID, serviceUserID, prefix string) error {
+func configureRoom(ctx context.Context, session messaging.Session, roomID, serviceUserID, prefix string) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := schema.TicketConfigContent{
 		Version: schema.TicketConfigVersion,
@@ -384,7 +384,7 @@ func configureRoom(ctx context.Context, session *messaging.Session, roomID, serv
 //   - m.bureau.ticket event type requires PL 10
 //   - m.bureau.ticket_config requires PL 100 (admin-only)
 //   - m.bureau.room_service requires PL 100 (admin-only)
-func configureTicketPowerLevels(ctx context.Context, session *messaging.Session, roomID, serviceUserID string) error {
+func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID, serviceUserID string) error {
 	// Read current power levels.
 	content, err := session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {

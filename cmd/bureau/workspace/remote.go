@@ -29,7 +29,7 @@ type commandResult struct {
 // resolveWorkspaceRoom validates the alias and resolves it to a Matrix
 // room ID. The alias is the Bureau localpart (e.g., "iree/amdgpu/inference")
 // without the leading # or trailing :server.
-func resolveWorkspaceRoom(ctx context.Context, session *messaging.Session, alias, serverName string) (string, error) {
+func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string) (string, error) {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return "", cli.Validation("invalid alias %q: %w", alias, err)
 	}
@@ -50,7 +50,7 @@ func resolveWorkspaceRoom(ctx context.Context, session *messaging.Session, alias
 // Returns the parent workspace's room ID, its parsed workspace state,
 // and the alias localpart that matched. Returns an error if no parent
 // workspace is found.
-func findParentWorkspace(ctx context.Context, session *messaging.Session, alias, serverName string) (string, *schema.WorkspaceState, string, error) {
+func findParentWorkspace(ctx context.Context, session messaging.Session, alias, serverName string) (string, *schema.WorkspaceState, string, error) {
 	// Walk up the alias path, dropping the last segment each time.
 	remaining := alias
 	for {
@@ -88,7 +88,7 @@ func findParentWorkspace(ctx context.Context, session *messaging.Session, alias,
 // daemon processes via /sync.
 func sendWorkspaceCommand(
 	ctx context.Context,
-	session *messaging.Session,
+	session messaging.Session,
 	roomID string,
 	commandName string,
 	workspace string,
@@ -125,7 +125,7 @@ func sendWorkspaceCommand(
 // slow ones (fetch, pipeline execution).
 func waitForCommandResult(
 	ctx context.Context,
-	session *messaging.Session,
+	session messaging.Session,
 	roomID string,
 	commandEventID string,
 	requestID string,
@@ -218,7 +218,7 @@ func extractSubpath(alias, workspaceAlias string) (string, error) {
 // readWorkspaceState reads and parses the m.bureau.workspace state
 // event from a room. Returns an error if the event doesn't exist or
 // can't be parsed.
-func readWorkspaceState(ctx context.Context, session *messaging.Session, roomID string) (*schema.WorkspaceState, error) {
+func readWorkspaceState(ctx context.Context, session messaging.Session, roomID string) (*schema.WorkspaceState, error) {
 	raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return nil, cli.Internal("reading workspace state: %w", err)

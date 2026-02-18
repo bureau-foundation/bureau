@@ -221,7 +221,7 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 // in the config room and clears them by sending empty content. Returns the
 // state keys (principal localparts) of credentials that were successfully
 // cleared, plus any errors encountered reading room state.
-func clearConfigRoomCredentials(ctx context.Context, session *messaging.Session, roomID string) ([]string, error) {
+func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID string) ([]string, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, cli.Internal("read config room state: %w", err)

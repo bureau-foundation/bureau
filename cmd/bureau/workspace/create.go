@@ -290,7 +290,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // the Bureau space. Handles the M_ROOM_IN_USE race condition (resolve alias →
 // create → retry resolve if someone else created it between our check and
 // create).
-func ensureWorkspaceRoom(ctx context.Context, session *messaging.Session, alias, serverName, adminUserID, machineUserID, spaceRoomID string) (string, error) {
+func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName, adminUserID, machineUserID, spaceRoomID string) (string, error) {
 	fullAlias := principal.RoomAlias(alias, serverName)
 
 	// Check if the room already exists.
@@ -454,7 +454,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 // MachineConfig state event: reads the existing config (if any), appends
 // new principal assignments (skipping duplicates by localpart), and
 // publishes the updated config.
-func updateMachineConfig(ctx context.Context, session *messaging.Session, machine, serverName string, newAssignments []schema.PrincipalAssignment) error {
+func updateMachineConfig(ctx context.Context, session messaging.Session, machine, serverName string, newAssignments []schema.PrincipalAssignment) error {
 	configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {

@@ -9,12 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/bureau-foundation/bureau/lib/netutil"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/netutil"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // Structured Matrix API endpoints for sandboxed processes.
@@ -150,17 +151,18 @@ func (h *Handler) copyResponseBody(w http.ResponseWriter, body io.Reader, endpoi
 	}
 }
 
-// HandleMatrixWhoami handles GET /v1/matrix/whoami. Returns the agent's
-// Matrix user ID by forwarding to /_matrix/client/v3/account/whoami.
-func (h *Handler) HandleMatrixWhoami(w http.ResponseWriter, r *http.Request) {
+// forwardSimpleGet forwards a parameterless GET request to the Matrix
+// homeserver at the given path and streams the response to the client.
+// Used for endpoints that need no query parameters (whoami, joined-rooms).
+func (h *Handler) forwardSimpleGet(w http.ResponseWriter, r *http.Request, matrixPath, endpoint string) {
 	service := h.getMatrixService(w)
 	if service == nil {
 		return
 	}
 
-	response, err := service.ForwardRequest(r.Context(), http.MethodGet, "/_matrix/client/v3/account/whoami", nil)
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, matrixPath, nil)
 	if err != nil {
-		h.logger.Error("matrix whoami failed", "error", err)
+		h.logger.Error("matrix "+endpoint+" failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
@@ -170,7 +172,55 @@ func (h *Handler) HandleMatrixWhoami(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	h.copyResponseBody(w, response.Body, "whoami")
+	h.copyResponseBody(w, response.Body, endpoint)
+}
+
+// forwardRoomGet resolves a room from the "room" query parameter and forwards
+// a GET request to a room-scoped Matrix endpoint. The pathSuffix is appended
+// after the room ID (e.g., "/state", "/members").
+func (h *Handler) forwardRoomGet(w http.ResponseWriter, r *http.Request, pathSuffix, endpoint string) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	room := r.URL.Query().Get("room")
+	if room == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room query parameter is required"})
+		return
+	}
+
+	roomID, err := h.resolveRoom(r, service, room)
+	if err != nil {
+		h.logger.Error("matrix "+endpoint+": room resolution failed", "room", room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + pathSuffix
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		h.logger.Error("matrix "+endpoint+" failed", "room", roomID, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, endpoint)
+}
+
+// HandleMatrixWhoami handles GET /v1/matrix/whoami. Returns the agent's
+// Matrix user ID by forwarding to /_matrix/client/v3/account/whoami.
+func (h *Handler) HandleMatrixWhoami(w http.ResponseWriter, r *http.Request) {
+	h.forwardSimpleGet(w, r, "/_matrix/client/v3/account/whoami", "whoami")
 }
 
 // HandleMatrixResolve handles GET /v1/matrix/resolve?alias=<alias>. Resolves
@@ -388,4 +438,404 @@ func (h *Handler) HandleMatrixSendMessage(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	h.copyResponseBody(w, response.Body, "send_message")
+}
+
+// HandleMatrixJoinedRooms handles GET /v1/matrix/joined-rooms. Returns the
+// list of room IDs the agent has joined via GET /_matrix/client/v3/joined_rooms.
+func (h *Handler) HandleMatrixJoinedRooms(w http.ResponseWriter, r *http.Request) {
+	h.forwardSimpleGet(w, r, "/_matrix/client/v3/joined_rooms", "joined_rooms")
+}
+
+// HandleMatrixGetRoomState handles GET /v1/matrix/room-state?room=<id>.
+// Returns all current state events from the room via
+// GET /_matrix/client/v3/rooms/{roomId}/state.
+func (h *Handler) HandleMatrixGetRoomState(w http.ResponseWriter, r *http.Request) {
+	h.forwardRoomGet(w, r, "/state", "get_room_state")
+}
+
+// HandleMatrixGetRoomMembers handles GET /v1/matrix/room-members?room=<id>.
+// Returns room membership via GET /_matrix/client/v3/rooms/{roomId}/members.
+func (h *Handler) HandleMatrixGetRoomMembers(w http.ResponseWriter, r *http.Request) {
+	h.forwardRoomGet(w, r, "/members", "get_room_members")
+}
+
+// HandleMatrixMessages handles GET /v1/matrix/messages?room=<id>&from=...&dir=...&limit=...
+// Fetches paginated room messages via GET /_matrix/client/v3/rooms/{roomId}/messages.
+func (h *Handler) HandleMatrixMessages(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	room := r.URL.Query().Get("room")
+	if room == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room query parameter is required"})
+		return
+	}
+
+	roomID, err := h.resolveRoom(r, service, room)
+	if err != nil {
+		h.logger.Error("matrix messages: room resolution failed", "room", room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+
+	// Build upstream query parameters from the client request.
+	upstreamQuery := url.Values{}
+	if from := r.URL.Query().Get("from"); from != "" {
+		upstreamQuery.Set("from", from)
+	}
+	direction := r.URL.Query().Get("dir")
+	if direction == "" {
+		direction = "b"
+	}
+	upstreamQuery.Set("dir", direction)
+	if limit := r.URL.Query().Get("limit"); limit != "" {
+		upstreamQuery.Set("limit", limit)
+	}
+
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/messages?" + upstreamQuery.Encode()
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		h.logger.Error("matrix messages failed", "room", roomID, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "messages")
+}
+
+// HandleMatrixThreadMessages handles GET /v1/matrix/thread-messages?room=<id>&thread=<eventId>&from=...&limit=...
+// Fetches thread messages via GET /_matrix/client/v3/rooms/{roomId}/relations/{eventId}/m.thread.
+func (h *Handler) HandleMatrixThreadMessages(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	room := r.URL.Query().Get("room")
+	thread := r.URL.Query().Get("thread")
+	if room == "" || thread == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and thread query parameters are required"})
+		return
+	}
+
+	roomID, err := h.resolveRoom(r, service, room)
+	if err != nil {
+		h.logger.Error("matrix thread messages: room resolution failed", "room", room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+
+	upstreamQuery := url.Values{}
+	if from := r.URL.Query().Get("from"); from != "" {
+		upstreamQuery.Set("from", from)
+	}
+	if limit := r.URL.Query().Get("limit"); limit != "" {
+		upstreamQuery.Set("limit", limit)
+	}
+
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/relations/" + url.PathEscape(thread) + "/m.thread"
+	if len(upstreamQuery) > 0 {
+		path += "?" + upstreamQuery.Encode()
+	}
+
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		h.logger.Error("matrix thread messages failed", "room", roomID, "thread", thread, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "thread_messages")
+}
+
+// HandleMatrixGetDisplayName handles GET /v1/matrix/display-name?user=<userId>.
+// Fetches a user's display name via GET /_matrix/client/v3/profile/{userId}/displayname.
+func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	userID := r.URL.Query().Get("user")
+	if userID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "user query parameter is required"})
+		return
+	}
+
+	path := "/_matrix/client/v3/profile/" + url.PathEscape(userID) + "/displayname"
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		h.logger.Error("matrix get display name failed", "user", userID, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "get_display_name")
+}
+
+// MatrixCreateRoomRequest is the JSON body for POST /v1/matrix/room.
+// Reuses the messaging.CreateRoomRequest type directly — the proxy forwards
+// the entire request body to the homeserver's POST /createRoom endpoint.
+type MatrixCreateRoomRequest = messaging.CreateRoomRequest
+
+// HandleMatrixCreateRoom handles POST /v1/matrix/room. Creates a room via
+// POST /_matrix/client/v3/createRoom. Requires the matrix/create-room grant.
+func (h *Handler) HandleMatrixCreateRoom(w http.ResponseWriter, r *http.Request) {
+	if !h.requireGrant(w, "matrix/create-room") {
+		return
+	}
+
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	// Read the request body and forward it directly to the homeserver.
+	// The request body is the Matrix createRoom JSON (room name, alias, etc.).
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("reading request body: %v", err)})
+		return
+	}
+
+	h.logger.Info("matrix create room")
+
+	response, err := service.ForwardRequest(r.Context(), http.MethodPost, "/_matrix/client/v3/createRoom", bytes.NewReader(body))
+	if err != nil {
+		h.logger.Error("matrix create room failed", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "create_room")
+}
+
+// MatrixJoinRequest is the JSON body for POST /v1/matrix/join.
+type MatrixJoinRequest struct {
+	// Room is the room ID or alias to join.
+	Room string `json:"room"`
+}
+
+// HandleMatrixJoinRoom handles POST /v1/matrix/join. Joins a room via
+// POST /_matrix/client/v3/join/{roomIdOrAlias}. Requires the matrix/join grant.
+func (h *Handler) HandleMatrixJoinRoom(w http.ResponseWriter, r *http.Request) {
+	if !h.requireGrant(w, "matrix/join") {
+		return
+	}
+
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	var request MatrixJoinRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+
+	if request.Room == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room is required"})
+		return
+	}
+
+	path := "/_matrix/client/v3/join/" + url.PathEscape(request.Room)
+
+	h.logger.Info("matrix join room", "room", request.Room)
+
+	// The join endpoint requires a POST with an empty JSON body.
+	response, err := service.ForwardRequest(r.Context(), http.MethodPost, path, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		h.logger.Error("matrix join room failed", "room", request.Room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "join_room")
+}
+
+// MatrixInviteRequest is the JSON body for POST /v1/matrix/invite.
+type MatrixInviteRequest struct {
+	// Room is the room ID to invite the user to. Aliases are resolved.
+	Room string `json:"room"`
+	// UserID is the Matrix user ID to invite.
+	UserID string `json:"user_id"`
+}
+
+// HandleMatrixInviteUser handles POST /v1/matrix/invite. Invites a user to a
+// room via POST /_matrix/client/v3/rooms/{roomId}/invite. Requires the
+// matrix/invite grant.
+func (h *Handler) HandleMatrixInviteUser(w http.ResponseWriter, r *http.Request) {
+	if !h.requireGrant(w, "matrix/invite") {
+		return
+	}
+
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	var request MatrixInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+
+	if request.Room == "" || request.UserID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and user_id are required"})
+		return
+	}
+
+	roomID, err := h.resolveRoom(r, service, request.Room)
+	if err != nil {
+		h.logger.Error("matrix invite: room resolution failed", "room", request.Room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+
+	// Build the invite request body for the homeserver.
+	inviteBody, _ := json.Marshal(messaging.InviteRequest{UserID: request.UserID})
+
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/invite"
+
+	h.logger.Info("matrix invite user", "room", roomID, "user", request.UserID)
+
+	response, err := service.ForwardRequest(r.Context(), http.MethodPost, path, bytes.NewReader(inviteBody))
+	if err != nil {
+		h.logger.Error("matrix invite failed", "room", roomID, "user", request.UserID, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "invite_user")
+}
+
+// MatrixSendEventRequest is the JSON body for POST /v1/matrix/event.
+type MatrixSendEventRequest struct {
+	// Room is the room ID or alias.
+	Room string `json:"room"`
+	// EventType is the Matrix event type (e.g., "m.room.message",
+	// "m.bureau.pipeline_request").
+	EventType string `json:"event_type"`
+	// Content is the event content, forwarded as-is to the homeserver.
+	Content any `json:"content"`
+}
+
+// HandleMatrixSendEvent handles POST /v1/matrix/event. Sends an event of any
+// type to a room via PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}.
+// Transaction IDs are generated automatically.
+func (h *Handler) HandleMatrixSendEvent(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	var request MatrixSendEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+
+	if request.Room == "" || request.EventType == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and event_type are required"})
+		return
+	}
+
+	roomID, err := h.resolveRoom(r, service, request.Room)
+	if err != nil {
+		h.logger.Error("matrix send event: room resolution failed", "room", request.Room, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+
+	contentBody, err := json.Marshal(request.Content)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid content: %v", err)})
+		return
+	}
+
+	transactionID := fmt.Sprintf("bureau_%d_%d", time.Now().UnixMilli(), matrixTransactionCounter.Add(1))
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/send/" + url.PathEscape(request.EventType) + "/" + url.PathEscape(transactionID)
+
+	h.logger.Info("matrix send event",
+		"room", roomID,
+		"event_type", request.EventType,
+		"txn_id", transactionID,
+	)
+
+	response, err := service.ForwardRequest(r.Context(), http.MethodPut, path, bytes.NewReader(contentBody))
+	if err != nil {
+		h.logger.Error("matrix send event failed", "room", roomID, "event_type", request.EventType, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "send_event")
 }

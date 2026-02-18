@@ -164,7 +164,7 @@ or prefix (e.g., --type 'm.bureau.*').`,
 
 // buildInspectResult fetches room state and members, then organizes them into
 // a structured inspectResult.
-func buildInspectResult(ctx context.Context, session *messaging.Session, roomID, typeFilter string) (*inspectResult, error) {
+func buildInspectResult(ctx context.Context, session messaging.Session, roomID, typeFilter string) (*inspectResult, error) {
 	stateEvents, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, cli.Internal("get room state: %w", err)

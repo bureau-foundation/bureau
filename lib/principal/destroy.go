@@ -27,7 +27,7 @@ type DestroyResult struct {
 // The daemon detects the config change via /sync and tears down the
 // principal's sandbox. The principal's Matrix account is preserved
 // for audit trail purposes.
-func Destroy(ctx context.Context, session *messaging.Session, configRoomID, machineName, localpart string) (*DestroyResult, error) {
+func Destroy(ctx context.Context, session messaging.Session, configRoomID, machineName, localpart string) (*DestroyResult, error) {
 	configRaw, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName)
 	if err != nil {
 		return nil, fmt.Errorf("read machine config for %s: %w", machineName, err)

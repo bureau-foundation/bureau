@@ -677,7 +677,7 @@ func writeServiceSession(t *testing.T, stateDir string, account principalAccount
 }
 
 // resolveGlobalRooms resolves #bureau/system and #bureau/service room IDs.
-func resolveGlobalRooms(t *testing.T, admin *messaging.Session) (systemRoomID, serviceRoomID string) {
+func resolveGlobalRooms(t *testing.T, admin *messaging.DirectSession) (systemRoomID, serviceRoomID string) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -696,7 +696,7 @@ func resolveGlobalRooms(t *testing.T, admin *messaging.Session) (systemRoomID, s
 
 // inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN
 // (already joined).
-func inviteToRooms(t *testing.T, admin *messaging.Session, userID string, roomIDs ...string) {
+func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID string, roomIDs ...string) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -713,7 +713,7 @@ func inviteToRooms(t *testing.T, admin *messaging.Session, userID string, roomID
 // room service binding, and appropriate power levels. Invites the ticket
 // service account and any additional users (machine accounts, etc.)
 // so they can participate.
-func createTicketProjectRoom(t *testing.T, admin *messaging.Session, name, ticketServiceUserID string, additionalInvites ...string) string {
+func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name, ticketServiceUserID string, additionalInvites ...string) string {
 	t.Helper()
 
 	ctx := t.Context()
@@ -807,7 +807,7 @@ func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string
 // readTicketState reads the current m.bureau.ticket state event for a
 // known ticket ID. Used after operations (update, close, reopen) where
 // the ticket ID is already known from a previous waitForTicket call.
-func readTicketState(t *testing.T, admin *messaging.Session, roomID, ticketID string) schema.TicketContent {
+func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID, ticketID string) schema.TicketContent {
 	t.Helper()
 
 	raw, err := admin.GetStateEvent(t.Context(), roomID, schema.EventTypeTicket, ticketID)

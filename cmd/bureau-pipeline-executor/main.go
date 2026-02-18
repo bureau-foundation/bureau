@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 const (
@@ -67,6 +68,16 @@ func run() error {
 	if _, err := proxy.DiscoverServerName(ctx); err != nil {
 		return fmt.Errorf("proxy connection failed (is the proxy running at %s?): %w", socketPath, err)
 	}
+
+	// Get the principal's identity for creating a Matrix session.
+	// The proxy client is still needed for proxy-specific operations
+	// (ServerName, pipeline ref resolution), but all Matrix operations
+	// (state events, messages, room resolution) use the session.
+	identity, err := proxy.Identity(ctx)
+	if err != nil {
+		return fmt.Errorf("proxy identity: %w", err)
+	}
+	session := proxyclient.NewProxySession(proxy, identity.UserID)
 
 	// Resolve pipeline definition.
 	payloadPath := os.Getenv("BUREAU_PAYLOAD_PATH")
@@ -127,7 +138,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("expanding log.room: %w", err)
 		}
-		logger, err = newThreadLogger(ctx, proxy, logRoom, name, len(content.Steps))
+		logger, err = newThreadLogger(ctx, session, logRoom, name, len(content.Steps))
 		if err != nil {
 			return fmt.Errorf("creating pipeline log thread: %w", err)
 		}
@@ -177,13 +188,13 @@ func run() error {
 			results.writeFailed(step.Name, err.Error(),
 				totalDuration.Milliseconds(), logger.logEventID())
 			logger.logFailed(ctx, name, step.Name, err)
-			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+			publishPipelineResult(ctx, session, logger, name, len(content.Steps),
 				"failure", pipelineStart, totalDuration, stepResults, nil,
 				step.Name, err.Error())
 			return fmt.Errorf("expanding step %q: %w", step.Name, err)
 		}
 
-		result := executeStep(ctx, expandedStep, index, len(content.Steps), proxy, artifacts, logger)
+		result := executeStep(ctx, expandedStep, index, len(content.Steps), session, artifacts, logger)
 
 		switch result.status {
 		case "aborted":
@@ -203,7 +214,7 @@ func run() error {
 				Error:      result.err.Error(),
 			})
 			totalDuration := time.Since(pipelineStart)
-			publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+			publishPipelineResult(ctx, session, logger, name, len(content.Steps),
 				"aborted", pipelineStart, totalDuration, stepResults, nil,
 				expandedStep.Name, result.err.Error())
 			return nil
@@ -239,12 +250,12 @@ func run() error {
 				// These are best-effort: their failures are logged but do not
 				// change the pipeline's overall outcome.
 				runOnFailureSteps(ctx, content.OnFailure, variables,
-					expandedStep.Name, result.err, proxy, artifacts, logger, results)
+					expandedStep.Name, result.err, session, artifacts, logger, results)
 
 				totalDuration := time.Since(pipelineStart)
 				results.writeFailed(expandedStep.Name, result.err.Error(),
 					totalDuration.Milliseconds(), logger.logEventID())
-				publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+				publishPipelineResult(ctx, session, logger, name, len(content.Steps),
 					"failure", pipelineStart, totalDuration, stepResults, nil,
 					expandedStep.Name, result.err.Error())
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
@@ -285,7 +296,7 @@ func run() error {
 				totalDuration := time.Since(pipelineStart)
 				results.writeFailed("", fmt.Sprintf("resolving pipeline output %q: %v", outputName, err),
 					totalDuration.Milliseconds(), logger.logEventID())
-				publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+				publishPipelineResult(ctx, session, logger, name, len(content.Steps),
 					"failure", pipelineStart, totalDuration, stepResults, nil,
 					"", fmt.Sprintf("resolving pipeline output %q: %v", outputName, err))
 				return fmt.Errorf("resolving pipeline output %q: %w", outputName, err)
@@ -298,7 +309,7 @@ func run() error {
 	fmt.Printf("[pipeline] %s: complete (%s)\n", name, formatDuration(totalDuration))
 	logger.logComplete(ctx, name, totalDuration)
 	results.writeComplete(totalDuration.Milliseconds(), logger.logEventID(), pipelineOutputs)
-	publishPipelineResult(ctx, proxy, logger, name, len(content.Steps),
+	publishPipelineResult(ctx, session, logger, name, len(content.Steps),
 		"success", pipelineStart, totalDuration, stepResults, pipelineOutputs,
 		"", "")
 	return nil
@@ -314,7 +325,7 @@ func run() error {
 // output for the daemon; the state event is for cross-service coordination.
 func publishPipelineResult(
 	ctx context.Context,
-	proxy *proxyclient.Client,
+	session messaging.Session,
 	logger *threadLogger,
 	pipelineName string,
 	stepCount int,
@@ -346,12 +357,7 @@ func publishPipelineResult(
 		LogEventID:   logger.logEventID(),
 	}
 
-	if _, err := proxy.PutState(ctx, proxyclient.PutStateRequest{
-		Room:      roomID,
-		EventType: schema.EventTypePipelineResult,
-		StateKey:  pipelineName,
-		Content:   result,
-	}); err != nil {
+	if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipelineResult, pipelineName, result); err != nil {
 		fmt.Printf("[pipeline] warning: failed to publish pipeline result event: %v\n", err)
 	}
 }
@@ -375,7 +381,7 @@ func runOnFailureSteps(
 	variables map[string]string,
 	failedStepName string,
 	failedError error,
-	proxy *proxyclient.Client,
+	session messaging.Session,
 	artifacts *artifact.Client,
 	logger *threadLogger,
 	results *resultLog,
@@ -401,7 +407,7 @@ func runOnFailureSteps(
 			continue
 		}
 
-		result := executeStep(ctx, expandedStep, index, len(steps), proxy, artifacts, logger)
+		result := executeStep(ctx, expandedStep, index, len(steps), session, artifacts, logger)
 
 		switch result.status {
 		case "ok", "skipped":

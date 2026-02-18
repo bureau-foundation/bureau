@@ -34,7 +34,7 @@ type SessionData struct {
 //
 // The caller must call Session.Close when the session is no longer
 // needed to release the guarded memory.
-func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messaging.Client, *messaging.Session, error) {
+func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messaging.Client, *messaging.DirectSession, error) {
 	sessionPath := filepath.Join(stateDir, "session.json")
 
 	jsonData, err := os.ReadFile(sessionPath)
@@ -79,7 +79,7 @@ func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messagin
 //
 // The JSON bytes are zeroed after writing to limit the window during
 // which the access token exists in process memory as cleartext.
-func SaveSession(stateDir, homeserverURL string, session *messaging.Session) error {
+func SaveSession(stateDir, homeserverURL string, session *messaging.DirectSession) error {
 	data := SessionData{
 		HomeserverURL: homeserverURL,
 		UserID:        session.UserID(),
@@ -105,7 +105,7 @@ func SaveSession(stateDir, homeserverURL string, session *messaging.Session) err
 // ValidateSession calls WhoAmI to verify the session's access token
 // is still valid and returns the authenticated user ID. This should
 // be called once at startup after LoadSession.
-func ValidateSession(ctx context.Context, session *messaging.Session) (string, error) {
+func ValidateSession(ctx context.Context, session *messaging.DirectSession) (string, error) {
 	userID, err := session.WhoAmI(ctx)
 	if err != nil {
 		return "", fmt.Errorf("validating matrix session: %w", err)

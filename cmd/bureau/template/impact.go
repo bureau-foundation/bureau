@@ -136,7 +136,7 @@ type impactResult struct {
 
 // impactAnalyzer holds state for the impact analysis.
 type impactAnalyzer struct {
-	session    *messaging.Session
+	session    messaging.Session
 	serverName string
 	ctx        context.Context
 	cache      map[string]*schema.TemplateContent

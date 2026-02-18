@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // threadLogger posts pipeline progress to a Matrix thread. A root message
@@ -18,7 +18,7 @@ import (
 // lets the executor call logging methods unconditionally without checking
 // whether thread logging is configured.
 type threadLogger struct {
-	proxy       *proxyclient.Client
+	session     messaging.Session
 	roomID      string
 	rootEventID string
 }
@@ -32,28 +32,24 @@ type threadLogger struct {
 // Returns an error if the thread cannot be created. The caller should
 // treat this as fatal when observation is configured — running a pipeline
 // with no record of what happened is worse than not running at all.
-func newThreadLogger(ctx context.Context, proxy *proxyclient.Client, room string, pipelineName string, stepCount int) (*threadLogger, error) {
+func newThreadLogger(ctx context.Context, session messaging.Session, room string, pipelineName string, stepCount int) (*threadLogger, error) {
 	roomID := room
 	if len(room) > 0 && room[0] == '#' {
-		resolved, err := proxy.ResolveAlias(ctx, room)
+		resolved, err := session.ResolveAlias(ctx, room)
 		if err != nil {
 			return nil, fmt.Errorf("resolving log room %q: %w", room, err)
 		}
 		roomID = resolved
 	}
 
-	rootMessage := map[string]string{
-		"msgtype": "m.text",
-		"body":    fmt.Sprintf("Pipeline %s started (%d steps)", pipelineName, stepCount),
-	}
-
-	rootEventID, err := proxy.SendMessage(ctx, roomID, rootMessage)
+	body := fmt.Sprintf("Pipeline %s started (%d steps)", pipelineName, stepCount)
+	rootEventID, err := session.SendMessage(ctx, roomID, messaging.NewTextMessage(body))
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline thread in %s: %w", roomID, err)
 	}
 
 	return &threadLogger{
-		proxy:       proxy,
+		session:     session,
 		roomID:      roomID,
 		rootEventID: rootEventID,
 	}, nil
@@ -123,20 +119,12 @@ func (l *threadLogger) logAborted(ctx context.Context, name, stepName string, er
 }
 
 func (l *threadLogger) sendThreadReply(ctx context.Context, body string) {
-	content := map[string]any{
-		"msgtype": "m.text",
-		"body":    body,
-		"m.relates_to": map[string]any{
-			"rel_type": "m.thread",
-			"event_id": l.rootEventID,
-		},
-	}
 	// Thread replies are best-effort within a running pipeline: if one
 	// reply fails to send, we log the error but don't abort the pipeline.
 	// The root message creation (in newThreadLogger) is the mandatory
 	// check — if we can't create the thread at all, the pipeline doesn't
 	// start.
-	if _, err := l.proxy.SendMessage(ctx, l.roomID, content); err != nil {
+	if _, err := l.session.SendMessage(ctx, l.roomID, messaging.NewThreadReply(l.rootEventID, body)); err != nil {
 		fmt.Printf("[pipeline] warning: failed to send thread reply: %v\n", err)
 	}
 }

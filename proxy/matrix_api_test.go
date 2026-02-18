@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
@@ -31,14 +32,25 @@ type mockMatrixHandler struct {
 	putStateEventID   string
 	sendMessageEvents []recordedMatrixEvent
 
+	// Canned responses for new endpoints.
+	joinedRoomsResponse string            // JSON for GET /joined_rooms
+	roomStateResponses  map[string]string // roomID → JSON array of state events
+	membersResponses    map[string]string // roomID → JSON members response
+	messagesResponses   map[string]string // roomID → JSON messages response
+	threadResponses     map[string]string // "roomID/eventID" → JSON thread response
+	displayNameResponse map[string]string // userID → JSON display name
+	createRoomResponse  string            // JSON for POST /createRoom
+	joinResponse        map[string]string // roomIDOrAlias → JSON join response
+
 	// Recorded requests for assertion.
 	recorded []recordedMatrixRequest
 }
 
 type recordedMatrixRequest struct {
-	Method string
-	Path   string
-	Body   string
+	Method   string
+	Path     string
+	RawQuery string // query string portion of the URL
+	Body     string
 }
 
 type recordedMatrixEvent struct {
@@ -47,19 +59,28 @@ type recordedMatrixEvent struct {
 
 func newMockMatrixHandler() *mockMatrixHandler {
 	return &mockMatrixHandler{
-		whoamiResponse:   `{"user_id":"@pipeline/test:bureau.local"}`,
-		resolveResponses: map[string]string{},
-		stateResponses:   map[string]string{},
-		putStateEventID:  "$state_evt_1",
+		whoamiResponse:      `{"user_id":"@pipeline/test:bureau.local"}`,
+		resolveResponses:    map[string]string{},
+		stateResponses:      map[string]string{},
+		putStateEventID:     "$state_evt_1",
+		joinedRoomsResponse: `{"joined_rooms":[]}`,
+		roomStateResponses:  map[string]string{},
+		membersResponses:    map[string]string{},
+		messagesResponses:   map[string]string{},
+		threadResponses:     map[string]string{},
+		displayNameResponse: map[string]string{},
+		createRoomResponse:  `{"room_id":"!new:bureau.local"}`,
+		joinResponse:        map[string]string{},
 	}
 }
 
 func (m *mockMatrixHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	m.recorded = append(m.recorded, recordedMatrixRequest{
-		Method: r.Method,
-		Path:   r.URL.Path,
-		Body:   string(body),
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
+		Body:     string(body),
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -115,10 +136,104 @@ func (m *mockMatrixHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}
+	// PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
 	if r.Method == "PUT" && strings.Contains(path, "/send/") {
 		eventID := "$msg_evt_" + strings.TrimRight(path[strings.LastIndex(path, "/")+1:], "/")
 		w.Write([]byte(`{"event_id":"` + eventID + `"}`))
+		return
+	}
+
+	// GET /_matrix/client/v3/joined_rooms
+	if r.Method == "GET" && path == "/_matrix/client/v3/joined_rooms" {
+		w.Write([]byte(m.joinedRoomsResponse))
+		return
+	}
+
+	// GET /_matrix/client/v3/rooms/{roomId}/state (no trailing type/key)
+	if r.Method == "GET" && strings.HasSuffix(path, "/state") && strings.HasPrefix(path, "/_matrix/client/v3/rooms/") {
+		roomID, _ := url.PathUnescape(strings.TrimPrefix(strings.TrimSuffix(path, "/state"), "/_matrix/client/v3/rooms/"))
+		if response, ok := m.roomStateResponses[roomID]; ok {
+			w.Write([]byte(response))
+			return
+		}
+		w.Write([]byte(`[]`))
+		return
+	}
+
+	// GET /_matrix/client/v3/rooms/{roomId}/members
+	if r.Method == "GET" && strings.HasSuffix(path, "/members") && strings.HasPrefix(path, "/_matrix/client/v3/rooms/") {
+		roomID, _ := url.PathUnescape(strings.TrimPrefix(strings.TrimSuffix(path, "/members"), "/_matrix/client/v3/rooms/"))
+		if response, ok := m.membersResponses[roomID]; ok {
+			w.Write([]byte(response))
+			return
+		}
+		w.Write([]byte(`{"chunk":[]}`))
+		return
+	}
+
+	// GET /_matrix/client/v3/rooms/{roomId}/messages
+	if r.Method == "GET" && strings.Contains(path, "/messages") && strings.HasPrefix(path, "/_matrix/client/v3/rooms/") {
+		roomID, _ := url.PathUnescape(strings.TrimPrefix(path, "/_matrix/client/v3/rooms/"))
+		roomID = strings.TrimSuffix(roomID, "/messages")
+		if response, ok := m.messagesResponses[roomID]; ok {
+			w.Write([]byte(response))
+			return
+		}
+		w.Write([]byte(`{"start":"","end":"","chunk":[]}`))
+		return
+	}
+
+	// GET /_matrix/client/v3/rooms/{roomId}/relations/{eventId}/m.thread
+	if r.Method == "GET" && strings.Contains(path, "/relations/") {
+		trimmed := strings.TrimPrefix(path, "/_matrix/client/v3/rooms/")
+		parts := strings.SplitN(trimmed, "/relations/", 2)
+		if len(parts) == 2 {
+			roomID, _ := url.PathUnescape(parts[0])
+			eventPart := strings.TrimSuffix(parts[1], "/m.thread")
+			eventID, _ := url.PathUnescape(eventPart)
+			lookupKey := roomID + "/" + eventID
+			if response, ok := m.threadResponses[lookupKey]; ok {
+				w.Write([]byte(response))
+				return
+			}
+		}
+		w.Write([]byte(`{"chunk":[]}`))
+		return
+	}
+
+	// GET /_matrix/client/v3/profile/{userId}/displayname
+	if r.Method == "GET" && strings.Contains(path, "/profile/") && strings.HasSuffix(path, "/displayname") {
+		trimmed := strings.TrimPrefix(path, "/_matrix/client/v3/profile/")
+		userID, _ := url.PathUnescape(strings.TrimSuffix(trimmed, "/displayname"))
+		if response, ok := m.displayNameResponse[userID]; ok {
+			w.Write([]byte(response))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"errcode":"M_NOT_FOUND","error":"User not found"}`))
+		return
+	}
+
+	// POST /_matrix/client/v3/createRoom
+	if r.Method == "POST" && path == "/_matrix/client/v3/createRoom" {
+		w.Write([]byte(m.createRoomResponse))
+		return
+	}
+
+	// POST /_matrix/client/v3/join/{roomIdOrAlias}
+	if r.Method == "POST" && strings.HasPrefix(path, "/_matrix/client/v3/join/") {
+		roomIDOrAlias, _ := url.PathUnescape(strings.TrimPrefix(path, "/_matrix/client/v3/join/"))
+		if response, ok := m.joinResponse[roomIDOrAlias]; ok {
+			w.Write([]byte(response))
+			return
+		}
+		w.Write([]byte(`{"room_id":"` + roomIDOrAlias + `"}`))
+		return
+	}
+
+	// POST /_matrix/client/v3/rooms/{roomId}/invite
+	if r.Method == "POST" && strings.HasSuffix(path, "/invite") && strings.HasPrefix(path, "/_matrix/client/v3/rooms/") {
+		w.Write([]byte(`{}`))
 		return
 	}
 
@@ -658,6 +773,677 @@ func TestMatrixSendMessage(t *testing.T) {
 	})
 }
 
+// setupMatrixProxyTestWithGrants creates a proxy test with the given grants
+// configured on the handler. Returns the HTTP client, mock handler, and
+// the server (so grants can be changed mid-test).
+func setupMatrixProxyTestWithGrants(t *testing.T, grants []schema.Grant) (*http.Client, *mockMatrixHandler, *Server) {
+	t.Helper()
+
+	mock := newMockMatrixHandler()
+
+	tempDir := t.TempDir()
+	matrixSocket := filepath.Join(tempDir, "matrix.sock")
+	matrixListener, err := net.Listen("unix", matrixSocket)
+	if err != nil {
+		t.Fatalf("listen on matrix socket: %v", err)
+	}
+	matrixServer := &http.Server{Handler: mock}
+	go matrixServer.Serve(matrixListener)
+	t.Cleanup(func() { matrixServer.Close() })
+
+	agentSocket := filepath.Join(tempDir, "proxy.sock")
+	server, err := NewServer(ServerConfig{
+		SocketPath: agentSocket,
+	})
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+
+	matrixService, err := NewHTTPService(HTTPServiceConfig{
+		Name:         matrixServiceName,
+		UpstreamUnix: matrixSocket,
+		InjectHeaders: map[string]string{
+			"Authorization": "matrix-bearer",
+		},
+		Credential: testCredentials(t, map[string]string{
+			"matrix-bearer": "Bearer syt_test_token",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create matrix service: %v", err)
+	}
+	server.RegisterHTTPService(matrixServiceName, matrixService)
+
+	if grants != nil {
+		server.SetGrants(grants)
+	}
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+	t.Cleanup(func() { server.Shutdown(context.Background()) })
+
+	testutil.RequireClosed(t, server.Ready(), 5*time.Second, "server ready")
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) {
+				return net.Dial("unix", agentSocket)
+			},
+		},
+	}
+
+	return client, mock, server
+}
+
+func TestMatrixJoinedRooms(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.joinedRoomsResponse = `{"joined_rooms":["!room1:bureau.local","!room2:bureau.local"]}`
+
+	resp, err := client.Get("http://localhost/v1/matrix/joined-rooms")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string][]string
+	json.NewDecoder(resp.Body).Decode(&result)
+	rooms := result["joined_rooms"]
+	if len(rooms) != 2 {
+		t.Fatalf("expected 2 rooms, got %d", len(rooms))
+	}
+	if rooms[0] != "!room1:bureau.local" {
+		t.Errorf("expected !room1:bureau.local, got %q", rooms[0])
+	}
+}
+
+func TestMatrixGetRoomState(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.roomStateResponses["!room1:bureau.local"] = `[{"type":"m.room.topic","state_key":"","content":{"topic":"test"}}]`
+
+	t.Run("get room state", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/room-state?room=" + url.QueryEscape("!room1:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var events []map[string]any
+		json.NewDecoder(resp.Body).Decode(&events)
+		if len(events) != 1 {
+			t.Fatalf("expected 1 event, got %d", len(events))
+		}
+		if events[0]["type"] != "m.room.topic" {
+			t.Errorf("expected m.room.topic, got %v", events[0]["type"])
+		}
+	})
+
+	t.Run("missing room parameter", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/room-state")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("alias resolution", func(t *testing.T) {
+		mock.resolveResponses["#bureau/config/machine/ws:bureau.local"] = `{"room_id":"!room1:bureau.local"}`
+
+		resp, err := client.Get("http://localhost/v1/matrix/room-state?room=" + url.QueryEscape("#bureau/config/machine/ws:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+	})
+}
+
+func TestMatrixGetRoomMembers(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.membersResponses["!room1:bureau.local"] = `{"chunk":[{"type":"m.room.member","state_key":"@agent/test:bureau.local","sender":"@admin:bureau.local","content":{"membership":"join","displayname":"Test Agent"}}]}`
+
+	t.Run("get room members", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/room-members?room=" + url.QueryEscape("!room1:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		chunk, ok := result["chunk"].([]any)
+		if !ok || len(chunk) != 1 {
+			t.Fatalf("expected 1 member event, got %v", result["chunk"])
+		}
+	})
+
+	t.Run("missing room parameter", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/room-members")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestMatrixMessages(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.messagesResponses["!room1:bureau.local"] = `{"start":"s1","end":"s2","chunk":[{"type":"m.room.message","sender":"@admin:bureau.local","content":{"msgtype":"m.text","body":"hello"}}]}`
+
+	t.Run("fetch messages", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/messages?room=" + url.QueryEscape("!room1:bureau.local") + "&dir=b&limit=10")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		chunk, ok := result["chunk"].([]any)
+		if !ok || len(chunk) != 1 {
+			t.Fatalf("expected 1 message event, got %v", result["chunk"])
+		}
+	})
+
+	t.Run("default direction is backward", func(t *testing.T) {
+		mock.recorded = nil
+
+		resp, err := client.Get("http://localhost/v1/matrix/messages?room=" + url.QueryEscape("!room1:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+
+		// Verify the forwarded request includes dir=b in the query string.
+		var messagesRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if strings.Contains(mock.recorded[i].Path, "/messages") {
+				messagesRequest = &mock.recorded[i]
+				break
+			}
+		}
+		if messagesRequest == nil {
+			t.Fatal("expected a request to /messages")
+		}
+		if !strings.Contains(messagesRequest.RawQuery, "dir=b") {
+			t.Errorf("expected dir=b in query string, got %q", messagesRequest.RawQuery)
+		}
+	})
+
+	t.Run("missing room parameter", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/messages")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestMatrixThreadMessages(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.threadResponses["!room1:bureau.local/$root_event"] = `{"chunk":[{"type":"m.room.message","sender":"@agent:bureau.local","content":{"msgtype":"m.text","body":"reply"}}],"next_batch":"nb1"}`
+
+	t.Run("fetch thread messages", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/thread-messages?room=" +
+			url.QueryEscape("!room1:bureau.local") +
+			"&thread=" + url.QueryEscape("$root_event") +
+			"&limit=25")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		chunk, ok := result["chunk"].([]any)
+		if !ok || len(chunk) != 1 {
+			t.Fatalf("expected 1 thread event, got %v", result["chunk"])
+		}
+	})
+
+	t.Run("missing required parameters", func(t *testing.T) {
+		// Missing thread parameter.
+		resp, err := client.Get("http://localhost/v1/matrix/thread-messages?room=" + url.QueryEscape("!room1:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("missing room parameter", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/thread-messages?thread=$evt")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestMatrixGetDisplayName(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.displayNameResponse["@agent/test:bureau.local"] = `{"displayname":"Test Agent"}`
+
+	t.Run("get display name", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/display-name?user=" + url.QueryEscape("@agent/test:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var result map[string]string
+		json.NewDecoder(resp.Body).Decode(&result)
+		if result["displayname"] != "Test Agent" {
+			t.Errorf("expected displayname Test Agent, got %q", result["displayname"])
+		}
+	})
+
+	t.Run("missing user parameter", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/display-name")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("user not found", func(t *testing.T) {
+		resp, err := client.Get("http://localhost/v1/matrix/display-name?user=" + url.QueryEscape("@nonexistent:bureau.local"))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestMatrixCreateRoom(t *testing.T) {
+	t.Run("with grant", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/create-room"}, Targets: []string{"*"}},
+		}
+		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		mock.createRoomResponse = `{"room_id":"!created:bureau.local"}`
+
+		body, _ := json.Marshal(map[string]any{
+			"name": "Test Room",
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/room", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result map[string]string
+		json.NewDecoder(resp.Body).Decode(&result)
+		if result["room_id"] != "!created:bureau.local" {
+			t.Errorf("expected room_id !created:bureau.local, got %q", result["room_id"])
+		}
+
+		// Verify the mock received a POST to /createRoom.
+		var createRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if mock.recorded[i].Method == "POST" && mock.recorded[i].Path == "/_matrix/client/v3/createRoom" {
+				createRequest = &mock.recorded[i]
+				break
+			}
+		}
+		if createRequest == nil {
+			t.Fatal("expected a POST to /createRoom")
+		}
+	})
+
+	t.Run("without grant", func(t *testing.T) {
+		// No grants configured — create room should be denied.
+		client, _, _ := setupMatrixProxyTestWithGrants(t, nil)
+
+		body, _ := json.Marshal(map[string]any{"name": "Test Room"})
+		resp, err := client.Post("http://localhost/v1/matrix/room", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusForbidden {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Errorf("expected 403, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+}
+
+func TestMatrixJoinRoom(t *testing.T) {
+	t.Run("with grant", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/join"}, Targets: []string{"*"}},
+		}
+		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		mock.joinResponse["!target:bureau.local"] = `{"room_id":"!target:bureau.local"}`
+
+		body, _ := json.Marshal(MatrixJoinRequest{Room: "!target:bureau.local"})
+		resp, err := client.Post("http://localhost/v1/matrix/join", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		// Verify the mock received a POST to /join/{room}.
+		var joinRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if mock.recorded[i].Method == "POST" && strings.Contains(mock.recorded[i].Path, "/join/") {
+				joinRequest = &mock.recorded[i]
+				break
+			}
+		}
+		if joinRequest == nil {
+			t.Fatal("expected a POST to /join/")
+		}
+	})
+
+	t.Run("without grant", func(t *testing.T) {
+		client, _, _ := setupMatrixProxyTestWithGrants(t, nil)
+
+		body, _ := json.Marshal(MatrixJoinRequest{Room: "!target:bureau.local"})
+		resp, err := client.Post("http://localhost/v1/matrix/join", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusForbidden {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Errorf("expected 403, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+
+	t.Run("missing room", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/join"}, Targets: []string{"*"}},
+		}
+		client, _, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		body, _ := json.Marshal(MatrixJoinRequest{})
+		resp, err := client.Post("http://localhost/v1/matrix/join", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestMatrixInviteUser(t *testing.T) {
+	t.Run("with grant", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+		}
+		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		body, _ := json.Marshal(MatrixInviteRequest{
+			Room:   "!room1:bureau.local",
+			UserID: "@agent/other:bureau.local",
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/invite", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		// Verify the mock received a POST to /rooms/{roomId}/invite.
+		var inviteRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if mock.recorded[i].Method == "POST" && strings.Contains(mock.recorded[i].Path, "/invite") {
+				inviteRequest = &mock.recorded[i]
+				break
+			}
+		}
+		if inviteRequest == nil {
+			t.Fatal("expected a POST to /invite")
+		}
+		if !strings.Contains(inviteRequest.Body, "@agent/other:bureau.local") {
+			t.Errorf("expected user_id in body, got %q", inviteRequest.Body)
+		}
+	})
+
+	t.Run("without grant", func(t *testing.T) {
+		client, _, _ := setupMatrixProxyTestWithGrants(t, nil)
+
+		body, _ := json.Marshal(MatrixInviteRequest{
+			Room:   "!room1:bureau.local",
+			UserID: "@agent/other:bureau.local",
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/invite", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusForbidden {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Errorf("expected 403, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+
+	t.Run("missing fields", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+		}
+		client, _, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		body, _ := json.Marshal(MatrixInviteRequest{Room: "!room1:bureau.local"})
+		resp, err := client.Post("http://localhost/v1/matrix/invite", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("alias resolution", func(t *testing.T) {
+		grants := []schema.Grant{
+			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+		}
+		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
+
+		mock.resolveResponses["#test/room:bureau.local"] = `{"room_id":"!resolved:bureau.local"}`
+
+		body, _ := json.Marshal(MatrixInviteRequest{
+			Room:   "#test/room:bureau.local",
+			UserID: "@user:bureau.local",
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/invite", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		// Verify the forwarded request used the resolved room ID.
+		var inviteRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if mock.recorded[i].Method == "POST" && strings.Contains(mock.recorded[i].Path, "/invite") {
+				inviteRequest = &mock.recorded[i]
+			}
+		}
+		if inviteRequest == nil {
+			t.Fatal("expected a POST to /invite")
+		}
+		if !strings.Contains(inviteRequest.Path, "!resolved:bureau.local") {
+			t.Errorf("expected resolved room ID in path, got %q", inviteRequest.Path)
+		}
+	})
+}
+
+func TestMatrixSendEvent(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	t.Run("send event", func(t *testing.T) {
+		body, _ := json.Marshal(MatrixSendEventRequest{
+			Room:      "!room1:bureau.local",
+			EventType: "m.bureau.pipeline_request",
+			Content:   map[string]any{"pipeline": "build", "ref": "main"},
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/event", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+
+		var result MatrixEventResponse
+		json.NewDecoder(resp.Body).Decode(&result)
+		if result.EventID == "" {
+			t.Error("expected non-empty event_id")
+		}
+
+		// Verify the mock received a PUT to a send path with the right event type.
+		var putRequest *recordedMatrixRequest
+		for i := range mock.recorded {
+			if mock.recorded[i].Method == "PUT" && strings.Contains(mock.recorded[i].Path, "/send/") {
+				putRequest = &mock.recorded[i]
+				break
+			}
+		}
+		if putRequest == nil {
+			t.Fatal("expected a PUT request to a send path")
+		}
+		if !strings.Contains(putRequest.Path, "m.bureau.pipeline_request") {
+			t.Errorf("expected m.bureau.pipeline_request in path, got %q", putRequest.Path)
+		}
+		if !strings.Contains(putRequest.Body, `"pipeline"`) {
+			t.Errorf("expected pipeline in body, got %q", putRequest.Body)
+		}
+	})
+
+	t.Run("alias resolution", func(t *testing.T) {
+		mock.resolveResponses["#workspace:bureau.local"] = `{"room_id":"!ws_room:bureau.local"}`
+
+		body, _ := json.Marshal(MatrixSendEventRequest{
+			Room:      "#workspace:bureau.local",
+			EventType: "m.bureau.test",
+			Content:   map[string]any{"value": true},
+		})
+		resp, err := client.Post("http://localhost/v1/matrix/event", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+		}
+	})
+
+	t.Run("missing fields", func(t *testing.T) {
+		body, _ := json.Marshal(MatrixSendEventRequest{Room: "!room:bureau.local"})
+		resp, err := client.Post("http://localhost/v1/matrix/event", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", resp.StatusCode)
+		}
+	})
+}
+
 func TestMatrixServiceNotConfigured(t *testing.T) {
 	// Test that all endpoints return 503 when the "matrix" HTTP service
 	// is not registered.
@@ -689,15 +1475,28 @@ func TestMatrixServiceNotConfigured(t *testing.T) {
 	}
 
 	endpoints := []struct {
-		method string
-		path   string
-		body   string
+		method     string
+		path       string
+		body       string
+		wantStatus int // expected status code
 	}{
-		{"GET", "/v1/matrix/whoami", ""},
-		{"GET", "/v1/matrix/resolve?alias=%23test:bureau.local", ""},
-		{"GET", "/v1/matrix/state?room=!room:bureau.local&type=m.room.topic&key=", ""},
-		{"POST", "/v1/matrix/state", `{"room":"!r:b","event_type":"m.test","content":{}}`},
-		{"POST", "/v1/matrix/message", `{"room":"!r:b","content":{"msgtype":"m.text","body":"x"}}`},
+		{"GET", "/v1/matrix/whoami", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/resolve?alias=%23test:bureau.local", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/state?room=!room:bureau.local&type=m.room.topic&key=", "", http.StatusServiceUnavailable},
+		{"POST", "/v1/matrix/state", `{"room":"!r:b","event_type":"m.test","content":{}}`, http.StatusServiceUnavailable},
+		{"POST", "/v1/matrix/message", `{"room":"!r:b","content":{"msgtype":"m.text","body":"x"}}`, http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/joined-rooms", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/room-state?room=!room:bureau.local", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/room-members?room=!room:bureau.local", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/messages?room=!room:bureau.local", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/thread-messages?room=!room:bureau.local&thread=$evt1", "", http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/display-name?user=@user:bureau.local", "", http.StatusServiceUnavailable},
+		// Gated endpoints return 403 (no grants) before reaching the matrix service check.
+		{"POST", "/v1/matrix/room", `{"name":"test"}`, http.StatusForbidden},
+		{"POST", "/v1/matrix/join", `{"room":"!room:bureau.local"}`, http.StatusForbidden},
+		{"POST", "/v1/matrix/invite", `{"room":"!room:bureau.local","user_id":"@u:b"}`, http.StatusForbidden},
+		// SendEvent is ungated — homeserver enforces permissions.
+		{"POST", "/v1/matrix/event", `{"room":"!r:b","event_type":"m.test","content":{}}`, http.StatusServiceUnavailable},
 	}
 
 	for _, endpoint := range endpoints {
@@ -717,9 +1516,9 @@ func TestMatrixServiceNotConfigured(t *testing.T) {
 			}
 			defer resp.Body.Close()
 
-			if resp.StatusCode != http.StatusServiceUnavailable {
+			if resp.StatusCode != endpoint.wantStatus {
 				body, _ := io.ReadAll(resp.Body)
-				t.Errorf("expected 503, got %d: %s", resp.StatusCode, body)
+				t.Errorf("expected %d, got %d: %s", endpoint.wantStatus, resp.StatusCode, body)
 			}
 		})
 	}

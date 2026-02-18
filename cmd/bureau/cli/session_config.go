@@ -67,12 +67,12 @@ func (c *SessionConfig) AddFlags(flagSet *pflag.FlagSet) {
 // credential file values.
 //
 // When no explicit credentials are provided and BUREAU_PROXY_SOCKET is set,
-// Connect falls through to a proxy-routed path: it creates a messaging.Client
-// whose HTTP transport dials the proxy Unix socket, and the proxy injects
-// credentials on outgoing Matrix API requests. This is the connection path
-// for CLI commands running inside a Bureau sandbox (both via MCP tools and
-// direct shell invocation).
-func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error) {
+// Connect falls through to a proxy-routed path: it creates a
+// proxyclient.ProxySession that delegates to the proxy's structured /v1/matrix/*
+// endpoints. The proxy injects credentials on outgoing Matrix API requests.
+// This is the connection path for CLI commands running inside a Bureau sandbox
+// (both via MCP tools and direct shell invocation).
+func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) {
 	homeserverURL := c.HomeserverURL
 	token := c.Token
 	userID := c.UserID
@@ -129,8 +129,10 @@ func (c *SessionConfig) Connect(ctx context.Context) (*messaging.Session, error)
 }
 
 // connectViaProxy creates a Matrix session routed through the Bureau proxy
-// Unix socket. The proxy handles credential injection — no token is needed.
-func (c *SessionConfig) connectViaProxy(ctx context.Context) (*messaging.Session, error) {
+// Unix socket. Returns a ProxySession that delegates to the proxy's
+// structured /v1/matrix/* endpoints. The proxy handles credential injection
+// — no token is needed in the sandbox.
+func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session, error) {
 	socketPath := os.Getenv("BUREAU_PROXY_SOCKET")
 	if socketPath == "" {
 		return nil, Validation("no credentials provided and BUREAU_PROXY_SOCKET is not set\n\nUse --credential-file, or run inside a Bureau sandbox where the proxy socket is available")
@@ -145,24 +147,7 @@ func (c *SessionConfig) connectViaProxy(ctx context.Context) (*messaging.Session
 		return nil, Internal("proxy identity: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
-	// Create a messaging.Client whose HTTP transport dials the proxy
-	// Unix socket. The HomeserverURL points to the proxy's Matrix
-	// passthrough route — the proxy forwards requests to the real
-	// homeserver and injects the access token.
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: "http://proxy/http/matrix",
-		HTTPClient:    proxy.HTTPClient(),
-		Logger:        logger,
-	})
-	if err != nil {
-		return nil, Internal("create proxy-routed matrix client: %w", err)
-	}
-
-	return client.ProxySession(identity.UserID), nil
+	return proxyclient.NewProxySession(proxy, identity.UserID), nil
 }
 
 // ResolveHomeserverURL extracts the homeserver URL from flags or credential

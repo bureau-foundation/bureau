@@ -415,7 +415,7 @@ func run() error {
 
 // Daemon is the core daemon state.
 type Daemon struct {
-	session *messaging.Session
+	session *messaging.DirectSession
 
 	// clock provides time operations (Now, After, NewTicker, AfterFunc,
 	// Sleep). Production code uses clock.Real(); tests use clock.Fake()
@@ -1151,7 +1151,7 @@ func uptimeSeconds() int64 {
 // The config room must already exist (created by "bureau machine provision").
 // The daemon does not create config rooms — that is the admin's responsibility
 // during provisioning.
-func resolveConfigRoom(ctx context.Context, session *messaging.Session, alias string, logger *slog.Logger) (string, error) {
+func resolveConfigRoom(ctx context.Context, session *messaging.DirectSession, alias string, logger *slog.Logger) (string, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

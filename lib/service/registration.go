@@ -41,7 +41,7 @@ type Registration struct {
 // room. The state key is the service's localpart. The daemon's
 // syncServiceDirectory picks this up and makes the service available
 // for routing.
-func Register(ctx context.Context, session *messaging.Session, serviceRoomID, localpart, serverName string, reg Registration) error {
+func Register(ctx context.Context, session *messaging.DirectSession, serviceRoomID, localpart, serverName string, reg Registration) error {
 	service := schema.Service{
 		Principal:    principal.MatrixUserID(localpart, serverName),
 		Machine:      reg.Machine,
@@ -61,7 +61,7 @@ func Register(ctx context.Context, session *messaging.Session, serviceRoomID, lo
 // publishing a state event with an empty Principal field. The daemon's
 // syncServiceDirectory skips entries with empty principals, effectively
 // removing the service from the directory.
-func Deregister(ctx context.Context, session *messaging.Session, serviceRoomID, localpart string) error {
+func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID, localpart string) error {
 	empty := schema.Service{}
 	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, localpart, empty); err != nil {
 		return fmt.Errorf("deregistering service %s from %s: %w", localpart, serviceRoomID, err)
@@ -72,7 +72,7 @@ func Deregister(ctx context.Context, session *messaging.Session, serviceRoomID, 
 // ResolveServiceRoom resolves the #bureau/service room alias and joins
 // it. Returns the room ID. This is called once at startup to establish
 // the service's connection to the service directory room.
-func ResolveServiceRoom(ctx context.Context, session *messaging.Session, serverName string) (string, error) {
+func ResolveServiceRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
 	alias := principal.RoomAlias("bureau/service", serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)

@@ -46,7 +46,7 @@ type resolvedRoom struct {
 // Returns the resolved rooms and any that could not be resolved. Resolution
 // failures for individual rooms are not fatal — the caller decides whether
 // to proceed based on the specific context (provisioning vs decommissioning).
-func resolveGlobalRooms(ctx context.Context, session *messaging.Session, serverName string) (resolved []resolvedRoom, failed []machineRoom, errors []error) {
+func resolveGlobalRooms(ctx context.Context, session messaging.Session, serverName string) (resolved []resolvedRoom, failed []machineRoom, errors []error) {
 	for _, room := range machineGlobalRooms {
 		fullAlias := principal.RoomAlias(room.alias, serverName)
 		roomID, err := session.ResolveAlias(ctx, fullAlias)
@@ -66,7 +66,7 @@ func resolveGlobalRooms(ctx context.Context, session *messaging.Session, serverN
 // checkMachineMembership checks whether a machine user has any active
 // memberships (join or invite) in the given rooms. Returns the list of
 // rooms where the machine still has an active membership.
-func checkMachineMembership(ctx context.Context, session *messaging.Session, machineUserID string, rooms []resolvedRoom) []resolvedRoom {
+func checkMachineMembership(ctx context.Context, session messaging.Session, machineUserID string, rooms []resolvedRoom) []resolvedRoom {
 	var activeRooms []resolvedRoom
 	for _, room := range rooms {
 		members, err := session.GetRoomMembers(ctx, room.roomID)

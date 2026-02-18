@@ -51,7 +51,7 @@ type ListResult struct {
 // List reads all m.bureau.credentials state events from a machine's config
 // room and returns their metadata. Returns an error if the config room
 // cannot be found or read.
-func List(ctx context.Context, session *messaging.Session, machineName, serverName string) (*ListResult, error) {
+func List(ctx context.Context, session messaging.Session, machineName, serverName string) (*ListResult, error) {
 	if err := principal.ValidateLocalpart(machineName); err != nil {
 		return nil, fmt.Errorf("invalid machine name: %w", err)
 	}

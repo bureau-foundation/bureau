@@ -456,6 +456,36 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	service.ServeHTTP(w, r)
 }
 
+// requireGrant checks that the agent's pre-resolved grants allow the given
+// action. If denied, writes a 403 JSON error response and returns false.
+// If allowed, returns true without writing anything.
+//
+// Used by structured /v1/matrix/* endpoints that need grant enforcement
+// (create-room, join, invite). Uses the same grant evaluation as
+// checkMatrixPolicy but with a cleaner interface for handlers that know
+// their action statically.
+func (h *Handler) requireGrant(w http.ResponseWriter, action string) bool {
+	h.mu.RLock()
+	grants := h.grants
+	h.mu.RUnlock()
+
+	result := authorization.GrantsCheck(grants, action, "")
+	if result.Allowed {
+		return true
+	}
+
+	h.logger.Warn("authorization denied",
+		"action", action,
+	)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(matrixErrorResponse{
+		Error: fmt.Sprintf("authorization: no grant for action %q", action),
+		Code:  "M_FORBIDDEN",
+	})
+	return false
+}
+
 // checkMatrixPolicy checks whether a Matrix API request is allowed by the
 // agent's policy. Returns (true, reason) if the request should be blocked,
 // (false, "") if allowed.

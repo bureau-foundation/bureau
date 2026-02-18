@@ -106,7 +106,7 @@ func TestSaveSession(t *testing.T) {
 		stateDir := t.TempDir()
 		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		// Seed a session via LoadSession so we have a *messaging.Session.
+		// Seed a session via LoadSession so we have a *messaging.DirectSession.
 		os.WriteFile(filepath.Join(stateDir, "session.json"), []byte(`{
 			"homeserver_url": "http://localhost:6167",
 			"user_id": "@machine/test:bureau.local",

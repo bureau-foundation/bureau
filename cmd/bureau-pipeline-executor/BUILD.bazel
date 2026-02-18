@@ -20,6 +20,7 @@ go_library(
         "//lib/proxyclient",
         "//lib/schema",
         "//lib/version",
+        "//messaging",
     ],
 )
 

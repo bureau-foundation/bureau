@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // RunConfig holds the configuration for the agent lifecycle.
@@ -131,6 +132,12 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		return fmt.Errorf("building agent context: %w", err)
 	}
 	logger.Info("agent identity", "user_id", agentContext.Identity.UserID, "config_room", agentContext.ConfigRoomID)
+
+	// Create a MatrixSession for operations that only need Matrix
+	// access (message pump, text messages). BuildContext above used
+	// the raw proxy client for proxy-specific operations (Identity,
+	// Grants, Services).
+	session := proxyclient.NewProxySession(proxy, agentContext.Identity.UserID)
 
 	// Write system prompt to temp file.
 	systemPromptFile, err := agentContext.WriteSystemPromptFile()
@@ -273,7 +280,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	ownUserID := agentContext.Identity.UserID
 	machineUserID := fmt.Sprintf("@%s:%s", config.MachineName, config.ServerName)
 	pumpReady := make(chan struct{})
-	go runMessagePump(messagePumpCtx, proxy, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
+	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
 
 	// Wait for the pump to complete its initial /sync before announcing
 	// readiness. This guarantees "agent-ready" means the pump is listening.
@@ -285,7 +292,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 
 	// Send ready message.
 	logger.Info("sending ready message to config room")
-	if _, err := proxy.SendTextMessage(ctx, agentContext.ConfigRoomID, "agent-ready"); err != nil {
+	if _, err := session.SendMessage(ctx, agentContext.ConfigRoomID, messaging.NewTextMessage("agent-ready")); err != nil {
 		logger.Warn("failed to send ready message", "error", err)
 	}
 
@@ -353,7 +360,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 			"cost_usd", summary.CostUSD,
 			"duration", summary.Duration,
 		)
-		if _, sendError := proxy.SendTextMessage(ctx, agentContext.ConfigRoomID, summaryMessage); sendError != nil {
+		if _, sendError := session.SendMessage(ctx, agentContext.ConfigRoomID, messaging.NewTextMessage(summaryMessage)); sendError != nil {
 			logger.Warn("failed to send completion summary", "error", sendError)
 		}
 	}
@@ -404,15 +411,16 @@ func formatSummary(summary SessionSummary, processError error) string {
 // Messages from the agent itself and from the machine daemon are
 // skipped (the daemon posts operational messages like service directory
 // updates that are not intended for the agent).
-func runMessagePump(ctx context.Context, proxy *proxyclient.Client, roomID, ownUserID, machineUserID string, stdin io.Writer, logger *slog.Logger, ready chan<- struct{}) {
+func runMessagePump(ctx context.Context, session messaging.Session, roomID, ownUserID, machineUserID string, stdin io.Writer, logger *slog.Logger, ready chan<- struct{}) {
 	filter := buildMessageSyncFilter(roomID)
 
 	// Initial /sync with timeout=0 to capture the stream position. Events
 	// from the initial sync are discarded — only messages arriving AFTER
 	// the agent starts should be injected into the agent's stdin.
-	response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
-		Timeout: 0,
-		Filter:  filter,
+	response, err := session.Sync(ctx, messaging.SyncOptions{
+		Timeout:    0,
+		SetTimeout: true,
+		Filter:     filter,
 	})
 	if err != nil {
 		logger.Error("message pump: initial sync failed", "error", err)
@@ -435,10 +443,11 @@ func runMessagePump(ctx context.Context, proxy *proxyclient.Client, roomID, ownU
 			return
 		}
 
-		response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
-			Since:   sinceToken,
-			Timeout: 30000, // 30s server-side hold
-			Filter:  filter,
+		response, err := session.Sync(ctx, messaging.SyncOptions{
+			Since:      sinceToken,
+			Timeout:    30000, // 30s server-side hold
+			SetTimeout: true,
+			Filter:     filter,
 		})
 		if err != nil {
 			if ctx.Err() != nil {

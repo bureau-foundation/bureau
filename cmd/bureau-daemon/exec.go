@@ -46,7 +46,7 @@ func (d *Daemon) daemonWatchdogPath() string {
 func checkDaemonWatchdog(
 	watchdogPath string,
 	daemonBinaryPath string,
-	session *messaging.Session,
+	session *messaging.DirectSession,
 	configRoomID string,
 	logger *slog.Logger,
 ) (failedPath string) {

@@ -181,7 +181,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 }
 
 // fixAction is a function that repairs a failed check.
-type fixAction func(ctx context.Context, session *messaging.Session) error
+type fixAction func(ctx context.Context, session messaging.Session) error
 
 // checkStatus is the outcome of a single health check.
 type checkStatus string
@@ -328,7 +328,7 @@ var standardRooms = []standardRoom{
 // When credentialFilePath is non-empty, credential mismatches are reported
 // as fixable failures (the fix updates the credential file). When empty,
 // credential mismatches remain warnings since there is no file to update.
-func runDoctor(ctx context.Context, client *messaging.Client, session *messaging.Session, serverName string, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
+func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName string, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
 	var results []checkResult
 
 	// Section 1: Connectivity and authentication.
@@ -360,7 +360,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
 	if spaceResult.Status == statusFail {
 		spaceResult.FixHint = "create Bureau space"
-		spaceResult.fix = func(ctx context.Context, session *messaging.Session) error {
+		spaceResult.fix = func(ctx context.Context, session messaging.Session) error {
 			id, err := ensureSpace(ctx, session, serverName, logger)
 			if err != nil {
 				return err
@@ -378,7 +378,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
 		if result.Status == statusFail {
 			result.FixHint = fmt.Sprintf("create %s", room.name)
-			result.fix = func(ctx context.Context, session *messaging.Session) error {
+			result.fix = func(ctx context.Context, session messaging.Session) error {
 				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
 					spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
 				if err != nil {
@@ -413,7 +413,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 
 		var credentialFix fixAction
 		if credentialFilePath != "" {
-			credentialFix = func(ctx context.Context, session *messaging.Session) error {
+			credentialFix = func(ctx context.Context, session messaging.Session) error {
 				return cli.UpdateCredentialFile(credentialFilePath, correctRoomIDs)
 			}
 		}
@@ -463,7 +463,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session *messaging
 					capturedRoomID := roomID
 					capturedName := room.name
 					result.FixHint = fmt.Sprintf("add %s as child of Bureau space", capturedName)
-					result.fix = func(ctx context.Context, session *messaging.Session) error {
+					result.fix = func(ctx context.Context, session messaging.Session) error {
 						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID,
 							map[string]any{"via": []string{serverName}})
 						return err
@@ -545,7 +545,7 @@ func checkServerVersions(ctx context.Context, client *messaging.Client) checkRes
 }
 
 // checkAuth verifies that the session's access token is valid.
-func checkAuth(ctx context.Context, session *messaging.Session) checkResult {
+func checkAuth(ctx context.Context, session messaging.Session) checkResult {
 	userID, err := session.WhoAmI(ctx)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeUnknownToken) {
@@ -563,7 +563,7 @@ func checkAuth(ctx context.Context, session *messaging.Session) checkResult {
 
 // checkRoomExists resolves a room alias and returns the result plus the room ID
 // (empty string if resolution failed).
-func checkRoomExists(ctx context.Context, session *messaging.Session, name, alias string) (checkResult, string) {
+func checkRoomExists(ctx context.Context, session messaging.Session, name, alias string) (checkResult, string) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -589,7 +589,7 @@ func checkCredentialMatch(name, credentialKey, resolvedRoomID string, credential
 
 // getSpaceChildIDs reads m.space.child state events from a space and returns
 // the set of child room IDs.
-func getSpaceChildIDs(ctx context.Context, session *messaging.Session, spaceRoomID string) (map[string]bool, error) {
+func getSpaceChildIDs(ctx context.Context, session messaging.Session, spaceRoomID string) (map[string]bool, error) {
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
 		return nil, err
@@ -617,7 +617,7 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // event types at power level 0. The first failing sub-check gets a fix closure
 // that resets the entire power levels state to expectedPowerLevels; subsequent
 // sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
+func checkPowerLevels(ctx context.Context, session messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
 	var results []checkResult
 
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
@@ -634,7 +634,7 @@ func checkPowerLevels(ctx context.Context, session *messaging.Session, name, roo
 
 	// Build fix closure shared across all PL sub-checks for this room.
 	// Only attached to the first failure — a single PL write fixes all issues.
-	fixPowerLevels := func(ctx context.Context, session *messaging.Session) error {
+	fixPowerLevels := func(ctx context.Context, session messaging.Session) error {
 		_, err := session.SendStateEvent(ctx, roomID, "m.room.power_levels", "",
 			expectedPowerLevels)
 		return err
@@ -733,7 +733,7 @@ func getNumericField(data map[string]any, key string) float64 {
 
 // checkJoinRules verifies that a room's join rules are set to "invite"
 // (the required configuration for Bureau rooms).
-func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomID string) checkResult {
+func checkJoinRules(ctx context.Context, session messaging.Session, name, roomID string) checkResult {
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.join_rules", "")
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -742,7 +742,7 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 				name+" join rules",
 				"join_rules state not found",
 				fmt.Sprintf("set %s join_rule to invite", name),
-				func(ctx context.Context, session *messaging.Session) error {
+				func(ctx context.Context, session messaging.Session) error {
 					_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
 						map[string]any{"join_rule": "invite"})
 					return err
@@ -767,7 +767,7 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 		name+" join rules",
 		fmt.Sprintf("join_rule is %q, expected invite", joinRule),
 		fmt.Sprintf("set %s join_rule to invite", name),
-		func(ctx context.Context, session *messaging.Session) error {
+		func(ctx context.Context, session messaging.Session) error {
 			_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
 				map[string]any{"join_rule": "invite"})
 			return err
@@ -789,7 +789,7 @@ func checkJoinRules(ctx context.Context, session *messaging.Session, name, roomI
 // Decommissioned machines have their machine_key content cleared to {}.
 // These are skipped — only machines with a non-empty "key" field are
 // considered active.
-func checkMachineMembership(ctx context.Context, session *messaging.Session, serverName string, roomIDs map[string]string) []checkResult {
+func checkMachineMembership(ctx context.Context, session messaging.Session, serverName string, roomIDs map[string]string) []checkResult {
 	machineRoomID, ok := roomIDs["bureau/machine"]
 	if !ok {
 		return nil
@@ -855,7 +855,7 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 				checkName,
 				"not a member of service room",
 				fmt.Sprintf("invite %s to service room", capturedUserID),
-				func(ctx context.Context, session *messaging.Session) error {
+				func(ctx context.Context, session messaging.Session) error {
 					return session.InviteUser(ctx, serviceRoomID, capturedUserID)
 				},
 			))
@@ -874,7 +874,7 @@ func checkMachineMembership(ctx context.Context, session *messaging.Session, ser
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
 // they have their own membership check (checkMachineMembership).
-func checkOperatorMembership(ctx context.Context, session *messaging.Session, spaceRoomID, serverName string, roomIDs map[string]string) []checkResult {
+func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID, serverName string, roomIDs map[string]string) []checkResult {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
 	if err != nil {
@@ -934,7 +934,7 @@ func checkOperatorMembership(ctx context.Context, session *messaging.Session, sp
 					checkName,
 					fmt.Sprintf("operator %s not in %s", capturedUserID, room.name),
 					fmt.Sprintf("invite %s to %s", capturedUserID, room.name),
-					func(ctx context.Context, session *messaging.Session) error {
+					func(ctx context.Context, session messaging.Session) error {
 						return session.InviteUser(ctx, capturedRoomID, capturedUserID)
 					},
 				))
@@ -958,7 +958,7 @@ type stateEventItem struct {
 // checkPublishedStateEvents verifies that each item in the list is present
 // as a state event in the given room. Missing items produce a fixable failure
 // that re-publishes the expected content.
-func checkPublishedStateEvents(ctx context.Context, session *messaging.Session, roomID string, items []stateEventItem) []checkResult {
+func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID string, items []stateEventItem) []checkResult {
 	var results []checkResult
 
 	for _, item := range items {
@@ -972,7 +972,7 @@ func checkPublishedStateEvents(ctx context.Context, session *messaging.Session, 
 					checkName,
 					fmt.Sprintf("%s %q not published", item.label, item.name),
 					fmt.Sprintf("publish %s %q", item.label, item.name),
-					func(ctx context.Context, session *messaging.Session) error {
+					func(ctx context.Context, session messaging.Session) error {
 						_, err := session.SendStateEvent(ctx, capturedRoomID, capturedItem.eventType,
 							capturedItem.name, capturedItem.content)
 						return err
@@ -992,7 +992,7 @@ func checkPublishedStateEvents(ctx context.Context, session *messaging.Session, 
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and
 // "base-networked") are published as m.bureau.template state events in the
 // template room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string) []checkResult {
+func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID string) []checkResult {
 	var items []stateEventItem
 	for _, template := range baseTemplates() {
 		items = append(items, stateEventItem{
@@ -1008,7 +1008,7 @@ func checkBaseTemplates(ctx context.Context, session *messaging.Session, templat
 // checkBasePipelines verifies that the embedded pipeline definitions are
 // published as m.bureau.pipeline state events in the pipeline room. Missing
 // pipelines are fixable by re-publishing them.
-func checkBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string) []checkResult {
+func checkBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID string) []checkResult {
 	pipelines, err := content.Pipelines()
 	if err != nil {
 		return []checkResult{fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err))}
@@ -1029,7 +1029,7 @@ func checkBasePipelines(ctx context.Context, session *messaging.Session, pipelin
 // executeFixes runs the fix action for each fixable failure, updating
 // results in place. Returns the number of successfully applied fixes.
 // In dry-run mode, no fixes are executed and 0 is returned.
-func executeFixes(ctx context.Context, session *messaging.Session, results []checkResult, dryRun bool) int {
+func executeFixes(ctx context.Context, session messaging.Session, results []checkResult, dryRun bool) int {
 	if dryRun {
 		return 0
 	}
@@ -1107,7 +1107,7 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 //
 // If no fleet controllers are registered, the check is skipped — there is
 // nothing to bind to.
-func checkFleetBindings(ctx context.Context, session *messaging.Session, serviceRoomID, machineRoomID, serverName string) []checkResult {
+func checkFleetBindings(ctx context.Context, session messaging.Session, serviceRoomID, machineRoomID, serverName string) []checkResult {
 	// Find fleet controllers in the service room.
 	serviceEvents, err := session.GetRoomState(ctx, serviceRoomID)
 	if err != nil {
@@ -1168,7 +1168,7 @@ func checkFleetBindings(ctx context.Context, session *messaging.Session, service
 					checkName,
 					fmt.Sprintf("no fleet binding in config room for %s", machineLocalpart),
 					fmt.Sprintf("publish fleet binding for %s", machineLocalpart),
-					func(ctx context.Context, session *messaging.Session) error {
+					func(ctx context.Context, session messaging.Session) error {
 						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeRoomService, "fleet", binding)
 						return err
 					},
@@ -1191,7 +1191,7 @@ func checkFleetBindings(ctx context.Context, session *messaging.Session, service
 				checkName,
 				fmt.Sprintf("fleet binding in %s has empty principal", machineLocalpart),
 				fmt.Sprintf("publish fleet binding for %s", machineLocalpart),
-				func(ctx context.Context, session *messaging.Session) error {
+				func(ctx context.Context, session messaging.Session) error {
 					_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeRoomService, "fleet", binding)
 					return err
 				},

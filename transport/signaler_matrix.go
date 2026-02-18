@@ -29,7 +29,7 @@ var _ Signaler = (*MatrixSignaler)(nil)
 // state events with event types m.bureau.webrtc_offer and
 // m.bureau.webrtc_answer respectively.
 type MatrixSignaler struct {
-	session       *messaging.Session
+	session       *messaging.DirectSession
 	machineRoomID string
 	logger        *slog.Logger
 
@@ -41,7 +41,7 @@ type MatrixSignaler struct {
 
 // NewMatrixSignaler creates a Matrix-backed signaler. machineRoomID is the
 // room ID for #bureau/machine where signaling state events are published.
-func NewMatrixSignaler(session *messaging.Session, machineRoomID string, logger *slog.Logger) *MatrixSignaler {
+func NewMatrixSignaler(session *messaging.DirectSession, machineRoomID string, logger *slog.Logger) *MatrixSignaler {
 	return &MatrixSignaler{
 		session:       session,
 		machineRoomID: machineRoomID,

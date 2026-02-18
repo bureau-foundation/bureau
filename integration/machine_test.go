@@ -129,7 +129,7 @@ func newTestMachine(t *testing.T, name string) *testMachine {
 // Both the launcher and daemon are registered for automatic cleanup via
 // t.Cleanup. Use startMachineLauncher + startMachineDaemonManual when
 // the test needs to kill and restart the daemon mid-test.
-func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
+func startMachine(t *testing.T, admin *messaging.DirectSession, machine *testMachine, options machineOptions) {
 	t.Helper()
 	startMachineLauncher(t, admin, machine, options)
 	startMachineDaemon(t, admin, machine, options)
@@ -148,7 +148,7 @@ func startMachine(t *testing.T, admin *messaging.Session, machine *testMachine, 
 //
 // Populates machine.PublicKey and machine.MachineRoomID. Does NOT start
 // the daemon — call startMachineDaemon or startMachineDaemonManual after this.
-func startMachineLauncher(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
+func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine *testMachine, options machineOptions) {
 	t.Helper()
 
 	if options.LauncherBinary == "" {
@@ -257,7 +257,7 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 // startMachineDaemon starts the daemon for a machine as a managed process
 // (registered for automatic cleanup), waits for the first heartbeat, and
 // resolves the config room. Populates machine.ConfigRoomID.
-func startMachineDaemon(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) {
+func startMachineDaemon(t *testing.T, admin *messaging.DirectSession, machine *testMachine, options machineOptions) {
 	t.Helper()
 
 	if options.DaemonBinary == "" {
@@ -281,7 +281,7 @@ func startMachineDaemon(t *testing.T, admin *messaging.Session, machine *testMac
 //
 // Use this for tests that need to kill and restart the daemon mid-test
 // (e.g., HA failover, daemon restart recovery).
-func startMachineDaemonManual(t *testing.T, admin *messaging.Session, machine *testMachine, options machineOptions) *exec.Cmd {
+func startMachineDaemonManual(t *testing.T, admin *messaging.DirectSession, machine *testMachine, options machineOptions) *exec.Cmd {
 	t.Helper()
 
 	if options.DaemonBinary == "" {
@@ -309,7 +309,7 @@ func startMachineDaemonManual(t *testing.T, admin *messaging.Session, machine *t
 // waitForDaemonReady waits for the daemon's first heartbeat and resolves
 // the per-machine config room. Shared by startMachineDaemon and
 // startMachineDaemonManual.
-func waitForDaemonReady(t *testing.T, admin *messaging.Session, machine *testMachine, statusWatch roomWatch) {
+func waitForDaemonReady(t *testing.T, admin *messaging.DirectSession, machine *testMachine, statusWatch roomWatch) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -408,7 +408,7 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 
 // principalSession creates a messaging.Session for a registered principal
 // using its access token. The caller is responsible for closing the session.
-func principalSession(t *testing.T, account principalAccount) *messaging.Session {
+func principalSession(t *testing.T, account principalAccount) *messaging.DirectSession {
 	t.Helper()
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
@@ -429,7 +429,7 @@ func principalSession(t *testing.T, account principalAccount) *messaging.Session
 // event to the machine's config room. Uses the production credential
 // provisioning library: fetches the machine key from Matrix, encrypts
 // with age, and publishes to the config room.
-func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachine, account principalAccount) {
+func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *testMachine, account principalAccount) {
 	t.Helper()
 
 	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
@@ -451,7 +451,7 @@ func pushCredentials(t *testing.T, admin *messaging.Session, machine *testMachin
 // to the machine's config room. The daemon detects this via /sync and
 // reconciles: creating proxies for new principals and destroying proxies
 // for removed ones.
-func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) {
+func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) {
 	t.Helper()
 
 	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
@@ -484,7 +484,7 @@ func pushMachineConfig(t *testing.T, admin *messaging.Session, machine *testMach
 // and waits for all proxy sockets to appear. Returns a map from localpart
 // to proxy socket path. This is a convenience wrapper around pushCredentials
 // and pushMachineConfig for the common case of deploying from scratch.
-func deployPrincipals(t *testing.T, admin *messaging.Session, machine *testMachine, config deploymentConfig) map[string]string {
+func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) map[string]string {
 	t.Helper()
 
 	for _, spec := range config.Principals {
@@ -602,7 +602,7 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 //
 // For multi-agent deployments (multiple principals sharing one template),
 // use agentTemplateContent directly with the lower-level helpers.
-func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, options agentOptions) agentDeployment {
+func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMachine, options agentOptions) agentDeployment {
 	t.Helper()
 
 	if options.Binary == "" {
@@ -689,7 +689,7 @@ func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, o
 // machine so the daemon can read templates during config reconciliation.
 // Returns the template room ID for tests that need to publish custom
 // templates.
-func grantTemplateAccess(t *testing.T, admin *messaging.Session, machine *testMachine) string {
+func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) string {
 	t.Helper()
 
 	templateRoomID, err := admin.ResolveAlias(t.Context(),
@@ -711,7 +711,7 @@ func grantTemplateAccess(t *testing.T, admin *messaging.Session, machine *testMa
 // state event. Returns the template reference string (e.g.,
 // "bureau/template:fleet-test-agent") for use in fleet service
 // definitions or PrincipalAssignment templates.
-func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *testMachine, templateName string) string {
+func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, machine *testMachine, templateName string) string {
 	t.Helper()
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
@@ -735,7 +735,7 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.Session, machine *t
 // joinConfigRoom invites an agent to the config room and joins via a
 // direct session. The agent needs config room membership so the lifecycle
 // manager can post messages (agent-ready, text responses) to the room.
-func joinConfigRoom(t *testing.T, admin *messaging.Session, configRoomID string, agent principalAccount) {
+func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID string, agent principalAccount) {
 	t.Helper()
 
 	ctx := t.Context()

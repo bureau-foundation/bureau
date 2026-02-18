@@ -14,8 +14,8 @@ import (
 	"testing"
 )
 
-// newTestSession creates a Client and Session pointing at a test server.
-func newTestSession(t *testing.T, handler http.Handler) (*Client, *Session) {
+// newTestSession creates a Client and DirectSession pointing at a test server.
+func newTestSession(t *testing.T, handler http.Handler) (*Client, *DirectSession) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

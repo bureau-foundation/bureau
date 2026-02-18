@@ -10,7 +10,7 @@
 // This package implements the business logic shared by the
 // bureau-credentials CLI binary and integration test helpers. CLI
 // commands and test code call these functions directly with a
-// *messaging.Session, getting full type safety and compiler checking.
+// messaging.Session, getting full type safety and compiler checking.
 //
 // The encryption flow:
 //   - Fetch the machine's age public key from m.bureau.machine_key

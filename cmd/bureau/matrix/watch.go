@@ -106,7 +106,7 @@ Press Ctrl-C to stop.`,
 const syncLongPollTimeout = 30000
 
 // runWatchLoop is the core sync loop for the watch command.
-func runWatchLoop(ctx context.Context, session *messaging.Session, roomID string, params *watchParams) error {
+func runWatchLoop(ctx context.Context, session messaging.Session, roomID string, params *watchParams) error {
 	encoder := json.NewEncoder(os.Stdout)
 
 	// Optionally print recent history before starting the live tail.
@@ -176,7 +176,7 @@ func runWatchLoop(ctx context.Context, session *messaging.Session, roomID string
 
 // printWatchHistory fetches and prints the N most recent events from the room
 // timeline before starting the live tail.
-func printWatchHistory(ctx context.Context, session *messaging.Session, roomID string, params *watchParams, encoder *json.Encoder) error {
+func printWatchHistory(ctx context.Context, session messaging.Session, roomID string, params *watchParams, encoder *json.Encoder) error {
 	response, err := session.RoomMessages(ctx, roomID, messaging.RoomMessagesOptions{
 		Direction: "b",
 		Limit:     params.History,

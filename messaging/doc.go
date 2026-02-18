@@ -6,22 +6,23 @@
 //
 // The package provides two core types. [Client] is an unauthenticated Matrix
 // client that handles registration (token-authenticated via MSC3231 UIAA
-// flow) and login, returning authenticated [Session] values. Client holds
-// the homeserver URL and HTTP transport, shared across all Sessions derived
-// from it.
+// flow) and login, returning authenticated [DirectSession] values. Client holds
+// the homeserver URL and HTTP transport, shared across all DirectSessions
+// derived from it.
 //
-// [Session] wraps a Client with an access token for authenticated operations:
+// [DirectSession] wraps a Client with an access token for authenticated operations:
 // room management (create, join, leave, invite, kick), messaging (send events,
 // room messages with pagination, thread messages via the relations endpoint),
 // state events (get/set individual events, full room state), incremental sync
 // with long-polling, room alias resolution, media upload, TURN credential
 // retrieval, password changes, and identity verification (WhoAmI).
 //
-// Sessions are lightweight (a pointer to the parent Client plus an access
-// token in mmap-backed secret.Buffer memory) and safe to create in large
-// numbers. The proxy process holds one Client and many Sessions, one per
-// sandboxed agent. The access token is locked against swap and excluded from
-// core dumps; callers must call Session.Close to release the protected memory.
+// DirectSessions are lightweight (a pointer to the parent Client plus an
+// access token in mmap-backed secret.Buffer memory) and safe to create in
+// large numbers. The proxy process holds one Client and many DirectSessions,
+// one per sandboxed agent. The access token is locked against swap and
+// excluded from core dumps; callers must call DirectSession.Close to release
+// the protected memory.
 //
 // All API errors are returned as [*MatrixError] with the standard Matrix
 // error code (M_FORBIDDEN, M_NOT_FOUND, etc.) and HTTP status code.
@@ -32,5 +33,5 @@
 //
 // Thread support is first-class: [NewTextMessage] creates a plain message,
 // [NewThreadReply] creates a threaded reply with the m.thread relation type,
-// and Session.ThreadMessages fetches thread contents via the relations API.
+// and DirectSession.ThreadMessages fetches thread contents via the relations API.
 package messaging

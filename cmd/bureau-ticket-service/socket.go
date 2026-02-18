@@ -696,7 +696,7 @@ func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetok
 
 // --- Matrix state writer ---
 
-// matrixWriter is the subset of *messaging.Session needed for writing
+// matrixWriter is the subset of *messaging.DirectSession needed for writing
 // ticket state events to Matrix. Tests substitute a fake implementation.
 type matrixWriter interface {
 	SendStateEvent(ctx context.Context, roomID, eventType, stateKey string, content any) (string, error)

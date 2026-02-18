@@ -405,7 +405,7 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 // resolveRoomTarget resolves a room target to a room ID. Accepts:
 //   - "#alias:server" — resolved via the homeserver
 //   - "!roomid:server" — returned as-is
-func resolveRoomTarget(ctx context.Context, session *messaging.Session, target, serverName string) (string, error) {
+func resolveRoomTarget(ctx context.Context, session messaging.Session, target, serverName string) (string, error) {
 	if strings.HasPrefix(target, "#") {
 		roomID, err := session.ResolveAlias(ctx, target)
 		if err != nil {

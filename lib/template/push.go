@@ -31,7 +31,7 @@ type PushResult struct {
 //
 // The session must have permission to read the target room (for alias
 // resolution and parent verification) and write state events to it.
-func Push(ctx context.Context, session *messaging.Session, ref schema.TemplateRef, content schema.TemplateContent, serverName string) (*PushResult, error) {
+func Push(ctx context.Context, session messaging.Session, ref schema.TemplateRef, content schema.TemplateContent, serverName string) (*PushResult, error) {
 	// Resolve the target room.
 	roomAlias := ref.RoomAlias(serverName)
 	roomID, err := session.ResolveAlias(ctx, roomAlias)

@@ -70,7 +70,7 @@ type machineEntry struct {
 	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
 }
 
-func runList(ctx context.Context, session *messaging.Session, serverName string, jsonOutput *cli.JSONOutput) error {
+func runList(ctx context.Context, session messaging.Session, serverName string, jsonOutput *cli.JSONOutput) error {
 	machineAlias := principal.RoomAlias("bureau/machine", serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {

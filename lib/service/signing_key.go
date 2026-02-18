@@ -18,7 +18,7 @@ import (
 // ResolveSystemRoom resolves the #bureau/system room alias and joins
 // it. Returns the room ID. Called once at startup by services that
 // need to fetch state from the system room (e.g., token signing keys).
-func ResolveSystemRoom(ctx context.Context, session *messaging.Session, serverName string) (string, error) {
+func ResolveSystemRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
 	alias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -41,7 +41,7 @@ func ResolveSystemRoom(ctx context.Context, session *messaging.Session, serverNa
 // Returns the decoded public key suitable for use in AuthConfig. Fails
 // if the state event doesn't exist, the public key field is empty, or
 // the hex decoding produces a key of the wrong length.
-func LoadTokenSigningKey(ctx context.Context, session *messaging.Session, systemRoomID, machineLocalpart string) (ed25519.PublicKey, error) {
+func LoadTokenSigningKey(ctx context.Context, session *messaging.DirectSession, systemRoomID, machineLocalpart string) (ed25519.PublicKey, error) {
 	raw, err := session.GetStateEvent(ctx, systemRoomID, schema.EventTypeTokenSigningKey, machineLocalpart)
 	if err != nil {
 		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", machineLocalpart, systemRoomID, err)

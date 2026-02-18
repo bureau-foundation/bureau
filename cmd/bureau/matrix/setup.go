@@ -235,7 +235,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 // registerOrLogin registers a new account, or logs in if it already exists.
 // Password and registrationToken are read but not closed — the caller retains ownership.
-func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.Session, error) {
+func registerOrLogin(ctx context.Context, client *messaging.Client, username string, password, registrationToken *secret.Buffer) (*messaging.DirectSession, error) {
 	session, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          username,
 		Password:          password,
@@ -254,7 +254,7 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username str
 }
 
 // ensureSpace creates the Bureau space if it doesn't exist.
-func ensureSpace(ctx context.Context, session *messaging.Session, serverName string, logger *slog.Logger) (string, error) {
+func ensureSpace(ctx context.Context, session messaging.Session, serverName string, logger *slog.Logger) (string, error) {
 	alias := fmt.Sprintf("#bureau:%s", serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -285,7 +285,7 @@ func ensureSpace(ctx context.Context, session *messaging.Session, serverName str
 
 // ensureRoom creates a room if it doesn't exist and adds it as a child of the space.
 // The powerLevels parameter sets the room's power level structure directly.
-func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, name, topic, spaceRoomID, serverName string, powerLevels map[string]any, logger *slog.Logger) (string, error) {
+func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name, topic, spaceRoomID, serverName string, powerLevels map[string]any, logger *slog.Logger) (string, error) {
 	alias := fmt.Sprintf("#%s:%s", aliasLocal, serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -321,7 +321,7 @@ func ensureRoom(ctx context.Context, session *messaging.Session, aliasLocal, nam
 }
 
 // inviteIfNeeded invites a user to a room, ignoring "already joined" errors.
-func inviteIfNeeded(ctx context.Context, session *messaging.Session, roomID, roomName, userID string, logger *slog.Logger) error {
+func inviteIfNeeded(ctx context.Context, session messaging.Session, roomID, roomName, userID string, logger *slog.Logger) error {
 	if err := session.InviteUser(ctx, roomID, userID); err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 			logger.Info("user already in room or invite not needed",
@@ -343,7 +343,7 @@ func inviteIfNeeded(ctx context.Context, session *messaging.Session, roomID, roo
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource. Room IDs are
 // written in standardRooms order for consistency.
-func writeCredentials(path, homeserverURL string, session *messaging.Session, registrationToken *secret.Buffer, spaceRoomID string, roomIDs map[string]string) error {
+func writeCredentials(path, homeserverURL string, session *messaging.DirectSession, registrationToken *secret.Buffer, spaceRoomID string, roomIDs map[string]string) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -365,7 +365,7 @@ func writeCredentials(path, homeserverURL string, session *messaging.Session, re
 // publishBaseTemplates publishes the built-in sandbox templates to the
 // template room as m.bureau.template state events. Idempotent: re-publishing
 // overwrites the existing state event with the same content.
-func publishBaseTemplates(ctx context.Context, session *messaging.Session, templateRoomID string, logger *slog.Logger) error {
+func publishBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID string, logger *slog.Logger) error {
 	for _, template := range baseTemplates() {
 		_, err := session.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name, template.content)
 		if err != nil {
@@ -379,7 +379,7 @@ func publishBaseTemplates(ctx context.Context, session *messaging.Session, templ
 // publishBasePipelines publishes the embedded pipeline definitions to the
 // pipeline room as m.bureau.pipeline state events. Idempotent: re-publishing
 // overwrites the existing state event with the same content.
-func publishBasePipelines(ctx context.Context, session *messaging.Session, pipelineRoomID string, logger *slog.Logger) error {
+func publishBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID string, logger *slog.Logger) error {
 	pipelines, err := content.Pipelines()
 	if err != nil {
 		return cli.Internal("loading embedded pipelines: %w", err)

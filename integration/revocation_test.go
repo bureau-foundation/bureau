@@ -28,7 +28,7 @@ import (
 // homeservers (Continuwuity returns M_UNRECOGNIZED for both). LogoutAll
 // uses the core Matrix spec and works everywhere, but requires access to
 // the machine's session file.
-func invalidateMachineTokens(t *testing.T, admin *messaging.Session, machine *testMachine) {
+func invalidateMachineTokens(t *testing.T, admin *messaging.DirectSession, machine *testMachine) {
 	t.Helper()
 	ctx := t.Context()
 

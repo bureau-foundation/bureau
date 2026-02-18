@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 func main() {
@@ -61,9 +62,13 @@ func run() error {
 	}
 	log("identity: user_id=%s", identity.UserID)
 
+	// Create a Matrix session for all subsequent operations. The proxy
+	// client is only needed for proxy-specific operations (Identity above).
+	session := proxyclient.NewProxySession(proxy, identity.UserID)
+
 	// Step 2: Verify Matrix authentication.
 	log("checking Matrix whoami...")
-	whoamiUserID, err := proxy.Whoami(ctx)
+	whoamiUserID, err := session.WhoAmI(ctx)
 	if err != nil {
 		return fmt.Errorf("whoami: %w", err)
 	}
@@ -72,7 +77,7 @@ func run() error {
 	// Step 3: Resolve the config room.
 	configAlias := fmt.Sprintf("#bureau/config/%s:%s", machineName, serverName)
 	log("resolving config room %s...", configAlias)
-	configRoomID, err := proxy.ResolveAlias(ctx, configAlias)
+	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		return fmt.Errorf("resolve config room %s: %w", configAlias, err)
 	}
@@ -88,7 +93,7 @@ func run() error {
 		log("no payload file found")
 	}
 	log("sending ready signal...")
-	if _, err := proxy.SendTextMessage(ctx, configRoomID, readyMessage); err != nil {
+	if _, err := session.SendMessage(ctx, configRoomID, messaging.NewTextMessage(readyMessage)); err != nil {
 		return fmt.Errorf("send ready message: %w", err)
 	}
 	log("ready signal sent")
@@ -99,7 +104,7 @@ func run() error {
 	// policy changes) to the config room that are not intended for the agent.
 	machineUserID := fmt.Sprintf("@%s:%s", machineName, serverName)
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, proxy, configRoomID, whoamiUserID, machineUserID)
+	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}
@@ -113,7 +118,7 @@ func run() error {
 		log("payload at ack: %s", currentPayload)
 	}
 	log("sending acknowledgment...")
-	if _, err := proxy.SendTextMessage(ctx, configRoomID, ackBody); err != nil {
+	if _, err := session.SendMessage(ctx, configRoomID, messaging.NewTextMessage(ackBody)); err != nil {
 		return fmt.Errorf("send ack message: %w", err)
 	}
 	log("acknowledgment sent")
@@ -154,13 +159,14 @@ func readPayloadJSON() string {
 // an external user (someone other than the agent itself or the machine
 // daemon). The homeserver holds each /sync request for up to 30 seconds,
 // returning immediately when new events arrive. Returns the message body.
-func waitForMessage(ctx context.Context, proxy *proxyclient.Client, roomID, ownUserID, machineUserID string) (string, error) {
+func waitForMessage(ctx context.Context, session messaging.Session, roomID, ownUserID, machineUserID string) (string, error) {
 	filter := buildRoomMessageFilter(roomID)
 
 	// Initial /sync with timeout=0 to capture the stream position.
-	response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
-		Timeout: 0,
-		Filter:  filter,
+	response, err := session.Sync(ctx, messaging.SyncOptions{
+		Timeout:    0,
+		SetTimeout: true,
+		Filter:     filter,
 	})
 	if err != nil {
 		return "", fmt.Errorf("initial sync: %w", err)
@@ -169,10 +175,11 @@ func waitForMessage(ctx context.Context, proxy *proxyclient.Client, roomID, ownU
 
 	// Long-poll until a message from an external user arrives.
 	for {
-		response, err := proxy.Sync(ctx, proxyclient.SyncOptions{
-			Since:   sinceToken,
-			Timeout: 30000, // 30s server-side hold
-			Filter:  filter,
+		response, err := session.Sync(ctx, messaging.SyncOptions{
+			Since:      sinceToken,
+			Timeout:    30000, // 30s server-side hold
+			SetTimeout: true,
+			Filter:     filter,
 		})
 		if err != nil {
 			if ctx.Err() != nil {

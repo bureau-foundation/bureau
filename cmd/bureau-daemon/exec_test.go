@@ -568,7 +568,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 // newNoopSession creates a messaging.Session connected to a mock server
 // that accepts all requests. Used for tests that need a valid session
 // but don't care about Matrix interactions.
-func newNoopSession(t *testing.T) *messaging.Session {
+func newNoopSession(t *testing.T) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

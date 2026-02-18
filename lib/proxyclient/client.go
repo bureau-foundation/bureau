@@ -24,6 +24,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // Client is a typed HTTP client for the Bureau proxy Unix socket API.
@@ -315,61 +316,256 @@ func (client *Client) SendTextMessage(ctx context.Context, room, text string) (s
 	})
 }
 
-// SyncOptions controls the behavior of the Matrix /sync endpoint
-// accessed through the proxy's HTTP passthrough (/http/matrix/).
-type SyncOptions struct {
-	// Since is the next_batch token from a previous sync. Empty for initial sync.
-	Since string
+// JoinedRooms returns the list of room IDs the principal has joined.
+func (client *Client) JoinedRooms(ctx context.Context) ([]string, error) {
+	response, err := client.get(ctx, "/v1/matrix/joined-rooms")
+	if err != nil {
+		return nil, fmt.Errorf("joined rooms: %w", err)
+	}
+	defer response.Body.Close()
 
-	// Timeout is the long-poll timeout in milliseconds. The server holds
-	// the connection for up to this duration, returning immediately when
-	// new events arrive. Use 0 for an immediate response (initial sync).
-	Timeout int
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("joined rooms: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+	}
 
-	// Filter is an inline JSON filter restricting which events the server
-	// returns. See the Matrix spec for the filter format.
-	Filter string
+	var result messaging.JoinedRoomsResponse
+	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
+		return nil, fmt.Errorf("joined rooms: %w", err)
+	}
+	return result.JoinedRooms, nil
 }
 
-// SyncResponse is the top-level response from Matrix /sync.
-type SyncResponse struct {
-	NextBatch string           `json:"next_batch"`
-	Rooms     SyncRoomsSection `json:"rooms"`
+// GetRoomState returns all current state events from a room.
+func (client *Client) GetRoomState(ctx context.Context, room string) ([]messaging.Event, error) {
+	response, err := client.get(ctx, "/v1/matrix/room-state?room="+url.QueryEscape(room))
+	if err != nil {
+		return nil, fmt.Errorf("get room state for %s: %w", room, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get room state for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	var events []messaging.Event
+	if err := netutil.DecodeResponse(response.Body, &events); err != nil {
+		return nil, fmt.Errorf("get room state for %s: %w", room, err)
+	}
+	return events, nil
 }
 
-// SyncRoomsSection contains per-room sync data grouped by membership.
-type SyncRoomsSection struct {
-	Join map[string]SyncJoinedRoom `json:"join,omitempty"`
+// GetRoomMembers returns the members of a room.
+func (client *Client) GetRoomMembers(ctx context.Context, room string) ([]messaging.RoomMember, error) {
+	response, err := client.get(ctx, "/v1/matrix/room-members?room="+url.QueryEscape(room))
+	if err != nil {
+		return nil, fmt.Errorf("get room members for %s: %w", room, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get room members for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	// The proxy forwards the homeserver's /members response, which contains
+	// member state events. Parse them into RoomMember structs matching what
+	// messaging.Session.GetRoomMembers returns.
+	var membersResponse messaging.RoomMembersResponse
+	if err := netutil.DecodeResponse(response.Body, &membersResponse); err != nil {
+		return nil, fmt.Errorf("get room members for %s: %w", room, err)
+	}
+
+	members := make([]messaging.RoomMember, len(membersResponse.Chunk))
+	for index, event := range membersResponse.Chunk {
+		members[index] = messaging.RoomMember{
+			UserID:      event.StateKey,
+			DisplayName: event.Content.DisplayName,
+			Membership:  event.Content.Membership,
+			AvatarURL:   event.Content.AvatarURL,
+		}
+	}
+	return members, nil
 }
 
-// SyncJoinedRoom contains sync data for a room the user has joined.
-type SyncJoinedRoom struct {
-	Timeline SyncTimeline `json:"timeline"`
+// RoomMessages fetches paginated messages from a room.
+func (client *Client) RoomMessages(ctx context.Context, room string, options messaging.RoomMessagesOptions) (*messaging.RoomMessagesResponse, error) {
+	query := url.Values{"room": {room}}
+	if options.From != "" {
+		query.Set("from", options.From)
+	}
+	direction := options.Direction
+	if direction == "" {
+		direction = "b"
+	}
+	query.Set("dir", direction)
+	if options.Limit > 0 {
+		query.Set("limit", strconv.Itoa(options.Limit))
+	}
+
+	response, err := client.get(ctx, "/v1/matrix/messages?"+query.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("room messages for %s: %w", room, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("room messages for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	var result messaging.RoomMessagesResponse
+	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
+		return nil, fmt.Errorf("room messages for %s: %w", room, err)
+	}
+	return &result, nil
 }
 
-// SyncTimeline contains timeline events from a sync response.
-type SyncTimeline struct {
-	Events []SyncEvent `json:"events"`
+// ThreadMessages fetches messages in a thread.
+func (client *Client) ThreadMessages(ctx context.Context, room, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
+	query := url.Values{
+		"room":   {room},
+		"thread": {threadRootID},
+	}
+	if options.From != "" {
+		query.Set("from", options.From)
+	}
+	if options.Limit > 0 {
+		query.Set("limit", strconv.Itoa(options.Limit))
+	}
+
+	response, err := client.get(ctx, "/v1/matrix/thread-messages?"+query.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, room, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("thread messages for %s in %s: HTTP %d: %s", threadRootID, room, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	var result messaging.ThreadMessagesResponse
+	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
+		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, room, err)
+	}
+	return &result, nil
 }
 
-// SyncEvent is a Matrix event from a /sync response. Contains only the
-// fields needed by agent message pumps — extend as needed.
-type SyncEvent struct {
-	Type    string         `json:"type"`
-	Sender  string         `json:"sender"`
-	Content map[string]any `json:"content"`
+// GetDisplayName fetches a user's display name.
+func (client *Client) GetDisplayName(ctx context.Context, userID string) (string, error) {
+	response, err := client.get(ctx, "/v1/matrix/display-name?user="+url.QueryEscape(userID))
+	if err != nil {
+		return "", fmt.Errorf("get display name for %s: %w", userID, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("get display name for %s: HTTP %d: %s", userID, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+
+	var result messaging.DisplayNameResponse
+	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
+		return "", fmt.Errorf("get display name for %s: %w", userID, err)
+	}
+	return result.DisplayName, nil
+}
+
+// CreateRoom creates a new Matrix room. Returns the room ID.
+func (client *Client) CreateRoom(ctx context.Context, request messaging.CreateRoomRequest) (*messaging.CreateRoomResponse, error) {
+	response, err := client.post(ctx, "/v1/matrix/room", request)
+	if err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+	defer response.Body.Close()
+
+	body, _ := netutil.ReadResponse(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("create room: HTTP %d: %s", response.StatusCode, body)
+	}
+
+	var result messaging.CreateRoomResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("create room: parsing response: %w", err)
+	}
+	return &result, nil
+}
+
+// JoinRoom joins a room by ID or alias. Returns the room ID.
+func (client *Client) JoinRoom(ctx context.Context, roomIDOrAlias string) (string, error) {
+	response, err := client.post(ctx, "/v1/matrix/join", struct {
+		Room string `json:"room"`
+	}{Room: roomIDOrAlias})
+	if err != nil {
+		return "", fmt.Errorf("join room %q: %w", roomIDOrAlias, err)
+	}
+	defer response.Body.Close()
+
+	body, _ := netutil.ReadResponse(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("join room %q: HTTP %d: %s", roomIDOrAlias, response.StatusCode, body)
+	}
+
+	var result struct {
+		RoomID string `json:"room_id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("join room: parsing response: %w", err)
+	}
+	return result.RoomID, nil
+}
+
+// InviteUser invites a user to a room.
+func (client *Client) InviteUser(ctx context.Context, roomID, userID string) error {
+	response, err := client.post(ctx, "/v1/matrix/invite", struct {
+		Room   string `json:"room"`
+		UserID string `json:"user_id"`
+	}{Room: roomID, UserID: userID})
+	if err != nil {
+		return fmt.Errorf("invite %q to %q: %w", userID, roomID, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("invite %q to %q: HTTP %d: %s", userID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+	}
+	return nil
+}
+
+// SendEvent sends an event of any type to a room. Returns the event ID.
+func (client *Client) SendEvent(ctx context.Context, room, eventType string, content any) (string, error) {
+	response, err := client.post(ctx, "/v1/matrix/event", struct {
+		Room      string `json:"room"`
+		EventType string `json:"event_type"`
+		Content   any    `json:"content"`
+	}{Room: room, EventType: eventType, Content: content})
+	if err != nil {
+		return "", fmt.Errorf("send event %s to %s: %w", eventType, room, err)
+	}
+	defer response.Body.Close()
+
+	body, _ := netutil.ReadResponse(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, room, response.StatusCode, body)
+	}
+
+	var result struct {
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("send event: parsing response: %w", err)
+	}
+	return result.EventID, nil
 }
 
 // Sync performs a Matrix /sync through the proxy's HTTP passthrough.
 // The proxy injects the principal's access token and forwards the request
 // to the homeserver. For initial sync, leave options.Since empty and set
 // Timeout to 0. For long-polling, set Timeout to 30000 (30 seconds).
-func (client *Client) Sync(ctx context.Context, options SyncOptions) (*SyncResponse, error) {
+func (client *Client) Sync(ctx context.Context, options messaging.SyncOptions) (*messaging.SyncResponse, error) {
 	query := url.Values{}
 	if options.Since != "" {
 		query.Set("since", options.Since)
 	}
-	query.Set("timeout", strconv.Itoa(options.Timeout))
+	if options.SetTimeout || options.Timeout > 0 {
+		query.Set("timeout", strconv.Itoa(options.Timeout))
+	}
 	if options.Filter != "" {
 		query.Set("filter", options.Filter)
 	}
@@ -389,7 +585,7 @@ func (client *Client) Sync(ctx context.Context, options SyncOptions) (*SyncRespo
 		return nil, fmt.Errorf("sync: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
-	var result SyncResponse
+	var result messaging.SyncResponse
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
 		return nil, fmt.Errorf("sync: %w", err)
 	}

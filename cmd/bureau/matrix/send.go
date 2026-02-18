@@ -128,7 +128,7 @@ Bureau protocol events).`,
 // resolveRoom resolves a room target to a room ID. If the target looks like an
 // alias (starts with #), it is resolved via the homeserver. Otherwise it is
 // returned as-is (assumed to be a room ID starting with !).
-func resolveRoom(ctx context.Context, session *messaging.Session, target string) (string, error) {
+func resolveRoom(ctx context.Context, session messaging.Session, target string) (string, error) {
 	if strings.HasPrefix(target, "#") {
 		roomID, err := session.ResolveAlias(ctx, target)
 		if err != nil {

@@ -42,6 +42,7 @@ the ticket across all rooms.`,
 			depsCommand(),
 			childrenCommand(),
 			epicHealthCommand(),
+			upcomingCommand(),
 
 			// Mutation commands.
 			createCommand(),
@@ -49,6 +50,7 @@ the ticket across all rooms.`,
 			closeCommand(),
 			reopenCommand(),
 			batchCommand(),
+			deferCommand(),
 
 			// Transfer commands.
 			exportCommand(),

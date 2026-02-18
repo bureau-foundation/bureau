@@ -335,7 +335,7 @@ func (idx *Index) Blocked() []Entry {
 		if content.Status != "open" {
 			continue
 		}
-		if !idx.allBlockersClosed(&content) || !allGatesSatisfied(&content) {
+		if !idx.AllBlockersClosed(&content) || !allGatesSatisfied(&content) {
 			result = append(result, Entry{ID: id, Content: content})
 		}
 	}
@@ -986,14 +986,15 @@ func (idx *Index) updateIndexes(
 // isReady returns true if the ticket is available to be picked up.
 func (idx *Index) isReady(content *schema.TicketContent) bool {
 	return content.Status == "open" &&
-		idx.allBlockersClosed(content) &&
+		idx.AllBlockersClosed(content) &&
 		allGatesSatisfied(content)
 }
 
-// allBlockersClosed returns true if every ticket in content.BlockedBy
-// exists in the index and has status "closed". Returns false if any
-// blocker is missing (dangling reference) or not closed.
-func (idx *Index) allBlockersClosed(content *schema.TicketContent) bool {
+// AllBlockersClosed returns true if every ticket in content.BlockedBy
+// exists in the index and has status "closed". Returns true if
+// BlockedBy is empty (no blockers means nothing to block on). Returns
+// false if any blocker is missing (dangling reference) or not closed.
+func (idx *Index) AllBlockersClosed(content *schema.TicketContent) bool {
 	for _, blockerID := range content.BlockedBy {
 		blocker, exists := idx.tickets[blockerID]
 		if !exists || blocker.Status != "closed" {

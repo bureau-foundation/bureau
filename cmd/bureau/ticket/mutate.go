@@ -17,14 +17,19 @@ import (
 type createParams struct {
 	TicketConnection
 	cli.JSONOutput
-	Room      string   `json:"room"       flag:"room,r"      desc:"room ID" required:"true"`
-	Title     string   `json:"title"      flag:"title"       desc:"ticket title" required:"true"`
-	Body      string   `json:"body"       flag:"body"        desc:"full description (markdown)"`
-	Type      string   `json:"type"       flag:"type,t"      desc:"ticket type (task, bug, feature, epic, chore, docs, question)" required:"true"`
-	Priority  int      `json:"priority"   flag:"priority,p"  desc:"priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)" default:"2"`
-	Labels    []string `json:"labels"     flag:"label,l"     desc:"labels (repeatable)"`
-	Parent    string   `json:"parent"     flag:"parent"      desc:"parent ticket ID"`
-	BlockedBy []string `json:"blocked_by" flag:"blocked-by"  desc:"blocking ticket IDs (repeatable)"`
+	Room       string   `json:"room"       flag:"room,r"      desc:"room ID" required:"true"`
+	Title      string   `json:"title"      flag:"title"       desc:"ticket title" required:"true"`
+	Body       string   `json:"body"       flag:"body"        desc:"full description (markdown)"`
+	Type       string   `json:"type"       flag:"type,t"      desc:"ticket type (task, bug, feature, epic, chore, docs, question)" required:"true"`
+	Priority   int      `json:"priority"   flag:"priority,p"  desc:"priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)" default:"2"`
+	Labels     []string `json:"labels"     flag:"label,l"     desc:"labels (repeatable)"`
+	Parent     string   `json:"parent"     flag:"parent"      desc:"parent ticket ID"`
+	BlockedBy  []string `json:"blocked_by" flag:"blocked-by"  desc:"blocking ticket IDs (repeatable)"`
+	Schedule   string   `json:"schedule"     flag:"schedule"     desc:"cron expression for recurring timer gate (e.g., '0 7 * * *')"`
+	Interval   string   `json:"interval"     flag:"interval"     desc:"Go duration for recurring timer gate (e.g., '4h')"`
+	DeferUntil string   `json:"defer_until"  flag:"defer-until"  desc:"defer until this time (RFC 3339)"`
+	DeferFor   string   `json:"defer_for"    flag:"defer-for"    desc:"defer for this duration (e.g., '24h')"`
+	Deadline   string   `json:"deadline"     flag:"deadline"     desc:"target completion time (RFC 3339 UTC)"`
 }
 
 func createCommand() *cli.Command {
@@ -52,6 +57,22 @@ Required fields: --room, --title, --type. Priority defaults to P2
 				Description: "Create a subtask of an epic",
 				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Implement login flow' --type task --parent tkt-epic1",
 			},
+			{
+				Description: "Create a recurring ticket with a cron schedule",
+				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Daily health check' --type chore --schedule '0 7 * * *'",
+			},
+			{
+				Description: "Create a recurring ticket with an interval",
+				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Rotate API keys' --type chore --interval '720h'",
+			},
+			{
+				Description: "Create a ticket deferred by 24 hours",
+				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Low priority cleanup' --type chore --defer-for 24h",
+			},
+			{
+				Description: "Create a ticket with a deadline",
+				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Ship v2 API' --type task --deadline '2026-03-01T00:00:00Z'",
+			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &createResult{} },
@@ -66,6 +87,12 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			}
 			if params.Type == "" {
 				return cli.Validation("--type is required")
+			}
+			if params.Schedule != "" && params.Interval != "" {
+				return cli.Validation("--schedule and --interval are mutually exclusive")
+			}
+			if params.DeferUntil != "" && params.DeferFor != "" {
+				return cli.Validation("--defer-until and --defer-for are mutually exclusive")
 			}
 
 			client, err := params.connect()
@@ -93,6 +120,21 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			}
 			if len(params.BlockedBy) > 0 {
 				fields["blocked_by"] = params.BlockedBy
+			}
+			if params.Schedule != "" {
+				fields["schedule"] = params.Schedule
+			}
+			if params.Interval != "" {
+				fields["interval"] = params.Interval
+			}
+			if params.DeferUntil != "" {
+				fields["defer_until"] = params.DeferUntil
+			}
+			if params.DeferFor != "" {
+				fields["defer_for"] = params.DeferFor
+			}
+			if params.Deadline != "" {
+				fields["deadline"] = params.Deadline
 			}
 
 			var result createResult
@@ -125,6 +167,7 @@ type updateParams struct {
 	Labels   []string `json:"labels"   flag:"label,l"    desc:"replace labels (repeatable)"`
 	Assignee string   `json:"assignee" flag:"assignee"   desc:"assign to Matrix user ID (requires in_progress status)"`
 	Parent   string   `json:"parent"   flag:"parent"     desc:"set parent ticket ID"`
+	Deadline string   `json:"deadline" flag:"deadline"   desc:"target completion time (RFC 3339 UTC, empty string to clear)"`
 }
 
 func updateCommand() *cli.Command {
@@ -153,6 +196,10 @@ assignee.`,
 			{
 				Description: "Add labels",
 				Command:     "bureau ticket update tkt-a3f9 --label auth --label urgent",
+			},
+			{
+				Description: "Set a deadline",
+				Command:     "bureau ticket update tkt-a3f9 --deadline '2026-03-15T17:00:00Z'",
 			},
 		},
 		Params:         func() any { return &params },
@@ -208,6 +255,9 @@ assignee.`,
 			if params.Parent != "" {
 				fields["parent"] = params.Parent
 			}
+			if params.Deadline != "" {
+				fields["deadline"] = params.Deadline
+			}
 
 			var result mutationResult
 			if err := client.Call(ctx, "update", fields, &result); err != nil {
@@ -229,9 +279,10 @@ assignee.`,
 type closeParams struct {
 	TicketConnection
 	cli.JSONOutput
-	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
-	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
-	Reason string `json:"reason" flag:"reason" desc:"close reason"`
+	Room          string `json:"room"            flag:"room,r"          desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
+	Ticket        string `json:"ticket"           desc:"ticket ID" required:"true"`
+	Reason        string `json:"reason"           flag:"reason"          desc:"close reason"`
+	EndRecurrence bool   `json:"end_recurrence"   flag:"end-recurrence"  desc:"permanently close a recurring ticket (strip recurring gates)"`
 }
 
 func closeCommand() *cli.Command {
@@ -241,7 +292,12 @@ func closeCommand() *cli.Command {
 		Name:    "close",
 		Summary: "Close a ticket",
 		Description: `Transition a ticket to "closed" with an optional reason. If the
-ticket was in_progress, the assignee is auto-cleared.`,
+ticket was in_progress, the assignee is auto-cleared.
+
+Tickets with recurring timer gates (schedule or interval) are automatically
+re-armed: the gate resets to pending with a new target, and the ticket
+reopens as "open" instead of closing. Use --end-recurrence to permanently
+close a recurring ticket by stripping its recurring gates first.`,
 		Usage: "bureau ticket close <ticket-id> [flags]",
 		Examples: []cli.Example{
 			{
@@ -251,6 +307,10 @@ ticket was in_progress, the assignee is auto-cleared.`,
 			{
 				Description: "Close with a reason",
 				Command:     "bureau ticket close tkt-a3f9 --reason 'Fixed in commit abc123'",
+			},
+			{
+				Description: "Permanently close a recurring ticket",
+				Command:     "bureau ticket close tkt-a3f9 --end-recurrence",
 			},
 		},
 		Params:         func() any { return &params },
@@ -281,6 +341,9 @@ ticket was in_progress, the assignee is auto-cleared.`,
 			}
 			if params.Reason != "" {
 				fields["reason"] = params.Reason
+			}
+			if params.EndRecurrence {
+				fields["end_recurrence"] = true
 			}
 
 			var result mutationResult
@@ -454,6 +517,101 @@ created.`,
 			for ref, ticketID := range result.Refs {
 				fmt.Printf("%s → %s\n", ref, ticketID)
 			}
+			return nil
+		},
+	}
+}
+
+// --- defer ---
+
+type deferParams struct {
+	TicketConnection
+	cli.JSONOutput
+	Room   string `json:"room"   flag:"room,r" desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
+	Ticket string `json:"ticket" desc:"ticket ID" required:"true"`
+	Until  string `json:"until"  flag:"until"   desc:"defer until this time (RFC 3339)"`
+	For    string `json:"for"    flag:"for"     desc:"defer for this duration (e.g., '24h', '2h30m')"`
+}
+
+func deferCommand() *cli.Command {
+	var params deferParams
+
+	return &cli.Command{
+		Name:    "defer",
+		Summary: "Defer a ticket until a future time",
+		Description: `Set or update a "defer" timer gate on a ticket. The ticket will not
+appear in ready queries until the defer time passes. Exactly one of
+--until or --for is required.
+
+If the ticket already has a defer gate, its target is updated. To
+remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
+		Usage: "bureau ticket defer <ticket-id> --until TIME | --for DUR [flags]",
+		Examples: []cli.Example{
+			{
+				Description: "Defer a ticket until tomorrow morning",
+				Command:     "bureau ticket defer tkt-a3f9 --until '2026-01-20T07:00:00Z'",
+			},
+			{
+				Description: "Defer a ticket for 24 hours",
+				Command:     "bureau ticket defer tkt-a3f9 --for 24h",
+			},
+		},
+		Params:         func() any { return &params },
+		Output:         func() any { return &mutationResult{} },
+		Annotations:    cli.Idempotent(),
+		RequiredGrants: []string{"command/ticket/defer"},
+		Run: func(args []string) error {
+			if len(args) == 1 {
+				params.Ticket = args[0]
+			} else if len(args) > 1 {
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
+			}
+			if params.Ticket == "" {
+				return cli.Validation("ticket ID is required\n\nUsage: bureau ticket defer <ticket-id> --until TIME | --for DUR")
+			}
+			if params.Until == "" && params.For == "" {
+				return cli.Validation("one of --until or --for is required")
+			}
+			if params.Until != "" && params.For != "" {
+				return cli.Validation("--until and --for are mutually exclusive")
+			}
+
+			client, err := params.connect()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := callContext()
+			defer cancel()
+
+			fields := map[string]any{"ticket": params.Ticket}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
+			if params.Until != "" {
+				fields["until"] = params.Until
+			}
+			if params.For != "" {
+				fields["for"] = params.For
+			}
+
+			var result mutationResult
+			if err := client.Call(ctx, "defer", fields, &result); err != nil {
+				return err
+			}
+
+			if done, err := params.EmitJSON(result); done {
+				return err
+			}
+
+			// Find the defer gate in the response to show the target.
+			for _, gate := range result.Content.Gates {
+				if gate.ID == "defer" {
+					fmt.Fprintf(os.Stderr, "%s deferred until %s\n", result.ID, gate.Target)
+					return nil
+				}
+			}
+			fmt.Fprintf(os.Stderr, "%s deferred\n", result.ID)
 			return nil
 		},
 	}

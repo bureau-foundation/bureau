@@ -506,9 +506,20 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Gates = []TicketGate{{ID: "g1", Type: "human", Status: "pending"}}
 				tc.Notes = []TicketNote{{ID: "n-1", Author: "@a:b.c", CreatedAt: "2026-01-01T00:00:00Z", Body: "note"}}
 				tc.Attachments = []TicketAttachment{{Ref: "art-abc123"}}
+				tc.Deadline = "2026-03-01T00:00:00Z"
 				tc.Origin = &TicketOrigin{Source: "github", ExternalRef: "GH-1234"}
 			},
 			wantErr: "",
+		},
+		{
+			name:    "deadline_valid",
+			modify:  func(tc *TicketContent) { tc.Deadline = "2026-12-31T23:59:59Z" },
+			wantErr: "",
+		},
+		{
+			name:    "deadline_invalid",
+			modify:  func(tc *TicketContent) { tc.Deadline = "next friday" },
+			wantErr: "deadline must be RFC 3339",
 		},
 	}
 
@@ -649,7 +660,7 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name: "timer_gate",
+			name: "timer_gate_duration",
 			gate: TicketGate{
 				ID:        "soak-period",
 				Type:      "timer",
@@ -661,6 +672,47 @@ func TestTicketGateRoundTrip(t *testing.T) {
 				"id":       "soak-period",
 				"type":     "timer",
 				"duration": "24h",
+			},
+		},
+		{
+			name: "timer_gate_recurring",
+			gate: TicketGate{
+				ID:             "daily-check",
+				Type:           "timer",
+				Status:         "pending",
+				Target:         "2026-02-18T07:00:00Z",
+				Schedule:       "0 7 * * *",
+				LastFiredAt:    "2026-02-17T07:00:00Z",
+				FireCount:      3,
+				MaxOccurrences: 30,
+				CreatedAt:      "2026-02-15T07:00:00Z",
+			},
+			checks: map[string]any{
+				"id":              "daily-check",
+				"type":            "timer",
+				"target":          "2026-02-18T07:00:00Z",
+				"schedule":        "0 7 * * *",
+				"last_fired_at":   "2026-02-17T07:00:00Z",
+				"fire_count":      float64(3),
+				"max_occurrences": float64(30),
+			},
+		},
+		{
+			name: "timer_gate_interval_with_base",
+			gate: TicketGate{
+				ID:       "retry",
+				Type:     "timer",
+				Status:   "pending",
+				Duration: "4h",
+				Interval: "4h",
+				Base:     "unblocked",
+			},
+			checks: map[string]any{
+				"id":       "retry",
+				"type":     "timer",
+				"duration": "4h",
+				"interval": "4h",
+				"base":     "unblocked",
 			},
 		},
 	}
@@ -714,7 +766,9 @@ func TestTicketGateOmitsEmptyOptionals(t *testing.T) {
 	optionalFields := []string{
 		"description", "pipeline_ref", "conclusion", "event_type",
 		"state_key", "room_alias", "content_match", "ticket_id",
-		"duration", "created_at", "satisfied_at", "satisfied_by",
+		"duration", "target", "base", "schedule", "interval",
+		"last_fired_at", "fire_count", "max_occurrences",
+		"created_at", "satisfied_at", "satisfied_by",
 	}
 	for _, field := range optionalFields {
 		if _, exists := raw[field]; exists {
@@ -795,9 +849,127 @@ func TestTicketGateValidate(t *testing.T) {
 			wantErr: "ticket_id is required for ticket gates",
 		},
 		{
-			name:    "timer_missing_duration",
+			name:    "timer_missing_target_and_duration",
 			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending"},
-			wantErr: "duration is required for timer gates",
+			wantErr: "target or duration is required for timer gates",
+		},
+		{
+			name:    "timer_target_only",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "2026-02-18T07:00:00Z"},
+			wantErr: "",
+		},
+		{
+			name:    "timer_duration_only",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "4h"},
+			wantErr: "",
+		},
+		{
+			name:    "timer_target_and_duration",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "2026-02-18T07:00:00Z", Duration: "4h"},
+			wantErr: "",
+		},
+		{
+			name:    "timer_invalid_target",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "not-a-time"},
+			wantErr: "target must be RFC 3339",
+		},
+		{
+			name:    "timer_invalid_duration",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "3 days"},
+			wantErr: "invalid duration",
+		},
+		{
+			name:    "timer_negative_duration",
+			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "-1h"},
+			wantErr: "duration must be positive",
+		},
+		{
+			name: "timer_schedule_valid",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * * *",
+			},
+			wantErr: "",
+		},
+		{
+			name: "timer_interval_valid",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "4h", Interval: "4h",
+			},
+			wantErr: "",
+		},
+		{
+			name: "timer_schedule_and_interval_exclusive",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "1h", Schedule: "0 7 * * *", Interval: "4h",
+			},
+			wantErr: "schedule and interval are mutually exclusive",
+		},
+		{
+			name: "timer_schedule_wrong_field_count",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * *",
+			},
+			wantErr: "expected 5 fields",
+		},
+		{
+			name: "timer_interval_too_short",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "5s", Interval: "5s",
+			},
+			wantErr: "interval must be >= 30s",
+		},
+		{
+			name: "timer_interval_at_minimum",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "30s", Interval: "30s",
+			},
+			wantErr: "",
+		},
+		{
+			name: "timer_base_created",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "1h", Base: "created",
+			},
+			wantErr: "",
+		},
+		{
+			name: "timer_base_unblocked",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "1h", Base: "unblocked",
+			},
+			wantErr: "",
+		},
+		{
+			name: "timer_base_invalid",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "1h", Base: "started",
+			},
+			wantErr: `unknown base "started"`,
+		},
+		{
+			name: "timer_max_occurrences_without_recurrence",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Duration: "1h", MaxOccurrences: 5,
+			},
+			wantErr: "max_occurrences requires schedule or interval",
+		},
+		{
+			name: "timer_max_occurrences_with_schedule",
+			gate: TicketGate{
+				ID: "g1", Type: "timer", Status: "pending",
+				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * * *", MaxOccurrences: 10,
+			},
+			wantErr: "",
 		},
 	}
 
@@ -1255,5 +1427,121 @@ func TestTicketConfigContentForwardCompatibility(t *testing.T) {
 	}
 	if strings.Contains(string(remarshaled), "new_v2_field") {
 		t.Error("unknown field survived re-marshal; expected it to be dropped")
+	}
+}
+
+func TestTicketGateIsRecurring(t *testing.T) {
+	tests := []struct {
+		name string
+		gate TicketGate
+		want bool
+	}{
+		{
+			name: "schedule",
+			gate: TicketGate{Type: "timer", Schedule: "0 7 * * *"},
+			want: true,
+		},
+		{
+			name: "interval",
+			gate: TicketGate{Type: "timer", Interval: "4h"},
+			want: true,
+		},
+		{
+			name: "one_shot_duration",
+			gate: TicketGate{Type: "timer", Duration: "1h"},
+			want: false,
+		},
+		{
+			name: "one_shot_target",
+			gate: TicketGate{Type: "timer", Target: "2026-02-18T07:00:00Z"},
+			want: false,
+		},
+		{
+			name: "non_timer_type",
+			gate: TicketGate{Type: "human"},
+			want: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.gate.IsRecurring(); got != test.want {
+				t.Errorf("IsRecurring() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTicketContentDeadlineRoundTrip(t *testing.T) {
+	content := validTicketContent()
+	content.Deadline = "2026-03-15T17:00:00Z"
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "deadline", "2026-03-15T17:00:00Z")
+
+	var decoded TicketContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Deadline != content.Deadline {
+		t.Errorf("Deadline = %q, want %q", decoded.Deadline, content.Deadline)
+	}
+}
+
+func TestTicketContentDeadlineOmittedWhenEmpty(t *testing.T) {
+	content := validTicketContent()
+	// Deadline is empty by default.
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := raw["deadline"]; exists {
+		t.Error("deadline should be omitted when empty")
+	}
+}
+
+func TestValidateCronExpression(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		wantErr    string
+	}{
+		{name: "standard_5_field", expression: "0 7 * * *", wantErr: ""},
+		{name: "all_stars", expression: "* * * * *", wantErr: ""},
+		{name: "ranges_and_steps", expression: "*/15 0-6 1,15 * 1-5", wantErr: ""},
+		{name: "4_fields", expression: "0 7 * *", wantErr: "expected 5 fields"},
+		{name: "6_fields", expression: "0 0 7 * * *", wantErr: "expected 5 fields"},
+		{name: "empty", expression: "", wantErr: "expected 5 fields"},
+		{name: "whitespace_only", expression: "   ", wantErr: "expected 5 fields"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateCronExpression(test.expression)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("validateCronExpression(%q) = %v, want nil", test.expression, err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("validateCronExpression(%q) = nil, want error containing %q", test.expression, test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("validateCronExpression(%q) = %q, want error containing %q", test.expression, err, test.wantErr)
+				}
+			}
+		})
 	}
 }

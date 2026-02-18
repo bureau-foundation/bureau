@@ -1,0 +1,20 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cron",
+    srcs = [
+        "cron.go",
+        "doc.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/cron",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cron_test",
+    srcs = ["cron_test.go"],
+    embed = [":cron"],
+)

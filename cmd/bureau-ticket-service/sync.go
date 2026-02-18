@@ -325,10 +325,31 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, roo
 	// Phase 1: Index ticket events. This must complete before gate
 	// evaluation so that ticket gates can see updated statuses
 	// (e.g., a ticket reaching "closed" satisfies ticket gates).
+	// Collect IDs of tickets that transitioned to "closed" for
+	// unblocked timer target resolution in Phase 1.5. Also push
+	// timer gates to the heap for tickets arriving from external
+	// sources (echoed writes already have heap entries, but the
+	// lazy-deletion design handles duplicates).
+	var closedTicketIDs []string
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
 			ts.indexTicketEvent(state, event)
+			if status, _ := event.Content["status"].(string); status == "closed" {
+				closedTicketIDs = append(closedTicketIDs, *event.StateKey)
+			}
+			if content, exists := state.index.Get(*event.StateKey); exists {
+				ts.pushTimerGates(roomID, *event.StateKey, &content)
+			}
 		}
+	}
+
+	// Phase 1.5: Resolve timer targets for tickets that became
+	// unblocked due to ticket closures in this batch. Must run after
+	// all ticket events are indexed (so allBlockersClosed sees current
+	// state) and before gate evaluation (so timer gates can fire in
+	// the same sync cycle if their target has already passed).
+	if len(closedTicketIDs) > 0 {
+		ts.resolveUnblockedTimerTargets(ctx, roomID, state, closedTicketIDs)
 	}
 
 	// Phase 2: Evaluate gates against ALL state events in the batch.
@@ -402,6 +423,11 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID st
 		// before this service started tracking it. Fetch the full
 		// room state and index any existing tickets.
 		backfilled := ts.backfillRoomTickets(ctx, roomID, state)
+
+		// Push timer gates from backfilled tickets to the heap.
+		for _, entry := range state.index.PendingGates() {
+			ts.pushTimerGates(roomID, entry.ID, &entry.Content)
+		}
 
 		ts.logger.Info("ticket management enabled for room",
 			"room_id", roomID,

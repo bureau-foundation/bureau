@@ -913,3 +913,95 @@ func truncate(s string, maxLength int) string {
 	}
 	return s[:maxLength-3] + "..."
 }
+
+// --- upcoming ---
+
+type upcomingParams struct {
+	TicketConnection
+	cli.JSONOutput
+	Room string `json:"room" flag:"room,r" desc:"filter to a single room"`
+}
+
+func upcomingCommand() *cli.Command {
+	var params upcomingParams
+
+	return &cli.Command{
+		Name:    "upcoming",
+		Summary: "List upcoming timer gates",
+		Description: `Show pending timer gates across all rooms (or filtered to a single
+room), sorted by target time ascending. Each entry shows the time until
+fire, ticket title, and gate type (one-shot, cron, or interval).
+
+This command is the data source for monitoring scheduled tasks and
+recurring tickets.`,
+		Usage: "bureau ticket upcoming [--room ROOM] [flags]",
+		Examples: []cli.Example{
+			{
+				Description: "List all upcoming timer gates",
+				Command:     "bureau ticket upcoming",
+			},
+			{
+				Description: "List gates in a specific room",
+				Command:     "bureau ticket upcoming --room '!abc:bureau.local'",
+			},
+			{
+				Description: "JSON output for scripting",
+				Command:     "bureau ticket upcoming --json",
+			},
+		},
+		Params:         func() any { return &params },
+		Output:         func() any { return &[]upcomingGateResult{} },
+		Annotations:    cli.ReadOnly(),
+		RequiredGrants: []string{"command/ticket/upcoming"},
+		Run: func(args []string) error {
+			client, err := params.connect()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := callContext()
+			defer cancel()
+
+			fields := map[string]any{}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
+
+			var results []upcomingGateResult
+			if err := client.Call(ctx, "upcoming-gates", fields, &results); err != nil {
+				return err
+			}
+
+			if done, err := params.EmitJSON(results); done {
+				return err
+			}
+
+			if len(results) == 0 {
+				fmt.Fprintln(os.Stderr, "no upcoming timer gates")
+				return nil
+			}
+
+			tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "UNTIL\tTICKET\tTITLE\tGATE\tTYPE\tTARGET")
+			for _, entry := range results {
+				gateType := "one-shot"
+				if entry.Schedule != "" {
+					gateType = "cron"
+				} else if entry.Interval != "" {
+					gateType = "interval"
+				}
+
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					entry.UntilFire,
+					entry.TicketID,
+					truncate(entry.Title, 40),
+					entry.GateID,
+					gateType,
+					entry.Target,
+				)
+			}
+			tw.Flush()
+			return nil
+		},
+	}
+}

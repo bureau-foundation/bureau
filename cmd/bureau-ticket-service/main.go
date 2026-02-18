@@ -149,6 +149,7 @@ func run() error {
 		startedAt:     clk.Now(),
 		rooms:         make(map[string]*roomState),
 		aliasCache:    make(map[string]string),
+		timerNotify:   make(chan struct{}, 1),
 		logger:        logger,
 	}
 
@@ -185,6 +186,11 @@ func run() error {
 		return fmt.Errorf("initial sync: %w", err)
 	}
 
+	// Seed the timer heap from pre-existing timer gates before
+	// starting the timer loop. No lock needed — no concurrent
+	// access yet (socket and sync goroutines haven't started).
+	ticketService.rebuildTimerHeap()
+
 	// Start the socket server in a goroutine.
 	socketPath := principal.RunDirSocketPath(runDir, principalName)
 	socketServer := service.NewSocketServer(socketPath, logger, authConfig)
@@ -201,10 +207,9 @@ func run() error {
 		Filter: syncFilter,
 	}, sinceToken, ticketService.handleSync, clk, logger)
 
-	// Start the timer gate ticker. Timer gates can't be evaluated
-	// from incoming events alone — they need a periodic check against
-	// the current time.
-	go ticketService.startTimerTicker(ctx)
+	// Start the timer loop. Timer gates fire at precise target
+	// times via a min-heap and AfterFunc, rather than polling.
+	go ticketService.startTimerLoop(ctx)
 
 	logger.Info("ticket service running",
 		"principal", principalName,
@@ -227,17 +232,17 @@ func run() error {
 // TicketService is the core service state.
 //
 // Concurrent access from socket handlers, the sync loop, and the
-// timer ticker is serialized by mu. Read-only handlers hold a read
-// lock; mutation handlers, the sync loop, and the timer ticker hold
+// timer loop is serialized by mu. Read-only handlers hold a read
+// lock; mutation handlers, the sync loop, and the timer loop hold
 // a write lock. The wrappers withReadLock and withWriteLock apply
 // the appropriate lock at handler registration time so individual
 // handlers do not need to manage locking themselves.
 type TicketService struct {
-	// mu serializes access to rooms, aliasCache, and every Index
-	// reachable through rooms. Socket handlers run in per-connection
-	// goroutines, the sync loop and timer ticker each run in their
-	// own goroutines, and all three paths read or mutate the same
-	// shared state.
+	// mu serializes access to rooms, aliasCache, timers, and every
+	// Index reachable through rooms. Socket handlers run in
+	// per-connection goroutines, the sync loop and timer loop each
+	// run in their own goroutines, and all three paths read or
+	// mutate the same shared state.
 	mu sync.RWMutex
 
 	session  *messaging.DirectSession
@@ -264,6 +269,23 @@ type TicketService struct {
 	// fire — operator action is needed anyway when aliases change).
 	// Protected by mu.
 	aliasCache map[string]string
+
+	// timers is a min-heap of pending timer gate deadlines, ordered
+	// by target time (earliest first). Entries use lazy deletion:
+	// on pop, the gate is verified against the current index state
+	// before firing. Protected by mu.
+	timers timerHeap
+
+	// timerNotify signals the timer loop that it should wake up
+	// and process expired entries or reschedule. Buffered with
+	// capacity 1 so that signals from AfterFunc callbacks and
+	// mutation handlers never block.
+	timerNotify chan struct{}
+
+	// timerFunc is the currently scheduled AfterFunc, set to fire
+	// at the heap minimum. Nil when the heap is empty or no timer
+	// is scheduled. Protected by mu.
+	timerFunc *clock.Timer
 
 	logger *slog.Logger
 }

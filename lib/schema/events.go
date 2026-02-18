@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/cron"
 )
 
 // Matrix state event type constants. These are the "type" field in Matrix
@@ -2426,6 +2429,12 @@ type TicketContent struct {
 	// CloseReason explains why the ticket was closed.
 	CloseReason string `json:"close_reason,omitempty"`
 
+	// Deadline is the target completion time for this ticket
+	// (RFC 3339 UTC). The ticket service monitors deadlines and
+	// emits warnings when tickets remain open past their deadline.
+	// Deadlines are informational — they do not affect readiness.
+	Deadline string `json:"deadline,omitempty"`
+
 	// Origin tracks where this ticket came from when imported
 	// from an external system (GitHub, beads JSONL, etc.).
 	Origin *TicketOrigin `json:"origin,omitempty"`
@@ -2496,6 +2505,11 @@ func (t *TicketContent) Validate() error {
 			return fmt.Errorf("ticket content: attachments[%d]: %w", i, err)
 		}
 	}
+	if t.Deadline != "" {
+		if _, err := time.Parse(time.RFC3339, t.Deadline); err != nil {
+			return fmt.Errorf("ticket content: deadline must be RFC 3339: %w", err)
+		}
+	}
 	if t.Origin != nil {
 		if err := t.Origin.Validate(); err != nil {
 			return fmt.Errorf("ticket content: origin: %w", err)
@@ -2552,8 +2566,12 @@ func (t *TicketContent) CanModify() error {
 //   - "ticket": Watches for m.bureau.ticket with the given TicketID
 //     transitioning to status "closed" in the same room.
 //
-//   - "timer": Checks whether the current time exceeds the gate's
-//     CreatedAt + Duration on each /sync tick.
+//   - "timer": Fires when the current time reaches the gate's Target.
+//     Supports one-shot delays (Duration or Target alone), absolute
+//     scheduling (Target), and recurring schedules (Schedule or
+//     Interval). The ticket service evaluates timer gates via a
+//     min-heap ordered by Target, not polling. See tickets.md
+//     "Scheduling and Recurrence" for the full design.
 type TicketGate struct {
 	// ID uniquely identifies this gate within the ticket (e.g.,
 	// "ci-pass", "lead-approval"). Used for targeted updates.
@@ -2605,10 +2623,59 @@ type TicketGate struct {
 	// is satisfied when that ticket's status becomes "closed".
 	TicketID string `json:"ticket_id,omitempty"`
 
-	// Duration is how long to wait (type "timer"). Parsed by
-	// time.ParseDuration (e.g., "24h", "30m"). The deadline is
-	// computed from the gate's CreatedAt + Duration.
+	// Duration is a relative delay for timer gates (e.g., "24h",
+	// "30m", "90s"). Parsed by time.ParseDuration. At gate creation
+	// time the ticket service converts Duration to an absolute
+	// Target using the base time determined by the Base field.
+	// Either Duration or Target (or both) must be set for timer
+	// gates.
 	Duration string `json:"duration,omitempty"`
+
+	// Target is the absolute UTC time at which a timer gate fires
+	// (RFC 3339). This is the evaluation field: the service fires
+	// the gate when now >= Target. When the caller provides Duration
+	// without Target, the service computes Target = base_time +
+	// Duration at creation time. For recurring gates, Target is
+	// updated on each re-arm to the next occurrence.
+	Target string `json:"target,omitempty"`
+
+	// Base determines what time Duration is measured from for timer
+	// gates. "created" (default): the gate's CreatedAt timestamp.
+	// "unblocked": the time when all of the ticket's blocked_by
+	// dependencies were satisfied. When Base is "unblocked" and the
+	// ticket still has open blockers, the timer has not started and
+	// Target remains unset until blockers clear.
+	Base string `json:"base,omitempty"`
+
+	// Schedule is a cron expression for fixed-calendar recurrence
+	// on timer gates (e.g., "0 7 * * *" for daily at 7am UTC).
+	// Standard five-field cron syntax. After the gate fires and the
+	// ticket is closed, the service computes the next occurrence,
+	// updates Target, and re-arms the gate. Mutually exclusive with
+	// Interval.
+	Schedule string `json:"schedule,omitempty"`
+
+	// Interval is a Go duration for drift-based recurrence on timer
+	// gates (e.g., "4h"). Unlike Schedule, the next occurrence is
+	// relative to when the ticket is closed, not anchored to
+	// wall-clock time. Mutually exclusive with Schedule.
+	Interval string `json:"interval,omitempty"`
+
+	// LastFiredAt is set by the service each time this timer gate
+	// transitions to "satisfied". For recurring gates this tracks
+	// the most recent fire across cycles.
+	LastFiredAt string `json:"last_fired_at,omitempty"`
+
+	// FireCount is the total number of times this timer gate has
+	// fired. Incremented by the service on each satisfaction.
+	FireCount int `json:"fire_count,omitempty"`
+
+	// MaxOccurrences limits how many times a recurring timer gate
+	// fires. After the Nth fire the gate stays satisfied and does
+	// not re-arm, allowing the ticket to be closed normally. Zero
+	// means unlimited. Only meaningful when Schedule or Interval is
+	// set.
+	MaxOccurrences int `json:"max_occurrences,omitempty"`
 
 	// --- Lifecycle metadata ---
 
@@ -2649,8 +2716,8 @@ func (g *TicketGate) Validate() error {
 			return fmt.Errorf("gate %q: ticket_id is required for ticket gates", g.ID)
 		}
 	case "timer":
-		if g.Duration == "" {
-			return fmt.Errorf("gate %q: duration is required for timer gates", g.ID)
+		if err := g.validateTimer(); err != nil {
+			return err
 		}
 	case "":
 		return fmt.Errorf("gate %q: type is required", g.ID)
@@ -2666,6 +2733,77 @@ func (g *TicketGate) Validate() error {
 		return fmt.Errorf("gate %q: unknown status %q", g.ID, g.Status)
 	}
 	return nil
+}
+
+// MinTimerRecurrence is the minimum allowed recurrence period for
+// recurring timer gates. Anything more frequent should be a service
+// loop, not a scheduled ticket.
+const MinTimerRecurrence = 30 * time.Second
+
+// validateTimer checks timer-specific field constraints. Called from
+// Validate when Type is "timer".
+func (g *TicketGate) validateTimer() error {
+	if g.Target == "" && g.Duration == "" {
+		return fmt.Errorf("gate %q: target or duration is required for timer gates", g.ID)
+	}
+	if g.Target != "" {
+		if _, err := time.Parse(time.RFC3339, g.Target); err != nil {
+			return fmt.Errorf("gate %q: target must be RFC 3339: %w", g.ID, err)
+		}
+	}
+	if g.Duration != "" {
+		duration, err := time.ParseDuration(g.Duration)
+		if err != nil {
+			return fmt.Errorf("gate %q: invalid duration: %w", g.ID, err)
+		}
+		if duration <= 0 {
+			return fmt.Errorf("gate %q: duration must be positive", g.ID)
+		}
+	}
+	if g.Schedule != "" && g.Interval != "" {
+		return fmt.Errorf("gate %q: schedule and interval are mutually exclusive", g.ID)
+	}
+	if g.Schedule != "" {
+		if err := validateCronExpression(g.Schedule); err != nil {
+			return fmt.Errorf("gate %q: invalid schedule: %w", g.ID, err)
+		}
+	}
+	if g.Interval != "" {
+		interval, err := time.ParseDuration(g.Interval)
+		if err != nil {
+			return fmt.Errorf("gate %q: invalid interval: %w", g.ID, err)
+		}
+		if interval < MinTimerRecurrence {
+			return fmt.Errorf("gate %q: interval must be >= %s", g.ID, MinTimerRecurrence)
+		}
+	}
+	switch g.Base {
+	case "", "created", "unblocked":
+		// Valid. Empty defaults to "created".
+	default:
+		return fmt.Errorf("gate %q: unknown base %q (must be \"created\" or \"unblocked\")", g.ID, g.Base)
+	}
+	if g.MaxOccurrences < 0 {
+		return fmt.Errorf("gate %q: max_occurrences must be >= 0", g.ID)
+	}
+	if g.MaxOccurrences > 0 && g.Schedule == "" && g.Interval == "" {
+		return fmt.Errorf("gate %q: max_occurrences requires schedule or interval", g.ID)
+	}
+	return nil
+}
+
+// IsRecurring reports whether this timer gate has a recurring schedule
+// (Schedule or Interval set).
+func (g *TicketGate) IsRecurring() bool {
+	return g.Type == "timer" && (g.Schedule != "" || g.Interval != "")
+}
+
+// validateCronExpression parses and validates a cron expression using
+// the cron package. Returns an error if the expression is malformed
+// or contains out-of-range values.
+func validateCronExpression(expression string) error {
+	_, err := cron.Parse(expression)
+	return err
 }
 
 // TicketNote is a short annotation on a ticket. Notes are for context

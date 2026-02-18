@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -69,6 +71,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("stats", ts.withReadLock(ts.handleStats))
 	server.HandleAuth("deps", ts.withReadLock(ts.handleDeps))
 	server.HandleAuth("epic-health", ts.withReadLock(ts.handleEpicHealth))
+	server.HandleAuth("upcoming-gates", ts.withReadLock(ts.handleUpcomingGates))
 
 	// Mutation actions — write lock, all write to Matrix and update
 	// the local index.
@@ -80,6 +83,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("import", ts.withWriteLock(ts.handleImport))
 	server.HandleAuth("resolve-gate", ts.withWriteLock(ts.handleResolveGate))
 	server.HandleAuth("update-gate", ts.withWriteLock(ts.handleUpdateGate))
+	server.HandleAuth("defer", ts.withWriteLock(ts.handleDefer))
 }
 
 // statusResponse is the response to the "status" action. Contains
@@ -387,6 +391,28 @@ type rankedEntryResponse struct {
 type epicHealthResponse struct {
 	Ticket string                 `json:"ticket"`
 	Health ticket.EpicHealthStats `json:"health"`
+}
+
+// upcomingGateEntry is a single upcoming timer gate with its ticket
+// and room context. Entries are sorted by Target time ascending.
+type upcomingGateEntry struct {
+	// Gate metadata.
+	GateID      string `json:"gate_id"`
+	Target      string `json:"target"`
+	Schedule    string `json:"schedule,omitempty"`
+	Interval    string `json:"interval,omitempty"`
+	FireCount   int    `json:"fire_count,omitempty"`
+	LastFiredAt string `json:"last_fired_at,omitempty"`
+
+	// Ticket context.
+	TicketID string `json:"ticket_id"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+	Assignee string `json:"assignee,omitempty"`
+	Room     string `json:"room"`
+
+	// Computed fields.
+	UntilFire string `json:"until_fire"`
 }
 
 // --- Query handlers ---
@@ -715,6 +741,108 @@ func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetok
 	}, nil
 }
 
+// handleUpcomingGates returns pending timer gates across all rooms (or
+// a single room if specified), sorted by target time ascending. Each
+// entry includes the gate metadata, ticket context, and a computed
+// time-until-fire duration.
+func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/upcoming-gates"); err != nil {
+		return nil, err
+	}
+
+	var request roomRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	now := ts.clock.Now()
+	var entries []upcomingGateEntry
+
+	for roomID, state := range ts.rooms {
+		if request.Room != "" && roomID != request.Room {
+			continue
+		}
+
+		for _, pending := range state.index.PendingGates() {
+			for i := range pending.Content.Gates {
+				gate := &pending.Content.Gates[i]
+				if gate.Type != "timer" || gate.Status != "pending" || gate.Target == "" {
+					continue
+				}
+
+				target, err := time.Parse(time.RFC3339, gate.Target)
+				if err != nil {
+					continue
+				}
+
+				untilFire := target.Sub(now)
+				var untilFireStr string
+				if untilFire <= 0 {
+					untilFireStr = "overdue"
+				} else {
+					untilFireStr = formatDuration(untilFire)
+				}
+
+				entries = append(entries, upcomingGateEntry{
+					GateID:      gate.ID,
+					Target:      gate.Target,
+					Schedule:    gate.Schedule,
+					Interval:    gate.Interval,
+					FireCount:   gate.FireCount,
+					LastFiredAt: gate.LastFiredAt,
+					TicketID:    pending.ID,
+					Title:       pending.Content.Title,
+					Status:      pending.Content.Status,
+					Assignee:    pending.Content.Assignee,
+					Room:        roomID,
+					UntilFire:   untilFireStr,
+				})
+			}
+		}
+	}
+
+	// Sort by target time ascending.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Target < entries[j].Target
+	})
+
+	return entries, nil
+}
+
+// formatDuration produces a human-readable relative time string like
+// "2h 15m", "3d 4h", or "45s". Stops after two significant units to
+// keep output concise.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	}
+
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	switch {
+	case days > 0:
+		if hours > 0 {
+			return fmt.Sprintf("%dd %dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
+	case hours > 0:
+		if minutes > 0 {
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	case minutes > 0:
+		if seconds > 0 {
+			return fmt.Sprintf("%dm %ds", minutes, seconds)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	default:
+		return fmt.Sprintf("%ds", seconds)
+	}
+}
+
 // --- Matrix state writer ---
 
 // matrixWriter is the subset of *messaging.DirectSession needed for writing
@@ -758,6 +886,83 @@ func (ts *TicketService) generateTicketID(state *roomState, roomID, timestamp, t
 	// SHA-256 provides 64 hex chars. Exhausting every prefix length
 	// while colliding each time requires 2^128 existing tickets.
 	return prefix + "-" + hexHash
+}
+
+// synthesizeRecurringGate builds a timer gate from the convenience
+// schedule or interval fields on a create request. Exactly one of
+// schedule or interval must be non-empty (the caller enforces mutual
+// exclusivity). The returned gate has a computed initial Target and
+// is ready to be appended to the request's Gates slice.
+func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (schema.TicketGate, error) {
+	now := ts.clock.Now()
+
+	gate := schema.TicketGate{
+		Type:   "timer",
+		Status: "pending",
+	}
+
+	if schedule != "" {
+		parsed, err := cron.Parse(schedule)
+		if err != nil {
+			return schema.TicketGate{}, fmt.Errorf("invalid schedule %q: %w", schedule, err)
+		}
+		target, err := parsed.Next(now)
+		if err != nil {
+			return schema.TicketGate{}, fmt.Errorf("cannot compute first cron occurrence for %q: %w", schedule, err)
+		}
+		gate.ID = "schedule"
+		gate.Schedule = schedule
+		gate.Target = target.UTC().Format(time.RFC3339)
+	} else {
+		duration, err := time.ParseDuration(interval)
+		if err != nil {
+			return schema.TicketGate{}, fmt.Errorf("invalid interval %q: %w", interval, err)
+		}
+		if duration < schema.MinTimerRecurrence {
+			return schema.TicketGate{}, fmt.Errorf("interval must be >= %s", schema.MinTimerRecurrence)
+		}
+		gate.ID = "interval"
+		gate.Interval = interval
+		gate.Target = now.Add(duration).UTC().Format(time.RFC3339)
+	}
+
+	return gate, nil
+}
+
+// synthesizeDeferGate builds a one-shot timer gate with ID "defer"
+// from the convenience defer_until or defer_for fields on a create
+// request. Exactly one must be non-empty (the caller enforces mutual
+// exclusivity).
+func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (schema.TicketGate, error) {
+	now := ts.clock.Now()
+
+	var target time.Time
+	if until != "" {
+		parsed, err := time.Parse(time.RFC3339, until)
+		if err != nil {
+			return schema.TicketGate{}, fmt.Errorf("invalid defer_until time: %w", err)
+		}
+		if !parsed.After(now) {
+			return schema.TicketGate{}, fmt.Errorf("defer_until time %s is not in the future", until)
+		}
+		target = parsed
+	} else {
+		duration, err := time.ParseDuration(forDuration)
+		if err != nil {
+			return schema.TicketGate{}, fmt.Errorf("invalid defer_for duration: %w", err)
+		}
+		if duration <= 0 {
+			return schema.TicketGate{}, errors.New("defer_for duration must be positive")
+		}
+		target = now.Add(duration)
+	}
+
+	return schema.TicketGate{
+		ID:     "defer",
+		Type:   "timer",
+		Status: "pending",
+		Target: target.UTC().Format(time.RFC3339),
+	}, nil
 }
 
 // --- Status transition validation ---
@@ -824,6 +1029,13 @@ func validateStatusTransition(currentStatus, proposedStatus, currentAssignee str
 
 // createRequest is the input for the "create" action. New tickets
 // always start with status "open" and no assignee.
+//
+// The Schedule and Interval fields are convenience shortcuts that
+// synthesize a recurring timer gate without the caller needing to
+// construct a full TicketGate object. When set, the service creates
+// a timer gate with the appropriate recurrence field and a computed
+// initial Target. These are mutually exclusive with each other and
+// additive with any explicit Gates in the request.
 type createRequest struct {
 	Room      string               `cbor:"room"`
 	Title     string               `cbor:"title"`
@@ -835,6 +1047,32 @@ type createRequest struct {
 	BlockedBy []string             `cbor:"blocked_by,omitempty"`
 	Gates     []schema.TicketGate  `cbor:"gates,omitempty"`
 	Origin    *schema.TicketOrigin `cbor:"origin,omitempty"`
+
+	// Schedule is a cron expression (e.g., "0 7 * * *") that
+	// creates a recurring timer gate with ID "schedule". The
+	// initial Target is the next cron occurrence after now.
+	Schedule string `cbor:"schedule,omitempty"`
+
+	// Interval is a Go duration (e.g., "4h") that creates a
+	// recurring timer gate with ID "interval". The initial
+	// Target is now + interval.
+	Interval string `cbor:"interval,omitempty"`
+
+	// DeferUntil is an RFC 3339 timestamp that creates a one-shot
+	// timer gate with ID "defer". The ticket won't be ready until
+	// this time passes. Mutually exclusive with DeferFor.
+	DeferUntil string `cbor:"defer_until,omitempty"`
+
+	// DeferFor is a Go duration (e.g., "24h") that creates a
+	// one-shot timer gate with ID "defer" targeting now + duration.
+	// Mutually exclusive with DeferUntil.
+	DeferFor string `cbor:"defer_for,omitempty"`
+
+	// Deadline is the target completion time (RFC 3339 UTC). The
+	// ticket service monitors deadlines and adds a note when a
+	// ticket remains open past its deadline. Deadlines are
+	// informational — they do not affect readiness.
+	Deadline string `cbor:"deadline,omitempty"`
 }
 
 // updateRequest is the input for the "update" action. Pointer fields
@@ -852,6 +1090,7 @@ type updateRequest struct {
 	Assignee  *string   `cbor:"assignee,omitempty"`
 	Parent    *string   `cbor:"parent,omitempty"`
 	BlockedBy *[]string `cbor:"blocked_by,omitempty"`
+	Deadline  *string   `cbor:"deadline,omitempty"`
 }
 
 // closeRequest is the input for the "close" action.
@@ -859,6 +1098,15 @@ type closeRequest struct {
 	Room   string `cbor:"room,omitempty"`
 	Ticket string `cbor:"ticket"`
 	Reason string `cbor:"reason,omitempty"`
+
+	// EndRecurrence stops recurring timer gates from re-arming on
+	// close. When true, recurring gates are removed from the ticket
+	// before closing, so the ticket stays closed permanently. When
+	// false (default), tickets with recurring timer gates are
+	// automatically re-armed: the gate is reset to pending with a
+	// new Target, and the ticket reopens as "open" instead of
+	// closing.
+	EndRecurrence bool `cbor:"end_recurrence,omitempty"`
 }
 
 // reopenRequest is the input for the "reopen" action.
@@ -926,6 +1174,17 @@ type updateGateRequest struct {
 	SatisfiedBy string `cbor:"satisfied_by,omitempty"`
 }
 
+// deferRequest is the input for the "defer" action. Exactly one of
+// Until or For must be set. If the ticket already has a gate with
+// ID "defer", its Target is updated. Otherwise a new timer gate is
+// created.
+type deferRequest struct {
+	Room   string `cbor:"room,omitempty"`
+	Ticket string `cbor:"ticket"`
+	Until  string `cbor:"until,omitempty"`
+	For    string `cbor:"for,omitempty"`
+}
+
 // --- Mutation response types ---
 
 // createResponse is returned by the "create" action.
@@ -964,6 +1223,30 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
+	// Synthesize a recurring timer gate from convenience fields.
+	if request.Schedule != "" && request.Interval != "" {
+		return nil, errors.New("schedule and interval are mutually exclusive")
+	}
+	if request.Schedule != "" || request.Interval != "" {
+		gate, err := ts.synthesizeRecurringGate(request.Schedule, request.Interval)
+		if err != nil {
+			return nil, err
+		}
+		request.Gates = append(request.Gates, gate)
+	}
+
+	// Synthesize a defer gate from convenience fields.
+	if request.DeferUntil != "" && request.DeferFor != "" {
+		return nil, errors.New("defer_until and defer_for are mutually exclusive")
+	}
+	if request.DeferUntil != "" || request.DeferFor != "" {
+		gate, err := ts.synthesizeDeferGate(request.DeferUntil, request.DeferFor)
+		if err != nil {
+			return nil, err
+		}
+		request.Gates = append(request.Gates, gate)
+	}
+
 	state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
@@ -984,6 +1267,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		BlockedBy: request.BlockedBy,
 		Gates:     request.Gates,
 		Origin:    request.Origin,
+		Deadline:  request.Deadline,
 		CreatedBy: createdBy,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -995,6 +1279,12 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 			content.Gates[i].CreatedAt = now
 		}
 	}
+
+	// Compute timer targets from Duration and Base. For base="created"
+	// gates this sets Target = CreatedAt + Duration immediately. For
+	// base="unblocked" gates, Target is only set if all blockers are
+	// already closed; otherwise it stays empty until blockers clear.
+	enrichTimerTargets(&content, state.index)
 
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)
@@ -1022,6 +1312,13 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	if err := ts.putWithEcho(ctx, request.Room, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
+
+	// Push any timer gates to the heap so the timer loop fires
+	// them at the right time.
+	ts.pushTimerGates(request.Room, ticketID, &content)
+
+	// Push a deadline monitoring entry if set.
+	ts.pushDeadlineEntry(request.Room, ticketID, &content)
 
 	return createResponse{
 		ID:   ticketID,
@@ -1079,6 +1376,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	if request.BlockedBy != nil {
 		content.BlockedBy = *request.BlockedBy
+	}
+	if request.Deadline != nil {
+		content.Deadline = *request.Deadline
 	}
 
 	// Determine the proposed status and assignee, starting from
@@ -1167,12 +1467,61 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 	content.UpdatedAt = now
 
+	// If this update closes a ticket with recurring timer gates,
+	// re-arm instead of closing. Same logic as handleClose — the
+	// close behavior should be consistent regardless of which
+	// handler processes it. The update handler doesn't expose
+	// EndRecurrence; use the dedicated close handler for that.
+	if content.Status == "closed" && hasRecurringGates(&content) {
+		rearmed, err := rearmRecurringGates(&content, ts.clock.Now())
+		if err != nil {
+			return nil, fmt.Errorf("re-arming recurring gates: %w", err)
+		}
+		if rearmed {
+			content.Status = "open"
+			content.Assignee = ""
+			content.ClosedAt = ""
+			content.CloseReason = ""
+
+			if err := content.Validate(); err != nil {
+				return nil, fmt.Errorf("invalid ticket after re-arm: %w", err)
+			}
+
+			if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+				return nil, fmt.Errorf("writing re-armed ticket to Matrix: %w", err)
+			}
+
+			ts.pushTimerGates(roomID, ticketID, &content)
+
+			return mutationResponse{
+				ID:      ticketID,
+				Room:    roomID,
+				Content: content,
+			}, nil
+		}
+		// All recurring gates exhausted — fall through to normal write.
+	}
+
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)
 	}
 
 	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	// If this update closed the ticket, resolve timer targets for
+	// dependents that may have become unblocked. Idempotent with the
+	// sync loop's echo processing.
+	if content.Status == "closed" {
+		ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
+	}
+
+	// Push a deadline monitoring entry if the deadline was changed.
+	// Stale entries from the old deadline are handled by lazy
+	// deletion in fireExpiredTimersLocked.
+	if request.Deadline != nil {
+		ts.pushDeadlineEntry(roomID, ticketID, &content)
 	}
 
 	return mutationResponse{
@@ -1185,6 +1534,18 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 // handleClose transitions a ticket to "closed" with an optional reason.
 // Validates that the current status allows closing and auto-clears the
 // assignee if the ticket was in_progress.
+//
+// For tickets with recurring timer gates (Schedule or Interval set),
+// close performs an atomic re-arm: the gate is reset to pending with a
+// new Target for the next occurrence, and the ticket reopens as "open"
+// instead of closing. The caller sees a normal mutation response
+// containing the (now open, re-armed) ticket. If all recurring gates
+// have exhausted their MaxOccurrences limit, the ticket closes
+// normally.
+//
+// The EndRecurrence field on the request overrides re-arm behavior:
+// when true, recurring gates are removed and the ticket closes
+// permanently regardless of schedule.
 func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	if err := requireGrant(token, "ticket/close"); err != nil {
 		return nil, err
@@ -1212,12 +1573,57 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		return nil, err
 	}
 
-	now := ts.clock.Now().UTC().Format(time.RFC3339)
+	now := ts.clock.Now()
+	nowStr := now.UTC().Format(time.RFC3339)
+
+	// Handle EndRecurrence: strip recurring gates before closing so
+	// the ticket stays closed permanently.
+	if request.EndRecurrence {
+		stripRecurringGates(&content)
+	}
+
+	// Check for recurring timer gates that should re-arm instead of
+	// letting the ticket close.
+	if hasRecurringGates(&content) {
+		rearmed, err := rearmRecurringGates(&content, now)
+		if err != nil {
+			return nil, fmt.Errorf("re-arming recurring gates: %w", err)
+		}
+		if rearmed {
+			// Ticket reopens with re-armed gates instead of closing.
+			content.Status = "open"
+			content.Assignee = ""
+			content.UpdatedAt = nowStr
+			// Do not set ClosedAt or CloseReason — the ticket is
+			// not actually closing.
+
+			if err := content.Validate(); err != nil {
+				return nil, fmt.Errorf("invalid ticket after re-arm: %w", err)
+			}
+
+			if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+				return nil, fmt.Errorf("writing re-armed ticket to Matrix: %w", err)
+			}
+
+			// Push the re-armed timer gates to the heap so the
+			// timer loop fires them at the new target time.
+			ts.pushTimerGates(roomID, ticketID, &content)
+
+			return mutationResponse{
+				ID:      ticketID,
+				Room:    roomID,
+				Content: content,
+			}, nil
+		}
+		// All recurring gates exhausted — fall through to normal close.
+	}
+
+	// Normal close path.
 	content.Status = "closed"
-	content.ClosedAt = now
+	content.ClosedAt = nowStr
 	content.CloseReason = request.Reason
 	content.Assignee = ""
-	content.UpdatedAt = now
+	content.UpdatedAt = nowStr
 
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)
@@ -1226,6 +1632,14 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
+
+	// Resolve timer targets for tickets that depend on this one. The
+	// closed ticket is already in the index (putWithEcho updates it
+	// immediately), so dependents' AllBlockersClosed checks see the
+	// current state. The sync loop will also process the echo, but
+	// resolveUnblockedTimerTargets is idempotent (skips gates that
+	// already have a Target).
+	ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
 
 	return mutationResponse{
 		ID:      ticketID,
@@ -1375,6 +1789,15 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 		}
 	}
 
+	// Phase 2.5: Compute timer targets. Needs real BlockedBy IDs (from
+	// Phase 2) and the room index to check blocker status. Intra-batch
+	// blockers are not yet in the index and won't be found by
+	// AllBlockersClosed, so base="unblocked" gates blocked by
+	// intra-batch tickets correctly leave Target empty.
+	for i := range tickets {
+		enrichTimerTargets(&tickets[i].content, state.index)
+	}
+
 	// Phase 3: Validate all tickets before writing any.
 	for i := range tickets {
 		if err := tickets[i].content.Validate(); err != nil {
@@ -1387,6 +1810,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 		if err := ts.putWithEcho(ctx, request.Room, state, tickets[i].id, tickets[i].content); err != nil {
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", tickets[i].id, err)
 		}
+		ts.pushTimerGates(request.Room, tickets[i].id, &tickets[i].content)
 	}
 
 	return batchCreateResponse{
@@ -1600,6 +2024,104 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
+
+	return mutationResponse{
+		ID:      ticketID,
+		Room:    roomID,
+		Content: content,
+	}, nil
+}
+
+// handleDefer sets or updates a "defer" timer gate on a ticket to
+// delay its readiness until a specified time. If the ticket already
+// has a gate with ID "defer", its Target is updated in-place.
+// Otherwise a new pending timer gate is appended.
+func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/update"); err != nil {
+		return nil, err
+	}
+
+	var request deferRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+	if request.Until == "" && request.For == "" {
+		return nil, errors.New("one of 'until' or 'for' is required")
+	}
+	if request.Until != "" && request.For != "" {
+		return nil, errors.New("'until' and 'for' are mutually exclusive")
+	}
+
+	// Compute the absolute target time.
+	now := ts.clock.Now()
+	var target time.Time
+	if request.Until != "" {
+		parsed, err := time.Parse(time.RFC3339, request.Until)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'until' time: %w", err)
+		}
+		if !parsed.After(now) {
+			return nil, fmt.Errorf("'until' time %s is not in the future", request.Until)
+		}
+		target = parsed
+	} else {
+		duration, err := time.ParseDuration(request.For)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'for' duration: %w", err)
+		}
+		if duration <= 0 {
+			return nil, errors.New("'for' duration must be positive")
+		}
+		target = now.Add(duration)
+	}
+
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	nowStr := now.UTC().Format(time.RFC3339)
+	targetStr := target.UTC().Format(time.RFC3339)
+
+	gateIndex := findGate(content.Gates, "defer")
+	if gateIndex >= 0 {
+		// Update existing defer gate's target and reset to pending.
+		gate := &content.Gates[gateIndex]
+		gate.Target = targetStr
+		gate.Status = "pending"
+		gate.SatisfiedAt = ""
+		gate.SatisfiedBy = ""
+	} else {
+		// Create a new defer gate.
+		content.Gates = append(content.Gates, schema.TicketGate{
+			ID:        "defer",
+			Type:      "timer",
+			Status:    "pending",
+			Target:    targetStr,
+			CreatedAt: nowStr,
+		})
+	}
+	content.UpdatedAt = nowStr
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	// Push the defer gate to the timer heap so the timer loop fires
+	// it at the right time.
+	ts.pushTimerGates(roomID, ticketID, &content)
 
 	return mutationResponse{
 		ID:      ticketID,

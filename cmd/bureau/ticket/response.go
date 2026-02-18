@@ -105,3 +105,20 @@ type mutationResult struct {
 	Room    string               `json:"room"    desc:"room ID"`
 	Content schema.TicketContent `json:"content" desc:"updated ticket content"`
 }
+
+// upcomingGateResult is a single upcoming timer gate with its ticket
+// and room context. Mirrors the service's upcomingGateEntry type.
+type upcomingGateResult struct {
+	GateID      string `json:"gate_id"                   desc:"gate identifier"`
+	Target      string `json:"target"                    desc:"absolute fire time (RFC 3339)"`
+	Schedule    string `json:"schedule,omitempty"         desc:"cron expression for recurring gates"`
+	Interval    string `json:"interval,omitempty"         desc:"Go duration for recurring gates"`
+	FireCount   int    `json:"fire_count,omitempty"       desc:"number of times this gate has fired"`
+	LastFiredAt string `json:"last_fired_at,omitempty"    desc:"last fire time (RFC 3339)"`
+	TicketID    string `json:"ticket_id"                  desc:"ticket identifier"`
+	Title       string `json:"title"                      desc:"ticket title"`
+	Status      string `json:"status"                     desc:"ticket status"`
+	Assignee    string `json:"assignee,omitempty"          desc:"ticket assignee"`
+	Room        string `json:"room"                       desc:"room ID"`
+	UntilFire   string `json:"until_fire"                 desc:"human-readable time until fire"`
+}

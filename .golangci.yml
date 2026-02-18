@@ -49,3 +49,11 @@ linters:
       - path: _test\.go
         linters:
           - dupl
+      # CLI command constructors all build *cli.Command with the same
+      # field set (Name, Summary, Description, Usage, Examples, Params,
+      # Output, RequiredGrants, Annotations, Run). The struct literal
+      # shape is inherently repeated across subcommands — the values
+      # differ but the AST structure is identical.
+      - path: cmd/
+        linters:
+          - dupl

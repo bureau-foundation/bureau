@@ -1,0 +1,192 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	libagent "github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// agentCreateParams holds the parameters for the agent create command.
+// This command requires the credential file (not just a session) because
+// it needs the registration token for Matrix account creation.
+type agentCreateParams struct {
+	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
+	Machine        string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
+	Name           string `json:"name"         flag:"name"            desc:"agent principal localpart (required)"`
+	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	AutoStart      bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
+
+	cli.JSONOutput
+}
+
+// agentCreateResult is the JSON output for agent create.
+type agentCreateResult struct {
+	PrincipalUserID string `json:"principal_user_id" desc:"full Matrix user ID of the created agent"`
+	MachineName     string `json:"machine"           desc:"machine the agent was assigned to"`
+	TemplateRef     string `json:"template"          desc:"template reference used for the agent"`
+	ConfigRoomID    string `json:"config_room_id"    desc:"config room where the assignment was published"`
+	ConfigEventID   string `json:"config_event_id"   desc:"event ID of the MachineConfig state event"`
+}
+
+func createCommand() *cli.Command {
+	var params agentCreateParams
+
+	return &cli.Command{
+		Name:    "create",
+		Summary: "Register and deploy an agent on a machine",
+		Description: `Create a new agent principal and deploy it to a machine.
+
+This performs the full deployment sequence in one operation:
+  - Validates that the template exists in Matrix
+  - Registers a new Matrix account for the agent
+  - Encrypts and publishes credentials to the machine's config room
+  - Invites the agent to the config room
+  - Publishes the MachineConfig assignment
+
+The daemon detects the config change via /sync and creates the agent's
+sandbox. If --auto-start is true (the default), the sandbox starts
+immediately.
+
+The template must already exist (use "bureau template push" to publish
+it first). The machine must be provisioned and have published its age
+public key.
+
+The --credential-file is the key=value file from "bureau matrix setup".
+It provides the admin session for Matrix operations and the registration
+token for creating the agent's account.`,
+		Usage: "bureau agent create <template-ref> --machine <machine> --name <name> --credential-file <path>",
+		Examples: []cli.Example{
+			{
+				Description: "Create an agent with the default template",
+				Command:     "bureau agent create bureau/template:claude-dev --machine machine/workstation --name agent/code-review --credential-file ./creds",
+			},
+			{
+				Description: "Create without auto-start (waits for wake event)",
+				Command:     "bureau agent create bureau/template:claude-dev --machine machine/gpu-box --name agent/trainer --credential-file ./creds --auto-start=false",
+			},
+		},
+		Params:         func() any { return &params },
+		Output:         func() any { return &agentCreateResult{} },
+		RequiredGrants: []string{"command/agent/create"},
+		Annotations:    cli.Create(),
+		Run: func(args []string) error {
+			if len(args) < 1 {
+				return cli.Validation("template reference is required\n\nUsage: bureau agent create <template-ref> --machine <machine> --name <name> --credential-file <path>")
+			}
+			templateRef := args[0]
+			if len(args) > 1 {
+				return cli.Validation("unexpected argument: %s", args[1])
+			}
+			if params.CredentialFile == "" {
+				return cli.Validation("--credential-file is required")
+			}
+			if params.Machine == "" {
+				return cli.Validation("--machine is required")
+			}
+			if params.Name == "" {
+				return cli.Validation("--name is required")
+			}
+			if err := principal.ValidateLocalpart(params.Machine); err != nil {
+				return cli.Validation("invalid machine name: %v", err)
+			}
+			if err := principal.ValidateLocalpart(params.Name); err != nil {
+				return cli.Validation("invalid agent name: %v", err)
+			}
+
+			// Validate the template ref format early, before doing any I/O.
+			if _, err := schema.ParseTemplateRef(templateRef); err != nil {
+				return cli.Validation("invalid template reference: %v", err)
+			}
+
+			return runCreate(templateRef, params)
+		},
+	}
+}
+
+func runCreate(templateRef string, params agentCreateParams) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Read the credential file for admin access and the registration token.
+	credentials, err := cli.ReadCredentialFile(params.CredentialFile)
+	if err != nil {
+		return cli.Internal("read credential file: %w", err)
+	}
+
+	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
+	if registrationToken == "" {
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+	}
+	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+	if homeserverURL == "" {
+		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
+	}
+	adminUserID := credentials["MATRIX_ADMIN_USER"]
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminUserID == "" || adminToken == "" {
+		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		return cli.Internal("create matrix client: %w", err)
+	}
+
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return cli.Internal("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	if err != nil {
+		return cli.Internal("create admin session: %w", err)
+	}
+	defer adminSession.Close()
+
+	fmt.Fprintf(os.Stderr, "Creating agent %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
+
+	result, err := libagent.Create(ctx, client, adminSession, registrationTokenBuffer, libagent.CreateParams{
+		MachineName:   params.Machine,
+		Localpart:     params.Name,
+		TemplateRef:   templateRef,
+		ServerName:    params.ServerName,
+		HomeserverURL: homeserverURL,
+		AutoStart:     params.AutoStart,
+	})
+	if err != nil {
+		return cli.Internal("create agent: %w", err)
+	}
+
+	if done, err := params.EmitJSON(agentCreateResult{
+		PrincipalUserID: result.PrincipalUserID,
+		MachineName:     result.MachineName,
+		TemplateRef:     result.TemplateRef,
+		ConfigRoomID:    result.ConfigRoomID,
+		ConfigEventID:   result.ConfigEventID,
+	}); done {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "  Principal: %s\n", result.PrincipalUserID)
+	fmt.Fprintf(os.Stderr, "  Machine:   %s\n", result.MachineName)
+	fmt.Fprintf(os.Stderr, "  Template:  %s\n", result.TemplateRef)
+	fmt.Fprintf(os.Stderr, "  Config:    %s\n", result.ConfigRoomID)
+	fmt.Fprintf(os.Stderr, "  Event:     %s\n", result.ConfigEventID)
+	fmt.Fprintf(os.Stderr, "\nThe daemon will create the sandbox on its next reconciliation cycle.\n")
+
+	return nil
+}

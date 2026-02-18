@@ -1,0 +1,30 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "agent",
+    srcs = [
+        "command.go",
+        "context.go",
+        "create.go",
+        "destroy.go",
+        "doc.go",
+        "helpers.go",
+        "list.go",
+        "metrics.go",
+        "session.go",
+        "show.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/agent",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/agent",
+        "//lib/principal",
+        "//lib/schema",
+        "//lib/secret",
+        "//messaging",
+    ],
+)

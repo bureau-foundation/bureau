@@ -7,9 +7,11 @@ go_library(
     name = "agent",
     srcs = [
         "context.go",
+        "create.go",
         "doc.go",
         "driver.go",
         "event.go",
+        "resolve.go",
         "run.go",
         "serviceclient.go",
         "session_log.go",
@@ -17,9 +19,14 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/agent",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/credential",
+        "//lib/principal",
         "//lib/proxyclient",
         "//lib/schema",
+        "//lib/secret",
         "//lib/service",
+        "//lib/template",
+        "//messaging",
     ],
 )
 

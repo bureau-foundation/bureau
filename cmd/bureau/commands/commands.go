@@ -7,6 +7,7 @@
 package commands
 
 import (
+	agentcmd "github.com/bureau-foundation/bureau/cmd/bureau/agent"
 	artifactcmd "github.com/bureau-foundation/bureau/cmd/bureau/artifact"
 	authcmd "github.com/bureau-foundation/bureau/cmd/bureau/auth"
 	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
@@ -46,6 +47,7 @@ observation, and structured messaging via Matrix.`,
 			observecmd.ListCommand(),
 			matrix.Command(),
 			machinecmd.Command(),
+			agentcmd.Command(),
 			authcmd.Command(),
 			credentialcmd.Command(),
 			templatecmd.Command(),

@@ -26,6 +26,9 @@ existing deployment, routing through the agent's proxy socket.`,
 			UserCommand(),
 			SendCommand(),
 			StateCommand(),
+			InspectCommand(),
+			WatchCommand(),
+			MessagesCommand(),
 		},
 	}
 }

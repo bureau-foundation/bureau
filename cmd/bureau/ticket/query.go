@@ -315,8 +315,13 @@ This is the primary query for PM agents deciding what to assign next.`,
 type grepParams struct {
 	TicketConnection
 	cli.JSONOutput
-	Pattern string `json:"pattern" desc:"regex search pattern" required:"true"`
-	Room    string `json:"room"    flag:"room,r" desc:"room ID (optional, searches all rooms if omitted)"`
+	Pattern  string `json:"pattern"  desc:"regex search pattern" required:"true"`
+	Room     string `json:"room"     flag:"room,r"     desc:"room ID (optional, searches all rooms if omitted)"`
+	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, closed, active, ready)"`
+	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
+	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
+	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`
+	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
 }
 
 func grepCommand() *cli.Command {
@@ -327,7 +332,12 @@ func grepCommand() *cli.Command {
 		Summary: "Search tickets by regex",
 		Description: `Search ticket titles, bodies, and notes with a regular expression.
 If --room is specified, searches only that room. Otherwise searches
-all rooms and includes the room ID in results.`,
+all rooms and includes the room ID in results.
+
+Results can be narrowed with filter flags (--status, --priority, etc.).
+The --status flag accepts concrete values (open, in_progress, closed) and
+two synthetic values: "active" (open or in_progress) and "ready" (open
+with all blockers closed and all gates satisfied).`,
 		Usage: "bureau ticket grep <pattern> [flags]",
 		Examples: []cli.Example{
 			{
@@ -337,6 +347,14 @@ all rooms and includes the room ID in results.`,
 			{
 				Description: "Search in a specific room",
 				Command:     "bureau ticket grep 'memory leak' --room '!abc:bureau.local'",
+			},
+			{
+				Description: "Search open tickets only",
+				Command:     "bureau ticket grep 'timeout' --status open --room '!abc:bureau.local'",
+			},
+			{
+				Description: "Search active (non-closed) tickets",
+				Command:     "bureau ticket grep 'auth' --status active",
 			},
 		},
 		Params:         func() any { return &params },
@@ -364,6 +382,21 @@ all rooms and includes the room ID in results.`,
 			fields := map[string]any{"pattern": params.Pattern}
 			if params.Room != "" {
 				fields["room"] = params.Room
+			}
+			if params.Status != "" {
+				fields["status"] = params.Status
+			}
+			if params.Priority >= 0 {
+				fields["priority"] = params.Priority
+			}
+			if params.Label != "" {
+				fields["label"] = params.Label
+			}
+			if params.Assignee != "" {
+				fields["assignee"] = params.Assignee
+			}
+			if params.Type != "" {
+				fields["type"] = params.Type
 			}
 
 			var entries []ticketEntry

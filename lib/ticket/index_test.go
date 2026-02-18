@@ -629,7 +629,7 @@ func TestGrepMatchesTitle(t *testing.T) {
 	idx.Put("tkt-a", makeTicket("Fix authentication bug"))
 	idx.Put("tkt-b", makeTicket("Add logging"))
 
-	entries, err := idx.Grep("auth")
+	entries, err := idx.Grep("auth", Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestGrepMatchesBody(t *testing.T) {
 	tc.Body = "The authentication flow is broken in production."
 	idx.Put("tkt-a", tc)
 
-	entries, err := idx.Grep("production")
+	entries, err := idx.Grep("production", Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestGrepMatchesNoteBody(t *testing.T) {
 	}
 	idx.Put("tkt-a", tc)
 
-	entries, err := idx.Grep("race condition")
+	entries, err := idx.Grep("race condition", Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
@@ -678,7 +678,7 @@ func TestGrepRegex(t *testing.T) {
 	idx.Put("tkt-b", makeTicket("Fix bug #456"))
 	idx.Put("tkt-c", makeTicket("Add feature"))
 
-	entries, err := idx.Grep(`bug #\d+`)
+	entries, err := idx.Grep(`bug #\d+`, Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestGrepRegex(t *testing.T) {
 
 func TestGrepInvalidRegex(t *testing.T) {
 	idx := NewIndex()
-	_, err := idx.Grep("[invalid")
+	_, err := idx.Grep("[invalid", Filter{})
 	if err == nil {
 		t.Fatal("Grep should return error for invalid regex")
 	}
@@ -699,12 +699,198 @@ func TestGrepNoMatches(t *testing.T) {
 	idx := NewIndex()
 	idx.Put("tkt-a", makeTicket("Something"))
 
-	entries, err := idx.Grep("nonexistent")
+	entries, err := idx.Grep("nonexistent", Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
 	if len(entries) != 0 {
 		t.Errorf("Grep(nonexistent) returned %d entries, want 0", len(entries))
+	}
+}
+
+// --- Grep with filters ---
+
+func TestGrepWithStatusFilter(t *testing.T) {
+	idx := NewIndex()
+
+	open := makeTicket("Fix auth bug")
+	open.Status = "open"
+	idx.Put("tkt-open", open)
+
+	closed := makeTicket("Fix auth regression")
+	closed.Status = "closed"
+	idx.Put("tkt-closed", closed)
+
+	// Without filter: both match.
+	all, err := idx.Grep("auth", Filter{})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(all) != 2 {
+		t.Errorf("Grep without filter returned %d, want 2", len(all))
+	}
+
+	// With status filter: only open matches.
+	filtered, err := idx.Grep("auth", Filter{Status: "open"})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != "tkt-open" {
+		t.Errorf("Grep with status=open = %v, want [tkt-open]", entryIDs(filtered))
+	}
+}
+
+func TestGrepWithActiveStatus(t *testing.T) {
+	idx := NewIndex()
+
+	open := makeTicket("Deploy fleet controller")
+	open.Status = "open"
+	idx.Put("tkt-open", open)
+
+	inProgress := makeTicket("Deploy fleet agent")
+	inProgress.Status = "in_progress"
+	idx.Put("tkt-wip", inProgress)
+
+	closed := makeTicket("Deploy fleet monitor")
+	closed.Status = "closed"
+	idx.Put("tkt-closed", closed)
+
+	entries, err := idx.Grep("fleet", Filter{Status: "active"})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("Grep with status=active returned %d, want 2 (open + in_progress)", len(entries))
+	}
+	if containsID(entries, "tkt-closed") {
+		t.Error("status=active should not include closed tickets")
+	}
+}
+
+func TestGrepWithReadyStatus(t *testing.T) {
+	idx := NewIndex()
+
+	// Ready ticket: open, no blockers, no gates.
+	ready := makeTicket("Fix auth bug")
+	ready.Status = "open"
+	idx.Put("tkt-ready", ready)
+
+	// Blocked ticket: open but has an open blocker.
+	blocker := makeTicket("Prerequisite")
+	blocker.Status = "open"
+	idx.Put("tkt-blocker", blocker)
+
+	blocked := makeTicket("Fix auth handler")
+	blocked.Status = "open"
+	blocked.BlockedBy = []string{"tkt-blocker"}
+	idx.Put("tkt-blocked", blocked)
+
+	// Closed ticket: not ready.
+	closedTicket := makeTicket("Fix auth config")
+	closedTicket.Status = "closed"
+	idx.Put("tkt-closed", closedTicket)
+
+	entries, err := idx.Grep("auth|fix", Filter{Status: "ready"})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "tkt-ready" {
+		t.Errorf("Grep with status=ready = %v, want [tkt-ready]", entryIDs(entries))
+	}
+}
+
+func TestGrepWithPriorityFilter(t *testing.T) {
+	idx := NewIndex()
+
+	p1 := makeTicket("Fix critical auth bug")
+	p1.Priority = 1
+	idx.Put("tkt-p1", p1)
+
+	p3 := makeTicket("Fix minor auth typo")
+	p3.Priority = 3
+	idx.Put("tkt-p3", p3)
+
+	priority := 1
+	entries, err := idx.Grep("auth", Filter{Priority: &priority})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "tkt-p1" {
+		t.Errorf("Grep with priority=1 = %v, want [tkt-p1]", entryIDs(entries))
+	}
+}
+
+func TestGrepWithMultipleFilters(t *testing.T) {
+	idx := NewIndex()
+
+	match := makeTicket("Fix auth bug")
+	match.Status = "open"
+	match.Labels = []string{"security"}
+	idx.Put("tkt-match", match)
+
+	wrongLabel := makeTicket("Fix auth regression")
+	wrongLabel.Status = "open"
+	wrongLabel.Labels = []string{"performance"}
+	idx.Put("tkt-wrong-label", wrongLabel)
+
+	wrongStatus := makeTicket("Fix auth config")
+	wrongStatus.Status = "closed"
+	wrongStatus.Labels = []string{"security"}
+	idx.Put("tkt-wrong-status", wrongStatus)
+
+	entries, err := idx.Grep("auth", Filter{Status: "open", Label: "security"})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "tkt-match" {
+		t.Errorf("Grep with status=open+label=security = %v, want [tkt-match]", entryIDs(entries))
+	}
+}
+
+func TestListWithActiveStatus(t *testing.T) {
+	idx := NewIndex()
+
+	open := makeTicket("A")
+	open.Status = "open"
+	idx.Put("tkt-open", open)
+
+	inProgress := makeTicket("B")
+	inProgress.Status = "in_progress"
+	idx.Put("tkt-wip", inProgress)
+
+	closed := makeTicket("C")
+	closed.Status = "closed"
+	idx.Put("tkt-closed", closed)
+
+	entries := idx.List(Filter{Status: "active"})
+	if len(entries) != 2 {
+		t.Errorf("List with status=active returned %d, want 2", len(entries))
+	}
+	if containsID(entries, "tkt-closed") {
+		t.Error("status=active should not include closed tickets")
+	}
+}
+
+func TestListWithReadyStatus(t *testing.T) {
+	idx := NewIndex()
+
+	ready := makeTicket("A")
+	ready.Status = "open"
+	idx.Put("tkt-ready", ready)
+
+	// Open but with a pending gate → not ready.
+	gated := makeTicket("B")
+	gated.Status = "open"
+	gated.Gates = []schema.TicketGate{{ID: "g-1", Type: "human", Status: "pending"}}
+	idx.Put("tkt-gated", gated)
+
+	closed := makeTicket("C")
+	closed.Status = "closed"
+	idx.Put("tkt-closed", closed)
+
+	entries := idx.List(Filter{Status: "ready"})
+	if len(entries) != 1 || entries[0].ID != "tkt-ready" {
+		t.Errorf("List with status=ready = %v, want [tkt-ready]", entryIDs(entries))
 	}
 }
 
@@ -1698,7 +1884,7 @@ func TestEmptyIndex(t *testing.T) {
 	if entries := idx.List(Filter{}); len(entries) != 0 {
 		t.Errorf("List on empty index = %v, want empty", entries)
 	}
-	entries, err := idx.Grep("anything")
+	entries, err := idx.Grep("anything", Filter{})
 	if err != nil {
 		t.Fatalf("Grep on empty index: %v", err)
 	}
@@ -1716,7 +1902,7 @@ func TestGrepCaseInsensitiveWithFlag(t *testing.T) {
 	idx.Put("tkt-a", makeTicket("Fix Authentication Bug"))
 
 	// Regex with case-insensitive flag.
-	entries, err := idx.Grep("(?i)authentication")
+	entries, err := idx.Grep("(?i)authentication", Filter{})
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}

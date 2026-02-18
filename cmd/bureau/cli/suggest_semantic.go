@@ -64,7 +64,7 @@ func SuggestSemantic(query string, root *Command, limit int) []SemanticSuggestio
 		summaries = append(summaries, command.Summary)
 	})
 
-	index := toolsearch.NewBM25Index(documents)
+	index := toolsearch.NewIndex(documents)
 	results := index.Search(query, limit)
 
 	// Map document names to positions for summary lookup.

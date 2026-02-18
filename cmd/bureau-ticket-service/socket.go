@@ -284,10 +284,21 @@ type showRequest struct {
 	Ticket string `cbor:"ticket"`
 }
 
-// grepRequest contains the regex search pattern and optional room scope.
+// grepRequest contains the regex search pattern, optional room scope,
+// and optional filter fields. Filter fields use the same semantics as
+// listRequest: zero-value fields mean "no filter", all non-zero fields
+// must match (AND semantics). The Status field supports synthetic
+// values "active" (open + in_progress) and "ready" (open, all blockers
+// closed, all gates satisfied).
 type grepRequest struct {
-	Pattern string `cbor:"pattern"`
-	Room    string `cbor:"room,omitempty"`
+	Pattern  string `cbor:"pattern"`
+	Room     string `cbor:"room,omitempty"`
+	Status   string `cbor:"status,omitempty"`
+	Priority *int   `cbor:"priority,omitempty"`
+	Label    string `cbor:"label,omitempty"`
+	Assignee string `cbor:"assignee,omitempty"`
+	Type     string `cbor:"type,omitempty"`
+	Parent   string `cbor:"parent,omitempty"`
 }
 
 // childrenRequest identifies the parent ticket and its room.
@@ -560,9 +571,10 @@ func (ts *TicketService) handleChildren(ctx context.Context, token *servicetoken
 	}, nil
 }
 
-// handleGrep searches tickets by regex across title, body, and notes.
-// If a room is specified, searches only that room. Otherwise searches
-// all rooms and includes the room ID in each result.
+// handleGrep searches tickets by regex across title, body, and notes,
+// optionally filtered by status, priority, label, assignee, type, or
+// parent. If a room is specified, searches only that room. Otherwise
+// searches all rooms and includes the room ID in each result.
 func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	if err := requireGrant(token, "ticket/grep"); err != nil {
 		return nil, err
@@ -577,13 +589,22 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 		return nil, errors.New("missing required field: pattern")
 	}
 
+	filter := ticket.Filter{
+		Status:   request.Status,
+		Priority: request.Priority,
+		Label:    request.Label,
+		Assignee: request.Assignee,
+		Type:     request.Type,
+		Parent:   request.Parent,
+	}
+
 	// Room-scoped grep.
 	if request.Room != "" {
 		state, err := ts.requireRoom(request.Room)
 		if err != nil {
 			return nil, err
 		}
-		entries, err := state.index.Grep(request.Pattern)
+		entries, err := state.index.Grep(request.Pattern, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -593,7 +614,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 	// Cross-room grep — include room ID in each result.
 	var allEntries []entryWithRoom
 	for roomID, state := range ts.rooms {
-		entries, err := state.index.Grep(request.Pattern)
+		entries, err := state.index.Grep(request.Pattern, filter)
 		if err != nil {
 			return nil, err
 		}

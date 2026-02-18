@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package toolsearch
+package bm25
 
 import (
 	"math"
@@ -12,30 +12,46 @@ import (
 
 // BM25 parameters (Okapi variant, standard values).
 const (
-	bm25K1      = 1.2
-	bm25B       = 0.75
-	bm25Epsilon = 0.25
-)
-
-// Field repetition weights. When building the composite document
-// for a tool, each field's tokens are repeated this many times.
-// This gives name tokens 3x the influence of argument descriptions
-// without needing per-field BM25 (which adds implementation weight
-// for marginal benefit on corpora this small).
-const (
-	weightName                = 3
-	weightDescription         = 2
-	weightArgumentName        = 2
-	weightArgumentDescription = 1
+	paramK1      = 1.2
+	paramB       = 0.75
+	paramEpsilon = 0.25
 )
 
 // tokenPattern splits text into alphanumeric runs.
 var tokenPattern = regexp.MustCompile(`[a-z0-9]+`)
 
-// BM25Index is a BM25 (Okapi) index over tool documents. The index
-// is built at construction time and is immutable thereafter. It is
-// safe for concurrent read access.
-type BM25Index struct {
+// Field is a weighted text field for BM25 indexing. The Weight
+// controls how many times this field's tokens are repeated in the
+// composite document (higher = more influence on ranking). A weight
+// of 0 or negative causes the field to be skipped.
+type Field struct {
+	Text   string
+	Weight int
+}
+
+// Document is a named collection of weighted text fields. Name is
+// used for result identification only — it is not scored unless
+// explicitly included as a Field.
+type Document struct {
+	Name   string
+	Fields []Field
+}
+
+// Result is a single search hit with its relevance score.
+type Result struct {
+	// Name is the document name (as provided at index construction).
+	Name string
+
+	// Score is the relevance score. Higher is more relevant. The
+	// scale depends on the corpus — BM25 scores are typically in
+	// the range 0–20 but are not bounded.
+	Score float64
+}
+
+// Index is a BM25 (Okapi) index over documents. The index is built
+// at construction time and is immutable thereafter. It is safe for
+// concurrent read access.
+type Index struct {
 	// documents stores the original documents for name retrieval.
 	documents []Document
 
@@ -54,11 +70,11 @@ type BM25Index struct {
 	inverseDocumentFrequency map[string]float64
 }
 
-// NewBM25Index creates a BM25 index from the given documents. Index
+// New creates a BM25 index from the given documents. Index
 // construction is O(total tokens across all documents) and takes
-// sub-millisecond for typical tool corpora (hundreds of documents).
-func NewBM25Index(documents []Document) *BM25Index {
-	index := &BM25Index{
+// sub-millisecond for typical corpora (hundreds of documents).
+func New(documents []Document) *Index {
+	index := &Index{
 		documents:                documents,
 		documentTermFrequencies:  make([]map[string]int, len(documents)),
 		documentLengths:          make([]int, len(documents)),
@@ -98,7 +114,7 @@ func NewBM25Index(documents []Document) *BM25Index {
 	for term, frequency := range documentFrequency {
 		idf := math.Log(1 + (documentCount-float64(frequency)+0.5)/(float64(frequency)+0.5))
 		if idf < 0 {
-			idf = bm25Epsilon
+			idf = paramEpsilon
 		}
 		index.inverseDocumentFrequency[term] = idf
 	}
@@ -109,8 +125,8 @@ func NewBM25Index(documents []Document) *BM25Index {
 // Search returns up to limit documents ranked by BM25 relevance to
 // the query. Returns an empty slice if the query produces no tokens
 // or matches no documents.
-func (index *BM25Index) Search(query string, limit int) []Result {
-	queryTokens := tokenize(query)
+func (index *Index) Search(query string, limit int) []Result {
+	queryTokens := Tokenize(query)
 	if len(queryTokens) == 0 {
 		return nil
 	}
@@ -148,7 +164,7 @@ func (index *BM25Index) Search(query string, limit int) []Result {
 
 // score computes the BM25 score for a single document against the
 // query tokens.
-func (index *BM25Index) score(documentIndex int, queryTokens []string) float64 {
+func (index *Index) score(documentIndex int, queryTokens []string) float64 {
 	termFrequency := index.documentTermFrequencies[documentIndex]
 	documentLength := float64(index.documentLengths[documentIndex])
 
@@ -165,8 +181,8 @@ func (index *BM25Index) score(documentIndex int, queryTokens []string) float64 {
 		}
 
 		// BM25 term score: IDF * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl/avgdl))
-		numerator := frequency * (bm25K1 + 1)
-		denominator := frequency + bm25K1*(1-bm25B+bm25B*documentLength/index.averageDocumentLength)
+		numerator := frequency * (paramK1 + 1)
+		denominator := frequency + paramK1*(1-paramB+paramB*documentLength/index.averageDocumentLength)
 		score += idf * numerator / denominator
 	}
 
@@ -175,42 +191,28 @@ func (index *BM25Index) score(documentIndex int, queryTokens []string) float64 {
 
 // buildCompositeTokens creates a weighted token sequence from a
 // document by repeating each field's tokens according to the field
-// weight constants. This is a simple alternative to per-field BM25
-// that works well for small corpora.
+// weight. This is a simple alternative to per-field BM25 that works
+// well for small corpora.
 func buildCompositeTokens(document Document) []string {
 	var tokens []string
 
-	nameTokens := tokenize(document.Name)
-	for i := 0; i < weightName; i++ {
-		tokens = append(tokens, nameTokens...)
-	}
-
-	descriptionTokens := tokenize(document.Description)
-	for i := 0; i < weightDescription; i++ {
-		tokens = append(tokens, descriptionTokens...)
-	}
-
-	for _, argumentName := range document.ArgumentNames {
-		argumentTokens := tokenize(argumentName)
-		for i := 0; i < weightArgumentName; i++ {
-			tokens = append(tokens, argumentTokens...)
+	for _, field := range document.Fields {
+		if field.Weight <= 0 {
+			continue
 		}
-	}
-
-	for _, argumentDescription := range document.ArgumentDescriptions {
-		argumentTokens := tokenize(argumentDescription)
-		for i := 0; i < weightArgumentDescription; i++ {
-			tokens = append(tokens, argumentTokens...)
+		fieldTokens := Tokenize(field.Text)
+		for i := 0; i < field.Weight; i++ {
+			tokens = append(tokens, fieldTokens...)
 		}
 	}
 
 	return tokens
 }
 
-// tokenize splits text into lowercase alphanumeric tokens, discarding
+// Tokenize splits text into lowercase alphanumeric tokens, discarding
 // tokens shorter than 2 characters. This catches "a", "I", and other
 // noise words that don't contribute to relevance ranking.
-func tokenize(text string) []string {
+func Tokenize(text string) []string {
 	lower := strings.ToLower(text)
 	matches := tokenPattern.FindAllString(lower, -1)
 

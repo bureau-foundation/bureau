@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package toolsearch provides relevance-ranked search over tool
-// definitions using BM25 (Okapi variant). The index accepts tool
-// documents with name, description, and argument metadata, then
-// scores natural language queries against them using term-frequency
-// and inverse-document-frequency weighting.
+// definitions. It maps tool-specific fields (name, description,
+// argument names and descriptions) to weighted BM25 documents using
+// the generic [bm25] package, applying field-specific weights so
+// that tool names carry more influence than argument descriptions.
 //
 // Three consumers share this package:
 //   - The MCP server's progressive disclosure meta-tools

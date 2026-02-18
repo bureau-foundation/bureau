@@ -349,7 +349,7 @@ func (idx *Index) Blocked() []Entry {
 func (idx *Index) List(filter Filter) []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
-		if matchesFilter(&content, &filter) {
+		if idx.matchesFilter(&content, &filter) {
 			result = append(result, Entry{ID: id, Content: content})
 		}
 	}
@@ -358,9 +358,16 @@ func (idx *Index) List(filter Filter) []Entry {
 }
 
 // Grep searches ticket titles, bodies, and note bodies for a regex
-// pattern. Returns matching tickets sorted by priority then creation
-// time. Returns an error if the pattern is not valid regex.
-func (idx *Index) Grep(pattern string) ([]Entry, error) {
+// pattern, optionally narrowed by a filter. A zero-value filter
+// matches all tickets. Returns matching tickets sorted by priority
+// then creation time. Returns an error if the pattern is not valid
+// regex.
+//
+// The filter supports synthetic statuses in addition to concrete
+// statuses: "active" matches open and in_progress tickets, "ready"
+// matches tickets that are open with all blockers closed and all
+// gates satisfied.
+func (idx *Index) Grep(pattern string, filter Filter) ([]Entry, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid grep pattern: %w", err)
@@ -368,6 +375,9 @@ func (idx *Index) Grep(pattern string) ([]Entry, error) {
 
 	var result []Entry
 	for id, content := range idx.tickets {
+		if !idx.matchesFilter(&content, &filter) {
+			continue
+		}
 		if grepMatches(re, &content) {
 			result = append(result, Entry{ID: id, Content: content})
 		}
@@ -1004,10 +1014,27 @@ func allGatesSatisfied(content *schema.TicketContent) bool {
 }
 
 // matchesFilter returns true if the ticket matches all non-zero fields
-// in the filter.
-func matchesFilter(content *schema.TicketContent, filter *Filter) bool {
-	if filter.Status != "" && content.Status != filter.Status {
-		return false
+// in the filter. In addition to concrete statuses (open, in_progress,
+// closed), the Status field supports two synthetic values:
+//   - "active": matches tickets with status "open" or "in_progress"
+//   - "ready": matches tickets that are open with all blockers closed
+//     and all gates satisfied (equivalent to the isReady predicate)
+func (idx *Index) matchesFilter(content *schema.TicketContent, filter *Filter) bool {
+	if filter.Status != "" {
+		switch filter.Status {
+		case "active":
+			if content.Status != "open" && content.Status != "in_progress" {
+				return false
+			}
+		case "ready":
+			if !idx.isReady(content) {
+				return false
+			}
+		default:
+			if content.Status != filter.Status {
+				return false
+			}
+		}
 	}
 	if filter.Priority != nil && content.Priority != *filter.Priority {
 		return false

@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/bm25"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/toolsearch"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -35,7 +36,7 @@ type Server struct {
 	// tools (not just authorized ones — authorization is checked at
 	// query time). Used by the bureau_tools_list meta-tool's query
 	// parameter and by CallTool dispatch for meta-tools.
-	searchIndex toolsearch.Index
+	searchIndex *bm25.Index
 }
 
 // ServerOption configures optional server behavior.
@@ -108,7 +109,7 @@ func NewServer(root *cli.Command, grants []schema.Grant, options ...ServerOption
 			ArgumentDescriptions: argumentDescriptions,
 		}
 	}
-	s.searchIndex = toolsearch.NewBM25Index(documents)
+	s.searchIndex = toolsearch.NewIndex(documents)
 
 	return s
 }

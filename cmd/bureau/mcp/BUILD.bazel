@@ -18,6 +18,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//lib/authorization",
+        "//lib/bm25",
         "//lib/schema",
         "//lib/toolsearch",
         "//lib/version",

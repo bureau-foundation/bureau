@@ -6,20 +6,17 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "toolsearch",
     srcs = [
-        "bm25.go",
         "doc.go",
-        "index.go",
         "schema.go",
+        "toolsearch.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/toolsearch",
     visibility = ["//visibility:public"],
+    deps = ["//lib/bm25"],
 )
 
 go_test(
     name = "toolsearch_test",
-    srcs = [
-        "bm25_test.go",
-        "schema_test.go",
-    ],
+    srcs = ["schema_test.go"],
     embed = [":toolsearch"],
 )

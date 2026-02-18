@@ -1,0 +1,20 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "bm25",
+    srcs = [
+        "bm25.go",
+        "doc.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/bm25",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bm25_test",
+    srcs = ["bm25_test.go"],
+    embed = [":bm25"],
+)

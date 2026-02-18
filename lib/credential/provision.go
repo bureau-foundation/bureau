@@ -91,6 +91,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	if params.MachineRoomID == "" {
 		return nil, fmt.Errorf("machine room ID is required")
 	}
+	if params.ServerName == "" {
+		return nil, fmt.Errorf("server name is required")
+	}
 
 	// Collect and sort credential key names for deterministic output.
 	credentialKeys := make([]string, 0, len(params.Credentials))

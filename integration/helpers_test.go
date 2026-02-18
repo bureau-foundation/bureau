@@ -569,6 +569,10 @@ func resolvedBinary(t *testing.T, envVar string) string {
 func startProcess(t *testing.T, name, binary string, args ...string) {
 	t.Helper()
 
+	if binary == "" {
+		t.Fatal("binary path is required")
+	}
+
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -611,6 +615,9 @@ func tempSocketDir(t *testing.T) string {
 // intermediate timeout.
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
+	if path == "" {
+		t.Fatal("path is required")
+	}
 	if err := inotifyWaitCreate(t.Context(), path); err != nil {
 		t.Fatalf("waiting for file %s: %v", path, err)
 	}
@@ -621,6 +628,9 @@ func waitForFile(t *testing.T, path string) {
 // while waiting. Bounded by t.Context().
 func waitForFileGone(t *testing.T, path string) {
 	t.Helper()
+	if path == "" {
+		t.Fatal("path is required")
+	}
 	if err := inotifyWaitDelete(t.Context(), path); err != nil {
 		t.Fatalf("waiting for file to disappear %s: %v", path, err)
 	}
@@ -808,6 +818,9 @@ type roomWatch struct {
 // returned roomWatch only sees events arriving after this call returns.
 func watchRoom(t *testing.T, session *messaging.DirectSession, roomID string) roomWatch {
 	t.Helper()
+	if roomID == "" {
+		t.Fatal("roomID is required")
+	}
 	response, err := session.Sync(t.Context(), messaging.SyncOptions{
 		SetTimeout: true,
 		Timeout:    0, // immediate return with current state
@@ -994,6 +1007,12 @@ func (w *roomWatch) WaitForCommandResults(t *testing.T, requestID string, count 
 // fields instead of body substrings.
 func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, senderID string, predicate func(T) bool, description string) T {
 	t.Helper()
+	if msgtype == "" {
+		t.Fatal("msgtype is required")
+	}
+	if senderID == "" {
+		t.Fatal("senderID is required")
+	}
 	var result T
 	w.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != schema.MatrixEventTypeMessage {
@@ -1024,6 +1043,9 @@ func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, send
 // socket. Requests to any hostname are routed to the proxy — the hostname
 // in the URL is ignored (the proxy uses the path to route to services).
 func proxyHTTPClient(socketPath string) *http.Client {
+	if socketPath == "" {
+		panic("proxyHTTPClient: socketPath is required")
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -1062,6 +1084,9 @@ func proxyWhoami(t *testing.T, client *http.Client) string {
 // authorization grants (a matrix/join grant must be present).
 func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 	t.Helper()
+	if roomID == "" {
+		t.Fatal("roomID is required")
+	}
 	body, _ := json.Marshal(map[string]string{"room": roomID})
 	request, err := http.NewRequest("POST",
 		"http://proxy/v1/matrix/join",
@@ -1087,6 +1112,9 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 // (e.g., grants blocking the join with 403 Forbidden).
 func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, string) {
 	t.Helper()
+	if roomID == "" {
+		t.Fatal("roomID is required")
+	}
 	body, _ := json.Marshal(map[string]string{"room": roomID})
 	request, err := http.NewRequest("POST",
 		"http://proxy/v1/matrix/join",
@@ -1108,6 +1136,9 @@ func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, st
 // event ID assigned by the homeserver.
 func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) string {
 	t.Helper()
+	if roomID == "" {
+		t.Fatal("roomID is required")
+	}
 	requestBody, _ := json.Marshal(map[string]any{
 		"room":       roomID,
 		"event_type": schema.MatrixEventTypeMessage,
@@ -1141,6 +1172,9 @@ func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) st
 // response with all current state.
 func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID string) []messaging.Event {
 	t.Helper()
+	if roomID == "" {
+		t.Fatal("roomID is required")
+	}
 	response, err := client.Get("http://proxy/v1/matrix/sync?timeout=0")
 	if err != nil {
 		t.Fatalf("sync request: %v", err)

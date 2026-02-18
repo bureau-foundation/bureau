@@ -424,6 +424,19 @@ func principalSession(t *testing.T, account principalAccount) *messaging.DirectS
 func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *testMachine, account principalAccount) {
 	t.Helper()
 
+	if machine.Name == "" {
+		t.Fatal("machine.Name is required")
+	}
+	if machine.MachineRoomID == "" {
+		t.Fatal("machine.MachineRoomID is required")
+	}
+	if account.Localpart == "" {
+		t.Fatal("account.Localpart is required")
+	}
+	if account.Token == "" {
+		t.Fatal("account.Token is required")
+	}
+
 	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
 		MachineName:   machine.Name,
 		Principal:     account.Localpart,
@@ -446,6 +459,13 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 // for removed ones.
 func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) {
 	t.Helper()
+
+	if machine.ConfigRoomID == "" {
+		t.Fatal("machine.ConfigRoomID is required")
+	}
+	if machine.Name == "" {
+		t.Fatal("machine.Name is required")
+	}
 
 	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
 	for i, spec := range config.Principals {
@@ -479,6 +499,16 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 // and pushMachineConfig for the common case of deploying from scratch.
 func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) map[string]string {
 	t.Helper()
+
+	if len(config.Principals) == 0 {
+		t.Fatal("config.Principals must not be empty")
+	}
+	if machine.ConfigRoomID == "" {
+		t.Fatal("machine.ConfigRoomID is required")
+	}
+	if machine.MachineRoomID == "" {
+		t.Fatal("machine.MachineRoomID is required")
+	}
 
 	for _, spec := range config.Principals {
 		pushCredentials(t, admin, machine, spec.Account)
@@ -604,6 +634,15 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	if options.Localpart == "" {
 		t.Fatal("agentOptions.Localpart is required")
 	}
+	if machine.Name == "" {
+		t.Fatal("machine.Name is required")
+	}
+	if machine.MachineRoomID == "" {
+		t.Fatal("machine.MachineRoomID is required")
+	}
+	if machine.ConfigRoomID == "" {
+		t.Fatal("machine.ConfigRoomID is required")
+	}
 
 	ctx := t.Context()
 
@@ -686,6 +725,10 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) string {
 	t.Helper()
 
+	if machine.UserID == "" {
+		t.Fatal("machine.UserID is required")
+	}
+
 	templateRoomID, err := admin.ResolveAlias(t.Context(),
 		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
 	if err != nil {
@@ -707,6 +750,10 @@ func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *
 // definitions or PrincipalAssignment templates.
 func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, machine *testMachine, templateName string) string {
 	t.Helper()
+
+	if templateName == "" {
+		t.Fatal("templateName is required")
+	}
 
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	grantTemplateAccess(t, admin, machine)
@@ -732,6 +779,16 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, mach
 func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID string, agent principalAccount) {
 	t.Helper()
 
+	if configRoomID == "" {
+		t.Fatal("configRoomID is required")
+	}
+	if agent.UserID == "" {
+		t.Fatal("agent.UserID is required")
+	}
+	if agent.Localpart == "" {
+		t.Fatal("agent.Localpart is required")
+	}
+
 	ctx := t.Context()
 	if err := admin.InviteUser(ctx, configRoomID, agent.UserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
@@ -752,6 +809,13 @@ func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID s
 // completed sandbox creation including token minting).
 func readDaemonMintedToken(t *testing.T, machine *testMachine, localpart, serviceRole string) []byte {
 	t.Helper()
+
+	if localpart == "" {
+		t.Fatal("localpart is required")
+	}
+	if serviceRole == "" {
+		t.Fatal("serviceRole is required")
+	}
 
 	tokenPath := filepath.Join(machine.StateDir, "tokens", localpart, serviceRole+".token")
 	token, err := os.ReadFile(tokenPath)

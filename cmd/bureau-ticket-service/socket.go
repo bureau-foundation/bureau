@@ -68,6 +68,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("show", ts.withReadLock(ts.handleShow))
 	server.HandleAuth("children", ts.withReadLock(ts.handleChildren))
 	server.HandleAuth("grep", ts.withReadLock(ts.handleGrep))
+	server.HandleAuth("search", ts.withReadLock(ts.handleSearch))
 	server.HandleAuth("stats", ts.withReadLock(ts.handleStats))
 	server.HandleAuth("deps", ts.withReadLock(ts.handleDeps))
 	server.HandleAuth("epic-health", ts.withReadLock(ts.handleEpicHealth))
@@ -303,6 +304,30 @@ type grepRequest struct {
 	Assignee string `cbor:"assignee,omitempty"`
 	Type     string `cbor:"type,omitempty"`
 	Parent   string `cbor:"parent,omitempty"`
+}
+
+// searchRequest is the request body for the "search" action. Query is
+// a natural language search string that may include ticket/artifact IDs
+// for exact-match boosting and graph expansion.
+type searchRequest struct {
+	Query    string `cbor:"query"`
+	Room     string `cbor:"room,omitempty"`
+	Status   string `cbor:"status,omitempty"`
+	Priority *int   `cbor:"priority,omitempty"`
+	Label    string `cbor:"label,omitempty"`
+	Assignee string `cbor:"assignee,omitempty"`
+	Type     string `cbor:"type,omitempty"`
+	Parent   string `cbor:"parent,omitempty"`
+	Limit    int    `cbor:"limit,omitempty"`
+}
+
+// searchEntryResponse pairs a ticket entry with its search relevance
+// score for the "search" action response.
+type searchEntryResponse struct {
+	ID      string               `json:"id"`
+	Room    string               `json:"room,omitempty"`
+	Content schema.TicketContent `json:"content"`
+	Score   float64              `json:"score"`
 }
 
 // childrenRequest identifies the parent ticket and its room.
@@ -658,6 +683,91 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 	}
 
 	return allEntries, nil
+}
+
+// handleSearch performs BM25-ranked full-text search with exact-match
+// boosting and graph expansion. If a room is specified, searches only
+// that room. Otherwise searches all rooms and merges results by score.
+func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/search"); err != nil {
+		return nil, err
+	}
+
+	var request searchRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Query == "" {
+		return nil, errors.New("missing required field: query")
+	}
+
+	filter := ticket.Filter{
+		Status:   request.Status,
+		Priority: request.Priority,
+		Label:    request.Label,
+		Assignee: request.Assignee,
+		Type:     request.Type,
+		Parent:   request.Parent,
+	}
+
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// Room-scoped search.
+	if request.Room != "" {
+		state, err := ts.requireRoom(request.Room)
+		if err != nil {
+			return nil, err
+		}
+		results := state.index.Search(request.Query, filter, limit)
+		entries := make([]searchEntryResponse, len(results))
+		for i, result := range results {
+			entries[i] = searchEntryResponse{
+				ID:      result.ID,
+				Content: result.Content,
+				Score:   result.Score,
+			}
+		}
+		return entries, nil
+	}
+
+	// Cross-room search: search each room with no limit, merge
+	// all results, re-sort by score, then apply the global limit.
+	var allResults []searchEntryResponse
+	for roomID, state := range ts.rooms {
+		results := state.index.Search(request.Query, filter, 0)
+		for _, result := range results {
+			allResults = append(allResults, searchEntryResponse{
+				ID:      result.ID,
+				Room:    roomID,
+				Content: result.Content,
+				Score:   result.Score,
+			})
+		}
+	}
+
+	sort.Slice(allResults, func(i, j int) bool {
+		if allResults[i].Score != allResults[j].Score {
+			return allResults[i].Score > allResults[j].Score
+		}
+		if allResults[i].Content.Priority != allResults[j].Content.Priority {
+			return allResults[i].Content.Priority < allResults[j].Content.Priority
+		}
+		return allResults[i].Content.CreatedAt < allResults[j].Content.CreatedAt
+	})
+
+	if len(allResults) > limit {
+		allResults = allResults[:limit]
+	}
+
+	if allResults == nil {
+		allResults = []searchEntryResponse{}
+	}
+
+	return allResults, nil
 }
 
 // handleStats returns aggregate counts for a room's tickets.

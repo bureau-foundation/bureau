@@ -98,6 +98,16 @@ type importResult struct {
 	Imported int    `json:"imported" desc:"number of tickets imported"`
 }
 
+// searchEntry pairs a ticket entry with its search relevance score.
+// Used by the "search" command response. Score combines BM25 text
+// relevance with exact-match and graph-proximity boosting.
+type searchEntry struct {
+	ID      string               `json:"id"              desc:"ticket identifier"`
+	Room    string               `json:"room,omitempty"   desc:"room ID"`
+	Content schema.TicketContent `json:"content"          desc:"ticket content"`
+	Score   float64              `json:"score"            desc:"search relevance score"`
+}
+
 // mutationResult is the common response for update, close, reopen,
 // and gate operations. Returns the full updated content.
 type mutationResult struct {

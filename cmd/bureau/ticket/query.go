@@ -418,6 +418,133 @@ with all blockers closed and all gates satisfied).`,
 	}
 }
 
+// --- search ---
+
+type searchParams struct {
+	TicketConnection
+	cli.JSONOutput
+	Query    string `json:"query"    desc:"search query (natural language, ticket IDs, or both)" required:"true"`
+	Room     string `json:"room"     flag:"room,r"     desc:"room ID (optional, searches all rooms if omitted)"`
+	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, closed, active, ready)"`
+	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
+	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
+	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`
+	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
+	Limit    int    `json:"limit"    flag:"limit,n"     desc:"maximum number of results" default:"50"`
+}
+
+func searchCommand() *cli.Command {
+	var params searchParams
+
+	return &cli.Command{
+		Name:    "search",
+		Summary: "Search tickets by relevance",
+		Description: `Search tickets using BM25 full-text ranking across titles, bodies,
+labels, and notes with relevance scoring.
+
+Ticket IDs (e.g., tkt-a3f9) and artifact IDs (e.g., art-cafe1234) in
+the query receive exact-match boosting. When a ticket ID is found, the
+search automatically expands to include dependency neighbors: blockers,
+dependents, parent, and children. Tickets that textually reference the
+ID are also included with a lower boost.
+
+If --room is specified, searches only that room. Otherwise searches all
+rooms and includes the room ID in results.`,
+		Usage: "bureau ticket search <query> [flags]",
+		Examples: []cli.Example{
+			{
+				Description: "Search for authentication-related tickets",
+				Command:     "bureau ticket search 'authentication token refresh'",
+			},
+			{
+				Description: "Find a ticket and its neighborhood",
+				Command:     "bureau ticket search 'tkt-a3f9'",
+			},
+			{
+				Description: "Search open tickets in a room",
+				Command:     "bureau ticket search 'memory leak' --room '!abc:bureau.local' --status open",
+			},
+			{
+				Description: "Limit results",
+				Command:     "bureau ticket search 'proxy' --limit 10",
+			},
+		},
+		Params:         func() any { return &params },
+		Output:         func() any { return &[]searchEntry{} },
+		Annotations:    cli.ReadOnly(),
+		RequiredGrants: []string{"command/ticket/search"},
+		Run: func(args []string) error {
+			if len(args) == 1 {
+				params.Query = args[0]
+			} else if len(args) > 1 {
+				return cli.Validation("expected 1 positional argument, got %d", len(args))
+			}
+			if params.Query == "" {
+				return cli.Validation("search query is required\n\nUsage: bureau ticket search <query>")
+			}
+
+			client, err := params.connect()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := callContext()
+			defer cancel()
+
+			fields := map[string]any{"query": params.Query}
+			if params.Room != "" {
+				fields["room"] = params.Room
+			}
+			if params.Status != "" {
+				fields["status"] = params.Status
+			}
+			if params.Priority >= 0 {
+				fields["priority"] = params.Priority
+			}
+			if params.Label != "" {
+				fields["label"] = params.Label
+			}
+			if params.Assignee != "" {
+				fields["assignee"] = params.Assignee
+			}
+			if params.Type != "" {
+				fields["type"] = params.Type
+			}
+			if params.Limit > 0 {
+				fields["limit"] = params.Limit
+			}
+
+			var entries []searchEntry
+			if err := client.Call(ctx, "search", fields, &entries); err != nil {
+				return err
+			}
+
+			if done, err := params.EmitJSON(entries); done {
+				return err
+			}
+
+			if len(entries) == 0 {
+				fmt.Fprintln(os.Stderr, "no matches")
+				return nil
+			}
+
+			writer := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
+			fmt.Fprintf(writer, "ID\tSCORE\tSTATUS\tPRI\tTYPE\tTITLE\n")
+			for _, entry := range entries {
+				fmt.Fprintf(writer, "%s\t%.1f\t%s\t%s\t%s\t%s\n",
+					entry.ID,
+					entry.Score,
+					entry.Content.Status,
+					priorityLabel(entry.Content.Priority),
+					entry.Content.Type,
+					truncate(entry.Content.Title, 50),
+				)
+			}
+			return writer.Flush()
+		},
+	}
+}
+
 // --- stats ---
 
 type statsParams struct {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/bm25"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -217,6 +218,12 @@ type Index struct {
 	// both the exact (eventType, stateKey) key and the wildcard
 	// (eventType, "") key.
 	gateWatch map[gateWatchKey]map[GateWatch]struct{}
+
+	// BM25 search index, lazily built on first Search() call and
+	// rebuilt when searchDirty is true. Covers all tickets in the
+	// index with weighted fields (title, body, labels, notes).
+	searchIndex *bm25.Index
+	searchDirty bool
 }
 
 // NewIndex returns an empty index ready for use.
@@ -289,6 +296,7 @@ func (idx *Index) Put(ticketID string, content schema.TicketContent) {
 	idx.tickets[ticketID] = content
 	idx.updateIndexes(ticketID, &content, addToStringIndex, addToIntIndex)
 	idx.addGateWatches(ticketID, &content)
+	idx.searchDirty = true
 }
 
 // Remove deletes a ticket from the index and cleans up all secondary
@@ -301,6 +309,7 @@ func (idx *Index) Remove(ticketID string) {
 	idx.updateIndexes(ticketID, &old, removeFromStringIndex, removeFromIntIndex)
 	idx.removeGateWatches(ticketID, &old)
 	delete(idx.tickets, ticketID)
+	idx.searchDirty = true
 }
 
 // Get returns the content of a single ticket. The second return value

@@ -148,6 +148,7 @@ func runProvision(args []string) error {
 		machineName   string
 		principalName string
 		serverName    string
+		fleetPrefix   string
 		escrowKey     string
 		fromFile      string
 	)
@@ -156,13 +157,14 @@ func runProvision(args []string) error {
 	flags.StringVar(&machineName, "machine", "", "machine localpart (e.g., machine/workstation) (required)")
 	flags.StringVar(&principalName, "principal", "", "principal localpart (e.g., iree/amdgpu/pm) (required)")
 	flags.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flags.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flags.StringVar(&escrowKey, "escrow-key", "", "operator escrow age public key (optional)")
 	flags.StringVar(&fromFile, "from-file", "", "read credentials from file instead of stdin (JSON object)")
 	flags.Parse(args)
 
-	if configPath == "" || machineName == "" || principalName == "" {
+	if configPath == "" || machineName == "" || principalName == "" || fleetPrefix == "" {
 		flags.Usage()
-		return fmt.Errorf("--config, --machine, and --principal are required")
+		return fmt.Errorf("--config, --machine, --principal, and --fleet are required")
 	}
 
 	if err := principal.ValidateLocalpart(machineName); err != nil {
@@ -223,11 +225,17 @@ func runProvision(args []string) error {
 		return err
 	}
 
-	// Fetch the machine's public key.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	// Parse the fleet prefix to derive the fleet machine room alias.
+	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return fmt.Errorf("parsing fleet prefix: %w", err)
+	}
+
+	// Fetch the machine's public key from the fleet machine room.
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machine room: %w", err)
+		return fmt.Errorf("resolving fleet machine room: %w", err)
 	}
 
 	machineKeyContent, err := session.GetStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName)

@@ -37,24 +37,15 @@ type mockDoctorServer struct {
 	// Room IDs.
 	spaceID    string
 	systemID   string
-	machineID  string
-	serviceID  string
 	templateID string
 	pipelineID string
 	artifactID string
-	fleetID    string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
 	joinRules     map[string]string         // roomID -> join_rule; nil = "invite" for all
 	powerLevels   map[string]map[string]any // roomID -> PL content; nil = correct defaults
-	machineUsers  []string                  // users with m.bureau.machine_key state events in machine room
 	roomMembers   map[string][]string       // roomID -> joined member user IDs; nil = admin only
-
-	// Fleet binding support.
-	configRooms      map[string]string // machine localpart → config room ID
-	fleetControllers map[string]string // service localpart → principal user ID (entries in service room)
-	fleetBindings    map[string]string // config room ID → fleet binding principal (empty string = present but empty)
 
 	// Mutation tracking.
 	mu             sync.Mutex
@@ -73,12 +64,9 @@ func newHealthyMock(adminUserID string) *mockDoctorServer {
 		adminUserID: adminUserID,
 		spaceID:     "!space:local",
 		systemID:    "!system:local",
-		machineID:   "!machine:local",
-		serviceID:   "!service:local",
 		templateID:  "!template:local",
 		pipelineID:  "!pipeline:local",
 		artifactID:  "!artifact:local",
-		fleetID:     "!fleet:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -135,17 +123,9 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			aliasMap := map[string]string{
 				"#bureau:local":          m.spaceID,
 				"#bureau/system:local":   m.systemID,
-				"#bureau/machine:local":  m.machineID,
-				"#bureau/service:local":  m.serviceID,
 				"#bureau/template:local": m.templateID,
 				"#bureau/pipeline:local": m.pipelineID,
 				"#bureau/artifact:local": m.artifactID,
-				"#bureau/fleet:local":    m.fleetID,
-			}
-			// Add config room aliases from the configRooms field.
-			for machineLocalpart, configRoomID := range m.configRooms {
-				alias := "#bureau/config/" + machineLocalpart + ":local"
-				aliasMap[alias] = configRoomID
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -219,7 +199,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					return
 				}
 			}
-			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.systemID, m.machineID, m.serviceID, m.pipelineID, m.artifactID, m.fleetID))
+			json.NewEncoder(writer).Encode(powerLevelsForRoom(m.adminUserID, roomID, m.systemID, m.pipelineID, m.artifactID))
 			return
 		}
 
@@ -267,20 +247,6 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			return
 		}
 
-		// GET specific state event: m.bureau.room_service/fleet in config rooms.
-		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.room_service/fleet") {
-			roomID := extractRoomIDFromStatePath(rawPath)
-			if m.fleetBindings != nil {
-				if principal, ok := m.fleetBindings[roomID]; ok {
-					json.NewEncoder(writer).Encode(map[string]any{"principal": principal})
-					return
-				}
-			}
-			writer.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
-			return
-		}
-
 		// GET room members.
 		if method == http.MethodGet && strings.Contains(path, "/members") && !strings.Contains(path, "/state") {
 			roomID := extractRoomIDFromPath(rawPath)
@@ -317,12 +283,9 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				if childIDs == nil {
 					childIDs = map[string]bool{
 						m.systemID:   true,
-						m.machineID:  true,
-						m.serviceID:  true,
 						m.templateID: true,
 						m.pipelineID: true,
 						m.artifactID: true,
-						m.fleetID:    true,
 					}
 				}
 				for childID := range childIDs {
@@ -330,37 +293,6 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 					events = append(events, messaging.Event{
 						Type: schema.MatrixEventTypeSpaceChild, StateKey: &id,
 						Content: map[string]any{"via": []string{"local"}},
-					})
-				}
-				json.NewEncoder(writer).Encode(events)
-				return
-			}
-
-			if roomID == m.machineID {
-				var events []messaging.Event
-				for _, machineUser := range m.machineUsers {
-					user := machineUser
-					events = append(events, messaging.Event{
-						Type: schema.EventTypeMachineKey, StateKey: &user,
-						Content: map[string]any{"algorithm": "ed25519", "key": "test-key"},
-					})
-				}
-				json.NewEncoder(writer).Encode(events)
-				return
-			}
-
-			if roomID == m.serviceID {
-				var events []messaging.Event
-				for localpart, principal := range m.fleetControllers {
-					stateKey := localpart
-					events = append(events, messaging.Event{
-						Type: schema.EventTypeService, StateKey: &stateKey,
-						Content: map[string]any{
-							"principal":   principal,
-							"machine":     m.adminUserID,
-							"protocol":    "cbor",
-							"description": "Fleet controller",
-						},
 					})
 				}
 				json.NewEncoder(writer).Encode(events)
@@ -378,13 +310,10 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, systemID, machineID, serviceID, pipelineID, artifactID, fleetID string) map[string]any {
-	// Pipeline room uses PipelineRoomPowerLevels (events_default: 100).
+func powerLevelsForRoom(adminUserID, roomID, systemID, pipelineID, artifactID string) map[string]any {
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
 	}
-	// Artifact room uses ArtifactRoomPowerLevels (admin-only, no
-	// member-writable events — metadata lives in the artifact service).
 	if roomID == artifactID {
 		return schema.ArtifactRoomPowerLevels(adminUserID)
 	}
@@ -396,24 +325,8 @@ func powerLevelsForRoom(adminUserID, roomID, systemID, machineID, serviceID, pip
 		schema.MatrixEventTypeSpaceChild:  100,
 	}
 
-	switch roomID {
-	case systemID:
+	if roomID == systemID {
 		events[schema.EventTypeTokenSigningKey] = 0
-	case machineID:
-		events[schema.EventTypeMachineKey] = 0
-		events[schema.EventTypeMachineInfo] = 0
-		events[schema.EventTypeMachineStatus] = 0
-		events[schema.EventTypeWebRTCOffer] = 0
-		events[schema.EventTypeWebRTCAnswer] = 0
-	case serviceID:
-		events[schema.EventTypeService] = 0
-	case fleetID:
-		events[schema.EventTypeFleetService] = 0
-		events[schema.EventTypeMachineDefinition] = 0
-		events[schema.EventTypeFleetConfig] = 0
-		events[schema.EventTypeHALease] = 0
-		events[schema.EventTypeServiceStatus] = 0
-		events[schema.EventTypeFleetAlert] = 0
 	}
 
 	return map[string]any{
@@ -431,14 +344,11 @@ func powerLevelsForRoom(adminUserID, roomID, systemID, machineID, serviceID, pip
 // of the form !config-<suffix>:local.
 func extractRoomIDFromStatePath(path string) string {
 	knownRooms := map[string]string{
-		"machine":  "!machine:local",
-		"service":  "!service:local",
 		"system":   "!system:local",
 		"space":    "!space:local",
 		"template": "!template:local",
 		"pipeline": "!pipeline:local",
 		"artifact": "!artifact:local",
-		"fleet":    "!fleet:local",
 	}
 	for name, roomID := range knownRooms {
 		encoded := "%21" + name + "%3Alocal"
@@ -520,33 +430,18 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"authentication",
 		"bureau space",
 		"system room",
-		"machine room",
-		"service room",
 		"template room",
 		"system room in space",
-		"machine room in space",
-		"service room in space",
 		"template room in space",
 		"bureau space admin power",
 		"bureau space state_default",
 		"system room admin power",
 		"system room state_default",
-		"machine room admin power",
-		"machine room state_default",
-		"machine room m.bureau.machine_key",
-		"machine room m.bureau.machine_info",
-		"machine room m.bureau.machine_status",
-		"machine room m.bureau.webrtc_offer",
-		"machine room m.bureau.webrtc_answer",
-		"service room admin power",
-		"service room state_default",
-		"service room m.bureau.service",
+		"system room m.bureau.token_signing_key",
 		"template room admin power",
 		"template room state_default",
 		"bureau space join rules",
 		"system room join rules",
-		"machine room join rules",
-		"service room join rules",
 		"template room join rules",
 		"pipeline room",
 		"pipeline room in space",
@@ -594,12 +489,9 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
 		"MATRIX_SYSTEM_ROOM":   "!system:local",
-		"MATRIX_MACHINE_ROOM":  "!machine:local",
-		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
-		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -629,12 +521,9 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	credentials := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
 		"MATRIX_SYSTEM_ROOM":   "!wrong:local",
-		"MATRIX_MACHINE_ROOM":  "!machine:local",
-		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
-		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
@@ -835,7 +724,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 
 	// Other rooms should still pass.
 	for _, result := range results {
-		if result.Name == "bureau space join rules" || result.Name == "machine room join rules" || result.Name == "service room join rules" {
+		if result.Name == "bureau space join rules" || result.Name == "template room join rules" {
 			if result.Status != statusPass {
 				t.Errorf("expected %s to PASS, got %s", result.Name, result.Status)
 			}
@@ -920,61 +809,6 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	}
 }
 
-func TestRunDoctor_FixMachineMembership(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
-	mock := newHealthyMock(adminUserID)
-	// machineUsers are state keys (localparts), matching how the launcher
-	// publishes machine_key events. The doctor constructs full user IDs
-	// from these using the server name.
-	mock.machineUsers = []string{"machine/workstation"}
-	mock.roomMembers = map[string][]string{
-		"!service:local": {adminUserID},
-		"!machine:local": {adminUserID, "@machine/workstation:local"},
-	}
-	server := mock.httpServer(t)
-	defer server.Close()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
-	if err != nil {
-		t.Fatalf("SessionFromToken: %v", err)
-	}
-	defer session.Close()
-
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
-
-	// Services membership should fail (machine not in service room).
-	// The doctor constructs the full user ID from the localpart state key.
-	servicesCheckName := "@machine/workstation:local in service room"
-	var servicesResult *checkResult
-	for i, result := range results {
-		if result.Name == servicesCheckName {
-			servicesResult = &results[i]
-		}
-	}
-
-	if servicesResult == nil {
-		t.Fatal("missing membership check: " + servicesCheckName)
-	}
-	if servicesResult.Status != statusFail {
-		t.Errorf("expected %s to FAIL, got %s", servicesCheckName, servicesResult.Status)
-	}
-	if servicesResult.fix == nil {
-		t.Errorf("expected %s to have a fix function", servicesCheckName)
-	}
-
-	executeFixes(t.Context(), session, results, false)
-
-	// Verify invite was sent to service room with the full user ID.
-	serviceInvites := mock.getInvites("!service:local")
-	if len(serviceInvites) != 1 || serviceInvites[0] != "@machine/workstation:local" {
-		t.Errorf("expected invite to service room for @machine/workstation:local, got %v", serviceInvites)
-	}
-}
-
 func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	adminUserID := "@bureau-admin:local"
 	server := mockBureauServer(t, adminUserID)
@@ -1043,12 +877,9 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	expectedRoomIDs := map[string]string{
 		"MATRIX_SPACE_ROOM":    "!space:local",
 		"MATRIX_SYSTEM_ROOM":   "!system:local",
-		"MATRIX_MACHINE_ROOM":  "!machine:local",
-		"MATRIX_SERVICE_ROOM":  "!service:local",
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
-		"MATRIX_FLEET_ROOM":    "!fleet:local",
 	}
 	for key, expectedValue := range expectedRoomIDs {
 		if updatedCredentials[key] != expectedValue {
@@ -1394,162 +1225,6 @@ func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
 	fixCount := executeFixes(t.Context(), nil, results, true)
 	if fixCount != 0 {
 		t.Errorf("expected fixCount=0 in dry-run, got %d", fixCount)
-	}
-}
-
-func TestRunDoctor_FleetBindings_Healthy(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
-	mock := newHealthyMock(adminUserID)
-	mock.machineUsers = []string{"machine/workstation"}
-	mock.configRooms = map[string]string{
-		"machine/workstation": "!config-workstation:local",
-	}
-	mock.fleetControllers = map[string]string{
-		"service/fleet/prod": "@service/fleet/prod:local",
-	}
-	mock.fleetBindings = map[string]string{
-		"!config-workstation:local": "@service/fleet/prod:local",
-	}
-	server := mock.httpServer(t)
-	defer server.Close()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
-	if err != nil {
-		t.Fatalf("SessionFromToken: %v", err)
-	}
-	defer session.Close()
-
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
-
-	found := false
-	for _, result := range results {
-		if result.Name == "fleet binding machine/workstation" {
-			found = true
-			if result.Status != statusPass {
-				t.Errorf("expected PASS, got %s: %s", result.Status, result.Message)
-			}
-		}
-	}
-	if !found {
-		t.Error("fleet binding check not found in results")
-	}
-}
-
-func TestRunDoctor_FleetBindings_Missing(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
-	mock := newHealthyMock(adminUserID)
-	mock.machineUsers = []string{"machine/workstation"}
-	mock.configRooms = map[string]string{
-		"machine/workstation": "!config-workstation:local",
-	}
-	mock.fleetControllers = map[string]string{
-		"service/fleet/prod": "@service/fleet/prod:local",
-	}
-	// No fleetBindings — fleet binding is missing.
-	server := mock.httpServer(t)
-	defer server.Close()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
-	if err != nil {
-		t.Fatalf("SessionFromToken: %v", err)
-	}
-	defer session.Close()
-
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
-
-	found := false
-	for _, result := range results {
-		if result.Name == "fleet binding machine/workstation" {
-			found = true
-			if result.Status != statusFail {
-				t.Errorf("expected FAIL, got %s: %s", result.Status, result.Message)
-			}
-			if result.fix == nil {
-				t.Error("expected fix function for missing fleet binding")
-			}
-			if result.FixHint == "" {
-				t.Error("expected fix hint for missing fleet binding")
-			}
-		}
-	}
-	if !found {
-		t.Error("fleet binding check not found in results")
-	}
-}
-
-func TestRunDoctor_FleetBindings_FixPublishesBinding(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
-	mock := newHealthyMock(adminUserID)
-	mock.machineUsers = []string{"machine/workstation"}
-	mock.configRooms = map[string]string{
-		"machine/workstation": "!config-workstation:local",
-	}
-	mock.fleetControllers = map[string]string{
-		"service/fleet/prod": "@service/fleet/prod:local",
-	}
-	server := mock.httpServer(t)
-	defer server.Close()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
-	if err != nil {
-		t.Fatalf("SessionFromToken: %v", err)
-	}
-	defer session.Close()
-
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
-
-	executeFixes(t.Context(), session, results, false)
-
-	// Verify the fleet binding was published.
-	stateEvents := mock.getStateEvents()
-	bindingPublished := false
-	for _, event := range stateEvents {
-		if event.eventType == schema.EventTypeRoomService && event.stateKey == "fleet" &&
-			event.roomID == "!config-workstation:local" {
-			bindingPublished = true
-		}
-	}
-	if !bindingPublished {
-		t.Error("expected fleet binding to be published in config room")
-	}
-}
-
-func TestRunDoctor_FleetBindings_NoController(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
-	mock := newHealthyMock(adminUserID)
-	mock.machineUsers = []string{"machine/workstation"}
-	// No fleet controllers — check should be skipped entirely.
-	server := mock.httpServer(t)
-	defer server.Close()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
-	if err != nil {
-		t.Fatalf("SessionFromToken: %v", err)
-	}
-	defer session.Close()
-
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
-
-	for _, result := range results {
-		if strings.HasPrefix(result.Name, "fleet binding") {
-			t.Errorf("unexpected fleet binding check when no fleet controller exists: %s", result.Name)
-		}
 	}
 }
 

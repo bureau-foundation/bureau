@@ -418,3 +418,30 @@ func IsFleetScoped(localpart string) bool {
 func FleetPrefix(namespace, fleetName string) string {
 	return namespace + "/" + fleetLiteral + "/" + fleetName
 }
+
+// ParseFleetPrefix is the inverse of FleetPrefix: it splits a fleet prefix
+// string into its namespace and fleet name components. The prefix must
+// contain exactly one "/fleet/" separator with non-empty parts on both sides.
+//
+//	ParseFleetPrefix("bureau/fleet/prod") → ("bureau", "prod", nil)
+//	ParseFleetPrefix("acme/fleet/staging") → ("acme", "staging", nil)
+//	ParseFleetPrefix("bureau/fleet/prod/machine") → error (trailing segments)
+func ParseFleetPrefix(prefix string) (namespace, fleetName string, err error) {
+	separator := "/" + fleetLiteral + "/"
+	index := strings.Index(prefix, separator)
+	if index < 0 {
+		return "", "", fmt.Errorf("fleet prefix %q does not contain %q", prefix, separator)
+	}
+	namespace = prefix[:index]
+	fleetName = prefix[index+len(separator):]
+	if namespace == "" {
+		return "", "", fmt.Errorf("fleet prefix %q has empty namespace", prefix)
+	}
+	if fleetName == "" {
+		return "", "", fmt.Errorf("fleet prefix %q has empty fleet name", prefix)
+	}
+	if strings.Contains(fleetName, "/") {
+		return "", "", fmt.Errorf("fleet prefix %q has trailing segments after fleet name", prefix)
+	}
+	return namespace, fleetName, nil
+}

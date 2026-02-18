@@ -40,7 +40,7 @@ type testMachine struct {
 	// Populated by startMachine:
 	PublicKey     string // age public key from the machine_key state event
 	ConfigRoomID  string // per-machine config room (#bureau/config/<name>)
-	MachineRoomID string // global #bureau/machine room
+	MachineRoomID string // fleet-scoped machine room (daemon status heartbeats)
 }
 
 // PrincipalSocketPath returns the proxy socket path for a principal on
@@ -58,18 +58,18 @@ func (m *testMachine) PrincipalAdminSocketPath(localpart string) string {
 }
 
 // machineOptions configures process binaries and daemon settings for
-// startMachine. LauncherBinary, DaemonBinary, and FleetRoomID are
-// required; the rest are optional and conditionally passed as CLI flags.
+// startMachine. LauncherBinary, DaemonBinary, and Fleet are required;
+// the rest are optional and conditionally passed as CLI flags.
 type machineOptions struct {
-	LauncherBinary         string // required
-	DaemonBinary           string // required
-	FleetRoomID            string // required: fleet room ID passed as --fleet-room to daemon
-	ProxyBinary            string // optional: launcher --proxy-binary
-	ObserveRelayBinary     string // optional: daemon --observe-relay-binary
-	StatusInterval         string // optional: daemon --status-interval (default "2s")
-	HABaseDelay            string // optional: daemon --ha-base-delay (default "0s" for tests)
-	PipelineExecutorBinary string // optional: daemon --pipeline-executor-binary
-	PipelineEnvironment    string // optional: daemon --pipeline-environment (Nix store path)
+	LauncherBinary         string     // required
+	DaemonBinary           string     // required
+	Fleet                  *testFleet // required: fleet-scoped rooms for this machine
+	ProxyBinary            string     // optional: launcher --proxy-binary
+	ObserveRelayBinary     string     // optional: daemon --observe-relay-binary
+	StatusInterval         string     // optional: daemon --status-interval (default "2s")
+	HABaseDelay            string     // optional: daemon --ha-base-delay (default "0s" for tests)
+	PipelineExecutorBinary string     // optional: daemon --pipeline-executor-binary
+	PipelineEnvironment    string     // optional: daemon --pipeline-environment (Nix store path)
 }
 
 // principalAccount holds the registration details for a principal Matrix
@@ -154,11 +154,9 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 	if options.LauncherBinary == "" {
 		t.Fatal("machineOptions.LauncherBinary is required")
 	}
-	if options.FleetRoomID == "" {
-		t.Fatal("machineOptions.FleetRoomID is required")
+	if options.Fleet == nil {
+		t.Fatal("machineOptions.Fleet is required")
 	}
-
-	ctx := t.Context()
 
 	// Provision the machine via the production CLI command. This registers
 	// the account, invites to all global rooms, creates the config room,
@@ -167,16 +165,12 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 	runBureauOrFail(t, "machine", "provision", machine.Name,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", options.FleetRoomID,
+		"--fleet", options.Fleet.Prefix,
 		"--output", bootstrapFile,
 	)
 
-	// Resolve the machine room for the key watch and daemon status watch.
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
-	machine.MachineRoomID = machineRoomID
+	// The daemon publishes MachineStatus to the fleet's machine room.
+	machine.MachineRoomID = options.Fleet.MachineRoomID
 
 	// Start the launcher with the bootstrap config. The launcher logs in
 	// with the one-time password from the bootstrap file, rotates it to
@@ -196,9 +190,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		launcherArgs = append(launcherArgs, "--proxy-binary", options.ProxyBinary)
 	}
 
-	// Set up a room watch before starting the launcher so we can detect
-	// the machine key publication via /sync long-polling.
-	keyWatch := watchRoom(t, admin, machineRoomID)
+	keyWatch := watchRoom(t, admin, options.Fleet.MachineRoomID)
 
 	startProcess(t, machine.Name+"-launcher", options.LauncherBinary, launcherArgs...)
 	waitForFile(t, machine.LauncherSocket)
@@ -234,7 +226,7 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machine.Name,
 		"--server-name", testServerName,
-		"--fleet-room", options.FleetRoomID,
+		"--fleet", options.Fleet.Prefix,
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
@@ -433,9 +425,10 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 	t.Helper()
 
 	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
-		MachineName: machine.Name,
-		Principal:   account.Localpart,
-		ServerName:  testServerName,
+		MachineName:   machine.Name,
+		Principal:     account.Localpart,
+		ServerName:    testServerName,
+		MachineRoomID: machine.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
 			"MATRIX_USER_ID":        account.UserID,
@@ -659,6 +652,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		ServerName:    testServerName,
 		HomeserverURL: testHomeserverURL,
 		AutoStart:     true,
+		MachineRoomID: machine.MachineRoomID,
 		Payload:       options.Payload,
 		Authorization: options.Authorization,
 	})

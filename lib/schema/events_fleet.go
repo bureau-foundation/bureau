@@ -674,6 +674,62 @@ type ProposedAction struct {
 	Score int `json:"score,omitempty"`
 }
 
+// MachineRoomPowerLevels returns the power level content for machine
+// presence rooms (both fleet-scoped and global). Members at power level 0
+// can publish machine keys, hardware info, status heartbeats, and WebRTC
+// signaling. Administrative room events remain locked to admin (PL 100).
+func MachineRoomPowerLevels(adminUserID string) map[string]any {
+	events := AdminProtectedEvents()
+	for _, eventType := range []string{
+		EventTypeMachineKey,
+		EventTypeMachineInfo,
+		EventTypeMachineStatus,
+		EventTypeWebRTCOffer,
+		EventTypeWebRTCAnswer,
+	} {
+		events[eventType] = 0
+	}
+
+	return map[string]any{
+		"users": map[string]any{
+			adminUserID: 100,
+		},
+		"users_default":  0,
+		"events":         events,
+		"events_default": 0,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         100,
+		"redact":         50,
+		"notifications":  map[string]any{"room": 50},
+	}
+}
+
+// ServiceRoomPowerLevels returns the power level content for service
+// directory rooms (both fleet-scoped and global). Members at power level
+// 0 can register and deregister services. Administrative room events
+// remain locked to admin (PL 100).
+func ServiceRoomPowerLevels(adminUserID string) map[string]any {
+	events := AdminProtectedEvents()
+	events[EventTypeService] = 0
+
+	return map[string]any{
+		"users": map[string]any{
+			adminUserID: 100,
+		},
+		"users_default":  0,
+		"events":         events,
+		"events_default": 0,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         100,
+		"redact":         50,
+		"notifications":  map[string]any{"room": 50},
+	}
+}
+
 // FleetRoomPowerLevels returns the power level content for fleet rooms.
 // Fleet rooms are admin-controlled but allow all members (machines, fleet
 // controllers) to write fleet-specific state events: fleet services,

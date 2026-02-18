@@ -24,6 +24,7 @@ type serviceCreateParams struct {
 	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
 	Machine        string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
 	Name           string `json:"name"         flag:"name"            desc:"service principal localpart (required)"`
+	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
 	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
 	AutoStart      bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
 
@@ -97,6 +98,12 @@ token for creating the service's account.`,
 			if params.Name == "" {
 				return cli.Validation("--name is required")
 			}
+			if params.Fleet == "" {
+				return cli.Validation("--fleet is required")
+			}
+			if _, _, err := principal.ParseFleetPrefix(params.Fleet); err != nil {
+				return cli.Validation("invalid fleet prefix: %v", err)
+			}
 			if err := principal.ValidateLocalpart(params.Machine); err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}
@@ -157,6 +164,18 @@ func runCreate(templateRef string, params serviceCreateParams) error {
 	}
 	defer adminSession.Close()
 
+	// Resolve the fleet machine room for credential provisioning.
+	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(params.Fleet)
+	if err != nil {
+		return cli.Internal("parse fleet prefix: %w", err)
+	}
+	machineRoomAlias := schema.FullRoomAlias(
+		schema.FleetMachineRoomAlias(fleetNamespace, fleetName), params.ServerName)
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
+	if err != nil {
+		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+	}
+
 	fmt.Fprintf(os.Stderr, "Creating service %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
 
 	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
@@ -166,6 +185,7 @@ func runCreate(templateRef string, params serviceCreateParams) error {
 		ServerName:    params.ServerName,
 		HomeserverURL: homeserverURL,
 		AutoStart:     params.AutoStart,
+		MachineRoomID: machineRoomID,
 	})
 	if err != nil {
 		return cli.Internal("create service: %w", err)

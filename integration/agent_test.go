@@ -26,7 +26,7 @@ func TestMockAgentLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/agent-mock-test")
@@ -34,7 +34,7 @@ func TestMockAgentLifecycle(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy the mock agent. deployAgent handles: template publish,

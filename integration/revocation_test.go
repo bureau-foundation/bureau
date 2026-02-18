@@ -109,7 +109,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Set up and start the machine.
 	machine := newTestMachine(t, machineName)
@@ -117,7 +117,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
 		ProxyBinary:    proxyBinary,
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy a principal and verify the proxy is functional.
@@ -190,7 +190,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 	machineUserID := "@" + machineName + ":" + testServerName
 
 	// Set up and start the machine.
@@ -199,7 +199,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
 		ProxyBinary:    proxyBinary,
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy two principals.
@@ -238,6 +238,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	runBureauOrFail(t, "machine", "revoke", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
 		"--reason", revokeReason,
 	)
 	t.Log("bureau machine revoke completed")

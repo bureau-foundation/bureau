@@ -18,6 +18,7 @@ type agentShowParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
+	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
@@ -75,7 +76,7 @@ func runShow(localpart string, params agentShowParams) error {
 	}
 	defer session.Close()
 
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.ServerName)
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.Fleet, params.ServerName)
 	if err != nil {
 		return cli.NotFound("resolve agent: %w", err)
 	}

@@ -47,14 +47,14 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/policy-hr")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy a proxy-only principal with no MatrixPolicy (default-deny).
@@ -191,14 +191,14 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/vis-hr")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy the consumer FIRST so the proxy exists when the daemon
@@ -226,14 +226,10 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// "Authorization grants updated" message to drain.
 	watch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	// Publish a test service in #bureau/service. No actual service
+	// Publish a test service in the fleet service room. No actual service
 	// principal needs to run — the directory entry is constructed from
 	// the state event content regardless of whether the principal exists.
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
 		"service/vis-hr/test", map[string]any{
 			"principal":   "@service/vis-hr/test:" + testServerName,
 			"machine":     machine.UserID,

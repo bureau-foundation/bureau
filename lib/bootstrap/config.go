@@ -37,6 +37,11 @@ type Config struct {
 	// randomly by "bureau machine provision" and rotated immediately
 	// by the launcher on first boot.
 	Password string `json:"password"`
+
+	// FleetPrefix is the fleet prefix for this machine
+	// (e.g., "bureau/fleet/prod"). The launcher uses this to resolve
+	// fleet-scoped rooms (machine, service, fleet config) at first boot.
+	FleetPrefix string `json:"fleet_prefix"`
 }
 
 // Validate checks that all required fields are present and that the
@@ -56,6 +61,12 @@ func (config *Config) Validate() error {
 	}
 	if config.Password == "" {
 		return fmt.Errorf("bootstrap config: password is required")
+	}
+	if config.FleetPrefix == "" {
+		return fmt.Errorf("bootstrap config: fleet_prefix is required")
+	}
+	if _, _, err := principal.ParseFleetPrefix(config.FleetPrefix); err != nil {
+		return fmt.Errorf("bootstrap config: invalid fleet_prefix: %w", err)
 	}
 	return nil
 }

@@ -44,8 +44,6 @@ func TestRoomsExistViaAPI(t *testing.T) {
 	expectedAliases := []string{
 		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
 		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
 		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 
@@ -86,8 +84,6 @@ func TestSpaceHierarchy(t *testing.T) {
 	// Verify each standard room is a child of the space.
 	childRooms := []string{
 		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
 		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 
@@ -153,8 +149,6 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 	rooms := []string{
 		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
 		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasMachine, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasService, testServerName),
 		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
 	}
 

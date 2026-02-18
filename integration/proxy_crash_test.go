@@ -44,12 +44,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
-
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -62,7 +57,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -101,7 +96,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	)
 	waitForFile(t, launcherSocket)
 
-	statusWatch := watchRoom(t, admin, machineRoomID)
+	statusWatch := watchRoom(t, admin, fleet.MachineRoomID)
 
 	startProcess(t, "daemon", daemonBinary,
 		"--homeserver", testHomeserverURL,
@@ -111,7 +106,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--state-dir", stateDir,
 		"--admin-user", "bureau-admin",
 		"--status-interval", "2s",
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleet.Prefix,
 	)
 
 	// Wait for the daemon to come alive.
@@ -132,9 +127,10 @@ func TestProxyCrashRecovery(t *testing.T) {
 	account := registerPrincipal(t, principalLocalpart, "pass-proxy-crash-agent")
 
 	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-		MachineName: machineName,
-		Principal:   principalLocalpart,
-		ServerName:  testServerName,
+		MachineName:   machineName,
+		Principal:     principalLocalpart,
+		ServerName:    testServerName,
+		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
 			"MATRIX_USER_ID":        account.UserID,

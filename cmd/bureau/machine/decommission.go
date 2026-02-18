@@ -22,6 +22,7 @@ import (
 type decommissionParams struct {
 	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
 	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
 }
 
 func decommissionCommand() *cli.Command {
@@ -65,16 +66,19 @@ failure explicitly.`,
 			if params.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
+			if params.Fleet == "" {
+				return cli.Validation("--fleet is required")
+			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
 				return cli.Validation("invalid machine name: %w", err)
 			}
 
-			return runDecommission(machineName, params.CredentialFile, params.ServerName)
+			return runDecommission(machineName, params.CredentialFile, params.ServerName, params.Fleet)
 		},
 	}
 }
 
-func runDecommission(machineName, credentialFile, serverName string) error {
+func runDecommission(machineName, credentialFile, serverName, fleetPrefix string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -109,24 +113,16 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 	fmt.Fprintf(os.Stderr, "Decommissioning %s (%s)...\n", machineName, machineUserID)
 
-	// Resolve all global Bureau rooms the machine should be in.
+	// Resolve global Bureau rooms (template, pipeline, system) for kick.
 	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
 	for index, room := range failedRooms {
 		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
 	}
 
-	// Clear machine_key and machine_status state events in the machine room.
-	// Sending empty content effectively "deletes" state events in Matrix.
-	// We need the machine room ID, which we already resolved above.
-	var machineRoomID string
-	for _, room := range globalRooms {
-		if room.alias == schema.RoomAliasMachine {
-			machineRoomID = room.roomID
-			break
-		}
-	}
-	if machineRoomID == "" {
-		return cli.NotFound("machine room could not be resolved — cannot clear machine state")
+	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
+	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleetPrefix, serverName)
+	if err != nil {
+		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
 	}
 
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
@@ -186,11 +182,29 @@ func runDecommission(machineName, credentialFile, serverName string) error {
 		}
 	}
 
+	// Kick from all fleet-scoped rooms.
+	fleetRooms := []resolvedRoom{
+		{machineRoom: machineRoom{displayName: "fleet machine room"}, roomID: machineRoomID},
+		{machineRoom: machineRoom{displayName: "fleet service room"}, roomID: serviceRoomID},
+		{machineRoom: machineRoom{displayName: "fleet config room"}, roomID: fleetRoomID},
+	}
+	for _, room := range fleetRooms {
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.displayName, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.displayName)
+		}
+	}
+
 	// Verify: check that the machine has zero active memberships in Bureau
 	// rooms. This catches cases where a kick silently failed or a race
 	// condition left stale membership.
 	fmt.Fprintf(os.Stderr, "\nVerifying cleanup...\n")
-	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, globalRooms)
+	allRooms := make([]resolvedRoom, 0, len(globalRooms)+len(fleetRooms))
+	allRooms = append(allRooms, globalRooms...)
+	allRooms = append(allRooms, fleetRooms...)
+	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, allRooms)
 
 	// Also check the config room if it exists.
 	if configRoomID != "" {

@@ -45,7 +45,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/agent-svc-test")
@@ -53,7 +53,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// --- Agent service setup ---
@@ -64,8 +64,8 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	agentServiceStateDir := t.TempDir()
 	writeServiceSession(t, agentServiceStateDir, agentServiceAccount)
 
-	systemRoomID, serviceRoomID := resolveGlobalRooms(t, admin)
-	inviteToRooms(t, admin, agentServiceAccount.UserID, systemRoomID, serviceRoomID)
+	systemRoomID := resolveSystemRoom(t, admin)
+	inviteToRooms(t, admin, agentServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
 
 	// Start agent service and wait for daemon discovery.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
@@ -83,6 +83,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		"--server-name", testServerName,
 		"--run-dir", machine.RunDir,
 		"--state-dir", agentServiceStateDir,
+		"--fleet", fleet.Prefix,
 	)
 	waitForFile(t, agentServiceSocketPath)
 

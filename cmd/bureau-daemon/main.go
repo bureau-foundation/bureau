@@ -49,7 +49,7 @@ func run() error {
 		homeserverURL          string
 		machineName            string
 		serverName             string
-		fleetRoom              string
+		fleetPrefix            string
 		runDir                 string
 		stateDir               string
 		adminUser              string
@@ -65,7 +65,7 @@ func run() error {
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-	flag.StringVar(&fleetRoom, "fleet-room", "", "fleet room ID (e.g., !abc:server) (required)")
+	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (must match the launcher's --run-dir)")
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory containing session.json from the launcher")
 	flag.StringVar(&adminUser, "admin-user", "bureau-admin", "admin account username (for config room invites)")
@@ -90,8 +90,12 @@ func run() error {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
 
-	if fleetRoom == "" {
-		return fmt.Errorf("--fleet-room is required")
+	if fleetPrefix == "" {
+		return fmt.Errorf("--fleet is required")
+	}
+	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return fmt.Errorf("invalid fleet prefix: %w", err)
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -189,13 +193,11 @@ func run() error {
 	}
 	logger.Info("config room ready", "room_id", configRoomID, "alias", configRoomAlias)
 
-	// Resolve and join the global rooms. The rooms are invite-only (created
+	// Resolve and join the system room. The room is invite-only (created
 	// with the private_chat preset by bureau matrix setup), so the machine
-	// account must have been invited by the admin before these joins can
-	// succeed. The launcher joins machines on first boot; the daemon
-	// defensively re-joins on every startup to handle membership recovery
-	// (e.g., homeserver reset, account re-creation).
-
+	// account must have been invited by the admin before the join can
+	// succeed. The daemon defensively re-joins on every startup to handle
+	// membership recovery (e.g., homeserver reset, account re-creation).
 	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
 	systemRoomID, err := session.ResolveAlias(ctx, systemAlias)
 	if err != nil {
@@ -206,32 +208,40 @@ func run() error {
 			"room_id", systemRoomID, "alias", systemAlias, "error", err)
 	}
 
-	machineAlias := principal.RoomAlias(schema.RoomAliasMachine, serverName)
+	// Resolve and join the fleet-scoped rooms. Each fleet has its own
+	// machine, service, and config rooms derived from the fleet prefix.
+	fleetAlias := principal.RoomAlias(schema.FleetRoomAlias(fleetNamespace, fleetName), serverName)
+	fleetRoomID, err := session.ResolveAlias(ctx, fleetAlias)
+	if err != nil {
+		return fmt.Errorf("resolving fleet room alias %q: %w", fleetAlias, err)
+	}
+	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
+		logger.Warn("failed to join fleet room (requires admin invitation)",
+			"room_id", fleetRoomID, "alias", fleetAlias, "error", err)
+	}
+
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(fleetNamespace, fleetName), serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
+		return fmt.Errorf("resolving fleet machine room alias %q: %w", machineAlias, err)
 	}
 	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
-		logger.Warn("failed to join machine room (requires admin invitation)",
+		logger.Warn("failed to join fleet machine room (requires admin invitation)",
 			"room_id", machineRoomID, "alias", machineAlias, "error", err)
 	}
 
-	serviceAlias := principal.RoomAlias(schema.RoomAliasService, serverName)
+	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(fleetNamespace, fleetName), serverName)
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
-		return fmt.Errorf("resolving service room alias %q: %w", serviceAlias, err)
+		return fmt.Errorf("resolving fleet service room alias %q: %w", serviceAlias, err)
 	}
 	if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
-		logger.Warn("failed to join service room (requires admin invitation)",
+		logger.Warn("failed to join fleet service room (requires admin invitation)",
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
-	fleetRoomID := fleetRoom
-	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
-		logger.Warn("failed to join fleet room (requires admin invitation)",
-			"room_id", fleetRoomID, "error", err)
-	}
 
-	logger.Info("global rooms ready",
+	logger.Info("fleet rooms ready",
+		"fleet", fleetPrefix,
 		"fleet_room", fleetRoomID,
 		"system_room", systemRoomID,
 		"machine_room", machineRoomID,

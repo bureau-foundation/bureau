@@ -65,7 +65,7 @@ func roomCreateCommand() *cli.Command {
 		Description: `Create a new Matrix room and add it as a child of a space.
 
 The alias is required and follows Bureau's naming convention (e.g.,
-"bureau/machine", "iree/amdgpu/general"). The --space flag specifies
+"iree/amdgpu/general"). The --space flag specifies
 the parent space by alias or room ID.
 
 By default, only the admin can set state events. Use --member-state-event

@@ -21,6 +21,7 @@ import (
 type revokeParams struct {
 	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
 	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
 	Reason         string `json:"reason"       flag:"reason"          desc:"reason for revocation (recorded in revocation event)"`
 }
 
@@ -71,16 +72,19 @@ depending on the homeserver — this is by design for emergency revocation.`,
 			if params.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
+			if params.Fleet == "" {
+				return cli.Validation("--fleet is required")
+			}
 			if err := principal.ValidateLocalpart(machineName); err != nil {
 				return cli.Validation("invalid machine name: %w", err)
 			}
 
-			return runRevoke(machineName, params.CredentialFile, params.ServerName, params.Reason)
+			return runRevoke(machineName, params.CredentialFile, params.ServerName, params.Fleet, params.Reason)
 		},
 	}
 }
 
-func runRevoke(machineName, credentialFile, serverName, reason string) error {
+func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -154,22 +158,16 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 	// Layer 2: Clean up state events and kick from rooms.
 	fmt.Fprintf(os.Stderr, "\nLayer 2: Clearing state and revoking access...\n")
 
-	// Resolve all global Bureau rooms.
+	// Resolve global Bureau rooms (template, pipeline, system) for kick.
 	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
 	for index, room := range failedRooms {
 		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
 	}
 
-	// Find the machine room for state event cleanup.
-	var machineRoomID string
-	for _, room := range globalRooms {
-		if room.alias == schema.RoomAliasMachine {
-			machineRoomID = room.roomID
-			break
-		}
-	}
-	if machineRoomID == "" {
-		return cli.NotFound("machine room could not be resolved — cannot clear machine state")
+	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
+	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleetPrefix, serverName)
+	if err != nil {
+		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
 	}
 
 	// Clear machine_key and machine_status.
@@ -233,6 +231,24 @@ func runRevoke(machineName, credentialFile, serverName, reason string) error {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", fullAlias, err)
 		} else {
 			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", fullAlias)
+		}
+	}
+
+	// Kick from all fleet-scoped rooms.
+	fleetRooms := []struct {
+		roomID string
+		name   string
+	}{
+		{machineRoomID, "fleet machine room"},
+		{serviceRoomID, "fleet service room"},
+		{fleetRoomID, "fleet config room"},
+	}
+	for _, room := range fleetRooms {
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.name, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.name)
 		}
 	}
 

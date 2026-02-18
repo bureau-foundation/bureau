@@ -21,6 +21,7 @@ import (
 type listParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
+	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
@@ -33,7 +34,7 @@ func listCommand() *cli.Command {
 		Description: `List all machines that have published keys to the Bureau fleet.
 
 Shows each machine's name, public key, and last status heartbeat
-(if available). Reads from the #bureau/machine room state.`,
+(if available). Reads from the fleet's machine room state.`,
 		Usage:          "bureau machine list [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]machineEntry{} },
@@ -42,6 +43,9 @@ Shows each machine's name, public key, and last status heartbeat
 		Run: func(args []string) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
+			}
+			if params.Fleet == "" {
+				return cli.Validation("--fleet is required")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -53,7 +57,7 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, params.ServerName, &params.JSONOutput)
+			return runList(ctx, matrixSession, params.Fleet, params.ServerName, &params.JSONOutput)
 		},
 	}
 }
@@ -70,11 +74,15 @@ type machineEntry struct {
 	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
 }
 
-func runList(ctx context.Context, session messaging.Session, serverName string, jsonOutput *cli.JSONOutput) error {
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+func runList(ctx context.Context, session messaging.Session, fleetPrefix, serverName string, jsonOutput *cli.JSONOutput) error {
+	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return cli.Validation("invalid fleet prefix: %w", err)
+	}
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return cli.NotFound("resolve machine room %q: %w", machineAlias, err)
+		return cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)

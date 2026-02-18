@@ -29,7 +29,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/output-capture")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -40,7 +40,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Publish a template with a command that will fail inside the sandbox.

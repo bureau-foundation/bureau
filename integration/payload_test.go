@@ -29,7 +29,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/payload-test")
@@ -37,7 +37,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Publish a test template.
@@ -164,7 +164,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/payload-empty")
@@ -172,7 +172,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Publish a test template.

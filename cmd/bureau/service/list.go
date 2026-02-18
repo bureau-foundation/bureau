@@ -18,6 +18,7 @@ type serviceListParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"filter to a specific machine (optional — lists all machines if omitted)"`
+	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
@@ -42,7 +43,7 @@ func listCommand() *cli.Command {
 		Summary: "List services across machines",
 		Description: `List all service principals, optionally filtered to a specific machine.
 
-When --machine is omitted, scans all machines from #bureau/machine and
+When --machine is omitted, scans all machines from the fleet's machine room and
 lists every assigned principal. The scan count is reported for diagnostics.`,
 		Usage: "bureau service list [--machine <machine>]",
 		Examples: []cli.Example{
@@ -78,7 +79,7 @@ func runList(params serviceListParams) error {
 	}
 	defer session.Close()
 
-	locations, machineCount, err := principal.List(ctx, session, params.Machine, params.ServerName)
+	locations, machineCount, err := principal.List(ctx, session, params.Machine, params.Fleet, params.ServerName)
 	if err != nil {
 		return cli.Internal("list services: %w", err)
 	}

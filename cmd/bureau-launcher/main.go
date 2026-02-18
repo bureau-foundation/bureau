@@ -56,6 +56,7 @@ func run() error {
 		firstBootOnly         bool
 		machineName           string
 		serverName            string
+		fleetPrefix           string
 		runDir                string
 		stateDir              string
 		proxyBinaryPath       string
@@ -70,6 +71,7 @@ func run() error {
 	flag.BoolVar(&firstBootOnly, "first-boot-only", false, "exit after first boot setup instead of entering the main loop")
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required for --registration-token-file first boot)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (all socket paths derive from this)")
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory for persistent state (keypair, session)")
 	flag.StringVar(&proxyBinaryPath, "proxy-binary", "", "path to bureau-proxy binary (auto-detected if empty)")
@@ -141,7 +143,10 @@ func run() error {
 				return fmt.Errorf("bootstrap first boot: %w", err)
 			}
 		} else {
-			if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machineName, serverName, keypair, stateDir, logger); err != nil {
+			if fleetPrefix == "" {
+				return fmt.Errorf("--fleet is required for --registration-token-file first boot")
+			}
+			if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machineName, serverName, fleetPrefix, keypair, stateDir, logger); err != nil {
 				return fmt.Errorf("first boot setup: %w", err)
 			}
 		}
@@ -340,7 +345,7 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 }
 
 // firstBootSetup registers the machine with Matrix and publishes its key.
-func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, machineName, serverName string, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
+func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, machineName, serverName, fleetPrefix string, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -371,8 +376,14 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	}
 	logger.Info("machine account ready", "user_id", session.UserID())
 
-	// Join the machine room and publish the public key.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	// Parse the fleet prefix to derive fleet-scoped room aliases.
+	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return fmt.Errorf("parsing fleet prefix: %w", err)
+	}
+
+	// Join the fleet machine room and publish the public key.
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
@@ -397,11 +408,11 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 		"public_key", keypair.PublicKey,
 	)
 
-	// Join the service room so the daemon can read service directory state
-	// events via /sync and GetRoomState. Like machines, this requires an
-	// admin invitation (the room is invite-only). Non-fatal because the
+	// Join the fleet service room so the daemon can read service directory
+	// state events via /sync and GetRoomState. Like machines, this requires
+	// an admin invitation (the room is invite-only). Non-fatal because the
 	// daemon will retry on every startup.
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(namespace, fleetName), serverName)
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		logger.Warn("could not resolve service room (daemon will retry on startup)",
@@ -487,9 +498,16 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	}
 	logger.Info("rotated one-time password to permanent password")
 
-	// Join the machine room and publish the public key — same as the
-	// registration-token first boot path.
-	machineAlias := principal.RoomAlias("bureau/machine", serverName)
+	// Parse the fleet prefix from the bootstrap config to derive
+	// fleet-scoped room aliases.
+	namespace, fleetName, err := principal.ParseFleetPrefix(config.FleetPrefix)
+	if err != nil {
+		return fmt.Errorf("parsing fleet prefix from bootstrap config: %w", err)
+	}
+
+	// Join the fleet machine room and publish the public key — same as
+	// the registration-token first boot path.
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
@@ -512,8 +530,8 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 		"public_key", keypair.PublicKey,
 	)
 
-	// Join the service room (non-fatal, daemon retries on startup).
-	serviceAlias := principal.RoomAlias("bureau/service", serverName)
+	// Join the fleet service room (non-fatal, daemon retries on startup).
+	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(namespace, fleetName), serverName)
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		logger.Warn("could not resolve service room (daemon will retry on startup)",

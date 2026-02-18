@@ -35,6 +35,7 @@ func run() error {
 		machineName   string
 		principalName string
 		serverName    string
+		fleetPrefix   string
 		runDir        string
 		stateDir      string
 		showVersion   bool
@@ -44,6 +45,7 @@ func run() error {
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&principalName, "principal-name", "", "service principal localpart (e.g., service/agent/iree) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
+	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets")
 	flag.StringVar(&stateDir, "state-dir", "", "directory containing session.json (required)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -72,6 +74,10 @@ func run() error {
 		return fmt.Errorf("--state-dir is required")
 	}
 
+	if fleetPrefix == "" {
+		return fmt.Errorf("--fleet is required")
+	}
+
 	if err := principal.ValidateRunDir(runDir); err != nil {
 		return fmt.Errorf("run directory validation: %w", err)
 	}
@@ -97,10 +103,10 @@ func run() error {
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
-	// Resolve and join global rooms the service needs.
-	serviceRoomID, err := service.ResolveServiceRoom(ctx, session, serverName)
+	// Resolve and join fleet-scoped rooms the service needs.
+	serviceRoomID, err := service.ResolveFleetServiceRoom(ctx, session, fleetPrefix, serverName)
 	if err != nil {
-		return fmt.Errorf("resolving service room: %w", err)
+		return fmt.Errorf("resolving fleet service room: %w", err)
 	}
 
 	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)

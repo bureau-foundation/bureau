@@ -16,6 +16,7 @@ func validConfig() *Config {
 		ServerName:    "bureau.local",
 		MachineName:   "machine/worker-01",
 		Password:      "random-one-time-password",
+		FleetPrefix:   "bureau/fleet/prod",
 	}
 }
 
@@ -66,6 +67,22 @@ func TestValidate(t *testing.T) {
 			t.Fatal("expected error for missing password")
 		}
 	})
+
+	t.Run("missing fleet prefix", func(t *testing.T) {
+		config := validConfig()
+		config.FleetPrefix = ""
+		if err := config.Validate(); err == nil {
+			t.Fatal("expected error for missing fleet_prefix")
+		}
+	})
+
+	t.Run("invalid fleet prefix", func(t *testing.T) {
+		config := validConfig()
+		config.FleetPrefix = "no-fleet-segment"
+		if err := config.Validate(); err == nil {
+			t.Fatal("expected error for invalid fleet_prefix")
+		}
+	})
 }
 
 func TestWriteAndReadConfig(t *testing.T) {
@@ -113,6 +130,9 @@ func TestWriteAndReadConfig(t *testing.T) {
 	if loaded.Password != original.Password {
 		t.Errorf("password = %q, want %q", loaded.Password, original.Password)
 	}
+	if loaded.FleetPrefix != original.FleetPrefix {
+		t.Errorf("fleet_prefix = %q, want %q", loaded.FleetPrefix, original.FleetPrefix)
+	}
 }
 
 func TestWriteConfig_InvalidConfig(t *testing.T) {
@@ -155,7 +175,7 @@ func TestReadConfig_MissingRequiredField(t *testing.T) {
 	configPath := filepath.Join(directory, "bootstrap.json")
 
 	// Valid JSON but missing the password field.
-	data := `{"homeserver_url": "http://localhost:6167", "server_name": "bureau.local", "machine_name": "machine/test"}`
+	data := `{"homeserver_url": "http://localhost:6167", "server_name": "bureau.local", "machine_name": "machine/test", "fleet_prefix": "bureau/fleet/prod"}`
 	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
 		t.Fatalf("write file failed: %v", err)
 	}

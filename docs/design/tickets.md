@@ -77,6 +77,11 @@ A ticket carries:
 - **Gates** — async coordination conditions. See [Gates](#gates).
 - **Notes** — embedded annotations. See [Notes](#notes).
 - **Attachments** — artifact references. See [Attachments](#attachments).
+- **Deadline** — optional target completion time (RFC 3339 UTC). The
+  ticket service monitors deadlines and emits warnings when tickets
+  remain open past their deadline. Deadlines are informational — they
+  do not affect readiness. See
+  [Deadlines](#deadlines).
 - **Origin** — provenance tracking for imported tickets (source system,
   external ID, source room if moved).
 - **Timestamps** — created_at, updated_at, closed_at (ISO 8601).
@@ -161,9 +166,9 @@ the whole ticket is the natural operation.
   transitioning to `closed`. Syntactic sugar for a `state_event` gate.
   Use for milestone gates.
 
-- **`timer`** — checks whether current time exceeds `created_at +
-  duration` on each /sync tick. No external event needed. Use for soak
-  periods, cooldown intervals, scheduled reviews.
+- **`timer`** — time-based gate. Fires when the current time reaches
+  the gate's target. Supports one-shot delays, absolute target times,
+  and recurring schedules. See [Scheduling and Recurrence](#scheduling-and-recurrence).
 
 **Evaluation flow:** The ticket service's /sync loop delivers state
 event updates. The service checks all pending gates across all tickets
@@ -177,6 +182,207 @@ This is the key difference from polling-based systems. Bureau's /sync
 loop is the evaluator. Gate satisfaction is event-driven end-to-end:
 something happens, a state event appears, the ticket service sees it,
 the gate clears, the ticket updates, downstream agents trigger.
+
+**Composition model:** Gates within a ticket are AND'd — all must be
+satisfied for the ticket to be ready. There is no ordering between
+gates on the same ticket, and gates do not gate other gates. If work
+requires sequential phases where each phase has its own conditions,
+model each phase as a separate ticket with `blocked_by` dependencies.
+The dependency graph provides ordering; gates provide conditions within
+each phase. This keeps the gate model flat and composable — a ticket
+is a unit of work, not a workflow engine.
+
+### Scheduling and Recurrence
+
+Timer gates extend tickets into a scheduling primitive. A ticket with a
+timer gate is work that should happen at a specific time or on a
+recurring schedule. This replaces external cron jobs, agent sleep loops,
+and ad-hoc polling with a mechanism that composes with everything tickets
+already provide: dependencies, assignments, priorities, notes, and
+event-driven triggers.
+
+**Use cases:**
+
+- **Deferral** — "come back to this Monday." A timer gate targeting
+  Monday 9am. The ticket disappears from the ready set and reappears
+  when the target arrives.
+- **Delayed execution** — "retry in 4 hours." A timer gate targeting
+  now + 4h. The agent creates the ticket and goes idle; the system
+  handles the wake-up.
+- **Recurring tasks** — "check system health daily at 7am." A timer
+  gate with a cron schedule. The ticket cycles through
+  ready → claimed → closed → re-armed automatically.
+- **Maintenance windows** — "drain and update at 3am if no agents are
+  active." A timer gate (schedule) combined with a state_event gate
+  (activity check). Both must be satisfied.
+- **Agent sleep replacement** — instead of `sleep 90`, an agent creates
+  a ticket with a 90-second timer gate and goes idle. The intent is
+  documented, the timer survives crashes, and the agent releases its
+  sandbox while waiting.
+
+#### Timer Gate Fields
+
+Timer gates support both one-shot and recurring schedules through these
+fields on `TicketGate`:
+
+- **`target`** (string, RFC 3339 UTC) — absolute time at which the gate
+  fires. This is the evaluation field: the service fires the gate when
+  `now >= target`. When the caller provides `duration` without `target`,
+  the service computes `target = base_time + duration` at creation time.
+  For recurring gates, `target` is updated on each re-arm to the next
+  occurrence.
+
+- **`duration`** (string, Go duration) — relative delay. `"24h"`,
+  `"30m"`, `"90s"`. Converted to an absolute `target` at gate creation
+  time, using the base time determined by the `base` field.
+
+- **`base`** (string) — what time the `duration` is measured from.
+  `"created"` (default): the gate's `created_at` timestamp. `"unblocked"`:
+  the time when all of the ticket's `blocked_by` dependencies were
+  satisfied. The `unblocked` base is useful for soak periods that should
+  start after a prerequisite completes, not from when the ticket was
+  created. When `base` is `"unblocked"` and the ticket still has open
+  blockers, the timer has not started — its target is undefined and it
+  cannot fire.
+
+- **`schedule`** (string, cron expression) — fixed-calendar recurrence.
+  `"0 7 * * *"` = daily at 7am UTC. Standard five-field cron syntax.
+  After the gate fires and the ticket is closed, the service computes
+  the next occurrence from the schedule, updates `target`, and re-arms
+  the gate.
+
+- **`interval`** (string, Go duration) — drift-based recurrence.
+  `"4h"` = 4 hours after the ticket is closed. Unlike `schedule`, the
+  next occurrence is relative to when the current cycle completes, not
+  anchored to wall-clock time.
+
+- **`last_fired_at`** (string, RFC 3339 UTC) — when the gate last
+  transitioned to `satisfied`. Set by the service on each fire.
+
+- **`fire_count`** (int) — total number of times this gate has fired.
+  Incremented on each satisfaction. Useful for observability and
+  max-occurrence limits.
+
+- **`max_occurrences`** (int) — stop recurring after this many fires.
+  After the Nth fire, the gate stays satisfied and does not re-arm.
+  The ticket can then be closed normally. Zero means unlimited.
+
+`schedule` and `interval` are mutually exclusive. At least one of
+`target` or `duration` must be set. A timer gate with neither `schedule`
+nor `interval` is one-shot.
+
+The service enforces a minimum recurrence period (30 seconds) to prevent
+runaway loops. Anything more frequent than that is a service loop, not a
+scheduled task.
+
+#### Auto-Rearm on Close
+
+The agent should never need to do anything special for recurrence.
+Closing the ticket is the only signal the system needs.
+
+When the ticket service processes a `close` action on a ticket with a
+recurring timer gate (`schedule` or `interval` set), it performs an
+atomic re-arm instead of a normal close:
+
+1. Compute the next `target` from the schedule or interval.
+2. Reset the timer gate's status to `pending`.
+3. Clear `satisfied_at` and `satisfied_by`.
+4. Set the ticket's status to `open` (not `closed`).
+5. Clear the assignee.
+6. Update `updated_at`.
+7. Write the entire ticket as a single state event (`putWithEcho`).
+
+The agent called "close" and gets back an open ticket with a pending
+timer gate. From the agent's perspective, the work is done. The system
+handles the recurrence. The response includes the full ticket content,
+so the caller can see the re-armed state if it cares.
+
+**Atomicity.** Because gates are embedded in the ticket content and the
+entire ticket is written as a single Matrix state event, there is no
+window where a watcher sees an inconsistent intermediate state (ticket
+reopened but gate not yet reset, or gate reset but status still closed).
+The state event that watchers receive already has both the reset gate
+and the open status.
+
+**Permanently stopping recurrence.** Remove the recurring gate first
+(`remove-gate`), then close the ticket normally. The CLI provides
+`bureau ticket close ID --end-recurrence` as shorthand: it removes
+any recurring timer gates and closes the ticket in a single operation.
+
+**If nobody picks it up.** For cron-style recurrence, the schedule
+advances regardless of whether anyone claimed the ticket. When the next
+scheduled time arrives and the ticket is already ready (still unclaimed
+from the previous occurrence), the service updates the metadata
+(`fire_count`, `last_fired_at`, new `target`) but leaves the gate
+satisfied. The ticket stays ready. The metadata tells observers that
+occurrences were missed — a ticket with `fire_count: 5` that has been
+ready since Monday has missed several cycles, which is a signal for
+escalation.
+
+For interval-style recurrence, the interval cannot restart because
+the previous occurrence was never completed. The ticket stays ready
+indefinitely. This is correct — "4 hours between completions" means
+the timer doesn't start until the current cycle finishes.
+
+#### Evaluation: Min-Heap Timer
+
+Timer gates are evaluated by a dedicated timer goroutine, not the /sync
+loop. The service maintains a min-heap (priority queue) of pending timer
+gates ordered by `target`:
+
+- **Heap entry:** `(target, room_id, ticket_id, gate_id)`
+- **Timer:** a single `clock.AfterFunc` set to the heap's minimum
+  target. When it fires, the service pops the entry, verifies the gate
+  is still pending, satisfies it, and resets the timer to the new
+  minimum.
+- **Insertion:** when a ticket is created or updated with a timer gate,
+  insert into the heap. If the new entry is earlier than the current
+  minimum, reset the timer.
+- **Startup:** rebuild the heap from all pending timer gates across all
+  rooms. Fire anything overdue immediately (crash recovery).
+- **Missed cron fires:** when a recurring cron gate's target has passed
+  and the ticket is already ready, advance to the next scheduled
+  occurrence. Do not burst-fire missed occurrences — if the service was
+  down for 3 days and the cron was daily, fire once and set the next
+  target to the next future occurrence.
+
+This gives O(log n) insertion and O(log n) fire, with zero CPU between
+fires. A system with 10,000 scheduled tickets consumes no resources
+until the next one is due. The heap also provides an ordered view of
+upcoming fires for UI display.
+
+#### Deferral
+
+Deferral is syntactic sugar for a one-shot timer gate. The CLI command:
+
+```
+bureau ticket defer ID --until 2026-02-24T09:00:00Z
+bureau ticket defer ID --for 3d
+```
+
+adds a timer gate with ID `"defer"` and the computed target. If a
+deferral gate already exists, it updates the target. The ticket
+disappears from the ready set until the target arrives.
+
+To un-defer (make the ticket ready immediately), resolve the gate:
+`bureau ticket gate resolve ID defer`.
+
+#### Deadlines
+
+Deadlines are a separate concept from timer gates. A timer gate says
+"do this at time X." A deadline says "this should be done by time X."
+
+The `deadline` field on `TicketContent` (RFC 3339 UTC) is the time by
+which the ticket should be closed. The ticket service monitors open
+tickets with deadlines: when a deadline passes with the ticket still
+open, the service emits a warning (note on the ticket, log event).
+Deadlines do not affect readiness — they are informational alerts, not
+blocking conditions.
+
+Deadlines compose with timer gates: a recurring ticket can have a
+deadline per-occurrence (though this requires the re-arm logic to also
+manage the deadline, which is a refinement beyond the initial
+implementation).
 
 ### Notes
 
@@ -329,6 +535,8 @@ each /sync update:
 - Ready set: open tickets with no open blockers and all gates satisfied
 - Gate watch map: pending gates mapped to the state event conditions
   they watch for
+- Timer heap: min-heap of pending timer gates ordered by target time,
+  driving the timer goroutine's `clock.AfterFunc` wakeups
 
 When /sync delivers an `m.bureau.ticket` state event, the index
 updates: parse the content, update the primary store, update affected
@@ -393,13 +601,22 @@ Over the Unix socket, CBOR request-response (see
 - `grep` — full-text search across title, body, and notes
 - `stats` — counts by status, priority, type
 - `deps` — dependency graph for a ticket (transitive closure)
+- `upcoming-gates` — pending timer gates ordered by target time, with
+  optional room filter. Returns gate metadata, ticket title, and time
+  until fire. Used by UIs and PM agents to see the room's schedule.
 - `status` — service health (uptime, room count, ticket count)
 
 **Mutations:**
-- `create` — new ticket, returns generated ID
+- `create` — new ticket, returns generated ID. Accepts `schedule`,
+  `interval`, `defer_until`, and `defer_for` as top-level convenience
+  fields that produce the appropriate timer gate automatically.
 - `update` — modify fields on existing ticket
-- `close` — close with reason
+- `close` — close with reason. For tickets with recurring timer gates,
+  performs atomic re-arm (see [Auto-Rearm on Close](#auto-rearm-on-close)).
+  Accepts `end_recurrence` flag to remove recurring gates before closing.
 - `reopen` — reopen closed ticket
+- `defer` — add or update a deferral timer gate on a ticket. Accepts
+  `until` (absolute time) or `for` (duration).
 - `batch-create` — create a DAG of tickets with symbolic refs, resolved
   to real IDs server-side
 
@@ -457,18 +674,24 @@ attempt:
 ```
 bureau ticket create   --title "..." --body "..." [--priority N] [--type TYPE]
                        [--label L] [--parent ID] [--room ROOM]
+                       [--schedule CRON] [--interval DUR]
+                       [--defer-until TIME] [--defer-for DUR]
+                       [--deadline TIME]
 bureau ticket list     [--status S] [--priority N] [--label L] [--assignee A]
                        [--parent ID] [--room ROOM]
 bureau ticket show     ID
 bureau ticket update   ID [--status S] [--priority N] [--assign A]
                        [--label-add L] [--label-remove L] [--parent ID]
-bureau ticket close    ID [--reason "..."]
+                       [--deadline TIME]
+bureau ticket close    ID [--reason "..."] [--end-recurrence]
 bureau ticket reopen   ID
 bureau ticket ready    [--room ROOM]
 bureau ticket blocked  [--room ROOM]
 bureau ticket children ID
 bureau ticket grep     PATTERN [--room ROOM]
+bureau ticket upcoming [--room ROOM]
 
+bureau ticket defer      ID --until TIME | --for DUR
 bureau ticket dep add    ID DEPENDS-ON-ID
 bureau ticket dep remove ID DEPENDS-ON-ID
 
@@ -493,6 +716,25 @@ bureau ticket export  --jsonl FILE [--room ROOM]
 The CLI talks to the ticket service's Unix socket. The `--room` flag
 scopes to a specific room; without it, the CLI infers the room from
 workspace context or configuration.
+
+`--schedule`, `--interval`, `--defer-until`, and `--defer-for` on
+`create` are convenience flags that produce the appropriate timer gate
+automatically. `--schedule` and `--interval` create a recurring gate;
+`--defer-until` and `--defer-for` create a one-shot deferral gate.
+`--deadline` sets the ticket-level deadline field.
+
+`bureau ticket defer` adds or updates a deferral timer gate on an
+existing ticket. If the ticket already has a gate with ID `"defer"`,
+the target is updated. Otherwise a new gate is created.
+
+`bureau ticket upcoming` lists pending timer gates across the room,
+ordered by target time. Shows gate metadata, ticket title, and time
+until fire. Useful for PM agents and operators reviewing the room's
+schedule.
+
+`bureau ticket close --end-recurrence` removes any recurring timer
+gates from the ticket before closing. Without this flag, closing a
+ticket with a recurring gate performs auto-rearm.
 
 ---
 

@@ -19,11 +19,16 @@ import (
 // ProvisionFunc encrypts and publishes a credential bundle for a principal
 // on a machine. Returns the config room ID where credentials were published.
 //
+// The machineRoomID parameter is the fleet-scoped machine room where the
+// machine's age public key is published. This is a required parameter in
+// the function signature (not just a struct field) so that missing it
+// produces a compile error rather than a runtime error.
+//
 // The standard implementation is credential.AsProvisionFunc(), which calls
 // credential.Provision under the hood. This function type breaks the import
 // cycle between lib/principal (which defines Create) and lib/credential
 // (which implements the encryption and publishing workflow).
-type ProvisionFunc func(ctx context.Context, session messaging.Session, machineName, principalLocalpart, serverName string, credentials map[string]string) (configRoomID string, err error)
+type ProvisionFunc func(ctx context.Context, session messaging.Session, machineName, principalLocalpart, serverName, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
 
 // CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
@@ -68,6 +73,10 @@ type CreateParams struct {
 	// Authorization is the authorization policy for this principal.
 	// When nil, the daemon uses default-deny.
 	Authorization *schema.AuthorizationPolicy
+
+	// MachineRoomID is the fleet-scoped machine room where the machine's
+	// age public key is published. Required for credential provisioning.
+	MachineRoomID string
 
 	// Labels are free-form key-value metadata for organizational purposes.
 	Labels map[string]string
@@ -133,6 +142,9 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	if params.HomeserverURL == "" {
 		return nil, fmt.Errorf("homeserver URL is required")
 	}
+	if params.MachineRoomID == "" {
+		return nil, fmt.Errorf("machine room ID is required for credential provisioning")
+	}
 
 	// Validate the template reference format and verify the template exists
 	// in Matrix before creating any accounts or state.
@@ -186,7 +198,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	}
 
 	// Provision encrypted credentials to the machine's config room.
-	configRoomID, err := provision(ctx, session, params.MachineName, params.Localpart, params.ServerName, credentials)
+	configRoomID, err := provision(ctx, session, params.MachineName, params.Localpart, params.ServerName, params.MachineRoomID, credentials)
 	if err != nil {
 		return nil, fmt.Errorf("provision credentials: %w", err)
 	}

@@ -35,7 +35,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/ticket-agent")
@@ -43,7 +43,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// --- Ticket service setup ---
@@ -54,8 +54,8 @@ func TestTicketServiceAgent(t *testing.T) {
 	ticketStateDir := t.TempDir()
 	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
 
-	systemRoomID, serviceRoomID := resolveGlobalRooms(t, admin)
-	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, serviceRoomID)
+	systemRoomID := resolveSystemRoom(t, admin)
+	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
 
 	// Create a project room with ticket config and service binding.
 	projectRoomID := createTicketProjectRoom(t, admin, "ticket-agent-project",
@@ -77,6 +77,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		"--server-name", testServerName,
 		"--run-dir", machine.RunDir,
 		"--state-dir", ticketStateDir,
+		"--fleet", fleet.Prefix,
 	)
 	waitForFile(t, ticketSocketPath)
 
@@ -175,7 +176,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/ticket-lifecycle")
@@ -183,7 +184,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// --- Ticket service setup ---
@@ -194,8 +195,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	ticketStateDir := t.TempDir()
 	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
 
-	systemRoomID, serviceRoomID := resolveGlobalRooms(t, admin)
-	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, serviceRoomID)
+	systemRoomID := resolveSystemRoom(t, admin)
+	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
 
 	// Two project rooms for cross-room filing.
 	roomAlphaID := createTicketProjectRoom(t, admin, "lifecycle-alpha",
@@ -219,6 +220,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		"--server-name", testServerName,
 		"--run-dir", machine.RunDir,
 		"--state-dir", ticketStateDir,
+		"--fleet", fleet.Prefix,
 	)
 	waitForFile(t, ticketSocketPath)
 
@@ -676,22 +678,15 @@ func writeServiceSession(t *testing.T, stateDir string, account principalAccount
 	}
 }
 
-// resolveGlobalRooms resolves #bureau/system and #bureau/service room IDs.
-func resolveGlobalRooms(t *testing.T, admin *messaging.DirectSession) (systemRoomID, serviceRoomID string) {
+// resolveSystemRoom resolves the #bureau/system room ID.
+func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) string {
 	t.Helper()
 
-	ctx := t.Context()
-	var err error
-
-	systemRoomID, err = admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
+	systemRoomID, err := admin.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
 	}
-	serviceRoomID, err = admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-	return systemRoomID, serviceRoomID
+	return systemRoomID
 }
 
 // inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN

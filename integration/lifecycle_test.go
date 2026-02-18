@@ -46,12 +46,8 @@ func TestMachineLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
-
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
+	machineRoomID := fleet.MachineRoomID
 
 	// --- Phase 1: Provision via CLI ---
 	stateDir := t.TempDir()
@@ -60,7 +56,7 @@ func TestMachineLifecycle(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -174,7 +170,7 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 		waitForFile(t, launcherSocket)
 
-		statusWatch := watchRoom(t, admin, machineRoomID)
+		statusWatch := watchRoom(t, admin, fleet.MachineRoomID)
 
 		startProcess(t, "daemon", daemonBinary,
 			"--homeserver", testHomeserverURL,
@@ -184,7 +180,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--state-dir", stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
-			"--fleet-room", fleetRoomID,
+			"--fleet", fleet.Prefix,
 		)
 
 		// Wait for MachineStatus heartbeat.
@@ -216,6 +212,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--token", admin.AccessToken(),
 			"--user-id", "@bureau-admin:"+testServerName,
 			"--server-name", testServerName,
+			"--fleet", fleet.Prefix,
 		)
 		if !strings.Contains(listOutput, machineName) {
 			t.Errorf("bureau machine list output does not contain %q:\n%s", machineName, listOutput)
@@ -240,7 +237,7 @@ func TestMachineLifecycle(t *testing.T) {
 		)
 		waitForFile(t, launcherSocket)
 
-		statusWatch := watchRoom(t, admin, machineRoomID)
+		statusWatch := watchRoom(t, admin, fleet.MachineRoomID)
 
 		startProcess(t, "daemon-restart", daemonBinary,
 			"--homeserver", testHomeserverURL,
@@ -250,7 +247,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--state-dir", stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
-			"--fleet-room", fleetRoomID,
+			"--fleet", fleet.Prefix,
 		)
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
@@ -263,6 +260,7 @@ func TestMachineLifecycle(t *testing.T) {
 	runBureauOrFail(t, "machine", "decommission", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
 	)
 
 	// Verify machine key was cleared (empty content).
@@ -313,12 +311,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
-
-	twoMachineFleetRoomID := createFleetRoom(t, admin)
+	twoMachineFleet := createTestFleet(t, admin)
+	machineRoomID := twoMachineFleet.MachineRoomID
 
 	// --- Provision both machines ---
 	stateDirA := t.TempDir()
@@ -329,13 +323,13 @@ func TestTwoMachineFleet(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineAName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", twoMachineFleetRoomID,
+		"--fleet", twoMachineFleet.Prefix,
 		"--output", bootstrapPathA,
 	)
 	runBureauOrFail(t, "machine", "provision", machineBName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", twoMachineFleetRoomID,
+		"--fleet", twoMachineFleet.Prefix,
 		"--output", bootstrapPathB,
 	)
 	t.Log("both machines provisioned")
@@ -421,12 +415,12 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--state-dir", machine.stateDir,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
-			"--fleet-room", twoMachineFleetRoomID,
+			"--fleet", twoMachineFleet.Prefix,
 		)
 	}
 
 	// Set up a watch before starting daemons to detect their first heartbeats.
-	statusWatch := watchRoom(t, admin, machineRoomID)
+	statusWatch := watchRoom(t, admin, twoMachineFleet.MachineRoomID)
 
 	startMachineProcesses(t, machineA)
 	startMachineProcesses(t, machineB)
@@ -489,9 +483,10 @@ func TestTwoMachineFleet(t *testing.T) {
 		}
 
 		_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-			MachineName: p.machineSetup.name,
-			Principal:   p.account.Localpart,
-			ServerName:  testServerName,
+			MachineName:   p.machineSetup.name,
+			Principal:     p.account.Localpart,
+			ServerName:    testServerName,
+			MachineRoomID: twoMachineFleet.MachineRoomID,
 			Credentials: map[string]string{
 				"MATRIX_TOKEN":          p.account.Token,
 				"MATRIX_USER_ID":        p.account.UserID,
@@ -578,10 +573,12 @@ func TestTwoMachineFleet(t *testing.T) {
 	runBureauOrFail(t, "machine", "decommission", machineAName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet", twoMachineFleet.Prefix,
 	)
 	runBureauOrFail(t, "machine", "decommission", machineBName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet", twoMachineFleet.Prefix,
 	)
 
 	// Verify both machine keys are cleared.

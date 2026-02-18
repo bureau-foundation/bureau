@@ -41,7 +41,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/native-agent-test")
@@ -49,7 +49,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy bureau-agent with LLM config and MCP tool grants.
@@ -132,7 +132,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
 	machine := newTestMachine(t, "machine/native-truncation-test")
@@ -140,7 +140,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy bureau-agent with a context window that leaves a moderate

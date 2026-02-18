@@ -226,11 +226,11 @@ func skip(name, message string) checkResult {
 
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
 type standardRoom struct {
-	alias                    string   // local alias (e.g., "bureau/machine")
+	alias                    string   // local alias (e.g., "bureau/system")
 	displayName              string   // room name for CreateRoom (e.g., "Bureau Machine")
 	topic                    string   // room topic for CreateRoom
 	name                     string   // human name for check output
-	credentialKey            string   // key in credential file (e.g., "MATRIX_MACHINE_ROOM")
+	credentialKey            string   // key in credential file (e.g., "MATRIX_SYSTEM_ROOM")
 	memberSettableEventTypes []string // event types that members should be able to set
 
 	// powerLevelsFunc overrides the default power level generation. When
@@ -260,28 +260,6 @@ var standardRooms = []standardRoom{
 		},
 	},
 	{
-		alias:         "bureau/machine",
-		displayName:   "Bureau Machine",
-		topic:         "Machine keys and status",
-		name:          "machine room",
-		credentialKey: "MATRIX_MACHINE_ROOM",
-		memberSettableEventTypes: []string{
-			schema.EventTypeMachineKey,
-			schema.EventTypeMachineInfo,
-			schema.EventTypeMachineStatus,
-			schema.EventTypeWebRTCOffer,
-			schema.EventTypeWebRTCAnswer,
-		},
-	},
-	{
-		alias:                    "bureau/service",
-		displayName:              "Bureau Service",
-		topic:                    "Service directory",
-		name:                     "service room",
-		credentialKey:            "MATRIX_SERVICE_ROOM",
-		memberSettableEventTypes: []string{schema.EventTypeService},
-	},
-	{
 		alias:         "bureau/template",
 		displayName:   "Bureau Template",
 		topic:         "Sandbox templates",
@@ -303,22 +281,6 @@ var standardRooms = []standardRoom{
 		name:            "artifact room",
 		credentialKey:   "MATRIX_ARTIFACT_ROOM",
 		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
-	},
-	{
-		alias:           "bureau/fleet",
-		displayName:     "Bureau Fleet",
-		topic:           "Fleet service definitions, machine definitions, HA leases, and alerts",
-		name:            "fleet room",
-		credentialKey:   "MATRIX_FLEET_ROOM",
-		powerLevelsFunc: schema.FleetRoomPowerLevels,
-		memberSettableEventTypes: []string{
-			schema.EventTypeFleetService,
-			schema.EventTypeMachineDefinition,
-			schema.EventTypeFleetConfig,
-			schema.EventTypeHALease,
-			schema.EventTypeServiceStatus,
-			schema.EventTypeFleetAlert,
-		},
 	},
 }
 
@@ -501,10 +463,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		results = append(results, checkJoinRules(ctx, session, room.name, roomID))
 	}
 
-	// Section 7: Machine account membership.
-	results = append(results, checkMachineMembership(ctx, session, serverName, roomIDs)...)
-
-	// Section 8: Operator membership — non-admin, non-machine members of
+	// Section 7: Operator membership — non-admin, non-machine members of
 	// the Bureau space should be in every standard room. The space is
 	// invite-only, so anyone who's joined it was deliberately onboarded.
 	if spaceRoomID != "" {
@@ -519,16 +478,6 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	// Section 10: Base pipelines published.
 	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
 		results = append(results, checkBasePipelines(ctx, session, pipelineRoomID)...)
-	}
-
-	// Section 11: Fleet service bindings in machine config rooms.
-	// Every active machine's config room should have an m.bureau.room_service
-	// binding for the "fleet" role so agents with required_services: ["fleet"]
-	// can discover the fleet controller.
-	serviceRoomID, hasServiceRoom := roomIDs["bureau/service"]
-	machineRoomID, hasMachineRoom := roomIDs["bureau/machine"]
-	if hasServiceRoom && hasMachineRoom {
-		results = append(results, checkFleetBindings(ctx, session, serviceRoomID, machineRoomID, serverName)...)
 	}
 
 	return results
@@ -775,96 +724,6 @@ func checkJoinRules(ctx context.Context, session messaging.Session, name, roomID
 	)
 }
 
-// checkMachineMembership verifies that active machine accounts (those with
-// non-empty m.bureau.machine_key state in the machine room) are members of
-// the service room. Machines don't need to be in the system room — they
-// receive instructions through per-machine config rooms, not system room
-// membership. Missing memberships are fixable via invite.
-//
-// The state key for machine_key events is the machine's localpart (e.g.,
-// "machine/worker-01"), not the full Matrix user ID. This function
-// constructs the full user ID using the server name for membership checks
-// and invite fixes.
-//
-// Decommissioned machines have their machine_key content cleared to {}.
-// These are skipped — only machines with a non-empty "key" field are
-// considered active.
-func checkMachineMembership(ctx context.Context, session messaging.Session, serverName string, roomIDs map[string]string) []checkResult {
-	machineRoomID, ok := roomIDs["bureau/machine"]
-	if !ok {
-		return nil
-	}
-
-	// Find active machine users from m.bureau.machine_key state events.
-	// The state key is the machine's localpart. Skip events with empty
-	// content (decommissioned machines).
-	events, err := session.GetRoomState(ctx, machineRoomID)
-	if err != nil {
-		return []checkResult{fail("machine membership", fmt.Sprintf("cannot read machine room state: %v", err))}
-	}
-
-	type machineEntry struct {
-		localpart string
-		userID    string
-	}
-	var machines []machineEntry
-	for _, event := range events {
-		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil || *event.StateKey == "" {
-			continue
-		}
-		// Decommissioned machines have their key cleared to empty content.
-		// Only consider machines with a non-empty "key" field as active.
-		if keyValue, _ := event.Content["key"].(string); keyValue == "" {
-			continue
-		}
-		localpart := *event.StateKey
-		userID := fmt.Sprintf("@%s:%s", localpart, serverName)
-		machines = append(machines, machineEntry{localpart: localpart, userID: userID})
-	}
-
-	if len(machines) == 0 {
-		return nil
-	}
-
-	var results []checkResult
-
-	serviceRoomID, ok := roomIDs["bureau/service"]
-	if !ok {
-		return nil
-	}
-
-	members, err := session.GetRoomMembers(ctx, serviceRoomID)
-	if err != nil {
-		return []checkResult{fail("service room membership", fmt.Sprintf("cannot read members: %v", err))}
-	}
-
-	memberSet := make(map[string]bool)
-	for _, member := range members {
-		if member.Membership == "join" {
-			memberSet[member.UserID] = true
-		}
-	}
-
-	for _, machine := range machines {
-		checkName := fmt.Sprintf("%s in service room", machine.userID)
-		if memberSet[machine.userID] {
-			results = append(results, pass(checkName, "member"))
-		} else {
-			capturedUserID := machine.userID
-			results = append(results, failWithFix(
-				checkName,
-				"not a member of service room",
-				fmt.Sprintf("invite %s to service room", capturedUserID),
-				func(ctx context.Context, session messaging.Session) error {
-					return session.InviteUser(ctx, serviceRoomID, capturedUserID)
-				},
-			))
-		}
-	}
-
-	return results
-}
-
 // checkOperatorMembership verifies that every operator (a non-admin,
 // non-machine member of the Bureau space) is a member of every standard
 // room. When doctor --fix creates new rooms, existing operators won't be
@@ -873,7 +732,7 @@ func checkMachineMembership(ctx context.Context, session messaging.Session, serv
 // Operators are identified by space membership: the Bureau space is
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
-// they have their own membership check (checkMachineMembership).
+// they are only invited to global rooms during provisioning.
 func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID, serverName string, roomIDs map[string]string) []checkResult {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
@@ -1092,117 +951,6 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 
 	fmt.Fprintln(os.Stdout, "All checks passed.")
 	return nil
-}
-
-// checkFleetBindings verifies that every active machine's config room has
-// an m.bureau.room_service binding for the "fleet" role. This binding is
-// how the daemon resolves RequiredServices: ["fleet"] to a fleet controller
-// socket path at sandbox creation time.
-//
-// The check discovers fleet controllers from #bureau/service (state events
-// with localparts matching "service/fleet/") and active machines from
-// #bureau/machine (m.bureau.machine_key with non-empty key). For each
-// machine, it resolves the config room alias, reads the fleet binding, and
-// reports pass/fail with a fix that publishes the missing binding.
-//
-// If no fleet controllers are registered, the check is skipped — there is
-// nothing to bind to.
-func checkFleetBindings(ctx context.Context, session messaging.Session, serviceRoomID, machineRoomID, serverName string) []checkResult {
-	// Find fleet controllers in the service room.
-	serviceEvents, err := session.GetRoomState(ctx, serviceRoomID)
-	if err != nil {
-		return []checkResult{fail("fleet bindings", fmt.Sprintf("cannot read service room state: %v", err))}
-	}
-
-	var fleetControllerUserID string
-	for _, event := range serviceEvents {
-		if event.Type != schema.EventTypeService || event.StateKey == nil {
-			continue
-		}
-		if !strings.HasPrefix(*event.StateKey, "service/fleet/") {
-			continue
-		}
-		// Use the principal from the service registration.
-		if principal, _ := event.Content["principal"].(string); principal != "" {
-			fleetControllerUserID = principal
-			break
-		}
-	}
-
-	if fleetControllerUserID == "" {
-		return nil // No fleet controller registered, nothing to check.
-	}
-
-	// Find active machines from machine_key state events.
-	machineEvents, err := session.GetRoomState(ctx, machineRoomID)
-	if err != nil {
-		return []checkResult{fail("fleet bindings", fmt.Sprintf("cannot read machine room state: %v", err))}
-	}
-
-	var results []checkResult
-	binding := schema.RoomServiceContent{Principal: fleetControllerUserID}
-
-	for _, event := range machineEvents {
-		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil || *event.StateKey == "" {
-			continue
-		}
-		if keyValue, _ := event.Content["key"].(string); keyValue == "" {
-			continue
-		}
-
-		machineLocalpart := *event.StateKey
-		checkName := fmt.Sprintf("fleet binding %s", machineLocalpart)
-
-		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineLocalpart), serverName)
-		configRoomID, err := session.ResolveAlias(ctx, configAlias)
-		if err != nil {
-			results = append(results, warn(checkName, fmt.Sprintf("cannot resolve config room %s: %v", configAlias, err)))
-			continue
-		}
-
-		content, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeRoomService, "fleet")
-		if err != nil {
-			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-				capturedRoomID := configRoomID
-				results = append(results, failWithFix(
-					checkName,
-					fmt.Sprintf("no fleet binding in config room for %s", machineLocalpart),
-					fmt.Sprintf("publish fleet binding for %s", machineLocalpart),
-					func(ctx context.Context, session messaging.Session) error {
-						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeRoomService, "fleet", binding)
-						return err
-					},
-				))
-				continue
-			}
-			results = append(results, fail(checkName, fmt.Sprintf("cannot read fleet binding for %s: %v", machineLocalpart, err)))
-			continue
-		}
-
-		var existingBinding schema.RoomServiceContent
-		if err := json.Unmarshal(content, &existingBinding); err != nil {
-			results = append(results, fail(checkName, fmt.Sprintf("invalid fleet binding in %s: %v", machineLocalpart, err)))
-			continue
-		}
-
-		if existingBinding.Principal == "" {
-			capturedRoomID := configRoomID
-			results = append(results, failWithFix(
-				checkName,
-				fmt.Sprintf("fleet binding in %s has empty principal", machineLocalpart),
-				fmt.Sprintf("publish fleet binding for %s", machineLocalpart),
-				func(ctx context.Context, session messaging.Session) error {
-					_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeRoomService, "fleet", binding)
-					return err
-				},
-			))
-			continue
-		}
-
-		results = append(results, pass(checkName, fmt.Sprintf("bound to %s", existingBinding.Principal)))
-	}
-
-	return results
 }
 
 // doctorJSONOutput is the JSON output structure for the doctor command.

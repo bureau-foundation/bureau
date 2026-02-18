@@ -43,7 +43,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -54,7 +54,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	ctx := t.Context()
@@ -234,7 +234,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/ws-cli")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -249,7 +249,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 		ProxyBinary:            resolvedBinary(t, "PROXY_BINARY"),
 		PipelineExecutorBinary: resolvedBinary(t, "PIPELINE_EXECUTOR_BINARY"),
 		PipelineEnvironment:    runnerEnv,
-		FleetRoomID:            fleetRoomID,
+		Fleet:                  fleet,
 	})
 
 	ctx := t.Context()

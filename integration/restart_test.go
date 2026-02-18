@@ -43,12 +43,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
-
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -61,7 +56,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -102,8 +97,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Start the first daemon as a manageable process (not via startProcess,
 	// since we need to kill it mid-test without subtest cleanup).
-	initialStatusWatch := watchRoom(t, admin, machineRoomID)
-	daemon1 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleetRoomID)
+	initialStatusWatch := watchRoom(t, admin, fleet.MachineRoomID)
+	daemon1 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleet.Prefix)
 
 	// Wait for the daemon to come alive.
 	initialStatusWatch.WaitForStateEvent(t,
@@ -123,9 +118,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	account := registerPrincipal(t, principalLocalpart, "pass-restart-agent")
 
 	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-		MachineName: machineName,
-		Principal:   principalLocalpart,
-		ServerName:  testServerName,
+		MachineName:   machineName,
+		Principal:     principalLocalpart,
+		ServerName:    testServerName,
+		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
 			"MATRIX_USER_ID":        account.UserID,
@@ -167,7 +163,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Verify initial heartbeat reports 1 running sandbox. The daemon
 	// publishes status on its interval; use a watch from the current
 	// sync position to catch the next heartbeat.
-	runningWatch := watchRoom(t, admin, machineRoomID)
+	runningWatch := watchRoom(t, admin, fleet.MachineRoomID)
 	runningWatch.WaitForMachineStatus(t, machineName, func(status schema.MachineStatus) bool {
 		return status.Sandboxes.Running == 1
 	}, "initial heartbeat with Running=1")
@@ -199,7 +195,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Publish a sentinel status event so we can distinguish the old
 	// daemon's heartbeat from the new one's. The sentinel has an empty
 	// principal field; the new daemon will overwrite it with the real one.
-	_, err = admin.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus,
+	_, err = admin.SendStateEvent(ctx, fleet.MachineRoomID, schema.EventTypeMachineStatus,
 		machineName, map[string]any{
 			"principal": "",
 			"sandboxes": map[string]any{"running": -1},
@@ -211,10 +207,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Set up room watches before starting the new daemon so we can detect
 	// the adoption message and heartbeat without matching stale events.
 	adoptionWatch := watchRoom(t, admin, configRoomID)
-	recoveryWatch := watchRoom(t, admin, machineRoomID)
+	recoveryWatch := watchRoom(t, admin, fleet.MachineRoomID)
 
 	t.Log("starting new daemon")
-	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleetRoomID)
+	daemon2 := startDaemonProcess(t, daemonBinary, machineName, runDir, stateDir, fleet.Prefix)
 	t.Cleanup(func() {
 		daemon2.Process.Signal(syscall.SIGTERM)
 		done := make(chan error, 1)
@@ -255,7 +251,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 // for manual lifecycle management. Unlike startProcess, the caller is
 // responsible for killing the process. This is needed for tests that kill
 // and restart the daemon mid-test.
-func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir, fleetRoomID string) *exec.Cmd {
+func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir, fleetPrefix string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(binary,
 		"--homeserver", testHomeserverURL,
@@ -265,7 +261,7 @@ func startDaemonProcess(t *testing.T, binary, machineName, runDir, stateDir, fle
 		"--state-dir", stateDir,
 		"--admin-user", "bureau-admin",
 		"--status-interval", "2s",
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleetPrefix,
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

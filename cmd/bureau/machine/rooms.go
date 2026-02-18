@@ -12,10 +12,40 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// resolveFleetRooms resolves a fleet's three scoped rooms (machine, service,
+// fleet config) from the fleet prefix. Returns the resolved room IDs.
+func resolveFleetRooms(ctx context.Context, session messaging.Session, fleetPrefix, serverName string) (machineRoomID, serviceRoomID, fleetRoomID string, err error) {
+	namespace, fleetName, parseErr := principal.ParseFleetPrefix(fleetPrefix)
+	if parseErr != nil {
+		return "", "", "", fmt.Errorf("parsing fleet prefix %q: %w", fleetPrefix, parseErr)
+	}
+
+	aliases := []struct {
+		localpart string
+		target    *string
+		name      string
+	}{
+		{schema.FleetMachineRoomAlias(namespace, fleetName), &machineRoomID, "fleet machine room"},
+		{schema.FleetServiceRoomAlias(namespace, fleetName), &serviceRoomID, "fleet service room"},
+		{schema.FleetRoomAlias(namespace, fleetName), &fleetRoomID, "fleet config room"},
+	}
+
+	for _, alias := range aliases {
+		fullAlias := principal.RoomAlias(alias.localpart, serverName)
+		roomID, resolveErr := session.ResolveAlias(ctx, fullAlias)
+		if resolveErr != nil {
+			return "", "", "", fmt.Errorf("resolve %s (%s): %w", alias.name, fullAlias, resolveErr)
+		}
+		*alias.target = roomID
+	}
+
+	return machineRoomID, serviceRoomID, fleetRoomID, nil
+}
+
 // machineRoom describes a Bureau room that machines are invited to during
 // provisioning and kicked from during decommissioning.
 type machineRoom struct {
-	alias       string // localpart, e.g. "bureau/machine"
+	alias       string // localpart, e.g. "bureau/template"
 	displayName string // human-readable name for log messages
 }
 
@@ -28,12 +58,9 @@ type machineRoom struct {
 // (invite), decommission (kick), and re-provision verification (membership
 // check).
 var machineGlobalRooms = []machineRoom{
-	{schema.RoomAliasMachine, "machine room"},
-	{schema.RoomAliasService, "service room"},
 	{schema.RoomAliasTemplate, "template room"},
 	{schema.RoomAliasPipeline, "pipeline room"},
 	{schema.RoomAliasSystem, "system room"},
-	{schema.RoomAliasFleet, "fleet room"},
 }
 
 // resolvedRoom holds a resolved global room (alias → room ID).

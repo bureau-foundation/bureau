@@ -143,7 +143,8 @@ func runEnable(params *enableParams) error {
 	// Step 3: Publish fleet room_service binding in all machine config rooms.
 	// This makes the fleet controller discoverable via RequiredServices for
 	// any agent on any machine in the deployment.
-	bindingCount, err := publishFleetBindings(ctx, adminSession, serviceUserID, params.ServerName)
+	fleetPrefix := "bureau/fleet/" + params.Name
+	bindingCount, err := publishFleetBindings(ctx, adminSession, serviceUserID, fleetPrefix, params.ServerName)
 	if err != nil {
 		return cli.Internal("publishing fleet bindings: %w", err)
 	}
@@ -231,13 +232,19 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 // required_services: ["fleet"] can discover the fleet controller socket.
 //
 // Active machines are discovered from m.bureau.machine_key state events in
-// #bureau/machine. Machines with empty key content (decommissioned) are
-// skipped. Returns the number of config rooms successfully updated.
-func publishFleetBindings(ctx context.Context, session messaging.Session, serviceUserID, serverName string) (int, error) {
-	machineAlias := schema.FullRoomAlias(schema.RoomAliasMachine, serverName)
+// the fleet's machine room (resolved from the fleet prefix). Machines with
+// empty key content (decommissioned) are skipped. Returns the number of
+// config rooms successfully updated.
+func publishFleetBindings(ctx context.Context, session messaging.Session, serviceUserID, fleetPrefix, serverName string) (int, error) {
+	namespace, fleetName, parseErr := principal.ParseFleetPrefix(fleetPrefix)
+	if parseErr != nil {
+		return 0, cli.Validation("invalid fleet prefix %q: %w", fleetPrefix, parseErr)
+	}
+	machineAliasLocalpart := schema.FleetMachineRoomAlias(namespace, fleetName)
+	machineAlias := schema.FullRoomAlias(machineAliasLocalpart, serverName)
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return 0, cli.NotFound("resolving machine room %s: %w", machineAlias, err)
+		return 0, cli.NotFound("resolving fleet machine room %s: %w", machineAlias, err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)

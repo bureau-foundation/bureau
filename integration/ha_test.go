@@ -24,13 +24,13 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/ha-acq")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
@@ -45,10 +45,10 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	// Watch the fleet room before publishing the service so we catch
 	// the daemon's lease acquisition event.
-	fleetWatch := watchRoom(t, admin, fleetRoomID)
+	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 	configWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
 		Replicas: schema.ReplicaSpec{Min: 1},
@@ -124,7 +124,7 @@ func TestHALeaseFailover(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot two machines with manual daemon lifecycle so we can kill
 	// the winner mid-test. Both use startMachineLauncher +
@@ -135,7 +135,7 @@ func TestHALeaseFailover(t *testing.T) {
 	options := machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	}
 
@@ -182,9 +182,9 @@ func TestHALeaseFailover(t *testing.T) {
 	grantTemplateAccess(t, admin, machineB)
 
 	// --- Phase 1: Initial acquisition ---
-	fleetWatch := watchRoom(t, admin, fleetRoomID)
+	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
 		Replicas: schema.ReplicaSpec{Min: 1},
@@ -235,7 +235,7 @@ func TestHALeaseFailover(t *testing.T) {
 	}
 
 	// --- Phase 2: Kill the winner's daemon ---
-	failoverWatch := watchRoom(t, admin, fleetRoomID)
+	failoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 	if holder == machineA.Name {
 		daemonA.Process.Signal(syscall.SIGTERM)

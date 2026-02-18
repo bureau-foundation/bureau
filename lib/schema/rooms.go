@@ -9,9 +9,10 @@ package schema
 // form used in Matrix API calls.
 //
 // Global rooms are fleet-independent: they hold definitions (templates,
-// pipelines) that are reusable across fleets. Fleet-scoped rooms
-// (machines, services) live under <namespace>/fleet/<name>/ and are
-// constructed via the Fleet*RoomAlias helpers below.
+// pipelines, artifacts) and operational messages. Fleet-scoped rooms
+// (machines, services, fleet config) live under
+// <namespace>/fleet/<name>/ and are constructed via the
+// Fleet*RoomAlias helpers below.
 //
 // See naming-conventions.md for the full room topology.
 const (
@@ -21,29 +22,11 @@ const (
 	// RoomAliasSystem is the operational messages room.
 	RoomAliasSystem = "bureau/system"
 
-	// RoomAliasMachine is the global machine room. Under fleet-scoped
-	// naming, each fleet gets its own machine room via
-	// FleetMachineRoomAlias. This constant is used by callers that have
-	// not yet migrated to fleet-scoped rooms.
-	RoomAliasMachine = "bureau/machine"
-
-	// RoomAliasService is the global service directory room. Under
-	// fleet-scoped naming, each fleet gets its own service room via
-	// FleetServiceRoomAlias. This constant is used by callers that have
-	// not yet migrated to fleet-scoped rooms.
-	RoomAliasService = "bureau/service"
-
 	// RoomAliasTemplate is the built-in sandbox template room.
 	RoomAliasTemplate = "bureau/template"
 
 	// RoomAliasPipeline is the pipeline definitions room.
 	RoomAliasPipeline = "bureau/pipeline"
-
-	// RoomAliasFleet is the global fleet room alias localpart. Under
-	// fleet-scoped naming, individual fleets are constructed via
-	// FleetRoomAlias. This constant is used by callers that have not
-	// yet migrated to fleet-scoped rooms.
-	RoomAliasFleet = "bureau/fleet"
 
 	// RoomAliasArtifact is the artifact metadata room.
 	RoomAliasArtifact = "bureau/artifact"

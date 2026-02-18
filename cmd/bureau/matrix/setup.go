@@ -51,12 +51,12 @@ exposing secrets in CLI arguments, process listings, or shell history.
 
 Standard rooms created:
   bureau/system      Operational messages
-  bureau/machine     Machine keys and status
-  bureau/service     Service directory
   bureau/template    Sandbox templates (base, base-networked)
   bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)
   bureau/artifact    Artifact coordination
-  bureau/fleet       Fleet service definitions, HA leases, and alerts`,
+
+Fleet-scoped rooms (machine, service, fleet config) are created per-fleet
+by "bureau fleet enable" and resolved via the fleet prefix.`,
 		Usage: "bureau matrix setup [flags]",
 		Examples: []cli.Example{
 			{

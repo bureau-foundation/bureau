@@ -122,7 +122,7 @@ type fleetController struct {
 // Matrix account, writes session credentials, invites the service principal
 // to the required rooms (fleet, machine, service, system), and starts the
 // binary. Returns after the socket file appears on disk.
-func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName, fleetRoomID string) *fleetController {
+func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName string, fleet *testFleet) *fleetController {
 	t.Helper()
 
 	ctx := t.Context()
@@ -145,18 +145,10 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 		t.Fatalf("write fleet controller session.json: %v", err)
 	}
 
-	// Resolve and invite to required rooms.
+	// Invite fleet controller to the system room (global) and fleet-scoped rooms.
 	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
-	}
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
 	}
 
 	for _, invite := range []struct {
@@ -164,9 +156,9 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 		name   string
 	}{
 		{systemRoomID, "system"},
-		{serviceRoomID, "service"},
-		{fleetRoomID, "fleet"},
-		{machineRoomID, "machine"},
+		{fleet.FleetRoomID, "fleet"},
+		{fleet.MachineRoomID, "fleet machine"},
+		{fleet.ServiceRoomID, "fleet service"},
 	} {
 		if err := admin.InviteUser(ctx, invite.roomID, account.UserID); err != nil {
 			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
@@ -195,7 +187,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 		"--machine-name", machine.Name,
 		"--principal-name", controllerName,
 		"--server-name", testServerName,
-		"--fleet-room", fleetRoomID,
+		"--fleet", fleet.Prefix,
 		"--run-dir", machine.RunDir,
 		"--state-dir", stateDir,
 	)
@@ -455,14 +447,14 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// to #bureau/machine, and creates the per-machine config room.
 	// startMachine blocks until the first status heartbeat arrives, so
 	// the fleet controller's initial /sync will see this machine.
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/fleet-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
@@ -474,7 +466,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// RequiredServices: ["fleet"] — the daemon needs the fleet
 	// controller's socket and binding to resolve that dependency.
 	controllerName := "service/fleet/lifecycle"
-	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	fc := startFleetController(t, admin, machine, controllerName, fleet)
 	publishFleetServiceBinding(t, admin, machine, fc)
 
 	// Deploy a fleet operator to obtain a daemon-minted fleet token.
@@ -580,9 +572,9 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 		// Create a fleet room watch before publishing so we can
 		// event-wait for the service discovered notification.
-		fleetWatch := watchRoom(t, admin, fleetRoomID)
+		fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-		publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: schema.ReplicaSpec{Min: 0},
 			Failover: "migrate",
@@ -750,7 +742,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot a machine with proxy support. The daemon needs the proxy
 	// binary to create sandboxes when the fleet controller places a
@@ -760,7 +752,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Publish a test template so the daemon can create sandboxes when
@@ -793,14 +785,14 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// Create a fleet room watch BEFORE starting the fleet controller.
 	// The fleet controller posts config room discovered notifications
 	// to the fleet room after it joins and processes each config room.
-	configDiscoverWatch := watchRoom(t, admin, fleetRoomID)
+	configDiscoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 	// Start the fleet controller. The daemon detects the fleet controller
 	// joining the fleet room via /sync, invites it to the config room,
 	// and grants it PL 50. The fleet controller then accepts the config
 	// room invite and processes the MachineConfig event.
 	controllerName := "service/fleet/place-test"
-	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	fc := startFleetController(t, admin, machine, controllerName, fleet)
 	publishFleetServiceBinding(t, admin, machine, fc)
 
 	// Deploy a fleet operator to obtain a daemon-minted fleet token.
@@ -820,13 +812,13 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 
 	// Create a fleet room watch before publishing the service so we
 	// can event-wait for the service discovered notification.
-	serviceDiscoverWatch := watchRoom(t, admin, fleetRoomID)
+	serviceDiscoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 	// Publish a fleet service definition with Min=0 so the reconcile
 	// loop does not auto-place it. This test exercises explicit place
 	// and unplace calls; auto-placement is tested separately in
 	// TestFleetAutoPlacement.
-	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: schema.ReplicaSpec{Min: 0},
 		Failover: "migrate",
@@ -957,7 +949,7 @@ func TestFleetReconciliation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot two machines with proxy support.
 	machineA := newTestMachine(t, "machine/fleet-recon-a")
@@ -966,7 +958,7 @@ func TestFleetReconciliation(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	}
 	startMachine(t, admin, machineA, options)
 	startMachine(t, admin, machineB, options)
@@ -993,10 +985,10 @@ func TestFleetReconciliation(t *testing.T) {
 	// notifications to the fleet room. A single watch serves all
 	// discovery waits because WaitForEvent preserves non-matching
 	// events in its pending buffer.
-	discoverWatch := watchRoom(t, admin, fleetRoomID)
+	discoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 	controllerName := "service/fleet/reconcile-test"
-	fc := startFleetController(t, admin, machineA, controllerName, fleetRoomID)
+	fc := startFleetController(t, admin, machineA, controllerName, fleet)
 
 	// Grant the fleet controller access to machineB's config room.
 	// startFleetController only grants access for the machine it receives
@@ -1016,7 +1008,7 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish the fleet service with Min=2. The fleet controller
 	// discovers the service via /sync, runs reconcile, detects a
 	// deficit of 2, scores both machines, and calls place() for each.
-	publishFleetService(t, admin, fleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: schema.ReplicaSpec{Min: 2},
 		Placement: schema.PlacementConstraints{
@@ -1116,14 +1108,14 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/fleet-auth")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
@@ -1132,7 +1124,7 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	// RequiredServices: ["fleet"], so the daemon needs the fleet
 	// controller's socket and binding before it can create sandboxes.
 	controllerName := "service/fleet/auth-test"
-	fc := startFleetController(t, admin, machine, controllerName, fleetRoomID)
+	fc := startFleetController(t, admin, machine, controllerName, fleet)
 	publishFleetServiceBinding(t, admin, machine, fc)
 
 	// Deploy 3 principals with different grant scopes. Each uses the

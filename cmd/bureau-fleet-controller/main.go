@@ -36,7 +36,7 @@ func run() error {
 		machineName   string
 		principalName string
 		serverName    string
-		fleetRoom     string
+		fleetPrefix   string
 		runDir        string
 		stateDir      string
 		showVersion   bool
@@ -46,7 +46,7 @@ func run() error {
 	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
 	flag.StringVar(&principalName, "principal-name", "", "service principal localpart (e.g., service/fleet/prod) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-	flag.StringVar(&fleetRoom, "fleet-room", "", "fleet room ID (e.g., !abc:server) (required)")
+	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets")
 	flag.StringVar(&stateDir, "state-dir", "", "directory containing session.json (required)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -75,8 +75,12 @@ func run() error {
 		return fmt.Errorf("--state-dir is required")
 	}
 
-	if fleetRoom == "" {
-		return fmt.Errorf("--fleet-room is required")
+	if fleetPrefix == "" {
+		return fmt.Errorf("--fleet is required")
+	}
+	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return fmt.Errorf("invalid fleet prefix: %w", err)
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -104,32 +108,47 @@ func run() error {
 	}
 	logger.Info("matrix session valid", "user_id", userID)
 
-	// Resolve and join global rooms the fleet controller needs.
-	serviceRoomID, err := service.ResolveServiceRoom(ctx, session, serverName)
-	if err != nil {
-		return fmt.Errorf("resolving service room: %w", err)
-	}
-
+	// Resolve and join the system room (global).
 	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)
 	if err != nil {
 		return fmt.Errorf("resolving system room: %w", err)
 	}
 
-	fleetRoomID := fleetRoom
+	// Resolve and join fleet-scoped rooms. Each fleet has its own config,
+	// machine, and service rooms derived from the fleet prefix.
+	fleetAlias := principal.RoomAlias(schema.FleetRoomAlias(fleetNamespace, fleetName), serverName)
+	fleetRoomID, err := session.ResolveAlias(ctx, fleetAlias)
+	if err != nil {
+		return fmt.Errorf("resolving fleet room alias %q: %w", fleetAlias, err)
+	}
 	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
 		return fmt.Errorf("joining fleet room %s: %w", fleetRoomID, err)
 	}
 
-	machineRoomID, err := resolveMachineRoom(ctx, session, serverName)
+	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(fleetNamespace, fleetName), serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return fmt.Errorf("resolving machine room: %w", err)
+		return fmt.Errorf("resolving fleet machine room alias %q: %w", machineAlias, err)
+	}
+	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
+		return fmt.Errorf("joining fleet machine room %s: %w", machineRoomID, err)
 	}
 
-	logger.Info("global rooms ready",
-		"service_room", serviceRoomID,
-		"system_room", systemRoomID,
+	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(fleetNamespace, fleetName), serverName)
+	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
+	if err != nil {
+		return fmt.Errorf("resolving fleet service room alias %q: %w", serviceAlias, err)
+	}
+	if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
+		return fmt.Errorf("joining fleet service room %s: %w", serviceRoomID, err)
+	}
+
+	logger.Info("fleet rooms ready",
+		"fleet", fleetPrefix,
 		"fleet_room", fleetRoomID,
+		"system_room", systemRoomID,
 		"machine_room", machineRoomID,
+		"service_room", serviceRoomID,
 	)
 
 	// Load the daemon's token signing public key for authenticating
@@ -171,7 +190,7 @@ func run() error {
 		logger:        logger,
 	}
 
-	// Register in #bureau/service so daemons can discover us.
+	// Register in the fleet's service room so daemons can discover us.
 	machineUserID := principal.MatrixUserID(machineName, serverName)
 	if err := service.Register(ctx, session, serviceRoomID, principalName, serverName, service.Registration{
 		Machine:      machineUserID,
@@ -265,25 +284,11 @@ type FleetController struct {
 	// Populated from room aliases during initial sync.
 	configRooms map[string]string
 
-	// fleetRoomID is the fleet room ID, received via --fleet-room.
+	// fleetRoomID is the fleet config room, resolved from the fleet prefix.
 	fleetRoomID string
 
-	// machineRoomID is the resolved room ID for #bureau/machine.
+	// machineRoomID is the fleet-scoped machine room, resolved from the fleet prefix.
 	machineRoomID string
 
 	logger *slog.Logger
-}
-
-// resolveMachineRoom resolves the #bureau/machine room alias and joins
-// it. Returns the room ID.
-func resolveMachineRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
-	alias := principal.RoomAlias(schema.RoomAliasMachine, serverName)
-	roomID, err := session.ResolveAlias(ctx, alias)
-	if err != nil {
-		return "", fmt.Errorf("resolving machine room alias %q: %w", alias, err)
-	}
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return "", fmt.Errorf("joining machine room %s: %w", roomID, err)
-	}
-	return roomID, nil
 }

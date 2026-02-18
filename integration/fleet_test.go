@@ -26,13 +26,13 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// startMachine already proved: key published, status heartbeat received,
@@ -117,13 +117,13 @@ func TestPrincipalAssignment(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/sandbox")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
@@ -157,13 +157,13 @@ func TestOperatorFlow(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/observe")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:        fleetRoomID,
+		Fleet:              fleet,
 		ProxyBinary:        resolvedBinary(t, "PROXY_BINARY"),
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
@@ -348,13 +348,13 @@ func TestCredentialRotation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/rotate")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
@@ -426,7 +426,7 @@ func TestCrossMachineObservation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	ctx := t.Context()
 
@@ -441,14 +441,14 @@ func TestCrossMachineObservation(t *testing.T) {
 	startMachine(t, admin, provider, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:        fleetRoomID,
+		Fleet:              fleet,
 		ProxyBinary:        resolvedBinary(t, "PROXY_BINARY"),
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
 	startMachine(t, admin, consumer, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// Deploy a principal on the provider with observation allowances
@@ -470,15 +470,11 @@ func TestCrossMachineObservation(t *testing.T) {
 	// are needed on the consumer side.
 	pushMachineConfig(t, admin, consumer, deploymentConfig{})
 
-	// Publish a service entry in #bureau/service so the consumer daemon
-	// can discover the principal on the provider machine. In production,
-	// services are registered by the daemon or admin; here we simulate
-	// that by pushing the state event directly.
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+	// Publish a service entry in the fleet service room so the consumer
+	// daemon can discover the principal on the provider machine. In
+	// production, services are registered by the daemon or admin; here
+	// we simulate that by pushing the state event directly.
+	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
 		observed.Localpart, map[string]any{
 			"principal":   observed.UserID,
 			"machine":     provider.UserID,
@@ -622,13 +618,13 @@ func TestConfigReconciliation(t *testing.T) {
 
 	admin := adminSession(t)
 	defer admin.Close()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	machine := newTestMachine(t, "machine/reconcile")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 

@@ -54,14 +54,14 @@ func TestBootstrapScript(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	bootstrapFleetRoomID := createFleetRoom(t, admin)
+	bootstrapFleet := createTestFleet(t, admin)
 
 	// --- Provision the machine account on Matrix ---
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
 	runBureauOrFail(t, "machine", "provision", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
-		"--fleet-room", bootstrapFleetRoomID,
+		"--fleet", bootstrapFleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -137,10 +137,7 @@ func TestBootstrapScript(t *testing.T) {
 	t.Log("bootstrap config deleted (security check passed)")
 
 	// Verify: first boot published the machine key to Matrix.
-	machineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasMachine, testServerName))
-	if err != nil {
-		t.Fatalf("resolve machine room: %v", err)
-	}
+	machineRoomID := bootstrapFleet.MachineRoomID
 	// First boot already completed, so the key exists in room state.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 		schema.EventTypeMachineKey, machineName)
@@ -199,7 +196,7 @@ func TestBootstrapScript(t *testing.T) {
 		t.Log("launcher started inside container")
 
 		// Set up a watch before starting the daemon to detect its heartbeat.
-		statusWatch := watchRoom(t, admin, machineRoomID)
+		statusWatch := watchRoom(t, admin, bootstrapFleet.MachineRoomID)
 
 		// Start daemon in the background.
 		dockerExecBackground(t, containerID, "daemon",
@@ -209,7 +206,7 @@ func TestBootstrapScript(t *testing.T) {
 			"--server-name", testServerName,
 			"--admin-user", "bureau-admin",
 			"--status-interval", "2s",
-			"--fleet-room", bootstrapFleetRoomID,
+			"--fleet", bootstrapFleet.Prefix,
 		)
 
 		// Wait for daemon heartbeat in Matrix.
@@ -230,9 +227,10 @@ func TestBootstrapScript(t *testing.T) {
 		// Register and deploy a minimal principal (no template, just proxy).
 		principalAccount := registerPrincipal(t, "agent/bootstrap-test", "test-password")
 		pushCredentials(t, admin, &testMachine{
-			Name:         machineName,
-			PublicKey:    machineKey.PublicKey,
-			ConfigRoomID: configRoomID,
+			Name:          machineName,
+			PublicKey:     machineKey.PublicKey,
+			ConfigRoomID:  configRoomID,
+			MachineRoomID: bootstrapFleet.MachineRoomID,
 		}, principalAccount)
 
 		// Push machine config to trigger sandbox creation.
@@ -262,6 +260,7 @@ func TestBootstrapScript(t *testing.T) {
 	runBureauOrFail(t, "machine", "decommission", machineName,
 		"--credential-file", credentialFile,
 		"--server-name", testServerName,
+		"--fleet", bootstrapFleet.Prefix,
 	)
 	t.Log("bootstrap script test complete")
 }

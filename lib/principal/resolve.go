@@ -28,12 +28,15 @@ type Location struct {
 //
 // If machineName is non-empty, reads only that machine's config room and
 // verifies the principal is assigned there. If machineName is empty, scans
-// all machines from #bureau/machine to find the assignment. Returns the
-// number of machines scanned in the second return value (0 when machineName
-// is provided directly).
+// all machines in the fleet to find the assignment. The fleetPrefix
+// (e.g., "bureau/fleet/prod") identifies which fleet's machine room to
+// enumerate; it is only used when machineName is empty.
+//
+// Returns the number of machines scanned in the second return value
+// (0 when machineName is provided directly).
 //
 // Returns an error if the principal is not found on any machine.
-func Resolve(ctx context.Context, session messaging.Session, localpart, machineName, serverName string) (*Location, int, error) {
+func Resolve(ctx context.Context, session messaging.Session, localpart, machineName, fleetPrefix, serverName string) (*Location, int, error) {
 	if machineName != "" {
 		location, err := readFromMachine(ctx, session, localpart, machineName, serverName)
 		if err != nil {
@@ -43,7 +46,7 @@ func Resolve(ctx context.Context, session messaging.Session, localpart, machineN
 	}
 
 	// Scan all machines.
-	locations, machineCount, err := List(ctx, session, "", serverName)
+	locations, machineCount, err := List(ctx, session, "", fleetPrefix, serverName)
 	if err != nil {
 		return nil, machineCount, fmt.Errorf("scanning machines for %q: %w", localpart, err)
 	}
@@ -60,10 +63,12 @@ func Resolve(ctx context.Context, session messaging.Session, localpart, machineN
 // List returns all principal assignments across machines.
 //
 // If machineName is non-empty, returns only assignments from that machine.
-// If machineName is empty, enumerates all machines from #bureau/machine
-// and reads each machine's config. Returns the total number of machines
+// If machineName is empty, enumerates all machines from the fleet's
+// machine room and reads each machine's config. The fleetPrefix
+// (e.g., "bureau/fleet/prod") identifies the fleet; it is only used
+// when machineName is empty. Returns the total number of machines
 // scanned in the second return value.
-func List(ctx context.Context, session messaging.Session, machineName, serverName string) ([]Location, int, error) {
+func List(ctx context.Context, session messaging.Session, machineName, fleetPrefix, serverName string) ([]Location, int, error) {
 	if machineName != "" {
 		locations, err := listOnMachine(ctx, session, machineName, serverName)
 		if err != nil {
@@ -72,8 +77,19 @@ func List(ctx context.Context, session messaging.Session, machineName, serverNam
 		return locations, 0, nil
 	}
 
-	// Enumerate all machines from #bureau/machine.
-	machineNames, err := enumerateMachines(ctx, session, serverName)
+	// Resolve the fleet's machine room.
+	namespace, fleetName, err := ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return nil, 0, fmt.Errorf("parsing fleet prefix %q: %w", fleetPrefix, err)
+	}
+	machineRoomAlias := RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
+	machineRoomID, err := session.ResolveAlias(ctx, machineRoomAlias)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resolving fleet machine room %q: %w", machineRoomAlias, err)
+	}
+
+	// Enumerate all machines from the fleet machine room.
+	machineNames, err := enumerateMachines(ctx, session, machineRoomID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -156,16 +172,10 @@ func readMachineConfig(ctx context.Context, session messaging.Session, machineNa
 	return configRoomID, &config, nil
 }
 
-// enumerateMachines reads #bureau/machine room state to find all machine
-// localparts. Machines publish m.bureau.machine_status state events keyed
-// by their localpart.
-func enumerateMachines(ctx context.Context, session messaging.Session, serverName string) ([]string, error) {
-	machineAlias := RoomAlias(schema.RoomAliasMachine, serverName)
-	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
-	if err != nil {
-		return nil, fmt.Errorf("resolve machine room %q: %w", machineAlias, err)
-	}
-
+// enumerateMachines reads a fleet's machine room state to find all
+// machine localparts. Machines publish m.bureau.machine_status state
+// events keyed by their localpart.
+func enumerateMachines(ctx context.Context, session messaging.Session, machineRoomID string) ([]string, error) {
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("read machine room state: %w", err)

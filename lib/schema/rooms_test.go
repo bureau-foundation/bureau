@@ -17,11 +17,8 @@ func TestRoomAliasConstants(t *testing.T) {
 	}{
 		{"space", RoomAliasSpace, "bureau"},
 		{"system", RoomAliasSystem, "bureau/system"},
-		{"machine", RoomAliasMachine, "bureau/machine"},
-		{"service", RoomAliasService, "bureau/service"},
 		{"template", RoomAliasTemplate, "bureau/template"},
 		{"pipeline", RoomAliasPipeline, "bureau/pipeline"},
-		{"fleet", RoomAliasFleet, "bureau/fleet"},
 		{"artifact", RoomAliasArtifact, "bureau/artifact"},
 	}
 	for _, test := range tests {

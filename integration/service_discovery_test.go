@@ -28,7 +28,7 @@ func TestServiceDiscovery(t *testing.T) {
 	defer admin.Close()
 
 	ctx := t.Context()
-	fleetRoomID := createFleetRoom(t, admin)
+	fleet := createTestFleet(t, admin)
 
 	// Boot two machines. The provider hosts the service principal. The
 	// consumer has principals that query for services through their proxies.
@@ -39,13 +39,13 @@ func TestServiceDiscovery(t *testing.T) {
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 	startMachine(t, admin, consumer, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
-		FleetRoomID:    fleetRoomID,
+		Fleet:          fleet,
 	})
 
 	// --- Phase 1: Deploy all principals ---
@@ -92,12 +92,7 @@ func TestServiceDiscovery(t *testing.T) {
 	// any directory change messages arrive.
 	serviceWatch := watchRoom(t, admin, consumer.ConfigRoomID)
 
-	serviceRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasService, testServerName))
-	if err != nil {
-		t.Fatalf("resolve service room: %v", err)
-	}
-
-	_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
 		"service/stt/test", map[string]any{
 			"principal":    serviceAgent.UserID,
 			"machine":      provider.UserID,
@@ -202,7 +197,7 @@ func TestServiceDiscovery(t *testing.T) {
 		// Deregister the service by publishing an empty-content state event.
 		// The daemon's syncServiceDirectory skips entries with empty
 		// Principal (services.go:67), treating this as a deregistration.
-		_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+		_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
 			"service/stt/test", map[string]any{})
 		if err != nil {
 			t.Fatalf("deregister service: %v", err)
@@ -236,7 +231,7 @@ func TestServiceDiscovery(t *testing.T) {
 			},
 		})
 
-		_, err = admin.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService,
+		_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
 			"service/embedding/test", map[string]any{
 				"principal":    embeddingAgent.UserID,
 				"machine":      provider.UserID,

@@ -28,6 +28,12 @@ type ProvisionParams struct {
 	// ServerName is the Matrix server name (e.g., "bureau.local").
 	ServerName string
 
+	// MachineRoomID is the Matrix room ID of the fleet's machine room
+	// where the machine's public key is published. This is the
+	// fleet-scoped machine room (e.g., the room behind
+	// #bureau/fleet/prod/machine:server).
+	MachineRoomID string
+
 	// EscrowKey is an optional operator escrow age public key. When set,
 	// the credential bundle is encrypted to both the machine key and the
 	// escrow key, allowing the operator to recover credentials without
@@ -67,9 +73,8 @@ type ProvisionResult struct {
 // config room.
 //
 // The machine's public key is fetched from the m.bureau.machine_key state
-// event in the #bureau/machine room. The config room is resolved from the
-// standard alias #bureau/config/<machineName>. If the config room does not
-// exist, it is created with proper power levels.
+// event in the fleet's machine room (params.MachineRoomID). The config
+// room is resolved from the standard alias #bureau/config/<machineName>.
 //
 // The session must have permission to read the machine room (for the public
 // key) and write state events to the config room.
@@ -82,6 +87,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 	if len(params.Credentials) == 0 {
 		return nil, fmt.Errorf("credentials map is empty")
+	}
+	if params.MachineRoomID == "" {
+		return nil, fmt.Errorf("machine room ID is required")
 	}
 
 	// Collect and sort credential key names for deterministic output.
@@ -97,14 +105,8 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 		return nil, fmt.Errorf("marshaling credentials: %w", err)
 	}
 
-	// Fetch the machine's public key from #bureau/machine.
-	machineAlias := principal.RoomAlias(schema.RoomAliasMachine, params.ServerName)
-	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
-	if err != nil {
-		return nil, fmt.Errorf("resolving machine room %q: %w", machineAlias, err)
-	}
-
-	machineKeyContent, err := session.GetStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, params.MachineName)
+	// Fetch the machine's public key from the fleet machine room.
+	machineKeyContent, err := session.GetStateEvent(ctx, params.MachineRoomID, schema.EventTypeMachineKey, params.MachineName)
 	if err != nil {
 		return nil, fmt.Errorf("fetching machine key for %q: %w", params.MachineName, err)
 	}

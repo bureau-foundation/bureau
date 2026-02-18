@@ -12,7 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// Registration describes a service for the #bureau/service directory.
+// Registration describes a service for the fleet's service directory room.
 type Registration struct {
 	// Machine is the full Matrix user ID of the machine running this
 	// service instance (e.g., "@machine/workstation:bureau.local").
@@ -57,8 +57,8 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 	return nil
 }
 
-// Deregister clears the service registration from #bureau/service by
-// publishing a state event with an empty Principal field. The daemon's
+// Deregister clears the service registration from the service directory
+// by publishing a state event with an empty Principal field. The daemon's
 // syncServiceDirectory skips entries with empty principals, effectively
 // removing the service from the directory.
 func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID, localpart string) error {
@@ -69,19 +69,28 @@ func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRo
 	return nil
 }
 
-// ResolveServiceRoom resolves the #bureau/service room alias and joins
-// it. Returns the room ID. This is called once at startup to establish
-// the service's connection to the service directory room.
-func ResolveServiceRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
-	alias := principal.RoomAlias("bureau/service", serverName)
+// ResolveFleetServiceRoom resolves the fleet-scoped service room alias
+// and joins it. Returns the room ID. This is called once at startup to
+// establish the service's connection to the fleet's service directory.
+//
+// The fleet prefix (e.g., "bureau/fleet/prod") is parsed to derive the
+// fleet service room alias (e.g., "#bureau/fleet/prod/service:server").
+func ResolveFleetServiceRoom(ctx context.Context, session *messaging.DirectSession, fleetPrefix, serverName string) (string, error) {
+	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	if err != nil {
+		return "", fmt.Errorf("parsing fleet prefix %q: %w", fleetPrefix, err)
+	}
+
+	localpart := schema.FleetServiceRoomAlias(namespace, fleetName)
+	alias := principal.RoomAlias(localpart, serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
-		return "", fmt.Errorf("resolving service room alias %q: %w", alias, err)
+		return "", fmt.Errorf("resolving fleet service room alias %q: %w", alias, err)
 	}
 
 	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return "", fmt.Errorf("joining service room %s: %w", roomID, err)
+		return "", fmt.Errorf("joining fleet service room %s: %w", roomID, err)
 	}
 
 	return roomID, nil

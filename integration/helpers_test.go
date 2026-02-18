@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -472,19 +473,69 @@ func loadCredentials(t *testing.T) map[string]string {
 
 // --- Fleet Test Helpers ---
 
-// createFleetRoom creates a private fleet room for a single test. Each
-// test gets its own room to prevent cross-contamination between parallel
-// tests that publish fleet services or run fleet controllers.
-func createFleetRoom(t *testing.T, admin *messaging.DirectSession) string {
+// testFleet holds the fleet-scoped rooms for a single test. Every test
+// that uses a daemon or fleet controller gets its own fleet to prevent
+// cross-contamination through shared rooms.
+type testFleet struct {
+	Prefix        string // e.g., "bureau/fleet/TestSomeTest"
+	FleetRoomID   string // fleet config room
+	MachineRoomID string // fleet machine presence room
+	ServiceRoomID string // fleet service directory room
+}
+
+// createTestFleet creates the three fleet-scoped rooms (config, machine,
+// service) with proper aliases so daemons and fleet controllers can
+// resolve them. The fleet prefix is derived from the test name.
+func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	t.Helper()
-	response, err := admin.CreateRoom(t.Context(), messaging.CreateRoomRequest{
+	ctx := t.Context()
+
+	// Derive a fleet prefix from the test name. The homeserver is fresh
+	// per test run, so t.Name() is sufficient for uniqueness. Slashes in
+	// test names (from subtests) are valid in Matrix aliases.
+	fleetName := t.Name()
+	namespace := "bureau"
+	prefix := principal.FleetPrefix(namespace, fleetName)
+
+	// Create the three fleet-scoped rooms with aliases. The daemon and
+	// fleet controller resolve these aliases at startup.
+	fleetAlias := schema.FleetRoomAlias(namespace, fleetName)
+	machineAlias := schema.FleetMachineRoomAlias(namespace, fleetName)
+	serviceAlias := schema.FleetServiceRoomAlias(namespace, fleetName)
+
+	fleetRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Preset:                    "private_chat",
+		Alias:                     fleetAlias,
 		PowerLevelContentOverride: schema.FleetRoomPowerLevels(admin.UserID()),
 	})
 	if err != nil {
 		t.Fatalf("create fleet room: %v", err)
 	}
-	return response.RoomID
+
+	machineRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
+		Preset:                    "private_chat",
+		Alias:                     machineAlias,
+		PowerLevelContentOverride: schema.MachineRoomPowerLevels(admin.UserID()),
+	})
+	if err != nil {
+		t.Fatalf("create fleet machine room: %v", err)
+	}
+
+	serviceRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
+		Preset:                    "private_chat",
+		Alias:                     serviceAlias,
+		PowerLevelContentOverride: schema.ServiceRoomPowerLevels(admin.UserID()),
+	})
+	if err != nil {
+		t.Fatalf("create fleet service room: %v", err)
+	}
+
+	return &testFleet{
+		Prefix:        prefix,
+		FleetRoomID:   fleetRoom.RoomID,
+		MachineRoomID: machineRoom.RoomID,
+		ServiceRoomID: serviceRoom.RoomID,
+	}
 }
 
 // resolvedBinary resolves a binary path from a Bazel environment variable.

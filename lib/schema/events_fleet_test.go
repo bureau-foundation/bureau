@@ -991,3 +991,97 @@ func TestFleetAlertContentOmitsOptionalFields(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineRoomPowerLevels(t *testing.T) {
+	adminUserID := "@bureau-admin:bureau.local"
+	levels := MachineRoomPowerLevels(adminUserID)
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	}
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	events, ok := levels["events"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Members must be able to write machine presence events.
+	for _, eventType := range []string{
+		EventTypeMachineKey,
+		EventTypeMachineInfo,
+		EventTypeMachineStatus,
+		EventTypeWebRTCOffer,
+		EventTypeWebRTCAnswer,
+	} {
+		if events[eventType] != 0 {
+			t.Errorf("%s power level = %v, want 0", eventType, events[eventType])
+		}
+	}
+
+	// Admin-protected events must require PL 100.
+	for _, eventType := range []string{
+		"m.room.encryption", "m.room.server_acl",
+		"m.room.tombstone", "m.space.child",
+	} {
+		if events[eventType] != 100 {
+			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
+		}
+	}
+
+	if levels["state_default"] != 100 {
+		t.Errorf("state_default = %v, want 100", levels["state_default"])
+	}
+	if levels["events_default"] != 0 {
+		t.Errorf("events_default = %v, want 0", levels["events_default"])
+	}
+}
+
+func TestServiceRoomPowerLevels(t *testing.T) {
+	adminUserID := "@bureau-admin:bureau.local"
+	levels := ServiceRoomPowerLevels(adminUserID)
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	}
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	events, ok := levels["events"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Members must be able to register services.
+	if events[EventTypeService] != 0 {
+		t.Errorf("%s power level = %v, want 0", EventTypeService, events[EventTypeService])
+	}
+
+	// Admin-protected events must require PL 100.
+	for _, eventType := range []string{
+		"m.room.encryption", "m.room.server_acl",
+		"m.room.tombstone", "m.space.child",
+	} {
+		if events[eventType] != 100 {
+			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
+		}
+	}
+
+	if levels["state_default"] != 100 {
+		t.Errorf("state_default = %v, want 100", levels["state_default"])
+	}
+	if levels["events_default"] != 0 {
+		t.Errorf("events_default = %v, want 0", levels["events_default"])
+	}
+}

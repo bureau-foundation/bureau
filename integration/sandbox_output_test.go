@@ -18,11 +18,10 @@ import (
 // the end-to-end test for the remain-on-exit + capture-pane error capture
 // mechanism.
 //
-// The test deploys a principal with a template pointing at a nonexistent
-// binary. Bwrap fails to exec it and prints a clear error to stderr. The
-// launcher's session watcher captures the pane output before destroying
-// the tmux session, sends it through IPC, and the daemon posts it to the
-// config room.
+// The test deploys a principal whose command prints an error to stderr and
+// exits non-zero. The launcher's session watcher captures the pane output
+// before destroying the tmux session, sends it through IPC, and the daemon
+// posts it to the config room.
 func TestSandboxExitOutputCapture(t *testing.T) {
 	t.Parallel()
 
@@ -43,10 +42,10 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	// Publish a template with a command that will fail inside the sandbox.
-	// The binary path does not exist, so bwrap will fail to exec it and
-	// print an error like "execvp /this/binary/does/not/exist: No such
-	// file or directory".
+	// Publish a template with a command that prints an error and exits
+	// non-zero. Uses sh -c so the command passes binary validation (sh
+	// is a shell interpreter, always available). The error message is
+	// distinctive so we can verify it appears in the captured output.
 	grantTemplateAccess(t, admin, machine)
 
 	failingRef, err := schema.ParseTemplateRef("bureau/template:failing-agent")
@@ -54,8 +53,8 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 		t.Fatalf("parse template ref: %v", err)
 	}
 	_, err = template.Push(t.Context(), admin, failingRef, schema.TemplateContent{
-		Description: "Agent with nonexistent binary for output capture test",
-		Command:     []string{"/this/binary/does/not/exist"},
+		Description: "Agent that fails immediately for output capture test",
+		Command:     []string{"/bin/sh", "-c", "echo 'FATAL: bureau-output-capture-test-error' >&2; exit 42"},
 		Namespaces:  &schema.TemplateNamespaces{PID: true},
 		Security: &schema.TemplateSecurity{
 			NewSession:    true,
@@ -63,6 +62,10 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 			NoNewPrivs:    true,
 		},
 		Filesystem: []schema.TemplateMount{
+			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/lib", Dest: "/lib", Mode: "ro"},
+			{Source: "/lib64", Dest: "/lib64", Mode: "ro"},
 			{Dest: "/tmp", Type: "tmpfs"},
 		},
 		CreateDirs: []string{"/tmp", "/run/bureau"},
@@ -84,8 +87,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	exitWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	// Push the machine config. The daemon will reconcile, create the
-	// sandbox, and the sandbox will fail immediately because bwrap
-	// cannot exec the nonexistent binary.
+	// sandbox, and the command will print an error and exit 42.
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:  agent,
@@ -100,18 +102,13 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 		t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
 		nil, "sandbox exit notification")
 
-	// The exit code should be non-zero (bwrap failed to find the binary).
-	if exitMsg.ExitCode == 0 {
-		t.Errorf("expected non-zero exit code, got 0")
+	// The exit code should be 42 (our explicit exit code).
+	if exitMsg.ExitCode != 42 {
+		t.Errorf("expected exit code 42, got %d", exitMsg.ExitCode)
 	}
 
-	// The captured output should contain the bwrap error about the
-	// nonexistent binary. The exact wording depends on the bwrap version
-	// but all versions include the path and "No such file or directory".
-	if !strings.Contains(exitMsg.CapturedOutput, "/this/binary/does/not/exist") {
-		t.Errorf("captured output missing binary path, got: %s", exitMsg.CapturedOutput)
-	}
-	if !strings.Contains(exitMsg.CapturedOutput, "No such file or directory") {
-		t.Errorf("captured output missing errno message, got: %s", exitMsg.CapturedOutput)
+	// The captured output should contain our distinctive error message.
+	if !strings.Contains(exitMsg.CapturedOutput, "bureau-output-capture-test-error") {
+		t.Errorf("captured output missing error message, got: %s", exitMsg.CapturedOutput)
 	}
 }

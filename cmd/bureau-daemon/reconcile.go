@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -311,6 +312,34 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					}
 					continue
 				}
+			}
+		}
+
+		// Validate the command binary is resolvable before sending the
+		// spec to the launcher. The binary must be findable either in
+		// the Nix environment (EnvironmentPath/bin/) or on the daemon's
+		// PATH. Shell interpreters (sh, bash) are always available
+		// inside the sandbox and don't need host-side validation.
+		if sandboxSpec != nil && len(sandboxSpec.Command) > 0 {
+			if err := d.validateCommandFunc(sandboxSpec.Command[0], sandboxSpec.EnvironmentPath); err != nil {
+				templateName := assignment.Template
+				d.logger.Error("command binary not found",
+					"principal", localpart,
+					"template", templateName,
+					"command", sandboxSpec.Command,
+					"error", err,
+				)
+				isFirstFailure := d.startFailures[localpart] == nil
+				d.recordStartFailure(localpart, failureCategoryCommandBinary, err.Error())
+				if isFirstFailure {
+					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+						schema.NewPrincipalStartFailedMessage(localpart,
+							fmt.Sprintf("template %q command binary %q not found: %v", templateName, sandboxSpec.Command[0], err))); err != nil {
+						d.logger.Error("failed to post command binary failure notification",
+							"principal", localpart, "error", err)
+					}
+				}
+				continue
 			}
 		}
 
@@ -2048,4 +2077,58 @@ func countLines(s string) int {
 		count++
 	}
 	return count
+}
+
+// shellInterpreters are commands that wrap other commands. When the sandbox
+// command starts with one of these, the actual binary being executed is
+// embedded in the shell arguments and cannot be statically validated.
+var shellInterpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true,
+	"/bin/sh": true, "/bin/bash": true, "/bin/zsh": true, "/bin/dash": true,
+	"/usr/bin/sh": true, "/usr/bin/bash": true, "/usr/bin/env": true,
+}
+
+// validateCommandBinary checks that the command binary is resolvable before
+// sandbox creation. For Nix environments, the binary is looked up inside
+// the environment's bin/ directory (which gets bind-mounted at /usr/local/bin
+// inside the sandbox). For host-resolved commands, exec.LookPath is used.
+// Shell interpreters are skipped since they are always available in the
+// sandbox's minimal /usr mount.
+func validateCommandBinary(command string, environmentPath string) error {
+	if command == "" {
+		return fmt.Errorf("command is empty")
+	}
+
+	// Shell interpreters are always available inside the sandbox.
+	if shellInterpreters[command] {
+		return nil
+	}
+
+	// Absolute paths: check the file directly. If the path is inside a
+	// Nix store, the prefetchEnvironment step already confirmed the
+	// closure exists on disk.
+	if filepath.IsAbs(command) {
+		if _, err := os.Stat(command); err != nil {
+			return fmt.Errorf("%q not found: %w", command, err)
+		}
+		return nil
+	}
+
+	// Bare command name: check the Nix environment first (if present),
+	// then fall back to the daemon's PATH.
+	if environmentPath != "" {
+		candidate := filepath.Join(environmentPath, "bin", command)
+		if _, err := os.Stat(candidate); err == nil {
+			return nil
+		}
+	}
+
+	if _, err := exec.LookPath(command); err != nil {
+		if environmentPath != "" {
+			return fmt.Errorf("%q not found in environment %s/bin/ or on PATH", command, environmentPath)
+		}
+		return fmt.Errorf("%q not found on PATH", command)
+	}
+
+	return nil
 }

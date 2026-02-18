@@ -2359,3 +2359,90 @@ func TestHandleProvisionCredential(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateBinary(t *testing.T) {
+	t.Parallel()
+
+	// Create a real executable file for positive tests.
+	directory := t.TempDir()
+	goodBinary := filepath.Join(directory, "good-binary")
+	if err := os.WriteFile(goodBinary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing good binary: %v", err)
+	}
+
+	// Create a non-executable file.
+	notExecutable := filepath.Join(directory, "not-executable")
+	if err := os.WriteFile(notExecutable, []byte("data"), 0644); err != nil {
+		t.Fatalf("writing non-executable: %v", err)
+	}
+
+	// Create a directory to test the "not a regular file" case.
+	directoryPath := filepath.Join(directory, "is-a-directory")
+	if err := os.MkdirAll(directoryPath, 0755); err != nil {
+		t.Fatalf("creating directory: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		path          string
+		binaryName    string
+		wantError     bool
+		wantSubstring string
+	}{
+		{
+			name:          "empty path",
+			path:          "",
+			binaryName:    "bureau-proxy",
+			wantError:     true,
+			wantSubstring: "not found",
+		},
+		{
+			name:       "valid executable",
+			path:       goodBinary,
+			binaryName: "bureau-proxy",
+			wantError:  false,
+		},
+		{
+			name:          "file not executable",
+			path:          notExecutable,
+			binaryName:    "bureau-proxy",
+			wantError:     true,
+			wantSubstring: "not executable",
+		},
+		{
+			name:          "path is a directory",
+			path:          directoryPath,
+			binaryName:    "bureau-proxy",
+			wantError:     true,
+			wantSubstring: "not a regular file",
+		},
+		{
+			name:          "path does not exist",
+			path:          filepath.Join(directory, "nonexistent"),
+			binaryName:    "bureau-proxy",
+			wantError:     true,
+			wantSubstring: "no such file",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateBinary(test.path, test.binaryName)
+			if test.wantError && err == nil {
+				t.Errorf("validateBinary(%q, %q) = nil, want error containing %q",
+					test.path, test.binaryName, test.wantSubstring)
+			}
+			if !test.wantError && err != nil {
+				t.Errorf("validateBinary(%q, %q) = %v, want nil",
+					test.path, test.binaryName, err)
+			}
+			if test.wantError && err != nil && test.wantSubstring != "" {
+				if !strings.Contains(err.Error(), test.wantSubstring) {
+					t.Errorf("error %q does not contain %q",
+						err.Error(), test.wantSubstring)
+				}
+			}
+		})
+	}
+}

@@ -64,7 +64,7 @@ type machineOptions struct {
 	LauncherBinary         string     // required
 	DaemonBinary           string     // required
 	Fleet                  *testFleet // required: fleet-scoped rooms for this machine
-	ProxyBinary            string     // optional: launcher --proxy-binary
+	ProxyBinary            string     // defaults to PROXY_BINARY from Bazel runfiles
 	ObserveRelayBinary     string     // optional: daemon --observe-relay-binary
 	StatusInterval         string     // optional: daemon --status-interval (default "2s")
 	HABaseDelay            string     // optional: daemon --ha-base-delay (default "0s" for tests)
@@ -158,6 +158,13 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		t.Fatal("machineOptions.Fleet is required")
 	}
 
+	// In production, bureau-proxy is always co-deployed with the launcher.
+	// Resolve it from Bazel runfiles when the caller doesn't override.
+	proxyBinary := options.ProxyBinary
+	if proxyBinary == "" {
+		proxyBinary = resolvedBinary(t, "PROXY_BINARY")
+	}
+
 	// Provision the machine via the production CLI command. This registers
 	// the account, invites to all global rooms, creates the config room,
 	// and writes a bootstrap config with the one-time password.
@@ -185,9 +192,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
 		"--cache-root", machine.CacheRoot,
-	}
-	if options.ProxyBinary != "" {
-		launcherArgs = append(launcherArgs, "--proxy-binary", options.ProxyBinary)
+		"--proxy-binary", proxyBinary,
 	}
 
 	keyWatch := watchRoom(t, admin, options.Fleet.MachineRoomID)

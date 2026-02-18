@@ -166,10 +166,24 @@ func run() error {
 	}
 	logger.Info("matrix session loaded", "user_id", session.UserID())
 
-	// Find the proxy binary for sandbox spawning.
+	// Find and validate the proxy binary for sandbox spawning. Every
+	// sandbox needs bureau-proxy, so if it's missing the launcher cannot
+	// do useful work. Fail immediately with a precise error rather than
+	// accepting IPC connections and failing each create-sandbox request.
 	if proxyBinaryPath == "" {
 		proxyBinaryPath = findProxyBinary(logger)
 	}
+	if err := validateBinary(proxyBinaryPath, "bureau-proxy"); err != nil {
+		return fmt.Errorf("bureau-proxy: %w\n  Install bureau-proxy or set --proxy-binary to its path", err)
+	}
+	logger.Info("proxy binary validated", "path", proxyBinaryPath)
+
+	// Validate bwrap is available. Every sandboxed principal requires it.
+	bwrapPath, err := sandbox.BwrapPath()
+	if err != nil {
+		return fmt.Errorf("bwrap: %w\n  Install bubblewrap (bwrap) to create sandboxed principals", err)
+	}
+	logger.Info("bwrap validated", "path", bwrapPath)
 
 	// Ensure the workspace root directory exists. This is the top-level
 	// directory where all project workspaces live. The .cache/ subdirectory
@@ -2013,8 +2027,8 @@ func (l *Launcher) destroyTmuxSession(localpart string) {
 }
 
 // findProxyBinary looks for the bureau-proxy binary next to the launcher
-// binary, then on PATH. Returns "bureau-proxy" (bare name) if not found —
-// the error will surface at spawn time with a clear message.
+// binary, then on PATH. Returns an empty string if not found; the caller
+// validates the result with validateBinary before proceeding.
 func findProxyBinary(logger *slog.Logger) string {
 	// Check next to the launcher binary.
 	executable, err := os.Executable()
@@ -2033,6 +2047,28 @@ func findProxyBinary(logger *slog.Logger) string {
 		return path
 	}
 
-	logger.Warn("bureau-proxy not found; sandbox creation will fail until it is installed")
-	return "bureau-proxy"
+	return ""
+}
+
+// validateBinary checks that a binary path points to a regular, executable
+// file. Returns a precise error describing what's wrong and where it looked.
+func validateBinary(path, name string) error {
+	if path == "" {
+		return fmt.Errorf("%s not found (checked next to launcher binary and PATH)", name)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s at %q: %w", name, path, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s at %q is not a regular file (mode %s)", name, path, info.Mode())
+	}
+
+	if info.Mode()&0111 == 0 {
+		return fmt.Errorf("%s at %q is not executable (mode %s)", name, path, info.Mode())
+	}
+
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -2176,5 +2177,239 @@ func TestCountLines(t *testing.T) {
 					test.input, got, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateCommandBinary(t *testing.T) {
+	t.Parallel()
+
+	// Create a temporary "environment" with a bin directory containing
+	// a test binary, simulating a Nix environment path.
+	environmentDir := t.TempDir()
+	binDir := filepath.Join(environmentDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("creating bin dir: %v", err)
+	}
+	testBinary := filepath.Join(binDir, "test-agent")
+	if err := os.WriteFile(testBinary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing test binary: %v", err)
+	}
+
+	tests := []struct {
+		name            string
+		command         string
+		environmentPath string
+		wantError       bool
+		wantSubstring   string
+	}{
+		{
+			name:          "empty command",
+			command:       "",
+			wantError:     true,
+			wantSubstring: "empty",
+		},
+		{
+			name:      "shell interpreter sh",
+			command:   "sh",
+			wantError: false,
+		},
+		{
+			name:      "shell interpreter /bin/bash",
+			command:   "/bin/bash",
+			wantError: false,
+		},
+		{
+			name:      "shell interpreter /usr/bin/env",
+			command:   "/usr/bin/env",
+			wantError: false,
+		},
+		{
+			name:      "absolute path exists",
+			command:   "/bin/sh",
+			wantError: false,
+		},
+		{
+			name:          "absolute path missing",
+			command:       "/nonexistent/binary",
+			wantError:     true,
+			wantSubstring: "not found",
+		},
+		{
+			name:            "bare name found in environment",
+			command:         "test-agent",
+			environmentPath: environmentDir,
+			wantError:       false,
+		},
+		{
+			name:            "bare name not in environment and not on PATH",
+			command:         "nonexistent-bureau-binary-xyz",
+			environmentPath: environmentDir,
+			wantError:       true,
+			wantSubstring:   "not found in environment",
+		},
+		{
+			name:          "bare name not on PATH and no environment",
+			command:       "nonexistent-bureau-binary-xyz",
+			wantError:     true,
+			wantSubstring: "not found on PATH",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateCommandBinary(test.command, test.environmentPath)
+			if test.wantError && err == nil {
+				t.Errorf("validateCommandBinary(%q, %q) = nil, want error containing %q",
+					test.command, test.environmentPath, test.wantSubstring)
+			}
+			if !test.wantError && err != nil {
+				t.Errorf("validateCommandBinary(%q, %q) = %v, want nil",
+					test.command, test.environmentPath, err)
+			}
+			if test.wantError && err != nil && test.wantSubstring != "" {
+				if !strings.Contains(err.Error(), test.wantSubstring) {
+					t.Errorf("error %q does not contain %q",
+						err.Error(), test.wantSubstring)
+				}
+			}
+		})
+	}
+}
+
+// TestReconcileCommandBinaryValidationBlocksCreate verifies that when the
+// command binary validation fails, the daemon records a command_binary failure
+// and does NOT send a create-sandbox IPC to the launcher.
+func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+		serverName     = "test.local"
+		machineName    = "machine/test"
+	)
+
+	state := newMockMatrixState()
+	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
+		Command: []string{"missing-agent-binary"},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Localpart: "agent/test",
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+			},
+		},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	// Track messages posted to Matrix for notification verification.
+	var (
+		messagesMu sync.Mutex
+		messages   []string
+	)
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+			var content struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&content); err == nil {
+				messagesMu.Lock()
+				messages = append(messages, content.Body)
+				messagesMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	// Track IPC calls — there should be zero.
+	var (
+		launcherMu sync.Mutex
+		ipcActions []string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		ipcActions = append(ipcActions, request.Action)
+		launcherMu.Unlock()
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.machineName = machineName
+	daemon.serverName = serverName
+	daemon.configRoomID = configRoomID
+	daemon.launcherSocket = launcherSocket
+	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	// Override the validator to reject the binary.
+	daemon.validateCommandFunc = func(command string, environmentPath string) error {
+		if command == "missing-agent-binary" {
+			return fmt.Errorf("%q not found on PATH", command)
+		}
+		return nil
+	}
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	// No create-sandbox IPC should have been sent.
+	launcherMu.Lock()
+	defer launcherMu.Unlock()
+	for _, action := range ipcActions {
+		if action == "create-sandbox" {
+			t.Error("create-sandbox IPC was sent despite command binary validation failure")
+		}
+	}
+
+	// A command_binary failure should be recorded.
+	failure := daemon.startFailures["agent/test"]
+	if failure == nil {
+		t.Fatal("expected a start failure for agent/test")
+	}
+	if failure.category != failureCategoryCommandBinary {
+		t.Errorf("failure category = %q, want %q", failure.category, failureCategoryCommandBinary)
+	}
+
+	// A notification message should have been posted to the config room.
+	messagesMu.Lock()
+	defer messagesMu.Unlock()
+	found := false
+	for _, message := range messages {
+		if strings.Contains(message, "missing-agent-binary") && strings.Contains(message, "not found") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a notification message mentioning 'missing-agent-binary', got: %v", messages)
 	}
 }

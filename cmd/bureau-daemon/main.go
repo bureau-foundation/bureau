@@ -318,6 +318,7 @@ func run() error {
 		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
 		observeRelayBinary:     observeRelayBinary,
 		layoutWatchers:         make(map[string]*layoutWatcher),
+		validateCommandFunc:    validateCommandBinary,
 		workspaceRoot:          workspaceRoot,
 		pipelineExecutorBinary: pipelineExecutorBinary,
 		pipelineEnvironment:    pipelineEnvironment,
@@ -689,6 +690,12 @@ type Daemon struct {
 	// override this to avoid requiring a real Nix installation.
 	prefetchFunc func(ctx context.Context, storePath string) error
 
+	// validateCommandFunc checks that a command binary is resolvable
+	// before sending a create-sandbox request to the launcher. Defaults
+	// to validateCommandBinary. Tests override this when using fictional
+	// binary paths that don't need to exist on the host.
+	validateCommandFunc func(command string, environmentPath string) error
+
 	// Transport: daemon-to-daemon communication for cross-machine routing.
 	// These fields are nil/empty when --transport-listen is not set
 	// (local-only mode).
@@ -830,6 +837,7 @@ const (
 	failureCategoryCredentials       startFailureCategory = "credentials"
 	failureCategoryTemplate          startFailureCategory = "template"
 	failureCategoryNixPrefetch       startFailureCategory = "nix_prefetch"
+	failureCategoryCommandBinary     startFailureCategory = "command_binary"
 	failureCategoryServiceResolution startFailureCategory = "service_resolution"
 	failureCategoryTokenMinting      startFailureCategory = "token_minting"
 	failureCategoryLauncherIPC       startFailureCategory = "launcher_ipc"

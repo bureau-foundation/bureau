@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	libagent "github.com/bureau-foundation/bureau/lib/agent"
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -532,11 +533,6 @@ type agentOptions struct {
 	// Payload is the per-instance payload merged over template defaults.
 	Payload map[string]any
 
-	// SkipConfigRoomJoin skips inviting/joining the agent to the config
-	// room. Most agents need membership to post messages (agent-ready,
-	// agent-complete). Set to true for agents that don't.
-	SkipConfigRoomJoin bool
-
 	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
 	// Set to true for agents expected to exit/fail before posting ready.
 	SkipWaitForReady bool
@@ -600,15 +596,13 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 	}
 }
 
-// deployAgent performs the full agent deployment flow: publish template,
-// register principal, push credentials, join config room, push machine
-// config, wait for proxy socket, and wait for agent-ready. Returns the
-// deployment details for post-deployment interactions.
+// deployAgent performs the full agent deployment flow using lib/agent.Create:
+// publish template, register Matrix account, provision encrypted credentials,
+// join config room, publish MachineConfig assignment, wait for proxy socket,
+// and wait for agent-ready.
 //
-// This is the single-function equivalent of the 11-step sequence that
-// tests previously inlined. For multi-agent deployments (multiple
-// principals sharing one template), use agentTemplateContent directly
-// with the lower-level helpers.
+// For multi-agent deployments (multiple principals sharing one template),
+// use agentTemplateContent directly with the lower-level helpers.
 func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, options agentOptions) agentDeployment {
 	t.Helper()
 
@@ -627,7 +621,7 @@ func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, o
 		templateName = strings.ReplaceAll(options.Localpart, "/", "-")
 	}
 
-	// Publish the template via the production path.
+	// Publish the template — Create() validates it exists but doesn't push it.
 	grantTemplateAccess(t, admin, machine)
 
 	ref, err := schema.ParseTemplateRef("bureau/template:" + templateName)
@@ -640,40 +634,55 @@ func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, o
 		t.Fatalf("push agent template %q: %v", templateName, err)
 	}
 
-	// Register the principal and push credentials.
-	account := registerPrincipal(t, options.Localpart, options.Localpart+"-test-pw")
-	pushCredentials(t, admin, machine, account)
-
-	// Join config room so the agent can post messages (agent-ready,
-	// agent-complete, text responses).
-	if !options.SkipConfigRoomJoin {
-		joinConfigRoom(t, admin, machine.ConfigRoomID, account)
-	}
-
-	// Set up watch BEFORE pushing config so we don't miss agent-ready.
+	// Set up watch BEFORE Create() pushes the config so we don't miss
+	// the daemon's reconciliation events or agent-ready.
 	readyWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account:       account,
-			Template:      ref.String(),
-			Payload:       options.Payload,
-			Authorization: options.Authorization,
-		}},
+	// Create the agent via the production library. This registers the
+	// Matrix account, provisions encrypted credentials, joins the config
+	// room, and publishes the MachineConfig assignment.
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
 	})
+	if err != nil {
+		t.Fatalf("create client for agent creation: %v", err)
+	}
+	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("create registration token buffer: %v", err)
+	}
+	defer registrationTokenBuffer.Close()
 
-	proxySocketPath := machine.PrincipalSocketPath(account.Localpart)
+	result, err := libagent.Create(ctx, client, admin, registrationTokenBuffer, libagent.CreateParams{
+		MachineName:   machine.Name,
+		Localpart:     options.Localpart,
+		TemplateRef:   ref.String(),
+		ServerName:    testServerName,
+		HomeserverURL: testHomeserverURL,
+		AutoStart:     true,
+		Payload:       options.Payload,
+		Authorization: options.Authorization,
+	})
+	if err != nil {
+		t.Fatalf("create agent %q: %v", options.Localpart, err)
+	}
+
+	proxySocketPath := machine.PrincipalSocketPath(options.Localpart)
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
-		readyWatch.WaitForMessage(t, "agent-ready", account.UserID)
+		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID)
 	}
 
 	return agentDeployment{
-		Account:         account,
+		Account: principalAccount{
+			Localpart: options.Localpart,
+			UserID:    result.PrincipalUserID,
+			Token:     result.AccessToken,
+		},
 		TemplateRef:     ref.String(),
 		ProxySocketPath: proxySocketPath,
-		AdminSocketPath: machine.PrincipalAdminSocketPath(account.Localpart),
+		AdminSocketPath: machine.PrincipalAdminSocketPath(options.Localpart),
 	}
 }
 

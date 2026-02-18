@@ -83,6 +83,13 @@ type CreateResult struct {
 	// ConfigEventID is the event ID of the published MachineConfig state
 	// event that includes this agent's assignment.
 	ConfigEventID string
+
+	// AccessToken is the Matrix access token for the newly created agent
+	// account. This is the same token that was sealed into the credential
+	// bundle. Callers that need to perform Matrix operations as the agent
+	// (e.g., joining additional rooms) can use this token to create a
+	// session. The CLI should NOT display this in output.
+	AccessToken string `json:"-"`
 }
 
 // Create performs the full agent deployment sequence: registers a Matrix
@@ -180,13 +187,20 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 		return nil, fmt.Errorf("provision credentials: %w", err)
 	}
 
-	// Invite the agent to the config room so it can post messages
-	// (agent-ready, completion summaries, etc.).
+	// Invite the agent to the config room and join on its behalf. The
+	// agent needs config room membership to post lifecycle messages
+	// (agent-ready, completion summaries). We join now using the
+	// registration session so the agent is already a member when the
+	// sandbox starts — no need for the proxy or agent process to handle
+	// invite acceptance.
 	if err := session.InviteUser(ctx, provisionResult.ConfigRoomID, agentUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 			return nil, fmt.Errorf("invite agent to config room: %w", err)
 		}
 		// Already invited — not an error.
+	}
+	if _, err := agentSession.JoinRoom(ctx, provisionResult.ConfigRoomID); err != nil {
+		return nil, fmt.Errorf("agent join config room: %w", err)
 	}
 
 	// Read-modify-write the MachineConfig to add this principal's
@@ -203,6 +217,7 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 		TemplateRef:     params.TemplateRef,
 		ConfigRoomID:    provisionResult.ConfigRoomID,
 		ConfigEventID:   configEventID,
+		AccessToken:     agentToken,
 	}, nil
 }
 

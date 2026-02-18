@@ -2252,9 +2252,9 @@ func TestGrantsBasedMatrixPolicy(t *testing.T) {
 	}
 	server.RegisterHTTPService("matrix", matrixService)
 
-	// Push grants that allow join and create-room but NOT invite.
+	// Push grants that allow raw passthrough + join and create-room, but NOT invite.
 	grants := []schema.Grant{
-		{Actions: []string{"matrix/join", "matrix/create-room"}},
+		{Actions: []string{"matrix/raw-api", "matrix/join", "matrix/create-room"}},
 	}
 	body, _ := json.Marshal(grants)
 	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
@@ -2322,9 +2322,9 @@ func TestGrantsBasedMatrixPolicy(t *testing.T) {
 	})
 
 	t.Run("room join via rooms endpoint blocked without grant", func(t *testing.T) {
-		// Push grants with only matrix/invite — join should be blocked.
+		// Push grants with raw-api + invite — join should be blocked.
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/invite"}},
+			{Actions: []string{"matrix/raw-api", "matrix/invite"}},
 		}
 		body, _ := json.Marshal(grants)
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))

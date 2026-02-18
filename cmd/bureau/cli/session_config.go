@@ -95,9 +95,9 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 	}
 
 	// When no credentials are available, try the proxy socket. Inside a
-	// Bureau sandbox, all Matrix access goes through the proxy — it speaks
-	// the Matrix Client-Server API at /http/matrix/ and injects the
-	// principal's access token. No credentials needed in the sandbox.
+	// Bureau sandbox, all Matrix access goes through the proxy's structured
+	// /v1/matrix/* endpoints. The proxy injects the principal's access
+	// token. No credentials needed in the sandbox.
 	if homeserverURL == "" && token == "" && userID == "" {
 		return c.connectViaProxy(ctx)
 	}

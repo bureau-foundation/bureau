@@ -33,8 +33,9 @@ import (
 // instead of Matrix HTTP paths.
 //
 // Authorization is handled by the homeserver: room membership and power
-// levels are enforced on every forwarded request. The proxy adds no new
-// policy logic beyond what checkMatrixPolicy already does for /http/matrix/.
+// levels are enforced on every forwarded request. Write operations that
+// create new room-level state (join, invite, create-room) require explicit
+// grants checked by requireGrant before forwarding.
 
 // matrixServiceName is the HTTPService name used for Matrix homeserver access.
 // The daemon registers this service on the proxy when configuring credentials.
@@ -762,6 +763,47 @@ func (h *Handler) HandleMatrixInviteUser(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	h.copyResponseBody(w, response.Body, "invite_user")
+}
+
+// HandleMatrixSync handles GET /v1/matrix/sync?since=...&timeout=...&filter=...
+// Forwards to GET /_matrix/client/v3/sync. This is a long-poll endpoint: the
+// homeserver holds the connection for up to timeout ms before returning empty.
+// The proxy streams the response without buffering.
+func (h *Handler) HandleMatrixSync(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	query := url.Values{}
+	if since := r.URL.Query().Get("since"); since != "" {
+		query.Set("since", since)
+	}
+	if timeout := r.URL.Query().Get("timeout"); timeout != "" {
+		query.Set("timeout", timeout)
+	}
+	if filter := r.URL.Query().Get("filter"); filter != "" {
+		query.Set("filter", filter)
+	}
+
+	path := "/_matrix/client/v3/sync"
+	if len(query) > 0 {
+		path += "?" + query.Encode()
+	}
+
+	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		h.logger.Error("matrix sync failed", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "sync")
 }
 
 // MatrixSendEventRequest is the JSON body for POST /v1/matrix/event.

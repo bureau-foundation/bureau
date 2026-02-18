@@ -41,6 +41,7 @@ type mockMatrixHandler struct {
 	displayNameResponse map[string]string // userID → JSON display name
 	createRoomResponse  string            // JSON for POST /createRoom
 	joinResponse        map[string]string // roomIDOrAlias → JSON join response
+	syncResponse        string            // JSON for GET /sync
 
 	// Recorded requests for assertion.
 	recorded []recordedMatrixRequest
@@ -71,6 +72,7 @@ func newMockMatrixHandler() *mockMatrixHandler {
 		displayNameResponse: map[string]string{},
 		createRoomResponse:  `{"room_id":"!new:bureau.local"}`,
 		joinResponse:        map[string]string{},
+		syncResponse:        `{"next_batch":"s_initial","rooms":{"join":{}}}`,
 	}
 }
 
@@ -234,6 +236,12 @@ func (m *mockMatrixHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// POST /_matrix/client/v3/rooms/{roomId}/invite
 	if r.Method == "POST" && strings.HasSuffix(path, "/invite") && strings.HasPrefix(path, "/_matrix/client/v3/rooms/") {
 		w.Write([]byte(`{}`))
+		return
+	}
+
+	// GET /_matrix/client/v3/sync
+	if r.Method == "GET" && path == "/_matrix/client/v3/sync" {
+		w.Write([]byte(m.syncResponse))
 		return
 	}
 
@@ -1444,6 +1452,73 @@ func TestMatrixSendEvent(t *testing.T) {
 	})
 }
 
+func TestMatrixSync(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	mock.syncResponse = `{"next_batch":"s_42","rooms":{"join":{"!config:bureau.local":{"timeline":{"events":[{"type":"m.room.message","sender":"@admin:bureau.local","content":{"msgtype":"m.text","body":"hello"}}]}}}}}`
+
+	// Initial sync with timeout=0.
+	resp, err := client.Get("http://localhost/v1/matrix/sync?timeout=0")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["next_batch"] != "s_42" {
+		t.Errorf("next_batch = %v, want s_42", result["next_batch"])
+	}
+
+	// Verify the proxy forwarded query parameters correctly.
+	if len(mock.recorded) == 0 {
+		t.Fatal("no requests recorded by mock")
+	}
+	lastRequest := mock.recorded[len(mock.recorded)-1]
+	if lastRequest.Path != "/_matrix/client/v3/sync" {
+		t.Errorf("upstream path = %q, want /_matrix/client/v3/sync", lastRequest.Path)
+	}
+	if !strings.Contains(lastRequest.RawQuery, "timeout=0") {
+		t.Errorf("upstream query %q should contain timeout=0", lastRequest.RawQuery)
+	}
+}
+
+func TestMatrixSyncWithSince(t *testing.T) {
+	client, mock := setupMatrixProxyTest(t)
+
+	// Incremental sync with since token.
+	resp, err := client.Get("http://localhost/v1/matrix/sync?since=s_initial&timeout=30000&filter=myfilter")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	// Verify all query parameters were forwarded.
+	if len(mock.recorded) == 0 {
+		t.Fatal("no requests recorded by mock")
+	}
+	lastRequest := mock.recorded[len(mock.recorded)-1]
+	if !strings.Contains(lastRequest.RawQuery, "since=s_initial") {
+		t.Errorf("upstream query %q should contain since=s_initial", lastRequest.RawQuery)
+	}
+	if !strings.Contains(lastRequest.RawQuery, "timeout=30000") {
+		t.Errorf("upstream query %q should contain timeout=30000", lastRequest.RawQuery)
+	}
+	if !strings.Contains(lastRequest.RawQuery, "filter=myfilter") {
+		t.Errorf("upstream query %q should contain filter=myfilter", lastRequest.RawQuery)
+	}
+}
+
 func TestMatrixServiceNotConfigured(t *testing.T) {
 	// Test that all endpoints return 503 when the "matrix" HTTP service
 	// is not registered.
@@ -1497,6 +1572,7 @@ func TestMatrixServiceNotConfigured(t *testing.T) {
 		{"POST", "/v1/matrix/invite", `{"room":"!room:bureau.local","user_id":"@u:b"}`, http.StatusForbidden},
 		// SendEvent is ungated — homeserver enforces permissions.
 		{"POST", "/v1/matrix/event", `{"room":"!r:b","event_type":"m.test","content":{}}`, http.StatusServiceUnavailable},
+		{"GET", "/v1/matrix/sync?timeout=0", "", http.StatusServiceUnavailable},
 	}
 
 	for _, endpoint := range endpoints {

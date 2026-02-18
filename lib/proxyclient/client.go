@@ -554,7 +554,7 @@ func (client *Client) SendEvent(ctx context.Context, room, eventType string, con
 	return result.EventID, nil
 }
 
-// Sync performs a Matrix /sync through the proxy's HTTP passthrough.
+// Sync performs a Matrix /sync through the proxy's structured endpoint.
 // The proxy injects the principal's access token and forwards the request
 // to the homeserver. For initial sync, leave options.Since empty and set
 // Timeout to 0. For long-polling, set Timeout to 30000 (30 seconds).
@@ -570,12 +570,12 @@ func (client *Client) Sync(ctx context.Context, options messaging.SyncOptions) (
 		query.Set("filter", options.Filter)
 	}
 
-	requestURL := "http://proxy/http/matrix/_matrix/client/v3/sync?" + query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, err
+	path := "/v1/matrix/sync"
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
-	response, err := client.httpClient.Do(request)
+
+	response, err := client.get(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", err)
 	}

@@ -14,13 +14,13 @@ package integration_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -988,7 +988,7 @@ func proxyHTTPClient(socketPath string) *http.Client {
 // principal's access token.
 func proxyWhoami(t *testing.T, client *http.Client) string {
 	t.Helper()
-	response, err := client.Get("http://proxy/http/matrix/_matrix/client/v3/account/whoami")
+	response, err := client.Get("http://proxy/v1/matrix/whoami")
 	if err != nil {
 		t.Fatalf("whoami request: %v", err)
 	}
@@ -1006,14 +1006,15 @@ func proxyWhoami(t *testing.T, client *http.Client) string {
 	return result.UserID
 }
 
-// proxyJoinRoom joins a room through a proxy by posting to the Matrix join
-// endpoint. The proxy injects the principal's access token and checks
+// proxyJoinRoom joins a room through a proxy by posting to the structured
+// join endpoint. The proxy injects the principal's access token and checks
 // authorization grants (a matrix/join grant must be present).
 func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 	t.Helper()
+	body, _ := json.Marshal(map[string]string{"room": roomID})
 	request, err := http.NewRequest("POST",
-		"http://proxy/http/matrix/_matrix/client/v3/join/"+url.PathEscape(roomID),
-		strings.NewReader("{}"))
+		"http://proxy/v1/matrix/join",
+		bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("create join request: %v", err)
 	}
@@ -1024,8 +1025,8 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("join room %s: status %d: %s", roomID, response.StatusCode, body)
+		responseBody, _ := io.ReadAll(response.Body)
+		t.Fatalf("join room %s: status %d: %s", roomID, response.StatusCode, responseBody)
 	}
 }
 
@@ -1035,9 +1036,10 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 // (e.g., grants blocking the join with 403 Forbidden).
 func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, string) {
 	t.Helper()
+	body, _ := json.Marshal(map[string]string{"room": roomID})
 	request, err := http.NewRequest("POST",
-		"http://proxy/http/matrix/_matrix/client/v3/join/"+url.PathEscape(roomID),
-		strings.NewReader("{}"))
+		"http://proxy/v1/matrix/join",
+		bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("create join request: %v", err)
 	}
@@ -1055,11 +1057,12 @@ func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, st
 // event ID assigned by the homeserver.
 func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) string {
 	t.Helper()
-	transactionID := testutil.UniqueID("txn")
-	messageJSON, _ := json.Marshal(messaging.NewTextMessage(body))
-	requestURL := fmt.Sprintf("http://proxy/http/matrix/_matrix/client/v3/rooms/%s/send/%s/%s",
-		url.PathEscape(roomID), schema.MatrixEventTypeMessage, url.PathEscape(transactionID))
-	request, err := http.NewRequest("PUT", requestURL, strings.NewReader(string(messageJSON)))
+	requestBody, _ := json.Marshal(map[string]any{
+		"room":       roomID,
+		"event_type": schema.MatrixEventTypeMessage,
+		"content":    messaging.NewTextMessage(body),
+	})
+	request, err := http.NewRequest("POST", "http://proxy/v1/matrix/event", bytes.NewReader(requestBody))
 	if err != nil {
 		t.Fatalf("create send request: %v", err)
 	}
@@ -1087,7 +1090,7 @@ func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) st
 // response with all current state.
 func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID string) []messaging.Event {
 	t.Helper()
-	response, err := client.Get("http://proxy/http/matrix/_matrix/client/v3/sync?timeout=0")
+	response, err := client.Get("http://proxy/v1/matrix/sync?timeout=0")
 	if err != nil {
 		t.Fatalf("sync request: %v", err)
 	}

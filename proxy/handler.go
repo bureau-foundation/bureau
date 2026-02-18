@@ -439,10 +439,16 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce Matrix access policy on Matrix API requests. The check uses
-	// the rewritten servicePath (what the upstream sees), not the original
-	// request path, so it works regardless of how the service is named.
-	if strings.HasPrefix(servicePath, "/_matrix/") {
+	// The raw /http/matrix/ passthrough is for third-party Matrix client
+	// libraries that need direct homeserver access. Sandboxed agents use
+	// the structured /v1/matrix/* endpoints by default — the passthrough
+	// requires an explicit grant.
+	if serviceName == matrixServiceName {
+		if !h.requireGrant(w, "matrix/raw-api") {
+			return
+		}
+		// Additional Matrix-specific policy: block join/invite/create without
+		// the appropriate grants.
 		if blocked, reason := h.checkMatrixPolicy(r.Method, servicePath); blocked {
 			http.Error(w, reason, http.StatusForbidden)
 			return
@@ -486,15 +492,16 @@ func (h *Handler) requireGrant(w http.ResponseWriter, action string) bool {
 	return false
 }
 
-// checkMatrixPolicy checks whether a Matrix API request is allowed by the
-// agent's policy. Returns (true, reason) if the request should be blocked,
-// (false, "") if allowed.
+// checkMatrixPolicy checks whether a raw Matrix passthrough request is allowed
+// by the agent's grants. Returns (true, reason) if the request should be
+// blocked, (false, "") if allowed. Only used for /http/matrix/ passthrough —
+// the structured /v1/matrix/* endpoints have their own grant checks.
 //
 // The gated endpoints are:
-//   - POST /_matrix/client/v3/join/{roomIdOrAlias}   — AllowJoin
-//   - POST /_matrix/client/v3/rooms/{roomId}/join     — AllowJoin
-//   - POST /_matrix/client/v3/rooms/{roomId}/invite   — AllowInvite
-//   - POST /_matrix/client/v3/createRoom              — AllowRoomCreate
+//   - POST /_matrix/client/v3/join/{roomIdOrAlias}   — matrix/join
+//   - POST /_matrix/client/v3/rooms/{roomId}/join     — matrix/join
+//   - POST /_matrix/client/v3/rooms/{roomId}/invite   — matrix/invite
+//   - POST /_matrix/client/v3/createRoom              — matrix/create-room
 //
 // Everything else (messages, state, sync, room history) is allowed — the
 // homeserver enforces room membership and power levels for those operations.

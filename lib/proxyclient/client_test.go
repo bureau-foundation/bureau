@@ -339,8 +339,8 @@ func TestSync(t *testing.T) {
 
 	mux := http.NewServeMux()
 
-	// Mock the Matrix /sync endpoint via the proxy passthrough.
-	mux.HandleFunc("GET /http/matrix/_matrix/client/v3/sync", func(writer http.ResponseWriter, request *http.Request) {
+	// Mock the structured /v1/matrix/sync endpoint.
+	mux.HandleFunc("GET /v1/matrix/sync", func(writer http.ResponseWriter, request *http.Request) {
 		since := request.URL.Query().Get("since")
 		timeout := request.URL.Query().Get("timeout")
 
@@ -430,7 +430,7 @@ func TestSyncError(t *testing.T) {
 	t.Parallel()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /http/matrix/_matrix/client/v3/sync", func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("GET /v1/matrix/sync", func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(writer, `{"errcode":"M_UNKNOWN_TOKEN","error":"Invalid access token"}`)
 	})

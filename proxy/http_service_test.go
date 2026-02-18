@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
@@ -654,6 +655,11 @@ func TestMatrixProxyIntegration(t *testing.T) {
 	}
 
 	server.RegisterHTTPService("matrix", matrixService)
+
+	// Grant raw Matrix API passthrough access for this test. Without this,
+	// the proxy rejects all /http/matrix/ requests with 403 (agents must
+	// use the structured /v1/matrix/* endpoints by default).
+	server.SetGrants([]schema.Grant{{Actions: []string{"matrix/raw-api"}}})
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)

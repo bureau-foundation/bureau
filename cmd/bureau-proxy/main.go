@@ -151,7 +151,7 @@ func run() error {
 	// Matrix client-server API calls to the homeserver with token injection.
 	// The homeserver URL and token come from PipeCredentialSource (production)
 	// or FileCredentialSource/EnvCredentialSource (dev). Agents inside sandboxes
-	// reach Matrix via: PUT /http/matrix/_matrix/client/v3/rooms/{roomId}/send/...
+	// reach Matrix via the structured /v1/matrix/* endpoints.
 	if matrixService, err := createMatrixService(credentialSource, logger); err != nil {
 		logger.Warn("matrix proxy service not registered", "reason", err)
 	} else {
@@ -305,21 +305,20 @@ func createMatrixService(credentials proxy.CredentialSource, logger *slog.Logger
 	})
 }
 
-// matrixAPIFilter returns a GlobFilter that restricts agents to only the
-// Matrix client-server API endpoints they need. This is defense-in-depth:
-// even if an agent is compromised, it cannot browse the room directory,
+// matrixAPIFilter returns a GlobFilter that restricts the raw Matrix HTTP
+// passthrough (/http/matrix/) to a safe subset of client-server API
+// endpoints. This is defense-in-depth: even with a matrix/raw-api grant,
+// third-party Matrix client libraries cannot browse the room directory,
 // enumerate users, or perform administrative operations.
+//
+// Bureau's own code uses the structured /v1/matrix/* endpoints which bypass
+// this filter entirely. The raw passthrough exists for third-party Matrix
+// client libraries running inside sandboxes that need direct homeserver access.
 //
 // The filter uses an allowlist — any endpoint not explicitly listed is blocked.
 // The glob `*` matches any characters including `/`, so patterns like
 // `"* /_matrix/client/v3/rooms/*/send/*"` match all methods, room IDs, event
 // types, and transaction IDs.
-//
-// This filter is a stopgap until CLI commands migrate to proxyclient's
-// structured endpoints (/v1/matrix/*), which bypass the filter entirely.
-// Once that migration is complete, the HTTP passthrough for Matrix should
-// require a special grant and only be used for /sync and third-party
-// Matrix client libraries running inside sandboxes.
 //
 // Room-level access control (restricting which specific rooms an agent can
 // reach) requires room assignment data from the launcher's credential payload.
@@ -346,10 +345,8 @@ func matrixAPIFilter() *proxy.GlobFilter {
 			// Identity — agent can discover its own Matrix user ID.
 			"GET /_matrix/client/v3/account/whoami",
 
-			// Resolve room aliases to room IDs. CLI commands use
-			// messaging.Session.ResolveAlias() which hits this endpoint
-			// when routed through the proxy. Room membership still gates
-			// all subsequent operations on the resolved room ID.
+			// Resolve room aliases to room IDs. Room membership still
+			// gates all subsequent operations on the resolved room ID.
 			"GET /_matrix/client/v3/directory/room/*",
 
 			// Join rooms the agent has been invited to.

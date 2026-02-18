@@ -80,6 +80,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 	agentMux.HandleFunc("POST /v1/matrix/join", handler.HandleMatrixJoinRoom)
 	agentMux.HandleFunc("POST /v1/matrix/invite", handler.HandleMatrixInviteUser)
 	agentMux.HandleFunc("POST /v1/matrix/event", handler.HandleMatrixSendEvent)
+	agentMux.HandleFunc("GET /v1/matrix/sync", handler.HandleMatrixSync)
 	agentMux.HandleFunc("/http/", handler.HandleHTTPProxy)
 
 	server := &Server{

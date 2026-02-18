@@ -109,6 +109,124 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	// and t.Cleanup tears down the launcher, which kills the sandbox.
 }
 
+// TestNativeAgentContextTruncation exercises the full production pipeline
+// for context truncation. The agent processes 5 turns, each producing one
+// bureau_matrix_send tool call. A small context window (BUREAU_AGENT_CONTEXT_WINDOW)
+// forces the Truncating context manager to evict older turn groups mid-conversation.
+//
+// The mock Anthropic server records per-request message counts and signals
+// when truncation is observed (message count drops below a prior peak). This
+// proves the entire chain:
+//   - driver.go constructs the correct token budget from env vars
+//   - CharEstimator calibrates from mock input_tokens values via EMA
+//   - Truncating manager evicts oldest turn groups when over budget
+//   - Conversation structure remains valid after eviction (role alternation,
+//     tool_use/tool_result pairing preserved)
+//   - Agent continues functioning correctly across truncation boundaries
+func TestNativeAgentContextTruncation(t *testing.T) {
+	t.Parallel()
+
+	const turnCount = 5
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleetRoomID := createFleetRoom(t, admin)
+
+	// Boot a machine.
+	machine := newTestMachine(t, "machine/native-truncation-test")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		FleetRoomID:    fleetRoomID,
+	})
+
+	// Deploy bureau-agent with a small context window. Budget math:
+	//   messageBudget = contextWindow - maxOutputTokens - overhead
+	//                 = 5320 - 1024 - 4096 = 200 tokens
+	//
+	// Each turn adds ~4 messages (~250 chars total). At the estimator's
+	// calibrated ratio (~1.8 chars/token with 30 input_tokens per message),
+	// 9+ messages exceed the 200-token budget, triggering truncation on
+	// turn 2's tool_use request (the 5th LLM call).
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:    testutil.DataBinary(t, "BUREAU_AGENT_BINARY"),
+		Localpart: "agent/native-truncation-test",
+		ExtraEnv: map[string]string{
+			"BUREAU_AGENT_MODEL":          "mock-model",
+			"BUREAU_AGENT_SERVICE":        "anthropic",
+			"BUREAU_AGENT_MAX_TOKENS":     "1024",
+			"BUREAU_AGENT_CONTEXT_WINDOW": "5320",
+		},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"command/**"}},
+			},
+		},
+	})
+
+	// Create the multi-turn mock and register it on the proxy.
+	mock := newMockMultiTurnToolSequence(t, machine.ConfigRoomID, turnCount)
+	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.URL)
+
+	// Send turnCount messages, each triggering a full tool call cycle.
+	// Each cycle: admin sends message → LLM returns tool_use → agent
+	// executes bureau_matrix_send → LLM returns text → agent waits.
+	for turn := 0; turn < turnCount; turn++ {
+		responseWatch := watchRoom(t, admin, machine.ConfigRoomID)
+		prompt := fmt.Sprintf("Turn %d: echo this", turn)
+		if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage(prompt)); err != nil {
+			t.Fatalf("sending prompt for turn %d: %v", turn, err)
+		}
+
+		expectedResponse := fmt.Sprintf("response from turn %d", turn)
+		responseWatch.WaitForMessage(t, expectedResponse, agent.Account.UserID)
+		t.Logf("turn %d: bureau_matrix_send posted message", turn)
+	}
+
+	// Wait for all LLM requests to complete.
+	select {
+	case <-mock.AllRequestsHandled:
+		t.Log("all LLM requests handled")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for all LLM requests to complete")
+	}
+
+	// Verify truncation actually occurred. With a 200-token budget and
+	// ~50 tokens per turn, the context exceeds the budget by turn 2-3,
+	// forcing the Truncating manager to evict middle turn groups.
+	select {
+	case <-mock.TruncationObserved:
+		t.Log("context truncation observed — manager evicted turn groups")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for truncation (budget may be too large)")
+	}
+
+	// Log the per-request message counts for diagnostic visibility.
+	counts := mock.MessageCounts()
+	t.Logf("per-request message counts: %v", counts)
+
+	// Verify the message count pattern shows a decrease. Without
+	// truncation, counts grow monotonically: 1, 3, 5, 7, 9, 11, ...
+	// With truncation, at least one count is lower than a prior count.
+	maxSeen := 0
+	truncationCount := 0
+	for _, count := range counts {
+		if count < maxSeen {
+			truncationCount++
+		}
+		if count > maxSeen {
+			maxSeen = count
+		}
+	}
+	if truncationCount == 0 {
+		t.Errorf("no truncation detected in message counts %v; expected at least one decrease", counts)
+	}
+	t.Logf("truncation events in message counts: %d", truncationCount)
+}
+
 // mockAnthropicServer wraps an httptest.Server with a synchronization
 // channel that signals when all expected LLM requests have been handled.
 type mockAnthropicServer struct {

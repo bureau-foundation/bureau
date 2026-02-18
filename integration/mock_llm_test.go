@@ -321,6 +321,177 @@ func hasToolResult(messages []struct {
 	return false
 }
 
+// mockMultiTurnServer wraps an httptest.Server with observability hooks
+// for context truncation testing. Unlike mockToolSequenceServer which
+// handles a single-prompt multi-tool flow, this server handles multiple
+// independent prompts — each triggered by a separate Matrix message —
+// where each prompt results in one tool call cycle.
+//
+// The server records the message count in each LLM request and signals
+// when it observes a decrease (evidence of context truncation).
+type mockMultiTurnServer struct {
+	*httptest.Server
+
+	// AllRequestsHandled is closed when the final expected request has
+	// been fully processed.
+	AllRequestsHandled <-chan struct{}
+
+	// TruncationObserved is closed when a request's message count is
+	// lower than a previous request's count, proving the context
+	// manager evicted turn groups.
+	TruncationObserved <-chan struct{}
+
+	// messageCounts records len(wireRequest.Messages) for each LLM
+	// request in order. Protected by mutex; read via MessageCounts().
+	mutex         sync.Mutex
+	messageCounts []int
+}
+
+// MessageCounts returns a copy of the per-request message counts.
+func (server *mockMultiTurnServer) MessageCounts() []int {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	result := make([]int, len(server.messageCounts))
+	copy(result, server.messageCounts)
+	return result
+}
+
+// newMockMultiTurnToolSequence creates a mock Anthropic Messages API
+// server for multi-turn context truncation testing. It handles turnCount
+// independent prompt→tool_use→tool_result→text cycles, where each cycle
+// is triggered by a separate Matrix message from the test.
+//
+// Each turn produces two LLM requests:
+//   - Even request (2*i): returns a tool_use for "bureau_matrix_send"
+//     with input {"room": configRoomID, "message": "response from turn i"}
+//   - Odd request (2*i+1): validates tool_result is present, returns text
+//
+// The server reports input_tokens proportional to message count (30
+// tokens per message) to keep the CharEstimator's ratio stable enough
+// for predictable truncation timing. This avoids the extreme ratio
+// volatility that would occur with constant input_tokens values when
+// message counts vary across requests.
+func newMockMultiTurnToolSequence(t *testing.T, configRoomID string, turnCount int) *mockMultiTurnServer {
+	t.Helper()
+
+	var (
+		callMutex sync.Mutex
+		callCount int
+	)
+
+	allDone := make(chan struct{})
+	truncationObserved := make(chan struct{})
+	truncationOnce := sync.Once{}
+
+	server := &mockMultiTurnServer{}
+
+	httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		callMutex.Lock()
+		current := callCount
+		callCount++
+		callMutex.Unlock()
+
+		totalExpected := turnCount * 2
+
+		if current >= totalExpected {
+			t.Errorf("mock: unexpected request %d (only %d turns = %d requests configured)", current, turnCount, totalExpected)
+			http.Error(writer, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+
+		// Parse the wire request.
+		var wireRequest struct {
+			Model    string `json:"model"`
+			Stream   bool   `json:"stream"`
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&wireRequest); err != nil {
+			http.Error(writer, "bad request body", http.StatusBadRequest)
+			return
+		}
+		if !wireRequest.Stream {
+			http.Error(writer, "expected stream=true", http.StatusBadRequest)
+			return
+		}
+
+		messageCount := len(wireRequest.Messages)
+
+		// Record message count and check for truncation.
+		server.mutex.Lock()
+		server.messageCounts = append(server.messageCounts, messageCount)
+		// Detect truncation: message count decreased compared to any
+		// prior request's count.
+		for _, prior := range server.messageCounts[:len(server.messageCounts)-1] {
+			if messageCount < prior {
+				truncationOnce.Do(func() { close(truncationObserved) })
+				break
+			}
+		}
+		server.mutex.Unlock()
+
+		turnIndex := current / 2
+		isToolResult := current%2 == 1
+
+		// input_tokens proportional to message count keeps the
+		// CharEstimator ratio stable across turns with varying
+		// message counts (including post-truncation drops).
+		inputTokens := int64(messageCount) * 30
+
+		if isToolResult {
+			// Odd request: validate tool_result, return text.
+			toolCallID := fmt.Sprintf("tc_mock_%02d", turnIndex)
+			if !hasToolResult(wireRequest.Messages, toolCallID) {
+				t.Errorf("mock: request %d missing tool_result for %s", current, toolCallID)
+			}
+
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "end_turn",
+				InputTokens:  inputTokens,
+				OutputTokens: 15,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(`{"type":"text","text":"Step %d completed"}`, turnIndex)),
+				},
+			})
+
+			if turnIndex == turnCount-1 {
+				close(allDone)
+			}
+		} else {
+			// Even request: return bureau_matrix_send tool_use.
+			toolInput, _ := json.Marshal(map[string]string{
+				"room":    configRoomID,
+				"message": fmt.Sprintf("response from turn %d", turnIndex),
+			})
+			toolCallID := fmt.Sprintf("tc_mock_%02d", turnIndex)
+
+			writeSSE(writer, anthropicSSEResponse{
+				Model:        wireRequest.Model,
+				StopReason:   "tool_use",
+				InputTokens:  inputTokens,
+				OutputTokens: 30,
+				Content: []json.RawMessage{
+					json.RawMessage(fmt.Sprintf(
+						`{"type":"tool_use","id":"%s","name":"bureau_matrix_send","input":%s}`,
+						toolCallID, toolInput,
+					)),
+				},
+			})
+		}
+	}))
+
+	t.Cleanup(httpServer.Close)
+
+	server.Server = httpServer
+	server.AllRequestsHandled = allDone
+	server.TruncationObserved = truncationObserved
+
+	return server
+}
+
 // registerProxyHTTPService registers an HTTP service on a proxy's admin
 // socket. The proxy routes requests to /http/{serviceName}/... to the
 // given upstream URL. This is the same wire format the daemon uses in

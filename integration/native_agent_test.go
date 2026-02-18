@@ -143,14 +143,18 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 		FleetRoomID:    fleetRoomID,
 	})
 
-	// Deploy bureau-agent with a small context window. Budget math:
+	// Deploy bureau-agent with a context window that leaves a moderate
+	// message budget after the real overhead estimate. Budget math:
+	//   overhead ≈ 18000-20000 tokens (full Bureau tool catalog, varies
+	//             with number of authorized commands)
 	//   messageBudget = contextWindow - maxOutputTokens - overhead
-	//                 = 5320 - 1024 - 4096 = 200 tokens
+	//                 = 30000 - 1024 - ~19000 ≈ ~10000 tokens
 	//
-	// Each turn adds ~4 messages (~250 chars total). At the estimator's
-	// calibrated ratio (~1.8 chars/token with 30 input_tokens per message),
-	// 9+ messages exceed the 200-token budget, triggering truncation on
-	// turn 2's tool_use request (the 5th LLM call).
+	// The mock reports 1500 input_tokens per message (see
+	// newMockMultiTurnToolSequence), so the estimator converges to a
+	// ratio where each message costs ~1500 tokens. Truncation fires
+	// when estimated tokens exceed the message budget: around 7-9
+	// messages (turn 2-3 of 5).
 	agent := deployAgent(t, admin, machine, agentOptions{
 		Binary:    testutil.DataBinary(t, "BUREAU_AGENT_BINARY"),
 		Localpart: "agent/native-truncation-test",
@@ -158,7 +162,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 			"BUREAU_AGENT_MODEL":          "mock-model",
 			"BUREAU_AGENT_SERVICE":        "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS":     "1024",
-			"BUREAU_AGENT_CONTEXT_WINDOW": "5320",
+			"BUREAU_AGENT_CONTEXT_WINDOW": "30000",
 		},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
@@ -194,9 +198,10 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 		t.Fatal("timed out waiting for all LLM requests to complete")
 	}
 
-	// Verify truncation actually occurred. With a 200-token budget and
-	// ~50 tokens per turn, the context exceeds the budget by turn 2-3,
-	// forcing the Truncating manager to evict middle turn groups.
+	// Verify truncation actually occurred. With a ~10000-token budget
+	// and ~1500 tokens per message, the estimated context exceeds the
+	// budget by turn 2-3, forcing the Truncating manager to evict
+	// middle turn groups.
 	select {
 	case <-mock.TruncationObserved:
 		t.Log("context truncation observed — manager evicted turn groups")

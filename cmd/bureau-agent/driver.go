@@ -84,31 +84,6 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		contextWindow = parsed
 	}
 
-	// Build the token budget and context manager. The budget reserves
-	// space for max output tokens and system prompt overhead, leaving
-	// the remainder for conversation messages.
-	budget := llmcontext.Budget{
-		ContextWindow:   contextWindow,
-		MaxOutputTokens: maxTokens,
-	}
-	messageBudget := budget.MessageTokenBudget()
-	if messageBudget <= 0 {
-		return nil, nil, fmt.Errorf(
-			"context budget exhausted: context window %d tokens, max output %d tokens, "+
-				"leaving %d tokens for messages (need > 0)",
-			contextWindow, maxTokens, messageBudget)
-	}
-
-	estimator := llmcontext.NewCharEstimator()
-	contextManager := llmcontext.NewTruncating(messageBudget, estimator)
-
-	driver.logger.Info("context management configured",
-		"model", model,
-		"context_window", contextWindow,
-		"max_output_tokens", maxTokens,
-		"message_budget", messageBudget,
-	)
-
 	// Read provider selection from environment.
 	providerName := os.Getenv("BUREAU_AGENT_PROVIDER")
 	if providerName == "" {
@@ -138,6 +113,39 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		}
 		systemPrompt = string(data)
 	}
+
+	// Build the token budget and context manager. The overhead
+	// estimate covers system prompt, tool definitions, and protocol
+	// framing — everything the provider charges per request beyond
+	// the conversation messages. This uses the full tool catalog
+	// (before tool search may reduce the per-request set), which
+	// makes the estimate conservative: a larger overhead means a
+	// smaller message budget, so truncation fires earlier rather
+	// than risking context overflow on the first turn.
+	overheadTokens := estimateOverheadTokens(systemPrompt, mcpServer)
+	budget := llmcontext.Budget{
+		ContextWindow:   contextWindow,
+		MaxOutputTokens: maxTokens,
+		OverheadTokens:  overheadTokens,
+	}
+	messageBudget := budget.MessageTokenBudget()
+	if messageBudget <= 0 {
+		return nil, nil, fmt.Errorf(
+			"context budget exhausted: context window %d tokens, max output %d tokens, "+
+				"overhead %d tokens, leaving %d tokens for messages (need > 0)",
+			contextWindow, maxTokens, overheadTokens, messageBudget)
+	}
+
+	estimator := llmcontext.NewCharEstimator()
+	contextManager := llmcontext.NewTruncating(messageBudget, estimator)
+
+	driver.logger.Info("context management configured",
+		"model", model,
+		"context_window", contextWindow,
+		"max_output_tokens", maxTokens,
+		"overhead_tokens", overheadTokens,
+		"message_budget", messageBudget,
+	)
 
 	// Create pipes for communication between the agent loop and
 	// the lifecycle manager. The loop writes structured JSON events
@@ -250,6 +258,34 @@ func (process *nativeProcess) Signal(signal os.Signal) error {
 	// via context cancellation.
 	process.cancelFn()
 	return nil
+}
+
+// overheadFloorTokens is the minimum overhead estimate. Even with no
+// system prompt and zero tools, the protocol framing (JSON structure,
+// role markers, content block wrappers) consumes some tokens.
+const overheadFloorTokens = 512
+
+// estimateOverheadTokens estimates the fixed per-request token cost
+// of the system prompt and tool definitions. Uses the same chars/4
+// heuristic as estimateToolTokens. The estimate includes all
+// authorized tools regardless of tool search strategy, so it's an
+// upper bound — deferred tools don't contribute to per-request cost
+// but are counted here. This is the safe direction: the
+// CharEstimator calibration corrects the effective budget after the
+// first turn.
+func estimateOverheadTokens(systemPrompt string, tools *mcp.Server) int {
+	characters := len(systemPrompt)
+	for _, export := range tools.AuthorizedTools() {
+		characters += len(export.Name) + len(export.Description) + len(export.InputSchema)
+	}
+	// Protocol framing: JSON structure around each message, role
+	// markers, content block type wrappers, tool use/result envelopes.
+	characters += 2048
+	estimate := characters / 4
+	if estimate < overheadFloorTokens {
+		return overheadFloorTokens
+	}
+	return estimate
 }
 
 // loopEvent is the JSON format written by the agent loop to stdout.

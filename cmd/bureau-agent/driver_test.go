@@ -246,6 +246,38 @@ func TestBuildToolCatalog(t *testing.T) {
 	}
 }
 
+func TestEstimateOverheadTokens(t *testing.T) {
+	t.Parallel()
+
+	server := testCommandTree()
+
+	// With system prompt and tools, overhead should exceed the floor.
+	systemPrompt := "You are a Bureau agent. You have access to tools for managing infrastructure."
+	overhead := estimateOverheadTokens(systemPrompt, server)
+	if overhead < overheadFloorTokens {
+		t.Errorf("overhead = %d, want >= %d (floor)", overhead, overheadFloorTokens)
+	}
+	// The estimate should account for the system prompt.
+	if overhead <= len(systemPrompt)/4 {
+		t.Errorf("overhead = %d, should be > system prompt alone (%d tokens)", overhead, len(systemPrompt)/4)
+	}
+}
+
+func TestEstimateOverheadTokens_EmptyPromptReturnsFloor(t *testing.T) {
+	t.Parallel()
+
+	// Even with no grants (no authorized tools) and no system prompt,
+	// the floor should apply for protocol framing.
+	root := &cli.Command{Name: "empty"}
+	grants := []schema.Grant{}
+	server := mcp.NewServer(root, grants)
+
+	overhead := estimateOverheadTokens("", server)
+	if overhead != overheadFloorTokens {
+		t.Errorf("overhead = %d, want %d (floor)", overhead, overheadFloorTokens)
+	}
+}
+
 // testCommandTree creates a minimal command tree with a single
 // authorized tool for testing tool definition building.
 func testCommandTree() *mcp.Server {

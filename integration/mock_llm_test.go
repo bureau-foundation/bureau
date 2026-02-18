@@ -366,10 +366,13 @@ func (server *mockMultiTurnServer) MessageCounts() []int {
 //     with input {"room": configRoomID, "message": "response from turn i"}
 //   - Odd request (2*i+1): validates tool_result is present, returns text
 //
-// The server reports input_tokens proportional to message count (30
-// tokens per message) to keep the CharEstimator's ratio stable enough
-// for predictable truncation timing. This avoids the extreme ratio
-// volatility that would occur with constant input_tokens values when
+// The server reports input_tokens proportional to message count (1500
+// tokens per message) to keep the CharEstimator's ratio stable and
+// to ensure truncation fires within the message budget. With a budget
+// of ~10000 tokens (context window 30000 minus overhead and max
+// output), 1500 tokens per message triggers truncation at 7-9
+// messages (turn 2-3). The proportional scaling avoids ratio
+// volatility that would occur with constant input_tokens when
 // message counts vary across requests.
 func newMockMultiTurnToolSequence(t *testing.T, configRoomID string, turnCount int) *mockMultiTurnServer {
 	t.Helper()
@@ -438,7 +441,7 @@ func newMockMultiTurnToolSequence(t *testing.T, configRoomID string, turnCount i
 		// input_tokens proportional to message count keeps the
 		// CharEstimator ratio stable across turns with varying
 		// message counts (including post-truncation drops).
-		inputTokens := int64(messageCount) * 30
+		inputTokens := int64(messageCount) * 1500
 
 		if isToolResult {
 			// Odd request: validate tool_result, return text.

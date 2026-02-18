@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/toolsearch"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -29,6 +30,12 @@ type Server struct {
 	grants      []schema.Grant
 	initialized bool
 	progressive bool
+
+	// searchIndex provides BM25-ranked search over all discovered
+	// tools (not just authorized ones — authorization is checked at
+	// query time). Used by the bureau_tools_list meta-tool's query
+	// parameter and by CallTool dispatch for meta-tools.
+	searchIndex toolsearch.Index
 }
 
 // ServerOption configures optional server behavior.
@@ -86,6 +93,22 @@ func NewServer(root *cli.Command, grants []schema.Grant, options ...ServerOption
 	for i := range s.tools {
 		s.toolsByName[s.tools[i].name] = &s.tools[i]
 	}
+
+	// Build the BM25 search index over all discovered tools. Index
+	// all tools, not just authorized — authorization is checked at
+	// query time, allowing the index to be built once and shared.
+	documents := make([]toolsearch.Document, len(s.tools))
+	for i, t := range s.tools {
+		schemaJSON, _ := json.Marshal(t.inputSchema)
+		argumentNames, argumentDescriptions := toolsearch.ExtractArguments(schemaJSON)
+		documents[i] = toolsearch.Document{
+			Name:                 t.name,
+			Description:          t.title + " " + t.description,
+			ArgumentNames:        argumentNames,
+			ArgumentDescriptions: argumentDescriptions,
+		}
+	}
+	s.searchIndex = toolsearch.NewBM25Index(documents)
 
 	return s
 }
@@ -459,6 +482,12 @@ type ToolExport struct {
 	// InputSchema is the JSON Schema for the tool's parameters,
 	// serialized as JSON.
 	InputSchema json.RawMessage
+
+	// Deferrable is true when the tool can be deferred for on-demand
+	// discovery via tool search. Read-only query tools (list, show,
+	// search, status) are NOT deferrable — they stay in context
+	// always. Everything else is deferrable.
+	Deferrable bool
 }
 
 // AuthorizedTools returns tool metadata for all tools that pass
@@ -484,6 +513,7 @@ func (s *Server) AuthorizedTools() []ToolExport {
 			Name:        t.name,
 			Description: t.description,
 			InputSchema: schemaJSON,
+			Deferrable:  toolDeferrable(t),
 		})
 	}
 	return exports
@@ -494,11 +524,20 @@ func (s *Server) AuthorizedTools() []ToolExport {
 // and stdout capture as the MCP tools/call endpoint. Returns the
 // captured output text and whether the tool reported an error.
 //
+// Meta-tools (bureau_tools_list, bureau_tools_describe, bureau_tools_call)
+// are dispatched through the same handlers as the JSON-RPC path, with
+// results marshaled to JSON text. This allows the native agent loop to
+// use progressive disclosure without going through JSON-RPC framing.
+//
 // A non-nil error return indicates an infrastructure failure (unknown
 // tool, authorization denied) — not a tool execution failure. Tool
 // execution failures are indicated by isError=true with the error
 // message included in the output string.
 func (s *Server) CallTool(name string, arguments json.RawMessage) (output string, isError bool, err error) {
+	if isMetaTool(name) {
+		return s.callMetaTool(name, arguments)
+	}
+
 	t, ok := s.toolsByName[name]
 	if !ok {
 		return "", false, fmt.Errorf("unknown tool: %s", name)
@@ -518,6 +557,73 @@ func (s *Server) CallTool(name string, arguments json.RawMessage) (output string
 		return out, true, nil
 	}
 	return out, false, nil
+}
+
+// callMetaTool dispatches a meta-tool invocation and returns the
+// result as a JSON string. Used by CallTool to handle meta-tools
+// without JSON-RPC framing.
+func (s *Server) callMetaTool(name string, arguments json.RawMessage) (string, bool, error) {
+	var result any
+	var err error
+
+	switch name {
+	case metaToolList:
+		result, err = s.executeMetaList(arguments)
+	case metaToolDescribe:
+		result, err = s.executeMetaDescribe(arguments)
+	case metaToolCall:
+		return s.executeMetaCall(arguments)
+	default:
+		return "", false, fmt.Errorf("unknown meta-tool: %s", name)
+	}
+
+	if err != nil {
+		return err.Error(), true, nil
+	}
+
+	jsonBytes, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return "", false, fmt.Errorf("marshaling meta-tool result: %w", marshalErr)
+	}
+	return string(jsonBytes), false, nil
+}
+
+// MetaToolDefinitions returns LLM tool definitions for the three
+// meta-tools. Used by the native agent loop when progressive
+// disclosure is selected for non-Anthropic providers.
+func (s *Server) MetaToolDefinitions() []struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+} {
+	descriptions := metaToolDescriptions()
+	definitions := make([]struct {
+		Name        string
+		Description string
+		InputSchema json.RawMessage
+	}, len(descriptions))
+	for i, description := range descriptions {
+		schemaJSON, _ := json.Marshal(description.InputSchema)
+		definitions[i].Name = description.Name
+		definitions[i].Description = description.Description
+		definitions[i].InputSchema = schemaJSON
+	}
+	return definitions
+}
+
+// toolDeferrable returns true if a tool can be deferred for on-demand
+// discovery. Read-only query tools stay in context always; everything
+// else is deferrable.
+func toolDeferrable(t *tool) bool {
+	// Tools with explicit ReadOnly annotation and a query-like name
+	// are essential discovery/status tools — keep them always visible.
+	if t.annotations != nil && t.annotations.ReadOnlyHint != nil && *t.annotations.ReadOnlyHint {
+		switch t.command.Name {
+		case "list", "show", "search", "status", "get":
+			return false
+		}
+	}
+	return true
 }
 
 // discoverTools walks the command tree recursively, collecting leaf

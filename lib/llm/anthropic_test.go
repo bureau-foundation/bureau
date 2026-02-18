@@ -622,3 +622,499 @@ func TestAnthropicToolResultMessage(t *testing.T) {
 		t.Errorf("TextContent = %q, want 'It's sunny!'", text)
 	}
 }
+
+func TestAnthropicStreamServerToolUse(t *testing.T) {
+	t.Parallel()
+
+	// Simulates Anthropic's tool search: the model's response contains
+	// server_tool_use and tool_search_tool_result blocks alongside
+	// a normal tool_use block. The server blocks should flow through
+	// as ContentServerToolUse/ContentServerToolResult, while ToolUses()
+	// returns only the regular tool_use.
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			t.Fatal("ResponseWriter does not support Flush")
+		}
+
+		events := []string{
+			`event: message_start` + "\n" +
+				`data: {"type":"message_start","message":{"id":"msg_search","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":100,"output_tokens":0}}}` + "\n\n",
+
+			// Block 0: server_tool_use (tool search invocation).
+			`event: content_block_start` + "\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_01","name":"tool_search_tool_bm25_20251119"}}` + "\n\n",
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"weather\"}"}}` + "\n\n",
+			`event: content_block_stop` + "\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n",
+
+			// Block 1: tool_search_tool_result (fully formed, no deltas).
+			`event: content_block_start` + "\n" +
+				`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_01","content":{"tool_names":["get_weather","get_forecast"]}}}` + "\n\n",
+			`event: content_block_stop` + "\n" +
+				`data: {"type":"content_block_stop","index":1}` + "\n\n",
+
+			// Block 2: regular tool_use (the model decided to call get_weather).
+			`event: content_block_start` + "\n" +
+				`data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_02","name":"get_weather","input":{}}}` + "\n\n",
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"location\":\"NYC\"}"}}` + "\n\n",
+			`event: content_block_stop` + "\n" +
+				`data: {"type":"content_block_stop","index":2}` + "\n\n",
+
+			`event: message_delta` + "\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}` + "\n\n",
+			`event: message_stop` + "\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+		}
+
+		for _, event := range events {
+			fmt.Fprint(writer, event)
+			flusher.Flush()
+		}
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	eventStream, err := provider.Stream(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("Weather in NYC?")},
+		Tools: []ToolDefinition{
+			{
+				Name:         "get_weather",
+				Description:  "Get the weather",
+				InputSchema:  json.RawMessage(`{"type":"object","properties":{"location":{"type":"string"}}}`),
+				DeferLoading: true,
+			},
+			{
+				Type: "tool_search_tool_bm25_20251119",
+				Name: "tool_search_tool_bm25_20251119",
+			},
+		},
+		ExtraHeaders: map[string]string{
+			"anthropic-beta": "advanced-tool-use-2025-11-20",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer eventStream.Close()
+
+	var contentBlocks []ContentBlock
+	for {
+		event, err := eventStream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if event.Type == EventContentBlockDone {
+			contentBlocks = append(contentBlocks, event.ContentBlock)
+		}
+	}
+
+	if length := len(contentBlocks); length != 3 {
+		t.Fatalf("content blocks = %d, want 3", length)
+	}
+
+	// Block 0: server_tool_use.
+	if contentBlocks[0].Type != ContentServerToolUse {
+		t.Fatalf("block[0].Type = %q, want server_tool_use", contentBlocks[0].Type)
+	}
+	serverToolUse := contentBlocks[0].ServerToolUse
+	if serverToolUse.ID != "srvtoolu_01" {
+		t.Errorf("server_tool_use.ID = %q, want srvtoolu_01", serverToolUse.ID)
+	}
+	if serverToolUse.Name != "tool_search_tool_bm25_20251119" {
+		t.Errorf("server_tool_use.Name = %q, want tool_search_tool_bm25_20251119", serverToolUse.Name)
+	}
+	var searchInput map[string]string
+	if err := json.Unmarshal(serverToolUse.Input, &searchInput); err != nil {
+		t.Fatalf("unmarshal server_tool_use.Input: %v", err)
+	}
+	if searchInput["query"] != "weather" {
+		t.Errorf("server_tool_use query = %q, want weather", searchInput["query"])
+	}
+
+	// Block 1: tool_search_tool_result.
+	if contentBlocks[1].Type != ContentServerToolResult {
+		t.Fatalf("block[1].Type = %q, want server_tool_result", contentBlocks[1].Type)
+	}
+	serverResult := contentBlocks[1].ServerToolResult
+	if serverResult.ToolUseID != "srvtoolu_01" {
+		t.Errorf("server_tool_result.ToolUseID = %q, want srvtoolu_01", serverResult.ToolUseID)
+	}
+	var searchResult struct {
+		ToolNames []string `json:"tool_names"`
+	}
+	if err := json.Unmarshal(serverResult.Content, &searchResult); err != nil {
+		t.Fatalf("unmarshal server_tool_result.Content: %v", err)
+	}
+	if length := len(searchResult.ToolNames); length != 2 {
+		t.Errorf("tool_names length = %d, want 2", length)
+	}
+
+	// Block 2: regular tool_use.
+	if contentBlocks[2].Type != ContentToolUse {
+		t.Fatalf("block[2].Type = %q, want tool_use", contentBlocks[2].Type)
+	}
+	if contentBlocks[2].ToolUse.Name != "get_weather" {
+		t.Errorf("tool_use.Name = %q, want get_weather", contentBlocks[2].ToolUse.Name)
+	}
+
+	// ToolUses() should only return the regular tool_use, not server blocks.
+	response := eventStream.Response()
+	toolUses := response.ToolUses()
+	if length := len(toolUses); length != 1 {
+		t.Fatalf("ToolUses() = %d, want 1 (only regular tool_use)", length)
+	}
+	if toolUses[0].Name != "get_weather" {
+		t.Errorf("ToolUses()[0].Name = %q, want get_weather", toolUses[0].Name)
+	}
+}
+
+func TestAnthropicCompleteServerToolUse(t *testing.T) {
+	t.Parallel()
+
+	// Non-streaming response with server tool use blocks.
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":   "msg_search_complete",
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]any{
+				{
+					"type":  "server_tool_use",
+					"id":    "srvtoolu_10",
+					"name":  "tool_search_tool_bm25_20251119",
+					"input": map[string]string{"query": "ticket"},
+				},
+				{
+					"type":        "tool_search_tool_result",
+					"tool_use_id": "srvtoolu_10",
+					"content":     map[string]any{"tool_names": []string{"bureau_ticket_create"}},
+				},
+				{
+					"type":  "tool_use",
+					"id":    "toolu_10",
+					"name":  "bureau_ticket_create",
+					"input": map[string]any{"title": "Fix bug"},
+				},
+			},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "tool_use",
+			"usage":       map[string]any{"input_tokens": 90, "output_tokens": 35},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	response, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("Create a bug ticket")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if length := len(response.Content); length != 3 {
+		t.Fatalf("content blocks = %d, want 3", length)
+	}
+
+	if response.Content[0].Type != ContentServerToolUse {
+		t.Errorf("block[0].Type = %q, want server_tool_use", response.Content[0].Type)
+	}
+	if response.Content[1].Type != ContentServerToolResult {
+		t.Errorf("block[1].Type = %q, want server_tool_result", response.Content[1].Type)
+	}
+	if response.Content[2].Type != ContentToolUse {
+		t.Errorf("block[2].Type = %q, want tool_use", response.Content[2].Type)
+	}
+
+	toolUses := response.ToolUses()
+	if length := len(toolUses); length != 1 {
+		t.Fatalf("ToolUses() = %d, want 1", length)
+	}
+}
+
+func TestAnthropicServerBlockConversationReplay(t *testing.T) {
+	t.Parallel()
+
+	// Verify that server tool use blocks survive round-trip through
+	// conversation history: ContentBlock → anthropicContentBlock →
+	// wire JSON → back. This is critical because the model expects
+	// to see its own server_tool_use and tool_search_tool_result
+	// blocks in subsequent requests.
+
+	var capturedRequest json.RawMessage
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		capturedRequest = body
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":          "msg_replay",
+			"type":        "message",
+			"role":        "assistant",
+			"content":     []map[string]any{{"type": "text", "text": "Done."}},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 200, "output_tokens": 5},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	// Build a conversation that includes server blocks in the
+	// assistant turn (as if the previous response had tool search).
+	_, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages: []Message{
+			UserMessage("Weather?"),
+			{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					{
+						Type: ContentServerToolUse,
+						ServerToolUse: &ServerToolUse{
+							ID:    "srvtoolu_replay",
+							Name:  "tool_search_tool_bm25_20251119",
+							Input: json.RawMessage(`{"query":"weather"}`),
+						},
+					},
+					{
+						Type: ContentServerToolResult,
+						ServerToolResult: &ServerToolResult{
+							ToolUseID: "srvtoolu_replay",
+							Content:   json.RawMessage(`{"tool_names":["get_weather"]}`),
+						},
+					},
+					ToolUseBlock("toolu_replay", "get_weather", json.RawMessage(`{"location":"NYC"}`)),
+				},
+			},
+			ToolResultMessage(ToolResult{
+				ToolUseID: "toolu_replay",
+				Content:   "72F sunny",
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Parse the captured request and verify server blocks were
+	// serialized correctly.
+	var wireRequest struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string          `json:"type"`
+				ID        string          `json:"id,omitempty"`
+				Name      string          `json:"name,omitempty"`
+				Input     json.RawMessage `json:"input,omitempty"`
+				ToolUseID string          `json:"tool_use_id,omitempty"`
+				Content   json.RawMessage `json:"content,omitempty"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedRequest, &wireRequest); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if length := len(wireRequest.Messages); length != 3 {
+		t.Fatalf("messages = %d, want 3", length)
+	}
+
+	assistantMsg := wireRequest.Messages[1]
+	if assistantMsg.Role != "assistant" {
+		t.Fatalf("message[1].role = %q, want assistant", assistantMsg.Role)
+	}
+	if length := len(assistantMsg.Content); length != 3 {
+		t.Fatalf("assistant content blocks = %d, want 3", length)
+	}
+
+	// server_tool_use should be replayed with correct wire type.
+	if assistantMsg.Content[0].Type != "server_tool_use" {
+		t.Errorf("block[0].type = %q, want server_tool_use", assistantMsg.Content[0].Type)
+	}
+	if assistantMsg.Content[0].ID != "srvtoolu_replay" {
+		t.Errorf("block[0].id = %q, want srvtoolu_replay", assistantMsg.Content[0].ID)
+	}
+	if assistantMsg.Content[0].Name != "tool_search_tool_bm25_20251119" {
+		t.Errorf("block[0].name = %q, want tool_search_tool_bm25_20251119", assistantMsg.Content[0].Name)
+	}
+
+	// tool_search_tool_result should be replayed.
+	if assistantMsg.Content[1].Type != "tool_search_tool_result" {
+		t.Errorf("block[1].type = %q, want tool_search_tool_result", assistantMsg.Content[1].Type)
+	}
+	if assistantMsg.Content[1].ToolUseID != "srvtoolu_replay" {
+		t.Errorf("block[1].tool_use_id = %q, want srvtoolu_replay", assistantMsg.Content[1].ToolUseID)
+	}
+
+	// tool_use should also be present.
+	if assistantMsg.Content[2].Type != "tool_use" {
+		t.Errorf("block[2].type = %q, want tool_use", assistantMsg.Content[2].Type)
+	}
+}
+
+func TestAnthropicDeferLoadingWireFormat(t *testing.T) {
+	t.Parallel()
+
+	// Verify that DeferLoading and Type fields serialize correctly
+	// on the wire.
+	var capturedRequest json.RawMessage
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		capturedRequest = body
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":          "msg_defer",
+			"type":        "message",
+			"role":        "assistant",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 50, "output_tokens": 2},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	_, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("hello")},
+		Tools: []ToolDefinition{
+			{
+				Name:         "always_visible",
+				Description:  "Always in context",
+				InputSchema:  json.RawMessage(`{"type":"object"}`),
+				DeferLoading: false,
+			},
+			{
+				Name:         "deferred_tool",
+				Description:  "Only loaded on search match",
+				InputSchema:  json.RawMessage(`{"type":"object"}`),
+				DeferLoading: true,
+			},
+			{
+				Type: "tool_search_tool_bm25_20251119",
+				Name: "tool_search_tool_bm25_20251119",
+			},
+		},
+		ExtraHeaders: map[string]string{
+			"anthropic-beta": "advanced-tool-use-2025-11-20",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var wireRequest struct {
+		Tools []struct {
+			Type         string          `json:"type,omitempty"`
+			Name         string          `json:"name"`
+			Description  string          `json:"description,omitempty"`
+			InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+			DeferLoading bool            `json:"defer_loading,omitempty"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(capturedRequest, &wireRequest); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if length := len(wireRequest.Tools); length != 3 {
+		t.Fatalf("tools = %d, want 3", length)
+	}
+
+	// Tool 0: normal, not deferred.
+	if wireRequest.Tools[0].DeferLoading {
+		t.Error("tools[0].defer_loading should be false")
+	}
+	if wireRequest.Tools[0].Description != "Always in context" {
+		t.Errorf("tools[0].description = %q, want 'Always in context'", wireRequest.Tools[0].Description)
+	}
+
+	// Tool 1: deferred.
+	if !wireRequest.Tools[1].DeferLoading {
+		t.Error("tools[1].defer_loading should be true")
+	}
+	if wireRequest.Tools[1].Description != "Only loaded on search match" {
+		t.Errorf("tools[1].description = %q, want 'Only loaded on search match'", wireRequest.Tools[1].Description)
+	}
+
+	// Tool 2: special type (search tool) — description/schema omitted.
+	if wireRequest.Tools[2].Type != "tool_search_tool_bm25_20251119" {
+		t.Errorf("tools[2].type = %q, want tool_search_tool_bm25_20251119", wireRequest.Tools[2].Type)
+	}
+	if wireRequest.Tools[2].Description != "" {
+		t.Errorf("tools[2].description = %q, want empty (special tool)", wireRequest.Tools[2].Description)
+	}
+	if wireRequest.Tools[2].InputSchema != nil {
+		t.Errorf("tools[2].input_schema = %s, want nil (special tool)", wireRequest.Tools[2].InputSchema)
+	}
+}
+
+func TestAnthropicExtraHeaders(t *testing.T) {
+	t.Parallel()
+
+	var capturedHeaders http.Header
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		capturedHeaders = request.Header.Clone()
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":          "msg_headers",
+			"type":        "message",
+			"role":        "assistant",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 10, "output_tokens": 1},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	_, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("hello")},
+		ExtraHeaders: map[string]string{
+			"anthropic-beta": "advanced-tool-use-2025-11-20",
+			"x-custom":       "test-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if got := capturedHeaders.Get("anthropic-beta"); got != "advanced-tool-use-2025-11-20" {
+		t.Errorf("anthropic-beta header = %q, want advanced-tool-use-2025-11-20", got)
+	}
+	if got := capturedHeaders.Get("x-custom"); got != "test-value" {
+		t.Errorf("x-custom header = %q, want test-value", got)
+	}
+	if got := capturedHeaders.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+}

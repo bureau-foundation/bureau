@@ -21,6 +21,7 @@ import (
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	servicecmd "github.com/bureau-foundation/bureau/cmd/bureau/service"
+	suggestcmd "github.com/bureau-foundation/bureau/cmd/bureau/suggest"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
@@ -109,10 +110,13 @@ observation, and structured messaging via Matrix.`,
 		},
 	}
 
-	// Add MCP command with access to the full command tree. Tool
-	// discovery walks root.Subcommands, so this must be added after
-	// the tree is constructed.
-	root.Subcommands = append(root.Subcommands, mcpcmd.Command(root))
+	// Add commands that need access to the full command tree. These
+	// must be added after the tree is constructed because they walk
+	// root.Subcommands for tool discovery or search indexing.
+	root.Subcommands = append(root.Subcommands,
+		mcpcmd.Command(root),
+		suggestcmd.Command(root),
+	)
 
 	return root
 }

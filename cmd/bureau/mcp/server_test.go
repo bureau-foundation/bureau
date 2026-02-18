@@ -1361,6 +1361,147 @@ func TestServer_Progressive_ToolsListCategoryFilterNoMatch(t *testing.T) {
 	}
 }
 
+func TestServer_Progressive_ToolsListQuerySearch(t *testing.T) {
+	// "message" appears in test_echo's summary ("Echo a message"),
+	// description, and parameter name. It should rank highest.
+	result := callMetaTool(t, metaToolList, map[string]any{
+		"query": "echo message",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false, got true; content: %v", result.Content)
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected at least 1 search result")
+	}
+
+	// The top result should be test_echo.
+	first := items[0].(map[string]any)
+	if first["name"] != "test_echo" {
+		t.Errorf("top result = %v, want %q", first["name"], "test_echo")
+	}
+
+	// All results should have a score when query is provided.
+	for _, item := range items {
+		summary := item.(map[string]any)
+		if summary["score"] == nil {
+			t.Errorf("tool %v should have a score when query is provided", summary["name"])
+		}
+		score, ok := summary["score"].(float64)
+		if !ok {
+			t.Errorf("tool %v score type = %T, want float64", summary["name"], summary["score"])
+		}
+		if score <= 0 {
+			t.Errorf("tool %v has non-positive score %v", summary["name"], score)
+		}
+	}
+}
+
+func TestServer_Progressive_ToolsListQuerySearchNoMatch(t *testing.T) {
+	result := callMetaTool(t, metaToolList, map[string]any{
+		"query": "xyzzyplugh",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false")
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 results for nonsense query, got %d", len(items))
+	}
+}
+
+func TestServer_Progressive_ToolsListQueryWithCategory(t *testing.T) {
+	// Search for "message" but filter to category "fail". Even
+	// though test_echo matches better, it's excluded by category.
+	// "message" shouldn't match test_fail at all.
+	result := callMetaTool(t, metaToolList, map[string]any{
+		"query":    "message",
+		"category": "fail",
+	})
+
+	if result.IsError {
+		t.Errorf("expected isError=false")
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	// test_echo is filtered out by category, and "message" likely
+	// doesn't match test_fail, so we expect 0 results.
+	for _, item := range items {
+		summary := item.(map[string]any)
+		if summary["category"] != "fail" {
+			t.Errorf("result %v has category %v, want %q",
+				summary["name"], summary["category"], "fail")
+		}
+	}
+}
+
+func TestServer_Progressive_ToolsListQueryNoScoreWithoutQuery(t *testing.T) {
+	// Without a query parameter, results should NOT have scores.
+	result := callMetaTool(t, metaToolList, nil)
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+	for _, item := range items {
+		summary := item.(map[string]any)
+		if summary["score"] != nil {
+			t.Errorf("tool %v should not have a score without query, got %v",
+				summary["name"], summary["score"])
+		}
+	}
+}
+
+func TestServer_Progressive_ToolsListQueryGrantFiltering(t *testing.T) {
+	// Search for "message" (matches test_echo) but only grant test_list.
+	// test_echo should be excluded by authorization.
+	grants := []schema.Grant{{Actions: []string{"command/test/list"}}}
+	responses := progressiveSessionWithGrants(t, grants, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      metaToolList,
+			"arguments": map[string]any{"query": "echo message"},
+		},
+	})
+	resp := responses[1]
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	var result toolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	items, ok := result.StructuredContent.([]any)
+	if !ok {
+		t.Fatalf("structuredContent type = %T, want []any", result.StructuredContent)
+	}
+
+	// test_echo is not authorized, so it should not appear.
+	for _, item := range items {
+		summary := item.(map[string]any)
+		if summary["name"] == "test_echo" {
+			t.Error("test_echo should be excluded by authorization")
+		}
+	}
+}
+
 func TestServer_Progressive_ToolsListGrantFiltering(t *testing.T) {
 	// Only grant echo — bureau_tools_list should only show echo.
 	grants := []schema.Grant{{Actions: []string{"command/test/echo"}}}
@@ -1898,5 +2039,118 @@ func TestServer_CallTool_JSONOutput(t *testing.T) {
 	}
 	if result.Value != "test123" {
 		t.Errorf("result.Value = %q, want %q", result.Value, "test123")
+	}
+}
+
+func TestServer_CallTool_MetaToolList(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool(metaToolList, json.RawMessage(`{"query":"echo message"}`))
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if isError {
+		t.Errorf("isError = true, want false")
+	}
+
+	var summaries []toolSummary
+	if err := json.Unmarshal([]byte(output), &summaries); err != nil {
+		t.Fatalf("output is not valid JSON: %v (output: %q)", err, output)
+	}
+	if len(summaries) == 0 {
+		t.Fatal("expected at least 1 search result")
+	}
+	if summaries[0].Name != "test_echo" {
+		t.Errorf("top result = %q, want %q", summaries[0].Name, "test_echo")
+	}
+	if summaries[0].Score == nil {
+		t.Error("score should be present for query-ranked results")
+	}
+}
+
+func TestServer_CallTool_MetaToolDescribe(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool(metaToolDescribe, json.RawMessage(`{"name":"test_format"}`))
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if isError {
+		t.Errorf("isError = true, want false")
+	}
+
+	var detail toolDetail
+	if err := json.Unmarshal([]byte(output), &detail); err != nil {
+		t.Fatalf("output is not valid JSON: %v (output: %q)", err, output)
+	}
+	if detail.Name != "test_format" {
+		t.Errorf("detail.Name = %q, want %q", detail.Name, "test_format")
+	}
+	if detail.InputSchema == nil {
+		t.Error("inputSchema should be present")
+	}
+}
+
+func TestServer_CallTool_MetaToolCall(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool(metaToolCall,
+		json.RawMessage(`{"name":"test_echo","arguments":{"message":"via meta"}}`))
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if isError {
+		t.Errorf("isError = true, want false")
+	}
+	if !strings.Contains(output, "via meta") {
+		t.Errorf("output = %q, want it to contain 'via meta'", output)
+	}
+}
+
+func TestServer_CallTool_MetaToolCallError(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	output, isError, err := server.CallTool(metaToolCall,
+		json.RawMessage(`{"name":"test_fail","arguments":{"reason":"meta-err"}}`))
+	if err != nil {
+		t.Fatalf("CallTool infrastructure error: %v", err)
+	}
+	if !isError {
+		t.Error("isError = false, want true")
+	}
+	if !strings.Contains(output, "meta-err") {
+		t.Errorf("output = %q, want it to contain 'meta-err'", output)
+	}
+}
+
+func TestServer_CallTool_MetaToolCallUnknown(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	_, _, err := server.CallTool(metaToolCall,
+		json.RawMessage(`{"name":"nonexistent_tool"}`))
+	if err == nil {
+		t.Fatal("expected infrastructure error for unknown tool")
+	}
+	if !strings.Contains(err.Error(), "unknown tool") {
+		t.Errorf("error = %q, should contain 'unknown tool'", err.Error())
+	}
+}
+
+func TestServer_CallTool_MetaToolRecursionBlocked(t *testing.T) {
+	root := testCommandTree()
+	server := NewServer(root, wildcardGrants())
+
+	_, _, err := server.CallTool(metaToolCall,
+		json.RawMessage(fmt.Sprintf(`{"name":"%s"}`, metaToolList)))
+	if err == nil {
+		t.Fatal("expected infrastructure error for recursive meta-tool call")
+	}
+	if !strings.Contains(err.Error(), "meta-tools cannot be called") {
+		t.Errorf("error = %q, should contain 'meta-tools cannot be called'", err.Error())
 	}
 }

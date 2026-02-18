@@ -38,7 +38,7 @@ func (provider *Anthropic) Complete(ctx context.Context, request Request) (*Resp
 	wireRequest := provider.buildRequest(request, false)
 
 	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
-		provider.endpoint(), wireRequest, "llm/anthropic", false)
+		provider.endpoint(), wireRequest, "llm/anthropic", false, request.ExtraHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (provider *Anthropic) Stream(ctx context.Context, request Request) (*EventS
 	wireRequest := provider.buildRequest(request, true)
 
 	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
-		provider.endpoint(), wireRequest, "llm/anthropic", true)
+		provider.endpoint(), wireRequest, "llm/anthropic", true, request.ExtraHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -87,11 +87,21 @@ func (provider *Anthropic) buildRequest(request Request, stream bool) anthropicR
 	}
 
 	for _, tool := range request.Tools {
-		wireRequest.Tools = append(wireRequest.Tools, anthropicTool{
-			Name:        tool.Name,
-			Description: tool.Description,
-			InputSchema: tool.InputSchema,
-		})
+		wireTool := anthropicTool{
+			Name:         tool.Name,
+			Description:  tool.Description,
+			InputSchema:  tool.InputSchema,
+			DeferLoading: tool.DeferLoading,
+		}
+		if tool.Type != "" {
+			// Special provider-managed tools (e.g., tool search) send
+			// their type but not description or schema — the provider
+			// manages them internally.
+			wireTool.Type = tool.Type
+			wireTool.Description = ""
+			wireTool.InputSchema = nil
+		}
+		wireRequest.Tools = append(wireRequest.Tools, wireTool)
 	}
 
 	return wireRequest
@@ -150,11 +160,23 @@ func (provider *Anthropic) newEventStream(body io.ReadCloser) *EventStream {
 				for len(partialBlocks) <= envelope.Index {
 					partialBlocks = append(partialBlocks, anthropicPartialBlock{})
 				}
-				partialBlocks[envelope.Index] = anthropicPartialBlock{
+				partial := anthropicPartialBlock{
 					blockType: envelope.ContentBlock.Type,
 					toolUseID: envelope.ContentBlock.ID,
 					toolName:  envelope.ContentBlock.Name,
 				}
+				// server_tool_use uses ID for the tool use ID.
+				// tool_search_tool_result uses ToolUseID to reference
+				// the server_tool_use it responds to.
+				if envelope.ContentBlock.ToolUseID != "" {
+					partial.toolUseID = envelope.ContentBlock.ToolUseID
+				}
+				// Blocks that arrive fully formed (tool_search_tool_result)
+				// carry their content in the start event, not via deltas.
+				if len(envelope.ContentBlock.Content) > 0 {
+					partial.rawContent = envelope.ContentBlock.Content
+				}
+				partialBlocks[envelope.Index] = partial
 				continue
 
 			case "content_block_delta":
@@ -288,14 +310,16 @@ type anthropicContentBlock struct {
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Type         string          `json:"type,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	DeferLoading bool            `json:"defer_loading,omitempty"`
 }
 
 type anthropicResponse struct {
@@ -323,6 +347,10 @@ type anthropicPartialBlock struct {
 	inputJSON   strings.Builder
 	toolUseID   string
 	toolName    string
+	// rawContent holds content for blocks that arrive fully formed
+	// in content_block_start (e.g., tool_search_tool_result). These
+	// blocks have no deltas — the complete content is in the start event.
+	rawContent json.RawMessage
 }
 
 func (block *anthropicPartialBlock) toContentBlock() ContentBlock {
@@ -335,6 +363,27 @@ func (block *anthropicPartialBlock) toContentBlock() ContentBlock {
 			block.toolName,
 			json.RawMessage(block.inputJSON.String()),
 		)
+	case "server_tool_use":
+		// Server tool use accumulates input JSON via deltas, same as
+		// regular tool_use.
+		return ContentBlock{
+			Type: ContentServerToolUse,
+			ServerToolUse: &ServerToolUse{
+				ID:    block.toolUseID,
+				Name:  block.toolName,
+				Input: json.RawMessage(block.inputJSON.String()),
+			},
+		}
+	case "tool_search_tool_result":
+		// Tool search results arrive fully formed — use rawContent
+		// captured from content_block_start, not from deltas.
+		return ContentBlock{
+			Type: ContentServerToolResult,
+			ServerToolResult: &ServerToolResult{
+				ToolUseID: block.toolUseID,
+				Content:   block.rawContent,
+			},
+		}
 	default:
 		// Unknown block types are preserved as text with a type prefix.
 		return TextBlock(fmt.Sprintf("[%s] %s", block.blockType, block.textContent.String()))
@@ -366,11 +415,32 @@ func toAnthropicContentBlock(block ContentBlock) anthropicContentBlock {
 		}
 	case ContentToolResult:
 		if block.ToolResult != nil {
+			// Content is a string, but the wire format expects
+			// json.RawMessage. Marshal the string to a JSON string
+			// value so the wire representation is correct.
+			contentJSON, _ := json.Marshal(block.ToolResult.Content)
 			return anthropicContentBlock{
 				Type:      "tool_result",
 				ToolUseID: block.ToolResult.ToolUseID,
-				Content:   block.ToolResult.Content,
+				Content:   contentJSON,
 				IsError:   block.ToolResult.IsError,
+			}
+		}
+	case ContentServerToolUse:
+		if block.ServerToolUse != nil {
+			return anthropicContentBlock{
+				Type:  "server_tool_use",
+				ID:    block.ServerToolUse.ID,
+				Name:  block.ServerToolUse.Name,
+				Input: block.ServerToolUse.Input,
+			}
+		}
+	case ContentServerToolResult:
+		if block.ServerToolResult != nil {
+			return anthropicContentBlock{
+				Type:      "tool_search_tool_result",
+				ToolUseID: block.ServerToolResult.ToolUseID,
+				Content:   block.ServerToolResult.Content,
 			}
 		}
 	}
@@ -400,6 +470,23 @@ func fromAnthropicContentBlock(wire anthropicContentBlock) ContentBlock {
 		return TextBlock(wire.Text)
 	case "tool_use":
 		return ToolUseBlock(wire.ID, wire.Name, wire.Input)
+	case "server_tool_use":
+		return ContentBlock{
+			Type: ContentServerToolUse,
+			ServerToolUse: &ServerToolUse{
+				ID:    wire.ID,
+				Name:  wire.Name,
+				Input: wire.Input,
+			},
+		}
+	case "tool_search_tool_result":
+		return ContentBlock{
+			Type: ContentServerToolResult,
+			ServerToolResult: &ServerToolResult{
+				ToolUseID: wire.ToolUseID,
+				Content:   wire.Content,
+			},
+		}
 	default:
 		return TextBlock(fmt.Sprintf("[%s] %s", wire.Type, wire.Text))
 	}

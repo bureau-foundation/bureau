@@ -185,6 +185,12 @@ func (c *Command) Execute(args []string) error {
 				return Validation("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",
 					name, suggestion, c.fullName())
 			}
+			// Levenshtein found nothing — try semantic search across
+			// the full command tree.
+			semantic := SuggestSemantic(name, c.root(), 3)
+			if len(semantic) > 0 {
+				return Validation("%s", formatSemanticSuggestions(name, semantic, c.fullName()))
+			}
 			return Validation("unknown command %q\n\nRun '%s --help' for usage.",
 				name, c.fullName())
 		}
@@ -307,6 +313,17 @@ func (c *Command) fullName() string {
 		return c.Name
 	}
 	return c.parent.fullName() + " " + c.Name
+}
+
+// root returns the root of the command tree by walking up the parent
+// chain. During Execute dispatch, parent is set at each level, so
+// this reaches the entry-point command.
+func (c *Command) root() *Command {
+	current := c
+	for current.parent != nil {
+		current = current.parent
+	}
+	return current
 }
 
 // isHelpFlag returns true for common help flag variants.

@@ -192,11 +192,13 @@ func (err *ProviderError) IsOverloaded() bool {
 // doProviderRequest marshals wireRequest as JSON, POSTs it to endpoint
 // via httpClient, and returns the HTTP response. Returns a ProviderError
 // for non-200 status codes. When streaming is true, the Accept header is
-// set to text/event-stream.
+// set to text/event-stream. Extra headers (from Request.ExtraHeaders) are
+// applied after standard headers, allowing per-request feature flags like
+// Anthropic's "anthropic-beta" header.
 //
 // On success the caller is responsible for closing the response body.
 // On error the body is already closed.
-func doProviderRequest(ctx context.Context, httpClient *http.Client, endpoint string, wireRequest any, prefix string, streaming bool) (*http.Response, error) {
+func doProviderRequest(ctx context.Context, httpClient *http.Client, endpoint string, wireRequest any, prefix string, streaming bool, extraHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(wireRequest)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshaling request: %w", prefix, err)
@@ -210,6 +212,9 @@ func doProviderRequest(ctx context.Context, httpClient *http.Client, endpoint st
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if streaming {
 		httpRequest.Header.Set("Accept", "text/event-stream")
+	}
+	for key, value := range extraHeaders {
+		httpRequest.Header.Set(key, value)
 	}
 
 	httpResponse, err := httpClient.Do(httpRequest)

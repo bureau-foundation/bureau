@@ -117,11 +117,14 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 
 	// Create LLM provider through the proxy HTTP passthrough.
 	var provider llm.Provider
+	var selectedProviderType providerType
 	switch providerName {
 	case "anthropic":
 		provider = llm.NewAnthropic(proxy.HTTPClient(), service)
+		selectedProviderType = providerAnthropic
 	case "openai":
 		provider = llm.NewOpenAI(proxy.HTTPClient(), service)
+		selectedProviderType = providerOpenAI
 	default:
 		return nil, nil, fmt.Errorf("unknown LLM provider %q (supported: anthropic, openai)", providerName)
 	}
@@ -160,6 +163,7 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 
 		loopErr := runAgentLoop(loopCtx, &agentLoopConfig{
 			provider:       provider,
+			providerType:   selectedProviderType,
 			tools:          mcpServer,
 			contextManager: contextManager,
 			model:          model,

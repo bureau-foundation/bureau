@@ -23,6 +23,7 @@ go_library(
         "//cmd/bureau/observe",
         "//cmd/bureau/pipeline",
         "//cmd/bureau/service",
+        "//cmd/bureau/suggest",
         "//cmd/bureau/template",
         "//cmd/bureau/ticket",
         "//cmd/bureau/workspace",

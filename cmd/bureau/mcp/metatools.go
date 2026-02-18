@@ -20,11 +20,17 @@ const (
 	metaToolCall     = "bureau_tools_call"
 )
 
+// searchDefaultLimit is the maximum number of tools returned by a
+// BM25 search query in bureau_tools_list. Agents typically need
+// 5-10 relevant tools; 20 provides margin without overwhelming.
+const searchDefaultLimit = 20
+
 // --- Meta-tool parameter types ---
 
 // metaListParams are the parameters for bureau_tools_list.
 type metaListParams struct {
 	Category string `json:"category" desc:"filter tools by category (e.g. 'ticket', 'pipeline')"`
+	Query    string `json:"query"    desc:"search query to rank tools by relevance (e.g. 'create ticket', 'list services')"`
 }
 
 // metaDescribeParams are the parameters for bureau_tools_describe.
@@ -44,9 +50,10 @@ type metaCallParams struct {
 
 // toolSummary is a single entry in the bureau_tools_list output.
 type toolSummary struct {
-	Name     string `json:"name"     desc:"tool name (e.g. bureau_pipeline_list)"`
-	Title    string `json:"title"    desc:"one-line summary of what the tool does"`
-	Category string `json:"category" desc:"tool category derived from command path (e.g. pipeline, ticket)"`
+	Name     string   `json:"name"              desc:"tool name (e.g. bureau_pipeline_list)"`
+	Title    string   `json:"title"             desc:"one-line summary of what the tool does"`
+	Category string   `json:"category"          desc:"tool category derived from command path (e.g. pipeline, ticket)"`
+	Score    *float64 `json:"score,omitempty"    desc:"relevance score when a search query was provided"`
 }
 
 // toolDetail is the full description returned by bureau_tools_describe.
@@ -140,9 +147,12 @@ func metaToolDescriptions() []toolDescription {
 			Name:  metaToolList,
 			Title: "List available Bureau tools",
 			Description: "Return a lightweight listing of all available Bureau tools " +
-				"with names, one-line summaries, and categories. Use the category " +
-				"parameter to filter by tool group (e.g. 'ticket', 'pipeline'). " +
-				"Call bureau_tools_describe with a tool name to get full details " +
+				"with names, one-line summaries, and categories. Use the query " +
+				"parameter to search by natural language description and get " +
+				"relevance-ranked results (e.g. 'create ticket', 'list services'). " +
+				"Use the category parameter to filter by tool group (e.g. 'ticket', " +
+				"'pipeline'). Both parameters can be combined. Call " +
+				"bureau_tools_describe with a tool name to get full details " +
 				"including input/output schemas before invoking a tool.",
 			InputSchema:  listInputSchema,
 			OutputSchema: listOutputSchema,
@@ -175,6 +185,13 @@ func metaToolDescriptions() []toolDescription {
 	}
 }
 
+// --- JSON-RPC dispatch and handlers ---
+//
+// The handle* methods are thin wrappers that adapt the execute*
+// methods to the JSON-RPC protocol. Error returns from execute*
+// become JSON-RPC errors; success returns are serialized via
+// writeMetaToolResult or writeResult.
+
 // dispatchMetaTool routes a meta-tool invocation to the appropriate
 // handler.
 func (s *Server) dispatchMetaTool(encoder *json.Encoder, req *request, name string, arguments json.RawMessage) error {
@@ -190,14 +207,57 @@ func (s *Server) dispatchMetaTool(encoder *json.Encoder, req *request, name stri
 	}
 }
 
-// handleMetaList implements bureau_tools_list: returns authorized
-// tools as lightweight summaries filtered by optional category.
+// handleMetaList is the JSON-RPC handler for bureau_tools_list.
 func (s *Server) handleMetaList(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+	result, err := s.executeMetaList(arguments)
+	if err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
+	}
+	return writeMetaToolResult(encoder, req.ID, result)
+}
+
+// handleMetaDescribe is the JSON-RPC handler for bureau_tools_describe.
+func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+	result, err := s.executeMetaDescribe(arguments)
+	if err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
+	}
+	return writeMetaToolResult(encoder, req.ID, result)
+}
+
+// handleMetaCall is the JSON-RPC handler for bureau_tools_call.
+// Uses resolveMetaCallTarget for parameter validation, then
+// executeTool + buildToolResult for execution with full error
+// classification.
+func (s *Server) handleMetaCall(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+	target, innerArguments, err := s.resolveMetaCallTarget(arguments)
+	if err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
+	}
+
+	output, runErr := s.executeTool(target, innerArguments)
+	result := buildToolResult(output, runErr)
+	return writeResult(encoder, req.ID, result)
+}
+
+// --- Core implementations ---
+//
+// The execute* methods contain the business logic shared by both the
+// JSON-RPC handlers (above) and the CallTool API (callMetaTool in
+// server.go). They are independent of the transport layer.
+
+// executeMetaList returns authorized tool summaries, optionally
+// filtered by category and/or ranked by BM25 search query.
+func (s *Server) executeMetaList(arguments json.RawMessage) (any, error) {
 	var params metaListParams
 	if len(arguments) > 0 && string(arguments) != "null" {
 		if err := json.Unmarshal(arguments, &params); err != nil {
-			return writeError(encoder, req.ID, codeInvalidParams, "invalid arguments: "+err.Error())
+			return nil, fmt.Errorf("invalid arguments: %s", err)
 		}
+	}
+
+	if params.Query != "" {
+		return s.searchTools(params.Query, params.Category), nil
 	}
 
 	var summaries []toolSummary
@@ -219,30 +279,57 @@ func (s *Server) handleMetaList(encoder *json.Encoder, req *request, arguments j
 	if summaries == nil {
 		summaries = []toolSummary{}
 	}
-
-	return writeMetaToolResult(encoder, req.ID, summaries)
+	return summaries, nil
 }
 
-// handleMetaDescribe implements bureau_tools_describe: returns the
-// full description, schemas, annotations, and examples for a named
-// tool.
-func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+// searchTools returns BM25-ranked tool summaries matching the query,
+// filtered by authorization and optional category. Results are
+// ordered by descending relevance score.
+func (s *Server) searchTools(query, category string) []toolSummary {
+	results := s.searchIndex.Search(query, searchDefaultLimit)
+
+	var summaries []toolSummary
+	for _, result := range results {
+		t, ok := s.toolsByName[result.Name]
+		if !ok || !s.toolAuthorized(t) {
+			continue
+		}
+		toolCategory := toolCategory(t.name)
+		if category != "" && toolCategory != category {
+			continue
+		}
+		score := result.Score
+		summaries = append(summaries, toolSummary{
+			Name:     t.name,
+			Title:    t.title,
+			Category: toolCategory,
+			Score:    &score,
+		})
+	}
+	if summaries == nil {
+		summaries = []toolSummary{}
+	}
+	return summaries
+}
+
+// executeMetaDescribe returns the full tool detail for a named tool.
+func (s *Server) executeMetaDescribe(arguments json.RawMessage) (any, error) {
 	var params metaDescribeParams
 	if len(arguments) > 0 && string(arguments) != "null" {
 		if err := json.Unmarshal(arguments, &params); err != nil {
-			return writeError(encoder, req.ID, codeInvalidParams, "invalid arguments: "+err.Error())
+			return nil, fmt.Errorf("invalid arguments: %s", err)
 		}
 	}
 	if params.Name == "" {
-		return writeError(encoder, req.ID, codeInvalidParams, "name is required")
+		return nil, fmt.Errorf("name is required")
 	}
 
 	t, ok := s.toolsByName[params.Name]
 	if !ok {
-		return writeError(encoder, req.ID, codeInvalidParams, "unknown tool: "+params.Name)
+		return nil, fmt.Errorf("unknown tool: %s", params.Name)
 	}
 	if !s.toolAuthorized(t) {
-		return writeError(encoder, req.ID, codeInvalidParams, "tool not authorized: "+params.Name)
+		return nil, fmt.Errorf("tool not authorized: %s", params.Name)
 	}
 
 	detail := toolDetail{
@@ -254,7 +341,6 @@ func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, argumen
 		Annotations:  t.annotations,
 	}
 
-	// Include CLI examples from the command.
 	if t.command != nil {
 		for _, example := range t.command.Examples {
 			detail.Examples = append(detail.Examples, toolExample{
@@ -264,48 +350,61 @@ func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, argumen
 		}
 	}
 
-	return writeMetaToolResult(encoder, req.ID, detail)
+	return detail, nil
 }
 
-// handleMetaCall implements bureau_tools_call: executes a tool by
-// name with the provided arguments. The result passes through
-// transparently — the inner tool's content blocks and error status
-// are returned directly.
-//
-// No structuredContent is included because bureau_tools_call has no
-// outputSchema (the output type varies per inner tool). Per the MCP
-// specification, tools without outputSchema do not return
-// structuredContent. The inner tool's JSON output is available in
-// the text content block.
-func (s *Server) handleMetaCall(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+// resolveMetaCallTarget validates bureau_tools_call arguments and
+// resolves the target tool. Returns the resolved tool and the inner
+// tool's arguments. Used by both the JSON-RPC handler (which needs
+// the raw tool for executeTool + buildToolResult) and the CallTool
+// path (which formats the result differently).
+func (s *Server) resolveMetaCallTarget(arguments json.RawMessage) (*tool, json.RawMessage, error) {
 	var params metaCallParams
 	if len(arguments) > 0 && string(arguments) != "null" {
 		if err := json.Unmarshal(arguments, &params); err != nil {
-			return writeError(encoder, req.ID, codeInvalidParams, "invalid arguments: "+err.Error())
+			return nil, nil, fmt.Errorf("invalid arguments: %s", err)
 		}
 	}
 	if params.Name == "" {
-		return writeError(encoder, req.ID, codeInvalidParams, "name is required")
+		return nil, nil, fmt.Errorf("name is required")
 	}
 
-	// Prevent recursive meta-tool calls.
 	if isMetaTool(params.Name) {
-		return writeError(encoder, req.ID, codeInvalidParams,
-			fmt.Sprintf("meta-tools cannot be called through %s", metaToolCall))
+		return nil, nil, fmt.Errorf("meta-tools cannot be called through %s", metaToolCall)
 	}
 
 	t, ok := s.toolsByName[params.Name]
 	if !ok {
-		return writeError(encoder, req.ID, codeInvalidParams, "unknown tool: "+params.Name)
+		return nil, nil, fmt.Errorf("unknown tool: %s", params.Name)
 	}
 	if !s.toolAuthorized(t) {
-		return writeError(encoder, req.ID, codeInvalidParams, "tool not authorized: "+params.Name)
+		return nil, nil, fmt.Errorf("tool not authorized: %s", params.Name)
 	}
 
-	output, runErr := s.executeTool(t, params.Arguments)
-	result := buildToolResult(output, runErr)
-	return writeResult(encoder, req.ID, result)
+	return t, params.Arguments, nil
 }
+
+// executeMetaCall executes a tool via bureau_tools_call and returns
+// the result with CallTool semantics: infrastructure errors are
+// returned as a non-nil error, tool execution failures set isError.
+func (s *Server) executeMetaCall(arguments json.RawMessage) (string, bool, error) {
+	target, innerArguments, err := s.resolveMetaCallTarget(arguments)
+	if err != nil {
+		return "", false, err
+	}
+
+	output, runErr := s.executeTool(target, innerArguments)
+	if runErr != nil {
+		if output != "" {
+			output += "\n"
+		}
+		output += runErr.Error()
+		return output, true, nil
+	}
+	return output, false, nil
+}
+
+// --- Helpers ---
 
 // writeMetaToolResult marshals a value to JSON and returns it as both
 // a text content block and structuredContent. Used by meta-tools that

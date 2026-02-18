@@ -40,7 +40,7 @@ func (provider *OpenAI) Complete(ctx context.Context, request Request) (*Respons
 	wireRequest := provider.buildRequest(request, false)
 
 	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
-		provider.endpoint(), wireRequest, "llm/openai", false)
+		provider.endpoint(), wireRequest, "llm/openai", false, request.ExtraHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (provider *OpenAI) Stream(ctx context.Context, request Request) (*EventStre
 	wireRequest := provider.buildRequest(request, true)
 
 	httpResponse, err := doProviderRequest(ctx, provider.httpClient,
-		provider.endpoint(), wireRequest, "llm/openai", true)
+		provider.endpoint(), wireRequest, "llm/openai", true, request.ExtraHeaders)
 	if err != nil {
 		return nil, err
 	}

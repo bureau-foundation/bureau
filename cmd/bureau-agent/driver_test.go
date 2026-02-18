@@ -207,38 +207,42 @@ func TestParseLoopEvent_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestBuildToolDefinitions(t *testing.T) {
+func TestBuildToolCatalog(t *testing.T) {
 	t.Parallel()
 
 	// Create a minimal CLI command tree with a tool.
-	root := testCommandTree()
+	server := testCommandTree()
 
-	// Build tool definitions using the same code path as the agent.
-	definitions := buildToolDefinitions(root)
+	// Build tool catalog using the same code path as the agent.
+	catalog := buildToolCatalog(server)
 
 	// The wildcard grant should authorize the test tool.
-	if len(definitions) == 0 {
+	if len(catalog.definitions) == 0 {
 		t.Fatal("expected at least one tool definition")
 	}
 
 	// Find our test tool.
 	var found bool
-	for _, definition := range definitions {
+	for i, definition := range catalog.definitions {
 		if definition.Name == "test_echo" {
 			found = true
 			if definition.Description == "" {
 				t.Error("Description is empty")
 			}
 			// Verify InputSchema is valid JSON.
-			var schema map[string]any
-			if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
+			var schemaMap map[string]any
+			if err := json.Unmarshal(definition.InputSchema, &schemaMap); err != nil {
 				t.Errorf("InputSchema is not valid JSON: %v", err)
+			}
+			// Verify deferrable metadata is present.
+			if len(catalog.deferrable) <= i {
+				t.Error("deferrable slice too short")
 			}
 			break
 		}
 	}
 	if !found {
-		t.Errorf("test_echo tool not found in definitions; got %d tools", len(definitions))
+		t.Errorf("test_echo tool not found in catalog; got %d tools", len(catalog.definitions))
 	}
 }
 

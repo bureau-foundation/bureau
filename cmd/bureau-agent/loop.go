@@ -16,10 +16,46 @@ import (
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 )
 
+// providerType identifies the LLM provider for tool search strategy
+// selection. Different providers support different mechanisms for
+// managing large tool catalogs.
+type providerType string
+
+const (
+	providerAnthropic providerType = "anthropic"
+	providerOpenAI    providerType = "openai"
+)
+
+// Tool search thresholds. When the estimated token cost of tool
+// definitions exceeds these thresholds, the agent loop enables
+// provider-appropriate tool search to reduce per-request overhead.
+const (
+	// toolSearchTokenThreshold is the minimum estimated token cost
+	// before tool search is considered. 10K tokens is roughly 25-30
+	// tools with schemas — below this, sending all tools inline is
+	// cheaper than the search overhead.
+	toolSearchTokenThreshold = 10000
+
+	// toolSearchMinCount is the minimum number of tools before
+	// tool search is considered. Even if schemas are verbose,
+	// fewer than 15 tools are easily handled by the model without
+	// search assistance.
+	toolSearchMinCount = 15
+)
+
+// anthropicToolSearchBeta is the Anthropic beta header value that
+// enables server-side tool search with defer_loading.
+const anthropicToolSearchBeta = "advanced-tool-use-2025-04-15"
+
 // agentLoopConfig holds the dependencies for the agent loop.
 type agentLoopConfig struct {
 	// provider is the LLM backend (Anthropic, OpenAI-compat, etc.).
 	provider llm.Provider
+
+	// providerType identifies the provider for tool search strategy
+	// selection. Anthropic uses server-side defer_loading; other
+	// providers use progressive disclosure meta-tools.
+	providerType providerType
 
 	// tools is the MCP server providing tool discovery and execution.
 	tools *mcp.Server
@@ -39,6 +75,11 @@ type agentLoopConfig struct {
 
 	// maxTokens is the maximum output tokens per LLM call.
 	maxTokens int
+
+	// extraHeaders are provider-specific HTTP headers added to every
+	// LLM request. For Anthropic, this carries the beta header that
+	// enables tool search. Set by the tool search strategy selection.
+	extraHeaders map[string]string
 
 	// stdin is the read end of the message injection pipe. The lifecycle
 	// manager's message pump writes incoming Matrix messages here.
@@ -62,12 +103,10 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 	encoder.SetEscapeHTML(false)
 	scanner := bufio.NewScanner(config.stdin)
 
-	// Build tool definitions from the MCP server's authorized tool catalog.
-	toolDefinitions := buildToolDefinitions(config.tools)
-	config.logger.Info("tool catalog built",
-		"tool_count", len(toolDefinitions),
-		"model", config.model,
-	)
+	// Build tool definitions from the MCP server's authorized tool catalog,
+	// then select a tool search strategy if the catalog is large enough
+	// to benefit from on-demand discovery.
+	toolDefinitions := selectToolStrategy(config)
 
 	// Emit init system event.
 	encoder.Encode(loopEvent{
@@ -207,11 +246,12 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 // events — only the complete response matters for the session log.
 func callLLM(ctx context.Context, config *agentLoopConfig, messages []llm.Message, tools []llm.ToolDefinition) (*llm.Response, error) {
 	request := llm.Request{
-		Model:     config.model,
-		System:    config.systemPrompt,
-		Messages:  messages,
-		Tools:     tools,
-		MaxTokens: config.maxTokens,
+		Model:        config.model,
+		System:       config.systemPrompt,
+		Messages:     messages,
+		Tools:        tools,
+		MaxTokens:    config.maxTokens,
+		ExtraHeaders: config.extraHeaders,
 	}
 
 	stream, err := config.provider.Stream(ctx, request)
@@ -294,16 +334,134 @@ func executeToolCalls(ctx context.Context, tools *mcp.Server, toolUses []llm.Too
 	return results
 }
 
-// buildToolDefinitions converts the MCP server's authorized tool catalog
-// into llm.ToolDefinition values for the LLM request.
-func buildToolDefinitions(tools *mcp.Server) []llm.ToolDefinition {
+// toolCatalog holds the full tool catalog with deferral metadata.
+// Built once from the MCP server's authorized tools.
+type toolCatalog struct {
+	definitions []llm.ToolDefinition
+	deferrable  []bool
+}
+
+// buildToolCatalog converts the MCP server's authorized tool catalog
+// into llm.ToolDefinition values with deferral metadata.
+func buildToolCatalog(tools *mcp.Server) toolCatalog {
 	exports := tools.AuthorizedTools()
-	definitions := make([]llm.ToolDefinition, len(exports))
+	catalog := toolCatalog{
+		definitions: make([]llm.ToolDefinition, len(exports)),
+		deferrable:  make([]bool, len(exports)),
+	}
 	for i, export := range exports {
-		definitions[i] = llm.ToolDefinition{
+		catalog.definitions[i] = llm.ToolDefinition{
 			Name:        export.Name,
 			Description: export.Description,
 			InputSchema: export.InputSchema,
+		}
+		catalog.deferrable[i] = export.Deferrable
+	}
+	return catalog
+}
+
+// selectToolStrategy builds the tool catalog and applies the
+// appropriate tool search strategy based on catalog size and
+// provider type. Returns the tool definitions to send to the LLM.
+//
+// For small catalogs (below thresholds), all tools are sent inline.
+// For large catalogs:
+//   - Anthropic: tools are marked with defer_loading for server-side
+//     search, and the beta header is set on the config.
+//   - Other providers: tools are replaced with 3 progressive
+//     disclosure meta-tools that the model uses to discover and
+//     invoke tools on demand.
+func selectToolStrategy(config *agentLoopConfig) []llm.ToolDefinition {
+	catalog := buildToolCatalog(config.tools)
+	estimatedTokens := estimateToolTokens(catalog.definitions)
+
+	if estimatedTokens > toolSearchTokenThreshold && len(catalog.definitions) > toolSearchMinCount {
+		switch config.providerType {
+		case providerAnthropic:
+			definitions := applyAnthropicToolSearch(catalog)
+			config.extraHeaders = map[string]string{
+				"anthropic-beta": anthropicToolSearchBeta,
+			}
+
+			deferredCount := 0
+			for _, d := range catalog.deferrable {
+				if d {
+					deferredCount++
+				}
+			}
+			config.logger.Info("tool search enabled (Anthropic defer_loading)",
+				"tool_count", len(catalog.definitions),
+				"deferred_count", deferredCount,
+				"estimated_tool_tokens", estimatedTokens,
+				"model", config.model,
+			)
+			return definitions
+
+		default:
+			definitions := buildProgressiveToolDefinitions(config.tools)
+			config.logger.Info("tool search enabled (progressive disclosure)",
+				"tool_count", len(catalog.definitions),
+				"meta_tool_count", len(definitions),
+				"estimated_tool_tokens", estimatedTokens,
+				"model", config.model,
+			)
+			return definitions
+		}
+	}
+
+	config.logger.Info("tool catalog built",
+		"tool_count", len(catalog.definitions),
+		"estimated_tool_tokens", estimatedTokens,
+		"model", config.model,
+	)
+	return catalog.definitions
+}
+
+// estimateToolTokens estimates the total token cost of sending all
+// tool definitions in an LLM request. Uses a character-count / 4
+// heuristic, which is rough but sufficient for threshold comparison.
+func estimateToolTokens(tools []llm.ToolDefinition) int {
+	var totalCharacters int
+	for _, tool := range tools {
+		totalCharacters += len(tool.Name) + len(tool.Description) + len(tool.InputSchema)
+	}
+	return totalCharacters / 4
+}
+
+// applyAnthropicToolSearch marks deferrable tools with DeferLoading
+// and appends the Anthropic server-side search tool. Non-deferrable
+// tools (read-only query tools like list, show, search, status) stay
+// always-visible to ensure the model can discover what's available
+// without searching.
+func applyAnthropicToolSearch(catalog toolCatalog) []llm.ToolDefinition {
+	definitions := make([]llm.ToolDefinition, 0, len(catalog.definitions)+1)
+	for i, definition := range catalog.definitions {
+		if catalog.deferrable[i] {
+			definition.DeferLoading = true
+		}
+		definitions = append(definitions, definition)
+	}
+	// Append the Anthropic server-side search tool. The provider
+	// manages this tool internally — no description or schema needed.
+	definitions = append(definitions, llm.ToolDefinition{
+		Type: "tool_search_tool_bm25_20251119",
+		Name: "tool_search",
+	})
+	return definitions
+}
+
+// buildProgressiveToolDefinitions returns LLM tool definitions for
+// the 3 progressive disclosure meta-tools (bureau_tools_list,
+// bureau_tools_describe, bureau_tools_call). Used for non-Anthropic
+// providers where server-side tool search is unavailable.
+func buildProgressiveToolDefinitions(tools *mcp.Server) []llm.ToolDefinition {
+	metaTools := tools.MetaToolDefinitions()
+	definitions := make([]llm.ToolDefinition, len(metaTools))
+	for i, meta := range metaTools {
+		definitions[i] = llm.ToolDefinition{
+			Name:        meta.Name,
+			Description: meta.Description,
+			InputSchema: meta.InputSchema,
 		}
 	}
 	return definitions

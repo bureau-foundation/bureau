@@ -29,16 +29,29 @@ const (
 	// ContentToolResult is the result of a tool invocation, provided
 	// by the caller in a subsequent user message.
 	ContentToolResult ContentType = "tool_result"
+
+	// ContentServerToolUse is a server-initiated tool invocation
+	// (e.g., Anthropic's tool search). These are managed by the
+	// provider's API, not by the agent loop. They flow through
+	// conversation history so subsequent requests see them, but
+	// are not returned by [Response.ToolUses].
+	ContentServerToolUse ContentType = "server_tool_use"
+
+	// ContentServerToolResult is the result of a server-initiated
+	// tool invocation. Paired with ContentServerToolUse in the
+	// conversation history.
+	ContentServerToolResult ContentType = "server_tool_result"
 )
 
 // ContentBlock is a single unit of content within a [Message].
-// Exactly one of Text, ToolUse, or ToolResult is meaningful,
-// determined by Type.
+// Exactly one of the typed fields is meaningful, determined by Type.
 type ContentBlock struct {
-	Type       ContentType
-	Text       string      // Set when Type is ContentText.
-	ToolUse    *ToolUse    // Set when Type is ContentToolUse.
-	ToolResult *ToolResult // Set when Type is ContentToolResult.
+	Type             ContentType
+	Text             string            // Set when Type is ContentText.
+	ToolUse          *ToolUse          // Set when Type is ContentToolUse.
+	ToolResult       *ToolResult       // Set when Type is ContentToolResult.
+	ServerToolUse    *ServerToolUse    // Set when Type is ContentServerToolUse.
+	ServerToolResult *ServerToolResult // Set when Type is ContentServerToolResult.
 }
 
 // TextBlock creates a text content block.
@@ -74,6 +87,25 @@ type ToolResult struct {
 	ToolUseID string // Matches [ToolUse.ID] from the preceding assistant turn.
 	Content   string // Tool output text (typically JSON for structured tools).
 	IsError   bool   // True if the tool invocation failed.
+}
+
+// ServerToolUse represents a server-initiated tool invocation
+// (e.g., Anthropic's tool_search_tool). These are transparent to
+// the agent loop — the provider's API handles them internally —
+// but they must flow through conversation history so subsequent
+// requests maintain the correct message sequence.
+type ServerToolUse struct {
+	ID    string          // Provider-assigned identifier.
+	Name  string          // Server tool name (e.g., "tool_search_tool_bm25_20251119").
+	Input json.RawMessage // Server tool arguments.
+}
+
+// ServerToolResult carries the result of a server-initiated tool
+// invocation. Paired with a preceding [ServerToolUse] in the
+// conversation history.
+type ServerToolResult struct {
+	ToolUseID string          // Matches [ServerToolUse.ID].
+	Content   json.RawMessage // Result content (provider-specific JSON structure).
 }
 
 // Message is a single turn in a conversation.
@@ -113,6 +145,21 @@ type ToolDefinition struct {
 	Name        string          // Unique tool name.
 	Description string          // Human-readable description of what the tool does.
 	InputSchema json.RawMessage // JSON Schema object describing the tool's parameters.
+
+	// Type is set for provider-managed special tools like Anthropic's
+	// "tool_search_tool_bm25_20251119". Empty for regular user-defined
+	// tools. When Type is set, the tool is sent with its type field and
+	// the provider handles it internally — Description and InputSchema
+	// are omitted from the wire format.
+	Type string
+
+	// DeferLoading marks this tool for on-demand discovery by the
+	// provider's server-side tool search. The tool definition is sent
+	// in the request but hidden from the model's context until a
+	// search query matches it. Only meaningful for providers that
+	// support server-side tool search (Anthropic with the
+	// advanced-tool-use beta).
+	DeferLoading bool
 }
 
 // Request is a provider-agnostic LLM completion request.
@@ -143,6 +190,12 @@ type Request struct {
 
 	// StopSequences are strings that cause the model to stop generating.
 	StopSequences []string
+
+	// ExtraHeaders are provider-specific HTTP headers added to the
+	// request. For Anthropic, "anthropic-beta" enables features like
+	// server-side tool search. Other providers may use this for
+	// similar per-request feature flags.
+	ExtraHeaders map[string]string
 }
 
 // StopReason indicates why the model stopped generating.

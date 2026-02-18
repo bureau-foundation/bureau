@@ -70,8 +70,8 @@ func (d *Daemon) startCredentialService(ctx context.Context) (string, error) {
 }
 
 // credentialSocketPath returns the path for the daemon's credential
-// service socket. Placed directly under runDir (not under principal/)
-// because the daemon is not a principal.
+// service socket. The daemon is not a principal, so this uses a fixed
+// name rather than a localpart-derived path.
 func (d *Daemon) credentialSocketPath() string {
 	return d.runDir + "/credential.sock"
 }

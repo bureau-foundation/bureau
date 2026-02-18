@@ -179,7 +179,7 @@ pipeline runner, a Forgejo instance. Every principal:
 
 - Has a Matrix account (`@iree/amdgpu/pm:bureau.local`)
 - Has a unix socket path derived from its name
-  (`/run/bureau/principal/iree/amdgpu/pm.sock`)
+  (`/run/bureau/iree/amdgpu/pm.sock`)
 - Can be a member of rooms (scoping what it can see and do)
 - Can publish and receive state events
 - Can be observed (live terminal access)

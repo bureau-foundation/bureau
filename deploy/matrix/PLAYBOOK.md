@@ -405,7 +405,7 @@ bureau matrix state set \
   --key 'test/echo' \
   '#bureau/service:bureau.local' \
   m.bureau.service \
-  '{"name": "echo", "version": "0.1.0", "endpoint": "unix:///run/bureau/principal/test/echo.sock"}'
+  '{"name": "echo", "version": "0.1.0", "endpoint": "unix:///run/bureau/test/echo.sock"}'
 ```
 
 Read it back:

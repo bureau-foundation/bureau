@@ -65,7 +65,7 @@ Matrix user IDs use hierarchical localparts that map 1:1 to filesystem
 paths, room aliases, socket paths, and permission globs:
 
 ```
-@iree/amdgpu/pm:bureau.local      → /run/bureau/principal/iree/amdgpu/pm.sock
+@iree/amdgpu/pm:bureau.local      → /run/bureau/iree/amdgpu/pm.sock
 #iree/amdgpu/general:bureau.local → project room
 iree/**                           → permission glob
 ```

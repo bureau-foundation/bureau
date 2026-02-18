@@ -285,7 +285,7 @@ bureau-ticket-service
     |-- Matrix write path (PUT state events for mutations)
     '-- Unix socket server (CBOR request-response)
          |
-         '-- /run/bureau/principal/service/ticket/<scope>.sock
+         '-- /run/bureau/service/ticket/<scope>.sock
 ```
 
 The service has its own Matrix account and runs its own /sync loop. It

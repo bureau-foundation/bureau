@@ -9,17 +9,34 @@
 // Bureau uses Matrix localparts with "/" separators to create a
 // hierarchical namespace that maps 1:1 to filesystem paths:
 //
-//	@iree/amdgpu/pm:bureau.local  ->  /run/bureau/principal/iree/amdgpu/pm.sock
+//	@iree/amdgpu/pm:bureau.local  ->  /run/bureau/iree/amdgpu/pm.sock
 //
 // [ValidateLocalpart] enforces the invariants that make this mapping
 // safe: no ".." traversal, no hidden segments, no empty segments, only
 // the Matrix localpart charset (a-z, 0-9, ., _, =, -, /), and at most
-// 80 characters (derived from the 108-byte Unix socket path limit).
+// 84 characters (derived from the 108-byte Unix socket path limit).
 //
-// Two socket path namespaces are provided:
+// Agent-facing and daemon-only sockets share the same directory,
+// distinguished by suffix:
 //
-//   - [SocketPath] -- /run/bureau/principal/, visible inside sandboxes
-//   - [AdminSocketPath] -- /run/bureau/admin/, daemon-only
+//   - [SocketPath] -- <run-dir>/<localpart>.sock (agent-facing)
+//   - [AdminSocketPath] -- <run-dir>/<localpart>.admin.sock (daemon-only)
+//
+// The .admin.sock suffix replaces the old /admin/ subdirectory layout.
+// The launcher mounts individual socket files into sandboxes, so
+// co-locating both suffixes in the same directory has no security
+// implications — the .admin.sock file is simply never mounted.
+//
+// # Fleet Localparts
+//
+// Fleet-scoped entities use a structured localpart:
+//
+//	<namespace>/fleet/<fleet-name>/<entity-type>/<entity-name>
+//
+// [FleetLocalpart] constructs these, [ParseFleetLocalpart] decomposes them,
+// [FleetRelativeName] strips the fleet prefix to get entityType/entityName,
+// [IsFleetScoped] does a quick structural check, and [FleetPrefix] returns
+// the common prefix for all entities in a fleet.
 //
 // [MatchPattern] and [MatchAnyPattern] provide glob-based access
 // control matching: "*" (single segment), "**" (recursive), and

@@ -15,6 +15,7 @@ func TestRoomAliasConstants(t *testing.T) {
 		constant string
 		want     string
 	}{
+		{"space", RoomAliasSpace, "bureau"},
 		{"system", RoomAliasSystem, "bureau/system"},
 		{"machine", RoomAliasMachine, "bureau/machine"},
 		{"service", RoomAliasService, "bureau/service"},
@@ -28,6 +29,103 @@ func TestRoomAliasConstants(t *testing.T) {
 			t.Parallel()
 			if test.constant != test.want {
 				t.Errorf("%s = %q, want %q", test.name, test.constant, test.want)
+			}
+		})
+	}
+}
+
+func TestFleetRoomAlias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		namespace string
+		fleetName string
+		want      string
+	}{
+		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod"},
+		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev"},
+		{"acme_staging", "acme", "staging", "acme/fleet/staging"},
+		{"custom_namespace", "company_a", "us-east-gpu", "company_a/fleet/us-east-gpu"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := FleetRoomAlias(test.namespace, test.fleetName)
+			if got != test.want {
+				t.Errorf("FleetRoomAlias(%q, %q) = %q, want %q",
+					test.namespace, test.fleetName, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFleetMachineRoomAlias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		namespace string
+		fleetName string
+		want      string
+	}{
+		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod/machine"},
+		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev/machine"},
+		{"acme_staging", "acme", "staging", "acme/fleet/staging/machine"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := FleetMachineRoomAlias(test.namespace, test.fleetName)
+			if got != test.want {
+				t.Errorf("FleetMachineRoomAlias(%q, %q) = %q, want %q",
+					test.namespace, test.fleetName, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFleetServiceRoomAlias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		namespace string
+		fleetName string
+		want      string
+	}{
+		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod/service"},
+		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev/service"},
+		{"acme_staging", "acme", "staging", "acme/fleet/staging/service"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := FleetServiceRoomAlias(test.namespace, test.fleetName)
+			if got != test.want {
+				t.Errorf("FleetServiceRoomAlias(%q, %q) = %q, want %q",
+					test.namespace, test.fleetName, got, test.want)
+			}
+		})
+	}
+}
+
+func TestEntityConfigRoomAlias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		entityLocalpart string
+		want            string
+	}{
+		{"machine", "bureau/fleet/prod/machine/gpu-box", "bureau/fleet/prod/machine/gpu-box"},
+		{"service", "bureau/fleet/prod/service/stt/whisper", "bureau/fleet/prod/service/stt/whisper"},
+		{"agent", "bureau/fleet/dev/agent/code-reviewer", "bureau/fleet/dev/agent/code-reviewer"},
+		{"other_namespace", "acme/fleet/staging/machine/k8s-node-1", "acme/fleet/staging/machine/k8s-node-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := EntityConfigRoomAlias(test.entityLocalpart)
+			if got != test.want {
+				t.Errorf("EntityConfigRoomAlias(%q) = %q, want %q",
+					test.entityLocalpart, got, test.want)
 			}
 		})
 	}
@@ -62,16 +160,38 @@ func TestFullRoomAlias(t *testing.T) {
 		serverName string
 		want       string
 	}{
-		{"machine_room", RoomAliasMachine, "bureau.local", "#bureau/machine:bureau.local"},
-		{"config_room", ConfigRoomAlias("workstation"), "bureau.local", "#bureau/config/workstation:bureau.local"},
-		{"service_room", RoomAliasService, "example.com", "#bureau/service:example.com"},
+		{
+			"fleet_machine_room",
+			FleetMachineRoomAlias("bureau", "prod"),
+			"bureau.local",
+			"#bureau/fleet/prod/machine:bureau.local",
+		},
+		{
+			"entity_config_room",
+			EntityConfigRoomAlias("bureau/fleet/prod/machine/gpu-box"),
+			"bureau.local",
+			"#bureau/fleet/prod/machine/gpu-box:bureau.local",
+		},
+		{
+			"fleet_service_room",
+			FleetServiceRoomAlias("bureau", "prod"),
+			"example.com",
+			"#bureau/fleet/prod/service:example.com",
+		},
+		{
+			"global_system_room",
+			RoomAliasSystem,
+			"bureau.local",
+			"#bureau/system:bureau.local",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got := FullRoomAlias(test.localpart, test.serverName)
 			if got != test.want {
-				t.Errorf("FullRoomAlias(%q, %q) = %q, want %q", test.localpart, test.serverName, got, test.want)
+				t.Errorf("FullRoomAlias(%q, %q) = %q, want %q",
+					test.localpart, test.serverName, got, test.want)
 			}
 		})
 	}

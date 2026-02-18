@@ -21,7 +21,7 @@ func TestSignVerifyPushTargetsConfig(t *testing.T) {
 				SocketPath: "/run/bureau/tunnel/push-machine-gpu-server-1.sock",
 			},
 			"machine/workstation": {
-				SocketPath: "/run/bureau/principal/service/artifact/main.sock",
+				SocketPath: "/run/bureau/service/artifact/main.sock",
 				Token:      []byte("test-token-bytes"),
 			},
 		},
@@ -51,8 +51,8 @@ func TestSignVerifyPushTargetsConfig(t *testing.T) {
 	}
 
 	workstation := decoded.Targets["machine/workstation"]
-	if workstation.SocketPath != "/run/bureau/principal/service/artifact/main.sock" {
-		t.Errorf("workstation SocketPath = %q, want %q", workstation.SocketPath, "/run/bureau/principal/service/artifact/main.sock")
+	if workstation.SocketPath != "/run/bureau/service/artifact/main.sock" {
+		t.Errorf("workstation SocketPath = %q, want %q", workstation.SocketPath, "/run/bureau/service/artifact/main.sock")
 	}
 	if string(workstation.Token) != "test-token-bytes" {
 		t.Errorf("workstation Token = %q, want %q", string(workstation.Token), "test-token-bytes")

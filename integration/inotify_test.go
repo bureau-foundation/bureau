@@ -17,7 +17,7 @@ import (
 // Uses Linux inotify for event-driven detection instead of polling.
 //
 // When ancestor directories do not yet exist (e.g., the launcher hasn't
-// created <runDir>/principal/<name>/ yet), this function iteratively
+// created <runDir>/<namespace>/ yet for a hierarchical localpart), this function iteratively
 // watches the deepest existing ancestor. After any creation event in the
 // watched directory, it re-checks the full target path — this handles
 // os.MkdirAll creating multiple directory levels at once. Each iteration

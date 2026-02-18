@@ -1042,7 +1042,7 @@ func TestAdminEndpoints(t *testing.T) {
 
 	t.Run("register service with unix socket", func(t *testing.T) {
 		body, _ := json.Marshal(AdminServiceRequest{
-			UpstreamUnix: "/run/bureau/principal/service/stt/whisper.sock",
+			UpstreamUnix: "/run/bureau/service/stt/whisper.sock",
 		})
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/stt-whisper", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1135,7 +1135,7 @@ func TestAdminEndpoints(t *testing.T) {
 		// socket provides the physical transport.
 		body, _ := json.Marshal(AdminServiceRequest{
 			UpstreamURL:  "http://localhost/http/stt-whisper",
-			UpstreamUnix: "/run/bureau/principal/service/stt/whisper.sock",
+			UpstreamUnix: "/run/bureau/service/stt/whisper.sock",
 		})
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/service-stt-whisper", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

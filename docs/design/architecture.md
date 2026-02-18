@@ -61,15 +61,15 @@ escaping:
 
 ```
 @iree/amdgpu/pm:bureau.local
-  → /run/bureau/principal/iree/amdgpu/pm.sock
+  → /run/bureau/iree/amdgpu/pm.sock
 
 @service/stt/whisper:bureau.local
-  → /run/bureau/principal/service/stt/whisper.sock
+  → /run/bureau/service/stt/whisper.sock
 ```
 
 Standard unix tools work as discovery mechanisms:
-`ls /run/bureau/principal/iree/` lists all IREE principals.
-`ls /run/bureau/principal/iree/amdgpu/` narrows to the AMDGPU team.
+`ls /run/bureau/iree/` lists all IREE principals.
+`ls /run/bureau/iree/amdgpu/` narrows to the AMDGPU team.
 Shell globs match permission patterns.
 
 ### Room aliases
@@ -94,10 +94,10 @@ same path prefix.
 Localparts are validated at registration time:
 
 - **Non-empty.** A zero-length localpart is meaningless.
-- **Maximum 80 characters.** Unix socket paths are limited to 108 bytes
-  (`sun_path`). With the `/run/bureau/principal/` prefix (21 bytes) and
-  `.sock` suffix (5 bytes), 80 bytes of localpart keeps the total under
-  108 with 2 bytes of margin.
+- **Maximum 84 characters.** Unix socket paths are limited to 108 bytes
+  (`sun_path`). With the `/run/bureau/` prefix (12 bytes) and
+  `.admin.sock` suffix (11 bytes, the longest suffix), 84 bytes of
+  localpart keeps the total under 108 with 1 byte of margin.
 - **Lowercase only.** Matrix spec requires lowercase localparts. Bureau
   enforces this to prevent case-sensitivity mismatches between Matrix
   (case-folded) and the filesystem (case-sensitive).
@@ -517,7 +517,7 @@ template's `RequiredServices` list:
 2. Look up the bound principal in the `#bureau/service` directory to
    find which machine hosts it.
 3. For local services (same machine): use the service principal's socket
-   path directly (`/run/bureau/principal/<localpart>.sock`).
+   path directly (`/run/bureau/<localpart>.sock`).
 4. For remote services (different machine): create a local tunnel socket
    via the WebRTC transport.
 5. Pass all resolved sockets to the launcher as `ServiceMount` entries

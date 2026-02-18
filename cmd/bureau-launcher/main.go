@@ -741,9 +741,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 // handleCreateSandbox validates a create-sandbox request, spawns a bureau-proxy
 // process for the principal, and waits for it to become ready. The proxy's
-// agent-facing socket and admin socket are placed under
-// <run-dir>/principal/ and <run-dir>/admin/ respectively, mirroring the
-// principal's localpart hierarchy.
+// agent-facing socket (<run-dir>/<localpart>.sock) and admin socket
+// (<run-dir>/<localpart>.admin.sock) mirror the principal's localpart
+// hierarchy under the run directory.
 func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}

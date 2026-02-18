@@ -26,7 +26,7 @@ func TestSpecToProfile_Filesystem(t *testing.T) {
 		},
 	}
 
-	profile := specToProfile(spec, "/run/bureau/principal/test.sock")
+	profile := specToProfile(spec, "/run/bureau/test.sock")
 
 	// Should have the 3 spec mounts + 1 proxy socket mount.
 	if len(profile.Filesystem) != 4 {
@@ -53,8 +53,8 @@ func TestSpecToProfile_Filesystem(t *testing.T) {
 
 	// Check the proxy socket mount (always appended last).
 	proxySock := profile.Filesystem[3]
-	if proxySock.Source != "/run/bureau/principal/test.sock" {
-		t.Errorf("proxy socket source = %q, want /run/bureau/principal/test.sock", proxySock.Source)
+	if proxySock.Source != "/run/bureau/test.sock" {
+		t.Errorf("proxy socket source = %q, want /run/bureau/test.sock", proxySock.Source)
 	}
 	if proxySock.Dest != "/run/bureau/proxy.sock" {
 		t.Errorf("proxy socket dest = %q, want /run/bureau/proxy.sock", proxySock.Dest)
@@ -548,13 +548,13 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 	}
 
 	// Step 1: Convert to profile (no expansion yet).
-	profile := specToProfile(spec, "/run/bureau/principal/iree/amdgpu/pm.sock")
+	profile := specToProfile(spec, "/run/bureau/iree/amdgpu/pm.sock")
 
 	// Step 2: Build variables and expand (this mirrors buildSandboxCommand).
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
 		"CACHE_ROOT":     "/var/bureau/cache",
-		"PROXY_SOCKET":   "/run/bureau/principal/iree/amdgpu/pm.sock",
+		"PROXY_SOCKET":   "/run/bureau/iree/amdgpu/pm.sock",
 		"TERM":           "xterm-256color",
 	}
 	// Extract workspace variables from the payload (mirrors buildSandboxCommand).
@@ -651,7 +651,7 @@ func TestSpecToProfile_CacheRootVariableExpansion(t *testing.T) {
 		},
 	}
 
-	profile := specToProfile(spec, "/run/bureau/principal/bureau/sysadmin.sock")
+	profile := specToProfile(spec, "/run/bureau/bureau/sysadmin.sock")
 
 	// Sysadmin has no workspace payload — only base variables are available.
 	vars := sandbox.Variables{
@@ -710,13 +710,13 @@ func TestSpecToProfile_NoPayloadLeavesWorkspaceVarsUnexpanded(t *testing.T) {
 		// No payload — non-workspace principal.
 	}
 
-	profile := specToProfile(spec, "/run/bureau/principal/sysadmin.sock")
+	profile := specToProfile(spec, "/run/bureau/sysadmin.sock")
 
 	// No workspace payload means no PROJECT or WORKTREE_PATH variables.
 	vars := sandbox.Variables{
 		"WORKSPACE_ROOT": "/var/bureau/workspace",
 		"CACHE_ROOT":     "/var/bureau/cache",
-		"PROXY_SOCKET":   "/run/bureau/principal/sysadmin.sock",
+		"PROXY_SOCKET":   "/run/bureau/sysadmin.sock",
 	}
 	expanded := vars.ExpandProfile(profile)
 

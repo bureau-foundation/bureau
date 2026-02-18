@@ -38,33 +38,19 @@ const (
 
 	// MaxLocalpartLength is the maximum allowed length for a Bureau
 	// principal localpart. Derived from the unix socket path limit with
-	// the default run directory:
-	//   108 (sun_path) - len("/run/bureau/principal/") - len(".sock") = 82
-	// We use 80 for a clean limit with 2 bytes of margin.
-	MaxLocalpartLength = 80
+	// the default run directory. The longest socket subpath is
+	// /<localpart>.admin.sock, where the overhead is len("/") +
+	// len(".admin.sock") = 12 characters:
+	//   107 (usable sun_path bytes) - 11 (DefaultRunDir) - 12 (overhead) = 84
+	MaxLocalpartLength = 84
 
-	// SocketBasePath is the base directory under which principal sockets
-	// are created with the default run directory. The localpart maps
-	// directly to the path under this.
-	SocketBasePath = DefaultRunDir + "/principal/"
-
-	// AdminSocketBasePath is the base directory for proxy admin sockets
-	// with the default run directory. These are daemon-only — never
-	// bind-mounted into sandboxes. Separate from SocketBasePath so the
-	// security boundary is visible at the filesystem level: agents see
-	// <run-dir>/principal/, the daemon also sees <run-dir>/admin/.
-	AdminSocketBasePath = DefaultRunDir + "/admin/"
-
-	// SocketSuffix is the file extension for principal sockets.
+	// SocketSuffix is the file extension for agent-facing principal sockets.
 	SocketSuffix = ".sock"
 
-	// principalSubdir is the subdirectory under the run directory for
-	// agent-facing principal sockets.
-	principalSubdir = "/principal/"
-
-	// adminSubdir is the subdirectory under the run directory for
-	// daemon-only admin sockets.
-	adminSubdir = "/admin/"
+	// AdminSocketSuffix is the file extension for daemon-only admin sockets.
+	// The ".admin.sock" suffix distinguishes admin sockets from agent-facing
+	// sockets in the same directory — no parallel directory hierarchy needed.
+	AdminSocketSuffix = ".admin.sock"
 )
 
 // allowedChars is the set of characters permitted in Matrix localparts
@@ -96,7 +82,7 @@ func init() {
 //   - No ".." segments (path traversal)
 //   - No segments starting with "." (hidden files/directories)
 //   - No empty segments (double slashes "//" or leading/trailing "/")
-//   - Maximum 80 characters (derived from unix socket path limit)
+//   - Maximum 84 characters (derived from unix socket path limit)
 func ValidateLocalpart(localpart string) error {
 	if localpart == "" {
 		return fmt.Errorf("localpart is empty")
@@ -204,38 +190,39 @@ func RoomAliasLocalpart(fullAlias string) string {
 	return localpart
 }
 
-// SocketPath returns the unix socket path for a principal's localpart
-// using the default run directory.
+// SocketPath returns the agent-facing unix socket path for a principal's
+// localpart using the default run directory.
 //
-//	SocketPath("iree/amdgpu/pm") → "/run/bureau/principal/iree/amdgpu/pm.sock"
+//	SocketPath("iree/amdgpu/pm") → "/run/bureau/iree/amdgpu/pm.sock"
 //
 // The caller is responsible for creating intermediate directories.
 // The localpart should be validated with ValidateLocalpart before calling this.
 func SocketPath(localpart string) string {
-	return SocketBasePath + localpart + SocketSuffix
+	return DefaultRunDir + "/" + localpart + SocketSuffix
 }
 
-// AdminSocketPath returns the admin socket path for a principal using the
-// default run directory. The daemon connects here to configure service routing;
-// agents never see these sockets.
+// AdminSocketPath returns the daemon-only admin socket path for a principal
+// using the default run directory. The daemon connects here to configure
+// service routing; agents never see these sockets.
 //
-//	AdminSocketPath("iree/amdgpu/pm") → "/run/bureau/admin/iree/amdgpu/pm.sock"
+//	AdminSocketPath("iree/amdgpu/pm") → "/run/bureau/iree/amdgpu/pm.admin.sock"
 func AdminSocketPath(localpart string) string {
-	return AdminSocketBasePath + localpart + SocketSuffix
+	return DefaultRunDir + "/" + localpart + AdminSocketSuffix
 }
 
-// RunDirSocketPath returns the principal socket path for a custom run directory.
+// RunDirSocketPath returns the agent-facing socket path for a custom run directory.
 //
-//	RunDirSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/principal/iree/amdgpu/pm.sock"
+//	RunDirSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/iree/amdgpu/pm.sock"
 func RunDirSocketPath(runDir, localpart string) string {
-	return runDir + principalSubdir + localpart + SocketSuffix
+	return runDir + "/" + localpart + SocketSuffix
 }
 
-// RunDirAdminSocketPath returns the admin socket path for a custom run directory.
+// RunDirAdminSocketPath returns the daemon-only admin socket path for a custom
+// run directory.
 //
-//	RunDirAdminSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/admin/iree/amdgpu/pm.sock"
+//	RunDirAdminSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/iree/amdgpu/pm.admin.sock"
 func RunDirAdminSocketPath(runDir, localpart string) string {
-	return runDir + adminSubdir + localpart + SocketSuffix
+	return runDir + "/" + localpart + AdminSocketSuffix
 }
 
 // LauncherSocketPath returns the launcher IPC socket path for a run directory.
@@ -267,21 +254,20 @@ func ObserveSocketPath(runDir string) string {
 }
 
 // ValidateRunDir checks that a run directory path is short enough for unix
-// socket path limits. The longest subpath under run-dir is
-// /principal/<localpart>.sock, where the overhead is len("/principal/") +
-// len(".sock") = 16 characters. The total path must fit in 108 bytes
-// (sun_path limit).
+// socket path limits. The longest socket subpath is /<localpart>.admin.sock,
+// where the overhead is len("/") + len(".admin.sock") = 12 characters.
+// The total path must fit in 108 bytes (sun_path limit).
 //
 // Returns an error only if the run directory is too long for any localpart
 // at all (zero usable characters). Returns nil otherwise. The maximum
-// localpart length for a given run-dir is 107 - len(runDir) - 16.
+// localpart length for a given run-dir is 107 - len(runDir) - 12.
 //
 // MaxLocalpartAvailable returns the actual limit for callers that want to
 // check or log the effective localpart budget.
 func ValidateRunDir(runDir string) error {
 	available := MaxLocalpartAvailable(runDir)
 	if available < 1 {
-		overhead := len(principalSubdir) + len(SocketSuffix)
+		overhead := len("/") + len(AdminSocketSuffix)
 		return fmt.Errorf("--run-dir %q is %d bytes, too long for any localpart "+
 			"(unix socket path limit is 108 bytes, overhead is %d bytes)",
 			runDir, len(runDir), overhead+1)
@@ -291,10 +277,11 @@ func ValidateRunDir(runDir string) error {
 
 // MaxLocalpartAvailable returns the maximum localpart length supported by
 // the given run directory, accounting for the unix socket 108-byte sun_path
-// limit. The longest socket subpath is /principal/<localpart>.sock.
+// limit. The longest socket subpath is /<localpart>.admin.sock, where the
+// overhead is len("/") + len(".admin.sock") = 12 characters.
 // Returns 0 if the run directory is too long for any localpart.
 func MaxLocalpartAvailable(runDir string) int {
-	overhead := len(principalSubdir) + len(SocketSuffix) // 11 + 5 = 16
+	overhead := len("/") + len(AdminSocketSuffix) // 1 + 11 = 12
 	available := 107 - len(runDir) - overhead
 	if available < 0 {
 		return 0
@@ -338,4 +325,96 @@ func LocalpartFromMatrixID(matrixID string) (string, error) {
 	}
 
 	return matrixID[1:colonIndex], nil
+}
+
+// fleetLiteral is the literal path segment that marks the fleet boundary
+// in a fleet-scoped localpart: <namespace>/fleet/<fleetName>/<entityType>/<entityName>
+const fleetLiteral = "fleet"
+
+// FleetLocalpart constructs a fleet-scoped localpart from its components.
+// The result follows the structure: namespace/fleet/fleetName/entityType/entityName.
+//
+//	FleetLocalpart("bureau", "prod", "machine", "gpu-box") → "bureau/fleet/prod/machine/gpu-box"
+//	FleetLocalpart("acme", "staging", "service", "stt/whisper") → "acme/fleet/staging/service/stt/whisper"
+//
+// All components must be non-empty and must not contain "/". The entityName
+// is the only component that may contain "/" when passed through
+// ParseFleetLocalpart (it captures everything after entityType), but when
+// constructing via FleetLocalpart, the entityName is used verbatim.
+func FleetLocalpart(namespace, fleetName, entityType, entityName string) (string, error) {
+	for _, component := range []struct {
+		label string
+		value string
+	}{
+		{"namespace", namespace},
+		{"fleet name", fleetName},
+		{"entity type", entityType},
+		{"entity name", entityName},
+	} {
+		if component.value == "" {
+			return "", fmt.Errorf("fleet localpart: %s is empty", component.label)
+		}
+		if strings.Contains(component.value, "/") {
+			return "", fmt.Errorf("fleet localpart: %s %q contains '/'", component.label, component.value)
+		}
+	}
+	return namespace + "/" + fleetLiteral + "/" + fleetName + "/" + entityType + "/" + entityName, nil
+}
+
+// ParseFleetLocalpart splits a fleet-scoped localpart into its components.
+// The localpart must have the structure:
+//
+//	namespace/fleet/fleetName/entityType/entityName
+//
+// where "fleet" is a literal segment, and entityName may contain "/" (all
+// segments from index 4 onward are joined). Minimum 5 segments required.
+//
+//	ParseFleetLocalpart("bureau/fleet/prod/machine/gpu-box")
+//	  → ("bureau", "prod", "machine", "gpu-box", nil)
+//
+//	ParseFleetLocalpart("acme/fleet/staging/service/stt/whisper")
+//	  → ("acme", "staging", "service", "stt/whisper", nil)
+func ParseFleetLocalpart(localpart string) (namespace, fleetName, entityType, entityName string, err error) {
+	segments := strings.Split(localpart, "/")
+	if len(segments) < 5 {
+		return "", "", "", "", fmt.Errorf("fleet localpart %q has %d segments, minimum is 5", localpart, len(segments))
+	}
+	if segments[1] != fleetLiteral {
+		return "", "", "", "", fmt.Errorf("fleet localpart %q: segment 1 is %q, expected %q", localpart, segments[1], fleetLiteral)
+	}
+	namespace = segments[0]
+	fleetName = segments[2]
+	entityType = segments[3]
+	entityName = strings.Join(segments[4:], "/")
+	return namespace, fleetName, entityType, entityName, nil
+}
+
+// FleetRelativeName strips the namespace/fleet/fleetName/ prefix from a
+// fleet-scoped localpart, returning entityType/entityName.
+//
+//	FleetRelativeName("bureau/fleet/prod/machine/gpu-box") → "machine/gpu-box"
+//	FleetRelativeName("acme/fleet/staging/service/stt/whisper") → "service/stt/whisper"
+func FleetRelativeName(localpart string) (string, error) {
+	_, _, entityType, entityName, err := ParseFleetLocalpart(localpart)
+	if err != nil {
+		return "", err
+	}
+	return entityType + "/" + entityName, nil
+}
+
+// IsFleetScoped checks whether a localpart has fleet-scoped structure:
+// at least 5 slash-separated segments with "fleet" as the second segment.
+// This is a quick structural check, not a full validation.
+func IsFleetScoped(localpart string) bool {
+	segments := strings.Split(localpart, "/")
+	return len(segments) >= 5 && segments[1] == fleetLiteral
+}
+
+// FleetPrefix returns the common prefix for all entities in a fleet:
+// namespace/fleet/fleetName. Useful for constructing fleet-level room aliases
+// or glob patterns.
+//
+//	FleetPrefix("bureau", "prod") → "bureau/fleet/prod"
+func FleetPrefix(namespace, fleetName string) string {
+	return namespace + "/" + fleetLiteral + "/" + fleetName
 }

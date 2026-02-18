@@ -119,7 +119,7 @@ func TestLocalProviderSocket(t *testing.T) {
 		if !ok {
 			t.Fatal("expected to find local provider socket")
 		}
-		want := "/run/bureau/principal/service/stt/whisper.sock"
+		want := "/run/bureau/service/stt/whisper.sock"
 		if socket != want {
 			t.Errorf("socket = %q, want %q", socket, want)
 		}
@@ -304,7 +304,7 @@ func TestTransportInboundHandler(t *testing.T) {
 	// Since localProviderSocket derives the socket from the principal
 	// Matrix ID, we need the localpart "service/stt/whisper" to map
 	// to our test socket. The real SocketPath would be
-	// /run/bureau/principal/service/stt/whisper.sock. For testing, we
+	// /run/bureau/service/stt/whisper.sock. For testing, we
 	// need to control the path.
 	//
 	// Rather than patching SocketPath (which is a package-level
@@ -414,7 +414,7 @@ func TestCrossTransportRouting(t *testing.T) {
 
 	// The inbound handler calls localProviderSocket which derives the
 	// socket from the service principal. Since principal.SocketPath
-	// returns /run/bureau/principal/... (not our temp dir), we need to
+	// returns /run/bureau/... (not our temp dir), we need to
 	// hook the handler to use our test socket. We do this by making
 	// the inbound handler a closure that routes to the correct socket.
 	//
@@ -564,9 +564,8 @@ func TestTransportTunnel(t *testing.T) {
 
 	// The tunnel handler uses principal.RunDirSocketPath to derive
 	// the service socket from localpart. Override runDir so it finds
-	// our test socket. RunDirSocketPath returns runDir + "/principal/" +
-	// localpart + ".sock". We need to make sure our echo server is at
-	// that path.
+	// our test socket. RunDirSocketPath returns runDir + "/" +
+	// localpart + ".sock".
 	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
 
 	// Create the directory structure and symlink (or just re-listen).

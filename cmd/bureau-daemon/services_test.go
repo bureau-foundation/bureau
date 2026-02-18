@@ -219,7 +219,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machineUserID = "@machine/workstation:bureau.local"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
 	daemon.adminSocketPathFunc = func(localpart string) string {
 		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
@@ -249,7 +249,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 		Machine:   "@machine/cloud-gpu:bureau.local", // moved to remote
 		Protocol:  "http",
 	}
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
 	daemon.adminSocketPathFunc = func(localpart string) string {
 		return filepath.Join(adminDir, localpart+".admin.sock")
 	}
@@ -362,7 +362,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 		if err := json.Unmarshal([]byte(calls[0].body), &registration); err != nil {
 			t.Fatalf("unmarshal request body: %v", err)
 		}
-		expectedSocket := "/run/bureau/principal/service/stt/whisper.sock"
+		expectedSocket := "/run/bureau/service/stt/whisper.sock"
 		if registration.UpstreamUnix != expectedSocket {
 			t.Errorf("upstream_unix = %q, want %q", registration.UpstreamUnix, expectedSocket)
 		}
@@ -455,8 +455,8 @@ func TestConfigureConsumerProxy(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/principal/service/stt/whisper.sock"
-	daemon.proxyRoutes["service-llm-mixtral"] = "/run/bureau/principal/service/llm/mixtral.sock"
+	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
+	daemon.proxyRoutes["service-llm-mixtral"] = "/run/bureau/service/llm/mixtral.sock"
 	daemon.adminSocketPathFunc = func(localpart string) string {
 		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
@@ -524,7 +524,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	// Local service should be routed via provider socket.
 	if route, ok := daemon.proxyRoutes["service-stt-whisper"]; !ok {
 		t.Error("proxyRoutes should contain service-stt-whisper")
-	} else if route != "/run/bureau/principal/service/stt/whisper.sock" {
+	} else if route != "/run/bureau/service/stt/whisper.sock" {
 		t.Errorf("service-stt-whisper route = %q, want provider socket", route)
 	}
 
@@ -827,7 +827,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 		t.Error("proxyRoutes should contain service-stt-whisper")
 	} else if route == relaySocket {
 		t.Error("route should have changed from relay to provider socket after migration to local")
-	} else if route != "/run/bureau/principal/service/stt/whisper.sock" {
+	} else if route != "/run/bureau/service/stt/whisper.sock" {
 		t.Errorf("route = %q, want provider socket", route)
 	}
 }

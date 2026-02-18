@@ -314,6 +314,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			}
 		}
 
+		// Ensure the principal is a member of the config room. In the
+		// standard deployment path (bureau agent create / bureau service
+		// create), principal.Create invites and joins the principal to
+		// the config room before writing the MachineConfig. But
+		// alternative paths — HA failover, fleet placement, manual
+		// config edits — write PrincipalAssignments without handling
+		// room membership. The daemon invites here; the proxy's
+		// acceptPendingInvites joins during startup.
+		d.ensurePrincipalRoomAccess(ctx, localpart, d.configRoomID)
+
 		// Invite the principal to any workspace room it references so it
 		// can publish state events after joining. Two sources:
 		// StartCondition.RoomAlias (resolved during condition evaluation)
@@ -1048,28 +1058,23 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 	return destination
 }
 
-// ensurePrincipalRoomAccess invites a principal to a workspace room so it can
-// publish state events (m.bureau.workspace at PL 0). Called before
-// create-sandbox for principals whose StartCondition references a workspace
-// room or whose payload contains WORKSPACE_ROOM_ID.
+// ensurePrincipalRoomAccess invites a principal to a room so it becomes
+// a member when the proxy calls acceptPendingInvites on startup. Used for
+// both config rooms (lifecycle messaging) and workspace rooms (state
+// event publishing). Called before create-sandbox so the invite is
+// pending by the time the proxy starts.
 //
 // The invite is best-effort: failures are logged but do not block sandbox
 // creation. M_FORBIDDEN typically means the user is already a member.
-func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, workspaceRoomID string) {
+func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, roomID string) {
 	userID := principal.MatrixUserID(localpart, d.serverName)
 
-	// Invite the principal to the workspace room. Workspace rooms use
-	// membership as the authorization boundary (m.bureau.workspace at PL 0,
-	// room is invite-only), so the invite is the only access control step
-	// needed. Power level modification is not attempted — Continuwuity
-	// validates all fields in m.room.power_levels against the sender's PL
-	// (not just changed ones), so only admin (PL 100) can modify PLs.
-	if err := d.session.InviteUser(ctx, workspaceRoomID, userID); err != nil {
+	if err := d.session.InviteUser(ctx, roomID, userID); err != nil {
 		// M_FORBIDDEN typically means the user is already a member.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			d.logger.Warn("failed to invite principal to workspace room",
+			d.logger.Warn("failed to invite principal to room",
 				"principal", localpart,
-				"room_id", workspaceRoomID,
+				"room_id", roomID,
 				"error", err,
 			)
 		}

@@ -1,10 +1,10 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package principal handles Bureau principal identity: validation of
-// hierarchical localparts, construction of Matrix user IDs and room
-// aliases, and bidirectional mapping between Matrix identities and
-// filesystem paths.
+// Package principal handles Bureau principal identity, validation, and
+// lifecycle management.
+//
+// # Identity
 //
 // Bureau uses Matrix localparts with "/" separators to create a
 // hierarchical namespace that maps 1:1 to filesystem paths:
@@ -26,5 +26,21 @@
 // interior patterns like "iree/**/pm". Malformed patterns deny by
 // default rather than propagating errors.
 //
-// This package has no dependencies on other Bureau packages.
+// # Lifecycle Management
+//
+// Principal lifecycle operations are shared by agents and services:
+//
+//   - [Create]: registers a Matrix account, provisions encrypted credentials,
+//     joins the config room, and publishes the MachineConfig assignment.
+//     Used by "bureau agent create" and "bureau service create".
+//
+//   - [Resolve]: finds which machine a principal is assigned to, either
+//     by reading a specific machine's config or by scanning all machines
+//     from #bureau/machine.
+//
+//   - [List]: returns all principal assignments across machines,
+//     optionally filtered to a single machine.
+//
+//   - [Destroy]: removes a principal's assignment from the MachineConfig.
+//     The daemon detects the change and tears down the sandbox.
 package principal

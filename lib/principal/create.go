@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package agent
+package principal
 
 import (
 	"context"
@@ -10,20 +10,28 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bureau-foundation/bureau/lib/credential"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	libtemplate "github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// CreateParams holds the parameters for creating and deploying an agent.
+// ProvisionFunc encrypts and publishes a credential bundle for a principal
+// on a machine. Returns the config room ID where credentials were published.
+//
+// The standard implementation is credential.AsProvisionFunc(), which calls
+// credential.Provision under the hood. This function type breaks the import
+// cycle between lib/principal (which defines Create) and lib/credential
+// (which implements the encryption and publishing workflow).
+type ProvisionFunc func(ctx context.Context, session *messaging.Session, machineName, principalLocalpart, serverName string, credentials map[string]string) (configRoomID string, err error)
+
+// CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
 	// MachineName is the machine's localpart (e.g., "machine/workstation").
 	MachineName string
 
-	// Localpart is the agent principal's localpart (e.g., "agent/code-review").
+	// Localpart is the principal's localpart (e.g., "agent/code-review"
+	// or "service/ticket").
 	Localpart string
 
 	// TemplateRef is the template reference string (e.g.,
@@ -35,17 +43,17 @@ type CreateParams struct {
 
 	// HomeserverURL is the Matrix homeserver URL included in the encrypted
 	// credential bundle. The launcher uses this to configure the proxy's
-	// Matrix connection for the agent.
+	// Matrix connection for the principal.
 	HomeserverURL string
 
-	// AutoStart controls whether the daemon starts the agent's sandbox
+	// AutoStart controls whether the daemon starts the principal's sandbox
 	// immediately. Defaults to true when zero-valued because the struct
 	// is constructed by the caller — callers must explicitly set false.
 	AutoStart bool
 
 	// ExtraCredentials are additional key-value pairs included in the
 	// encrypted credential bundle alongside the Matrix token and user ID.
-	// Use this for LLM API keys or other service credentials the agent
+	// Use this for LLM API keys or other service credentials the principal
 	// needs inside its sandbox.
 	ExtraCredentials map[string]string
 
@@ -65,13 +73,13 @@ type CreateParams struct {
 	Labels map[string]string
 }
 
-// CreateResult holds the result of a successful agent creation.
+// CreateResult holds the result of a successful principal creation.
 type CreateResult struct {
-	// PrincipalUserID is the full Matrix user ID of the created agent
+	// PrincipalUserID is the full Matrix user ID of the created principal
 	// (e.g., "@agent/code-review:bureau.local").
 	PrincipalUserID string
 
-	// MachineName is the machine the agent was assigned to.
+	// MachineName is the machine the principal was assigned to.
 	MachineName string
 
 	// TemplateRef is the template reference string.
@@ -81,18 +89,18 @@ type CreateResult struct {
 	ConfigRoomID string
 
 	// ConfigEventID is the event ID of the published MachineConfig state
-	// event that includes this agent's assignment.
+	// event that includes this principal's assignment.
 	ConfigEventID string
 
-	// AccessToken is the Matrix access token for the newly created agent
-	// account. This is the same token that was sealed into the credential
-	// bundle. Callers that need to perform Matrix operations as the agent
-	// (e.g., joining additional rooms) can use this token to create a
-	// session. The CLI should NOT display this in output.
+	// AccessToken is the Matrix access token for the newly created
+	// principal account. This is the same token that was sealed into the
+	// credential bundle. Callers that need to perform Matrix operations
+	// as the principal (e.g., joining additional rooms) can use this
+	// token to create a session. The CLI should NOT display this in output.
 	AccessToken string `json:"-"`
 }
 
-// Create performs the full agent deployment sequence: registers a Matrix
+// Create performs the full principal deployment sequence: registers a Matrix
 // account, provisions encrypted credentials, invites the principal to the
 // config room, and publishes the MachineConfig assignment.
 //
@@ -103,17 +111,18 @@ type CreateResult struct {
 // The client is used for account registration (unauthenticated operation
 // that requires the registration token). The session is used for all
 // admin-level Matrix operations (credential provisioning, room management,
-// config publishing).
+// config publishing). The provision function handles credential encryption
+// and publishing — pass credential.AsProvisionFunc() for production use.
 //
 // If the account already exists (M_USER_IN_USE), Create returns an error.
-// Re-provisioning an existing agent requires explicit credential rotation
+// Re-provisioning an existing principal requires explicit credential rotation
 // via bureau credential provision.
-func Create(ctx context.Context, client *messaging.Client, session *messaging.Session, registrationToken *secret.Buffer, params CreateParams) (*CreateResult, error) {
-	if err := principal.ValidateLocalpart(params.MachineName); err != nil {
+func Create(ctx context.Context, client *messaging.Client, session *messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (*CreateResult, error) {
+	if err := ValidateLocalpart(params.MachineName); err != nil {
 		return nil, fmt.Errorf("invalid machine name: %w", err)
 	}
-	if err := principal.ValidateLocalpart(params.Localpart); err != nil {
-		return nil, fmt.Errorf("invalid agent localpart: %w", err)
+	if err := ValidateLocalpart(params.Localpart); err != nil {
+		return nil, fmt.Errorf("invalid principal localpart: %w", err)
 	}
 	if params.TemplateRef == "" {
 		return nil, fmt.Errorf("template reference is required")
@@ -135,8 +144,8 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 		return nil, fmt.Errorf("template %q not found: %w", params.TemplateRef, err)
 	}
 
-	// Register the agent's Matrix account. Generate a random password —
-	// the agent never logs in with it; it receives its access token via
+	// Register the principal's Matrix account. Generate a random password —
+	// the principal never logs in with it; it receives its access token via
 	// the encrypted credential bundle.
 	passwordBytes := make([]byte, 32)
 	if _, err := rand.Read(passwordBytes); err != nil {
@@ -150,23 +159,23 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 	}
 	defer password.Close()
 
-	agentSession, err := client.Register(ctx, messaging.RegisterRequest{
+	principalSession, err := client.Register(ctx, messaging.RegisterRequest{
 		Username:          params.Localpart,
 		Password:          password,
 		RegistrationToken: registrationToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("register agent account %q: %w", params.Localpart, err)
+		return nil, fmt.Errorf("register principal account %q: %w", params.Localpart, err)
 	}
-	defer agentSession.Close()
+	defer principalSession.Close()
 
-	agentUserID := agentSession.UserID()
-	agentToken := agentSession.AccessToken()
+	principalUserID := principalSession.UserID()
+	principalToken := principalSession.AccessToken()
 
 	// Build the credential bundle: Matrix identity + homeserver URL + extras.
 	credentials := map[string]string{
-		"MATRIX_TOKEN":          agentToken,
-		"MATRIX_USER_ID":        agentUserID,
+		"MATRIX_TOKEN":          principalToken,
+		"MATRIX_USER_ID":        principalUserID,
 		"MATRIX_HOMESERVER_URL": params.HomeserverURL,
 	}
 	for key, value := range params.ExtraCredentials {
@@ -177,47 +186,42 @@ func Create(ctx context.Context, client *messaging.Client, session *messaging.Se
 	}
 
 	// Provision encrypted credentials to the machine's config room.
-	provisionResult, err := credential.Provision(ctx, session, credential.ProvisionParams{
-		MachineName: params.MachineName,
-		Principal:   params.Localpart,
-		ServerName:  params.ServerName,
-		Credentials: credentials,
-	})
+	configRoomID, err := provision(ctx, session, params.MachineName, params.Localpart, params.ServerName, credentials)
 	if err != nil {
 		return nil, fmt.Errorf("provision credentials: %w", err)
 	}
 
-	// Invite the agent to the config room and join on its behalf. The
-	// agent needs config room membership to post lifecycle messages
+	// Invite the principal to the config room and join on its behalf. The
+	// principal needs config room membership to post lifecycle messages
 	// (agent-ready, completion summaries). We join now using the
-	// registration session so the agent is already a member when the
-	// sandbox starts — no need for the proxy or agent process to handle
+	// registration session so the principal is already a member when the
+	// sandbox starts — no need for the proxy or principal process to handle
 	// invite acceptance.
-	if err := session.InviteUser(ctx, provisionResult.ConfigRoomID, agentUserID); err != nil {
+	if err := session.InviteUser(ctx, configRoomID, principalUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return nil, fmt.Errorf("invite agent to config room: %w", err)
+			return nil, fmt.Errorf("invite principal to config room: %w", err)
 		}
 		// Already invited — not an error.
 	}
-	if _, err := agentSession.JoinRoom(ctx, provisionResult.ConfigRoomID); err != nil {
-		return nil, fmt.Errorf("agent join config room: %w", err)
+	if _, err := principalSession.JoinRoom(ctx, configRoomID); err != nil {
+		return nil, fmt.Errorf("principal join config room: %w", err)
 	}
 
 	// Read-modify-write the MachineConfig to add this principal's
 	// assignment. If the principal is already assigned (re-deploy),
 	// update the existing entry.
-	configEventID, err := assignPrincipal(ctx, session, provisionResult.ConfigRoomID, params)
+	configEventID, err := assignPrincipal(ctx, session, configRoomID, params)
 	if err != nil {
 		return nil, err
 	}
 
 	return &CreateResult{
-		PrincipalUserID: agentUserID,
+		PrincipalUserID: principalUserID,
 		MachineName:     params.MachineName,
 		TemplateRef:     params.TemplateRef,
-		ConfigRoomID:    provisionResult.ConfigRoomID,
+		ConfigRoomID:    configRoomID,
 		ConfigEventID:   configEventID,
-		AccessToken:     agentToken,
+		AccessToken:     principalToken,
 	}, nil
 }
 

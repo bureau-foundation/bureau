@@ -6,12 +6,21 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "principal",
     srcs = [
+        "create.go",
+        "destroy.go",
         "doc.go",
         "match.go",
         "principal.go",
+        "resolve.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/principal",
     visibility = ["//visibility:public"],
+    deps = [
+        "//lib/schema",
+        "//lib/secret",
+        "//lib/template",
+        "//messaging",
+    ],
 )
 
 go_test(

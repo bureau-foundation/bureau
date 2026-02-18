@@ -22,6 +22,7 @@ go_library(
         "//cmd/bureau/mcp",
         "//cmd/bureau/observe",
         "//cmd/bureau/pipeline",
+        "//cmd/bureau/service",
         "//cmd/bureau/template",
         "//cmd/bureau/ticket",
         "//cmd/bureau/workspace",

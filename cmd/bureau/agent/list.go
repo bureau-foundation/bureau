@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	libagent "github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -90,7 +90,7 @@ func runList(params agentListParams) error {
 	}
 	defer session.Close()
 
-	locations, machineCount, err := libagent.ListAgents(ctx, session, params.Machine, params.ServerName)
+	locations, machineCount, err := principal.List(ctx, session, params.Machine, params.ServerName)
 	if err != nil {
 		return cli.Internal("list agents: %w", err)
 	}
@@ -165,7 +165,7 @@ func runList(params agentListParams) error {
 // readAgentServiceState reads the agent session and metrics state events
 // for a given location. Returns nil for either if not found or on error
 // (best-effort enrichment).
-func readAgentServiceState(ctx context.Context, session *messaging.Session, location libagent.AgentLocation) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
+func readAgentServiceState(ctx context.Context, session *messaging.Session, location principal.Location) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
 	localpart := location.Assignment.Localpart
 	roomID := location.ConfigRoomID
 

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/bureau-foundation/bureau/lib/agent"
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -653,7 +652,7 @@ func deployAgent(t *testing.T, admin *messaging.Session, machine *testMachine, o
 	}
 	defer registrationTokenBuffer.Close()
 
-	result, err := libagent.Create(ctx, client, admin, registrationTokenBuffer, libagent.CreateParams{
+	result, err := principal.Create(ctx, client, admin, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
 		MachineName:   machine.Name,
 		Localpart:     options.Localpart,
 		TemplateRef:   ref.String(),

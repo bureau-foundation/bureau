@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package agent
+package service
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-type agentDestroyParams struct {
+type serviceDestroyParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
@@ -22,7 +22,7 @@ type agentDestroyParams struct {
 	Purge      bool   `json:"purge"       flag:"purge"       desc:"also clear the credential bundle"`
 }
 
-type agentDestroyResult struct {
+type serviceDestroyResult struct {
 	Localpart     string `json:"localpart"`
 	MachineName   string `json:"machine"`
 	ConfigRoomID  string `json:"config_room_id"`
@@ -31,44 +31,44 @@ type agentDestroyResult struct {
 }
 
 func destroyCommand() *cli.Command {
-	var params agentDestroyParams
+	var params serviceDestroyParams
 
 	return &cli.Command{
 		Name:    "destroy",
-		Summary: "Remove an agent's assignment from a machine",
-		Description: `Remove an agent's PrincipalAssignment from the MachineConfig.
+		Summary: "Remove a service's assignment from a machine",
+		Description: `Remove a service's PrincipalAssignment from the MachineConfig.
 
-The daemon detects the config change via /sync and tears down the agent's
-sandbox. The agent's Matrix account is preserved for audit trail purposes.
+The daemon detects the config change via /sync and tears down the service's
+sandbox. The service's Matrix account is preserved for audit trail purposes.
 
 With --purge, also clears the m.bureau.credentials state event for this
 principal (publishes empty content). Without --purge, credentials remain
-in the config room and can be reused if the agent is re-created.
+in the config room and can be reused if the service is re-created.
 
-Does NOT deactivate the Matrix account — the agent's message history and
+Does NOT deactivate the Matrix account — the service's message history and
 state event trail remain intact for auditing.`,
-		Usage: "bureau agent destroy <localpart> [--machine <machine>]",
+		Usage: "bureau service destroy <localpart> [--machine <machine>]",
 		Examples: []cli.Example{
 			{
-				Description: "Remove an agent (auto-discover machine)",
-				Command:     "bureau agent destroy agent/code-review --credential-file ./creds",
+				Description: "Remove a service (auto-discover machine)",
+				Command:     "bureau service destroy service/ticket --credential-file ./creds",
 			},
 			{
 				Description: "Remove and purge credentials",
-				Command:     "bureau agent destroy agent/code-review --credential-file ./creds --purge",
+				Command:     "bureau service destroy service/ticket --credential-file ./creds --purge",
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &agentDestroyResult{} },
-		RequiredGrants: []string{"command/agent/destroy"},
+		Output:         func() any { return &serviceDestroyResult{} },
+		RequiredGrants: []string{"command/service/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau agent destroy <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau service destroy <localpart> [--machine <machine>]", func(localpart string) error {
 			return runDestroy(localpart, params)
 		}),
 	}
 }
 
-func runDestroy(localpart string, params agentDestroyParams) error {
+func runDestroy(localpart string, params serviceDestroyParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -80,7 +80,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 
 	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.ServerName)
 	if err != nil {
-		return cli.NotFound("resolve agent: %w", err)
+		return cli.NotFound("resolve service: %w", err)
 	}
 
 	if params.Machine == "" && machineCount > 0 {
@@ -89,7 +89,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 
 	destroyResult, err := principal.Destroy(ctx, session, location.ConfigRoomID, location.MachineName, localpart)
 	if err != nil {
-		return cli.Internal("remove agent assignment: %w", err)
+		return cli.Internal("remove service assignment: %w", err)
 	}
 
 	purged := false
@@ -105,7 +105,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 		}
 	}
 
-	if done, err := params.EmitJSON(agentDestroyResult{
+	if done, err := params.EmitJSON(serviceDestroyResult{
 		Localpart:     localpart,
 		MachineName:   location.MachineName,
 		ConfigRoomID:  location.ConfigRoomID,

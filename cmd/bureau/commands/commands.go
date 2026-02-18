@@ -20,6 +20,7 @@ import (
 	mcpcmd "github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
+	servicecmd "github.com/bureau-foundation/bureau/cmd/bureau/service"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
@@ -48,6 +49,7 @@ observation, and structured messaging via Matrix.`,
 			matrix.Command(),
 			machinecmd.Command(),
 			agentcmd.Command(),
+			servicecmd.Command(),
 			authcmd.Command(),
 			credentialcmd.Command(),
 			templatecmd.Command(),

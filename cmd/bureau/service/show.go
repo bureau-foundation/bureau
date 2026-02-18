@@ -1,0 +1,106 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package service
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/principal"
+)
+
+type serviceShowParams struct {
+	cli.SessionConfig
+	cli.JSONOutput
+	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+}
+
+type serviceShowResult struct {
+	PrincipalUserID string            `json:"principal_user_id"`
+	MachineName     string            `json:"machine"`
+	Template        string            `json:"template"`
+	AutoStart       bool              `json:"auto_start"`
+	Labels          map[string]string `json:"labels,omitempty"`
+}
+
+func showCommand() *cli.Command {
+	var params serviceShowParams
+
+	return &cli.Command{
+		Name:    "show",
+		Summary: "Show detailed information about a service",
+		Description: `Display detailed information about a single service principal.
+
+If --machine is omitted, scans all machines to find where the service
+is assigned. The scan count is reported for diagnostics.`,
+		Usage: "bureau service show <localpart> [--machine <machine>]",
+		Examples: []cli.Example{
+			{
+				Description: "Show service details (auto-discover machine)",
+				Command:     "bureau service show service/ticket --credential-file ./creds",
+			},
+			{
+				Description: "Show service on a specific machine",
+				Command:     "bureau service show service/ticket --credential-file ./creds --machine machine/workstation",
+			},
+		},
+		Params:         func() any { return &params },
+		Output:         func() any { return &serviceShowResult{} },
+		RequiredGrants: []string{"command/service/show"},
+		Annotations:    cli.ReadOnly(),
+		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(localpart string) error {
+			return runShow(localpart, params)
+		}),
+	}
+}
+
+func runShow(localpart string, params serviceShowParams) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	session, err := params.SessionConfig.Connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.ServerName)
+	if err != nil {
+		return cli.NotFound("resolve service: %w", err)
+	}
+
+	if params.Machine == "" && machineCount > 0 {
+		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.MachineName, machineCount)
+	}
+
+	result := serviceShowResult{
+		PrincipalUserID: principal.MatrixUserID(localpart, params.ServerName),
+		MachineName:     location.MachineName,
+		Template:        location.Assignment.Template,
+		AutoStart:       location.Assignment.AutoStart,
+		Labels:          location.Assignment.Labels,
+	}
+
+	if done, err := params.EmitJSON(result); done {
+		return err
+	}
+
+	fmt.Printf("Principal:   %s\n", result.PrincipalUserID)
+	fmt.Printf("Machine:     %s\n", result.MachineName)
+	fmt.Printf("Template:    %s\n", result.Template)
+	fmt.Printf("Auto-start:  %v\n", result.AutoStart)
+
+	if len(result.Labels) > 0 {
+		fmt.Printf("Labels:\n")
+		for key, value := range result.Labels {
+			fmt.Printf("  %s: %s\n", key, value)
+		}
+	}
+
+	return nil
+}

@@ -4,20 +4,17 @@
 load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "agent",
+    name = "service",
     srcs = [
         "command.go",
-        "context.go",
         "create.go",
         "destroy.go",
         "doc.go",
         "helpers.go",
         "list.go",
-        "metrics.go",
-        "session.go",
         "show.go",
     ],
-    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/agent",
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/service",
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",

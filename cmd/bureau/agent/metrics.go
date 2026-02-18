@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	libagent "github.com/bureau-foundation/bureau/lib/agent"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -61,7 +60,7 @@ func runMetrics(localpart string, params agentMetricsParams) error {
 	}
 	defer session.Close()
 
-	location, machineCount, err := libagent.ResolveAgent(ctx, session, localpart, params.Machine, params.ServerName)
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.ServerName)
 	if err != nil {
 		return cli.NotFound("resolve agent: %w", err)
 	}

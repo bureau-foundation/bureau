@@ -1,10 +1,8 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package agent provides the shared library for Bureau agent wrappers
-// and agent management operations.
-//
-// # Agent Wrappers (in-sandbox)
+// Package agent provides the Bureau agent wrapper runtime for running
+// AI agent processes inside sandboxes.
 //
 // An agent wrapper is a binary that runs inside a Bureau sandbox, manages
 // an AI agent process (Claude Code, Codex, Gemini, etc.), and integrates
@@ -28,17 +26,6 @@
 // under cmd/bureau-agent-<name>/ and implements Driver for its specific
 // process management and output parsing.
 //
-// # Agent Management (operator-facing)
-//
-//   - Create: registers a Matrix account, provisions encrypted credentials,
-//     invites the agent to the config room, and publishes the MachineConfig
-//     assignment. Used by "bureau agent create".
-//
-//   - ResolveAgent: finds which machine a principal is assigned to, either
-//     by reading a specific machine's config or by scanning all machines
-//     from #bureau/machine. Used by all agent CLI commands that accept an
-//     optional --machine flag.
-//
-//   - ListAgents: returns all principal assignments across machines,
-//     optionally filtered to a single machine.
+// Principal lifecycle operations (create, resolve, list, destroy) live in
+// [lib/principal] and are shared between agents and services.
 package agent

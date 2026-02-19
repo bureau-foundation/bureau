@@ -26,6 +26,8 @@ go_test(
         "bwrap_test.go",
         "config_test.go",
         "sandbox_test.go",
+        "validate_test.go",
     ],
     embed = [":sandbox"],
+    deps = ["//lib/testutil"],
 )

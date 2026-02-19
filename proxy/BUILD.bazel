@@ -35,6 +35,7 @@ go_library(
 go_test(
     name = "proxy_test",
     srcs = [
+        "cli_service_test.go",
         "credentials_test.go",
         "filter_test.go",
         "http_service_test.go",

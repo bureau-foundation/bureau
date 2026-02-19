@@ -26,7 +26,7 @@ type createParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	Alias      string   `json:"alias"       desc:"workspace alias (e.g. iree/amdgpu/inference)" required:"true"`
-	Machine    string   `json:"machine"     flag:"machine"     desc:"machine localpart to host the workspace (required; use 'local' to auto-detect from launcher session)"`
+	Machine    string   `json:"machine"     flag:"machine"     desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation; use 'local' to auto-detect)"`
 	Template   string   `json:"template"    flag:"template"    desc:"sandbox template ref for agent principals (required, e.g., bureau/template:base)"`
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
 	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
@@ -60,8 +60,10 @@ m.bureau.workspace with status "active".
 
 The alias becomes both the Matrix room alias and filesystem path:
 
-  bureau workspace create iree/amdgpu/inference --machine machine/workstation \
-    --template bureau/template:base --param repository=https://github.com/iree-org/iree.git
+  bureau workspace create iree/amdgpu/inference \
+    --machine bureau/fleet/prod/machine/workstation \
+    --template bureau/template:base \
+    --param repository=https://github.com/iree-org/iree.git
 
 creates room #iree/amdgpu/inference:bureau.local, publishes project
 config, adds setup + agent principals to the workstation's MachineConfig,
@@ -75,15 +77,15 @@ All worktrees in a project share a single bare git object store at
 		Examples: []cli.Example{
 			{
 				Description: "Create a workspace with a git repository",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine bureau/fleet/prod/machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace with multiple agents",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --agent-count 3 --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine bureau/fleet/prod/machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --agent-count 3 --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace on a specific branch",
-				Command:     "bureau workspace create iree/amdgpu/inference --machine machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --param branch=develop --credential-file ./creds",
+				Command:     "bureau workspace create iree/amdgpu/inference --machine bureau/fleet/prod/machine/workstation --template bureau/template:base --param repository=https://github.com/iree-org/iree.git --param branch=develop --credential-file ./creds",
 			},
 			{
 				Description: "Create a workspace on the local machine (auto-detect identity)",

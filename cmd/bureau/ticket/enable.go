@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -22,7 +23,7 @@ type enableParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	Space      string `json:"space"       flag:"space"       desc:"project space alias (e.g., iree) — scopes the ticket service to rooms in this space"`
-	Host       string `json:"host"        flag:"host"        desc:"machine localpart to run the ticket service on (e.g., machine/workstation; use 'local' to auto-detect)"`
+	Host       string `json:"host"        flag:"host"        desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation; use 'local' to auto-detect)"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 	Prefix     string `json:"prefix"      flag:"prefix"      desc:"ticket ID prefix for rooms in this space" default:"tkt"`
 }
@@ -49,7 +50,7 @@ The command:
 
 Example:
 
-  bureau ticket enable --space iree --host machine/workstation --credential-file ./creds
+  bureau ticket enable --space iree --host bureau/fleet/prod/machine/workstation --credential-file ./creds
 
 This creates service principal "service/ticket/iree", adds it to the
 workstation's MachineConfig, and enables tickets in all rooms under
@@ -58,7 +59,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 		Examples: []cli.Example{
 			{
 				Description: "Enable tickets for the iree space on a workstation",
-				Command:     "bureau ticket enable --space iree --host machine/workstation --credential-file ./creds",
+				Command:     "bureau ticket enable --space iree --host bureau/fleet/prod/machine/workstation --credential-file ./creds",
 			},
 			{
 				Description: "Enable tickets on the local machine (auto-detect)",
@@ -106,8 +107,10 @@ func runEnable(params *enableParams) error {
 		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
 	}
 
-	if err := principal.ValidateLocalpart(host); err != nil {
-		return cli.Internal("invalid host: %w", err)
+	// Parse and validate the machine localpart as a typed ref.
+	machineRef, err := ref.ParseMachine(host, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid host: %w", err)
 	}
 
 	// Derive the service principal localpart from the space name.
@@ -157,7 +160,7 @@ func runEnable(params *enableParams) error {
 	fmt.Fprintf(os.Stderr, "Space %s (%s): %d rooms\n", spaceAlias, spaceRoomID, len(childRoomIDs))
 
 	// Step 3: Publish PrincipalAssignment to the machine config room.
-	if err := publishPrincipalAssignment(ctx, adminSession, host, servicePrincipal, params.Space, params.ServerName); err != nil {
+	if err := publishPrincipalAssignment(ctx, adminSession, machineRef, servicePrincipal, params.Space); err != nil {
 		return cli.Internal("publishing principal assignment: %w", err)
 	}
 
@@ -291,16 +294,17 @@ func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomI
 // rebuildAuthorizationIndex processes ALL principals regardless of
 // AutoStart, so the service appears in the authorization index for
 // grant resolution and service token minting.
-func publishPrincipalAssignment(ctx context.Context, session messaging.Session, host, servicePrincipal, space, serverName string) error {
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(host), serverName)
+func publishPrincipalAssignment(ctx context.Context, session messaging.Session, machine ref.Machine, servicePrincipal, space string) error {
+	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
 	}
 
 	// Read existing MachineConfig.
+	machineLocalpart := machine.Localpart()
 	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host)
+	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
 			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
@@ -327,12 +331,12 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 		},
 	})
 
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host, config)
+	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
 		return cli.Internal("publishing machine config: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, host)
+	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, machineLocalpart)
 	return nil
 }
 

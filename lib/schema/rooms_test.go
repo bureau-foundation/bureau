@@ -31,30 +31,6 @@ func TestRoomAliasConstants(t *testing.T) {
 	}
 }
 
-func TestEntityConfigRoomAlias(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name            string
-		entityLocalpart string
-		want            string
-	}{
-		{"machine", "bureau/fleet/prod/machine/gpu-box", "bureau/fleet/prod/machine/gpu-box"},
-		{"service", "bureau/fleet/prod/service/stt/whisper", "bureau/fleet/prod/service/stt/whisper"},
-		{"agent", "bureau/fleet/dev/agent/code-reviewer", "bureau/fleet/dev/agent/code-reviewer"},
-		{"other_namespace", "acme/fleet/staging/machine/k8s-node-1", "acme/fleet/staging/machine/k8s-node-1"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := EntityConfigRoomAlias(test.entityLocalpart)
-			if got != test.want {
-				t.Errorf("EntityConfigRoomAlias(%q) = %q, want %q",
-					test.entityLocalpart, got, test.want)
-			}
-		})
-	}
-}
-
 func TestFullRoomAlias(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -71,7 +47,7 @@ func TestFullRoomAlias(t *testing.T) {
 		},
 		{
 			"entity_config_room",
-			EntityConfigRoomAlias("bureau/fleet/prod/machine/gpu-box"),
+			"bureau/fleet/prod/machine/gpu-box",
 			"bureau.local",
 			"#bureau/fleet/prod/machine/gpu-box:bureau.local",
 		},

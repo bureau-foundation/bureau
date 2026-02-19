@@ -19,7 +19,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//lib/pipeline",
-        "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
     ],
 )

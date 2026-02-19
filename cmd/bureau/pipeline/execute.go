@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -19,7 +19,7 @@ import (
 type pipelineExecuteParams struct {
 	cli.JSONOutput
 	PipelineRef string   `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
-	Machine     string   `json:"machine"      flag:"machine"     desc:"target machine localpart (required)"`
+	Machine     string   `json:"machine"      flag:"machine"     desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation) (required)"`
 	Param       []string `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
 	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
@@ -57,11 +57,11 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		Examples: []cli.Example{
 			{
 				Description: "Run the workspace init pipeline on a machine",
-				Command:     "bureau pipeline execute bureau/pipeline:dev-workspace-init --machine machine/workstation --param PROJECT=iree --param BRANCH=main",
+				Command:     "bureau pipeline execute bureau/pipeline:dev-workspace-init --machine bureau/fleet/prod/machine/workstation --param PROJECT=iree --param BRANCH=main",
 			},
 			{
 				Description: "Run a project-specific deploy pipeline",
-				Command:     "bureau pipeline execute iree/pipeline:deploy --machine machine/builder",
+				Command:     "bureau pipeline execute iree/pipeline:deploy --machine bureau/fleet/prod/machine/builder",
 			},
 		},
 		Params:         func() any { return &params },
@@ -90,8 +90,9 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}
 
-			// Validate the machine localpart.
-			if err := principal.ValidateLocalpart(params.Machine); err != nil {
+			// Parse and validate the machine localpart as a typed ref.
+			machine, err := ref.ParseMachine(params.Machine, params.ServerName)
+			if err != nil {
 				return cli.Validation("invalid machine name: %w", err)
 			}
 
@@ -127,7 +128,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Resolve the config room for the target machine. The daemon
 			// monitors this room for m.bureau.command messages.
-			configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(params.Machine), params.ServerName)
+			configRoomAlias := machine.RoomAlias()
 			configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 			if err != nil {
 				return cli.NotFound("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)

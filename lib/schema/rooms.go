@@ -31,18 +31,6 @@ const (
 	RoomAliasArtifact = "bureau/artifact"
 )
 
-// EntityConfigRoomAlias returns the room alias localpart for an
-// entity's config room. Under the @→# convention, an entity's Matrix
-// user ID localpart IS its config room alias localpart — swap the
-// sigil and you get the room. This function makes that convention
-// explicit at call sites.
-//
-// Example: EntityConfigRoomAlias("bureau/fleet/prod/machine/gpu-box")
-// → "bureau/fleet/prod/machine/gpu-box"
-func EntityConfigRoomAlias(entityLocalpart string) string {
-	return entityLocalpart
-}
-
 // FullRoomAlias constructs a full Matrix room alias from a localpart
 // and server name: "#<localpart>:<serverName>".
 func FullRoomAlias(localpart, serverName string) string {

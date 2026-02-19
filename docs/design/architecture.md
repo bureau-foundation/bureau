@@ -403,8 +403,8 @@ add project-specific or role-specific overrides.
 Principal assignments declare what should run on a specific machine.
 They are published as `m.bureau.machine_config` state events in
 per-machine config rooms. Each machine's config room alias is the
-machine's fleet-scoped localpart (the `@`→`#` convention — see
-`EntityConfigRoomAlias()` in `lib/schema/rooms.go`). For example,
+machine's fleet-scoped localpart (the `@`→`#` convention — swap the
+sigil prefix, keeping the localpart and server). For example,
 `@bureau/fleet/prod/machine/workstation:bureau.local` has its config
 room at `#bureau/fleet/prod/machine/workstation:bureau.local`.
 

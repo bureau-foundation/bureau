@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/glamour"
-	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -423,8 +421,8 @@ func (renderer DetailRenderer) renderSection(title, body string) string {
 	return headerStyle.Render(title) + "\n" + bodyStyle.Render(body)
 }
 
-// renderMarkdownSection renders a titled section with glamour-rendered
-// markdown body. Falls back to plain text if glamour fails.
+// renderMarkdownSection renders a titled section with markdown body.
+// Falls back to plain text wrapping if rendering fails.
 func (renderer DetailRenderer) renderMarkdownSection(title, body string) string {
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -432,38 +430,22 @@ func (renderer DetailRenderer) renderMarkdownSection(title, body string) string 
 
 	rendered, err := renderer.renderMarkdown(body)
 	if err != nil {
-		// Fall back to plain text wrapping on glamour failure.
+		// Fall back to plain text wrapping on rendering failure.
 		return renderer.renderSection(title, body)
 	}
 
-	// Glamour adds leading/trailing newlines — trim them so section
-	// spacing is controlled by the caller.
+	// Trim trailing newlines so section spacing is controlled by the caller.
 	rendered = strings.TrimRight(rendered, "\n")
 
 	return headerStyle.Render(title) + "\n" + rendered
 }
 
-// renderMarkdown renders markdown text using glamour with word wrap
-// sized to the detail pane width.
+// renderMarkdown renders markdown text as styled terminal output with
+// word wrap sized to the detail pane width. Soft line breaks within
+// paragraphs become spaces so hard-wrapped source text reflows
+// correctly at any terminal width.
 func (renderer DetailRenderer) renderMarkdown(text string) (string, error) {
-	glamourRenderer, err := glamour.NewTermRenderer(
-		detailMarkdownStyle(),
-		glamour.WithWordWrap(renderer.width),
-	)
-	if err != nil {
-		return "", err
-	}
-	return glamourRenderer.Render(text)
-}
-
-// detailMarkdownStyle returns a glamour dark style with zero document
-// and code block margins for flush-left rendering in the detail pane.
-func detailMarkdownStyle() glamour.TermRendererOption {
-	style := glamourstyles.DarkStyleConfig
-	zeroMargin := uint(0)
-	style.Document.Margin = &zeroMargin
-	style.CodeBlock.StyleBlock.Margin = &zeroMargin
-	return glamour.WithStyles(style)
+	return renderTerminalMarkdown(text, renderer.theme, renderer.width), nil
 }
 
 // renderParentContext renders the parent epic with progress bar.
@@ -626,10 +608,7 @@ func (renderer DetailRenderer) renderNotes(notes []schema.TicketNote) string {
 		metaStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.FaintText)
 		meta := metaStyle.Render(fmt.Sprintf("%s at %s", note.Author, note.CreatedAt))
-		body := lipgloss.NewStyle().
-			Foreground(renderer.theme.NormalText).
-			Width(renderer.width).
-			Render(note.Body)
+		body := renderTerminalMarkdown(note.Body, renderer.theme, renderer.width)
 		lines = append(lines, meta+"\n"+body)
 	}
 
@@ -647,7 +626,7 @@ type DetailPane struct {
 
 	// Retained for re-rendering on resize. source and entry are set
 	// by SetContent and cleared by Clear. When hasEntry is true,
-	// SetSize re-renders the content at the new width so glamour
+	// SetSize re-renders the content at the new width so markdown
 	// word wrap adapts to splitter changes.
 	hasEntry bool
 	source   Source

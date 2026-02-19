@@ -224,6 +224,11 @@ available.`,
 }
 
 func runContextShow(localpart, key string, params contextShowParams) error {
+	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid agent localpart: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -279,7 +284,7 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 		return err
 	}
 
-	fmt.Printf("Agent:        %s\n", principal.MatrixUserID(localpart, params.ServerName))
+	fmt.Printf("Agent:        %s\n", agentRef.UserID())
 	fmt.Printf("Key:          %s\n", key)
 	fmt.Printf("Artifact:     %s\n", entry.ArtifactRef)
 	fmt.Printf("Content type: %s\n", entry.ContentType)

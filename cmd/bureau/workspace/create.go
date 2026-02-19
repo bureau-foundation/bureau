@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -143,9 +144,10 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machine)
 	}
 
-	// Validate the machine localpart.
-	if err := principal.ValidateLocalpart(machine); err != nil {
-		return cli.Validation("invalid machine name: %w", err)
+	// Parse and validate the machine localpart as a typed ref.
+	machineRef, err := ref.ParseMachine(machine, serverName)
+	if err != nil {
+		return cli.Validation("invalid machine name: %v", err)
 	}
 
 	// Parse key=value parameters.
@@ -172,7 +174,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	defer sess.Close()
 
 	adminUserID := sess.UserID()
-	machineUserID := principal.MatrixUserID(machine, serverName)
+	machineUserID := machineRef.UserID()
 
 	// Resolve the Bureau space. The workspace room will be added as a child.
 	spaceAlias := schema.FullRoomAlias("bureau", serverName)

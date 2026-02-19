@@ -53,6 +53,11 @@ of the m.bureau.agent_metrics state event.`,
 }
 
 func runMetrics(localpart string, params agentMetricsParams) error {
+	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid agent localpart: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -103,7 +108,7 @@ func runMetrics(localpart string, params agentMetricsParams) error {
 		return err
 	}
 
-	fmt.Printf("Agent:    %s\n", principal.MatrixUserID(localpart, params.ServerName))
+	fmt.Printf("Agent:    %s\n", agentRef.UserID())
 	fmt.Printf("Machine:  %s\n", location.Machine.Localpart())
 	fmt.Println()
 

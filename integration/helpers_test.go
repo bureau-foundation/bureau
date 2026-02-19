@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -498,7 +497,6 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	// validates this constraint.
 	fleetName := strings.ToLower(t.Name())
 	namespace := "bureau"
-	prefix := principal.FleetPrefix(namespace, fleetName)
 
 	namespaceRef, err := ref.NewNamespace(testServerName, namespace)
 	if err != nil {
@@ -508,6 +506,7 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	if err != nil {
 		t.Fatalf("create fleet ref: %v", err)
 	}
+	prefix := fleetRef.Localpart()
 
 	// Create the three fleet-scoped rooms with aliases. The daemon and
 	// fleet controller resolve these aliases at startup.

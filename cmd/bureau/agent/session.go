@@ -53,6 +53,11 @@ This is a direct view of the m.bureau.agent_session state event.`,
 }
 
 func runSession(localpart string, params agentSessionParams) error {
+	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid agent localpart: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -103,7 +108,7 @@ func runSession(localpart string, params agentSessionParams) error {
 		return err
 	}
 
-	fmt.Printf("Agent:    %s\n", principal.MatrixUserID(localpart, params.ServerName))
+	fmt.Printf("Agent:    %s\n", agentRef.UserID())
 	fmt.Printf("Machine:  %s\n", location.Machine.Localpart())
 	fmt.Println()
 

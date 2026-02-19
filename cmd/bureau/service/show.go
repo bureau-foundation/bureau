@@ -62,6 +62,11 @@ is assigned. The scan count is reported for diagnostics.`,
 }
 
 func runShow(localpart string, params serviceShowParams) error {
+	serviceRef, err := ref.ParseService(localpart, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid service localpart: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -95,7 +100,7 @@ func runShow(localpart string, params serviceShowParams) error {
 	}
 
 	result := serviceShowResult{
-		PrincipalUserID: principal.MatrixUserID(localpart, params.ServerName),
+		PrincipalUserID: serviceRef.UserID(),
 		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,

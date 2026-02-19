@@ -68,6 +68,11 @@ plus agent service state (session lifecycle, aggregated metrics).`,
 }
 
 func runShow(localpart string, params agentShowParams) error {
+	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid agent localpart: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -107,7 +112,7 @@ func runShow(localpart string, params agentShowParams) error {
 	sessionContent, metricsContent := readAgentServiceState(ctx, session, *location)
 
 	result := agentShowResult{
-		PrincipalUserID: principal.MatrixUserID(localpart, params.ServerName),
+		PrincipalUserID: agentRef.UserID(),
 		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,

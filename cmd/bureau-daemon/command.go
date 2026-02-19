@@ -72,7 +72,7 @@ func (d *Daemon) processCommandMessages(ctx context.Context, roomID string, even
 		// Skip messages sent by the daemon itself. This prevents
 		// self-processing loops if the daemon's own messages appear
 		// in the sync response (e.g., echoed command results).
-		if event.Sender == d.machineUserID {
+		if event.Sender == d.machine.UserID() {
 			continue
 		}
 

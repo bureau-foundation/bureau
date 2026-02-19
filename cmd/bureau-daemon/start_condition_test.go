@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -28,18 +29,19 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Set up the workspace room with an active workspace event (condition is met).
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
 	})
 
@@ -63,7 +65,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -90,11 +92,12 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Set up the workspace room alias but do NOT publish the workspace event.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -118,7 +121,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -146,11 +149,12 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -172,7 +176,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: event missing → deferred.
@@ -190,7 +194,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T01:00:00Z",
 	})
 
@@ -218,11 +222,12 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Principal with no StartCondition.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -238,7 +243,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -261,11 +266,12 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Principal gates on a custom state event in its own config room.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -291,7 +297,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 		"approved_by": "bureau-admin",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -314,11 +320,12 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Principal references a room alias that doesn't exist.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -339,7 +346,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -369,18 +376,19 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Workspace event exists but with "pending" status (not "active").
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "pending",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
 	})
 
@@ -403,7 +411,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: event exists but status is "pending" → deferred.
@@ -421,7 +429,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T01:00:00Z",
 	})
 
@@ -451,11 +459,12 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Ticket event with an array "labels" field containing "bug".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -484,7 +493,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -509,11 +518,12 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Ticket with labels that do NOT include "security".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -542,7 +552,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -567,11 +577,12 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Array with non-string elements only.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -600,7 +611,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -625,11 +636,12 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-4", map[string]any{
@@ -658,7 +670,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -682,11 +694,12 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-5", map[string]any{
@@ -715,7 +728,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -739,11 +752,12 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-6", map[string]any{
@@ -771,7 +785,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 		Ciphertext: "encrypted-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -799,18 +813,19 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Workspace is initially active — condition is met.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
 	})
 
@@ -833,7 +848,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: condition met → principal starts.
@@ -854,7 +869,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "teardown",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T02:00:00Z",
 	})
 
@@ -885,18 +900,19 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Workspace is initially active.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
 	})
 
@@ -929,7 +945,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 		Ciphertext: "encrypted-sysadmin-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: both principals start.
@@ -950,7 +966,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "teardown",
 		Project:   "iree",
-		Machine:   "machine/test",
+		Machine:   machineName,
 		UpdatedAt: "2026-02-10T02:00:00Z",
 	})
 
@@ -986,11 +1002,12 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Set up a workspace event with status "teardown" and a teardown_mode field.
 	// This is the event whose content should flow through as trigger content.
@@ -999,7 +1016,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 		Status:       "teardown",
 		TeardownMode: "archive",
 		Project:      "iree",
-		Machine:      "machine/test",
+		Machine:      machineName,
 		UpdatedAt:    "2026-02-10T03:00:00Z",
 	})
 
@@ -1033,7 +1050,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1058,8 +1075,8 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -1102,8 +1119,8 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	if triggerMap["project"] != "iree" {
 		t.Errorf("trigger project = %v, want %q", triggerMap["project"], "iree")
 	}
-	if triggerMap["machine"] != "machine/test" {
-		t.Errorf("trigger machine = %v, want %q", triggerMap["machine"], "machine/test")
+	if triggerMap["machine"] != machineName {
+		t.Errorf("trigger machine = %v, want %q", triggerMap["machine"], machineName)
 	}
 }
 
@@ -1116,11 +1133,12 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -1144,7 +1162,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1169,8 +1187,8 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -1213,11 +1231,12 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Ticket event with an array field. The "labels" array contains "urgent"
 	// which will satisfy the ContentMatch condition.
@@ -1258,7 +1277,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1283,8 +1302,8 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -1360,11 +1379,12 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Initial ticket has labels that do NOT include "reviewed".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1393,7 +1413,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 		Ciphertext: "encrypted-deployer-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: "reviewed" not in array → deferred.
@@ -1446,11 +1466,12 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Ticket initially has "active" in its tags array.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1478,7 +1499,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 		Ciphertext: "encrypted-worker-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: "active" is in the tags array → principal starts.
@@ -1530,11 +1551,12 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Ticket with labels containing "bug" and "frontend" but NOT "backend".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1591,7 +1613,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 		Ciphertext: "encrypted-backend-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -1647,11 +1669,12 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
 		ticketRoomID   = "!tickets:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID, machineName)
+	machine, fleet := testMachineSetup(t, "test", "test.local")
+	machineName := machine.Localpart()
+
+	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	// Start with "category" as a plain string value "infrastructure".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1679,7 +1702,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 		Ciphertext: "encrypted-infra-credentials",
 	})
 
-	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	daemon, tracker, cleanup := newStartConditionTestDaemon(t, matrixState, configRoomID, machine, fleet)
 	defer cleanup()
 
 	// First reconcile: string match succeeds → principal starts.
@@ -1732,7 +1755,7 @@ type principalTracker struct {
 
 // newStartConditionTestState creates a mock Matrix state with a base template.
 // The caller sets MachineConfig and StartCondition per test.
-func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID, machineName string) *mockMatrixState {
+func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID string) *mockMatrixState {
 	t.Helper()
 
 	state := newMockMatrixState()
@@ -1748,7 +1771,7 @@ func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID, mach
 // newStartConditionTestDaemon creates a Daemon backed by a mock Matrix server
 // and a mock launcher. Returns the daemon, a tracker for created principals,
 // and a cleanup function.
-func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, configRoomID, serverName, machineName string) (*Daemon, *principalTracker, func()) {
+func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, configRoomID string, machine ref.Machine, fleet ref.Fleet) (*Daemon, *principalTracker, func()) {
 	t.Helper()
 
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -1759,7 +1782,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1786,8 +1809,8 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }

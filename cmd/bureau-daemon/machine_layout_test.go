@@ -66,16 +66,17 @@ func TestMachineLayoutBasic(t *testing.T) {
 	if response.Layout == nil {
 		t.Fatal("response layout is nil")
 	}
-	if response.Machine != "machine/test" {
-		t.Errorf("machine = %q, want %q", response.Machine, "machine/test")
+	expectedMachine := daemon.machine.Localpart()
+	if response.Machine != expectedMachine {
+		t.Errorf("machine = %q, want %q", response.Machine, expectedMachine)
 	}
 	if len(response.Layout.Windows) != 1 {
 		t.Fatalf("window count = %d, want 1", len(response.Layout.Windows))
 	}
 
 	window := response.Layout.Windows[0]
-	if window.Name != "machine/test" {
-		t.Errorf("window name = %q, want %q", window.Name, "machine/test")
+	if window.Name != expectedMachine {
+		t.Errorf("window name = %q, want %q", window.Name, expectedMachine)
 	}
 	if len(window.Panes) != 3 {
 		t.Fatalf("pane count = %d, want 3", len(window.Panes))
@@ -194,7 +195,8 @@ func TestMachineLayoutMachineName(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
 	}
-	if response.Machine != "machine/test" {
-		t.Errorf("machine = %q, want %q", response.Machine, "machine/test")
+	expectedMachine := daemon.machine.Localpart()
+	if response.Machine != expectedMachine {
+		t.Errorf("machine = %q, want %q", response.Machine, expectedMachine)
 	}
 }

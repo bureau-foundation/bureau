@@ -21,9 +21,12 @@ import (
 )
 
 func TestServiceChanged(t *testing.T) {
+	gpu1, _ := testMachineSetup(t, "gpu-1", "bureau.local")
+	gpu2, _ := testMachineSetup(t, "gpu-2", "bureau.local")
+
 	base := &schema.Service{
 		Principal:    "@stt/whisper:bureau.local",
-		Machine:      "@machine/gpu-1:bureau.local",
+		Machine:      gpu1.UserID(),
 		Capabilities: []string{"streaming", "diarization"},
 		Protocol:     "http",
 		Description:  "Speech-to-text via Whisper",
@@ -36,37 +39,37 @@ func TestServiceChanged(t *testing.T) {
 	}{
 		{
 			name:    "identical",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: false,
 		},
 		{
 			name:    "different machine",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-2:bureau.local", Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu2.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different protocol",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: []string{"streaming", "diarization"}, Protocol: "grpc", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "grpc", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different capabilities",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: []string{"streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "capabilities reordered",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: []string{"diarization", "streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"diarization", "streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different description",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Updated description"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Updated description"},
 			changed: true,
 		},
 		{
 			name:    "nil vs empty capabilities",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: "@machine/gpu-1:bureau.local", Capabilities: nil, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: nil, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 	}
@@ -109,21 +112,22 @@ func TestStringSlicesEqual(t *testing.T) {
 func TestLocalAndRemoteServices(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu-1", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu-1:bureau.local",
+		Machine:   remoteMachine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.services["service/llm/mixtral"] = &schema.Service{
 		Principal: "@service/llm/mixtral:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 
@@ -151,18 +155,17 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
-	daemon.machineName = "machine/workstation"
-	daemon.serverName = "bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   remoteMachine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.adminSocketPathFunc = func(localpart string) string {
@@ -199,7 +202,7 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.adminSocketPathFunc = func(localpart string) string {
 		return filepath.Join(adminDir, localpart+".admin.sock")
@@ -217,7 +220,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
 	daemon.adminSocketPathFunc = func(localpart string) string {
@@ -242,11 +245,12 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local", // moved to remote
+		Machine:   remoteMachine.UserID(), // moved to remote
 		Protocol:  "http",
 	}
 	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
@@ -319,11 +323,11 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.running["agent/alice"] = true
@@ -494,19 +498,18 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
-	daemon.machineName = "machine/workstation"
-	daemon.serverName = "bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.relaySocketPath = relaySocket
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   remoteMachine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.adminSocketPathFunc = func(localpart string) string {
@@ -539,11 +542,12 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 func TestBuildServiceDirectory(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	gpuMachine, _ := testMachineSetup(t, "gpu-1", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal:    "@service/stt/whisper:bureau.local",
-		Machine:      "@machine/gpu-1:bureau.local",
+		Machine:      gpuMachine.UserID(),
 		Capabilities: []string{"streaming", "speaker-diarization"},
 		Protocol:     "http",
 		Description:  "Speech-to-text via Whisper",
@@ -551,7 +555,7 @@ func TestBuildServiceDirectory(t *testing.T) {
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal:    "@service/tts/piper:bureau.local",
-		Machine:      "@machine/gpu-1:bureau.local",
+		Machine:      gpuMachine.UserID(),
 		Capabilities: []string{"streaming"},
 		Protocol:     "http",
 		Description:  "Text-to-speech via Piper",
@@ -656,11 +660,13 @@ func TestPushDirectoryToProxy(t *testing.T) {
 		return filepath.Join(tempDir, localpart+".admin.sock")
 	}
 
+	gpuMachine, _ := testMachineSetup(t, "gpu-1", "bureau.local")
+	cpuMachine, _ := testMachineSetup(t, "cpu-1", "bureau.local")
 	directory := []adminDirectoryEntry{
 		{
 			Localpart:    "service/stt/whisper",
 			Principal:    "@service/stt/whisper:bureau.local",
-			Machine:      "@machine/gpu-1:bureau.local",
+			Machine:      gpuMachine.UserID(),
 			Protocol:     "http",
 			Description:  "Speech-to-text",
 			Capabilities: []string{"streaming"},
@@ -668,7 +674,7 @@ func TestPushDirectoryToProxy(t *testing.T) {
 		{
 			Localpart:   "service/embedding/e5",
 			Principal:   "@service/embedding/e5:bureau.local",
-			Machine:     "@machine/cpu-1:bureau.local",
+			Machine:     cpuMachine.UserID(),
 			Protocol:    "grpc",
 			Description: "Text embeddings",
 			Metadata:    map[string]any{"max_tokens": float64(512)},
@@ -751,11 +757,11 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 	daemon.running["agent/alice"] = true
@@ -781,11 +787,11 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	// When no consumers are running, pushServiceDirectory should be a no-op.
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 
@@ -801,12 +807,12 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	adminDir := testutil.SocketDir(t)
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.relaySocketPath = relaySocket
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local", // now local
+		Machine:   daemon.machine.UserID(), // now local
 		Protocol:  "http",
 	}
 	daemon.proxyRoutes["service-stt-whisper"] = relaySocket // was remote

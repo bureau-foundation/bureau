@@ -26,7 +26,7 @@ import (
 )
 
 // newTokenBlacklistDaemon creates a test daemon configured for token
-// blacklist tests: signing keypair, stateDir, and machineName set up.
+// blacklist tests: signing keypair, stateDir, and machine identity set up.
 func newTokenBlacklistDaemon(t *testing.T) (*Daemon, *clock.FakeClock, ed25519.PublicKey) {
 	t.Helper()
 
@@ -36,7 +36,7 @@ func newTokenBlacklistDaemon(t *testing.T) (*Daemon, *clock.FakeClock, ed25519.P
 	if err != nil {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
-	daemon.machineName = "machine/test"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
 	daemon.stateDir = t.TempDir()
 	daemon.tokenSigningPrivateKey = privateKey
 

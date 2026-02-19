@@ -81,6 +81,9 @@ func TestRoomHasStateChanges(t *testing.T) {
 func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -90,7 +93,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	const serviceRoomID = "!service:test"
 
 	// Set up machine config so reconcile finds something.
-	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
 			AutoStart: true,
@@ -103,7 +106,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -112,9 +115,8 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -123,7 +125,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
 	// Construct a sync response with a config room state change.
-	stateKey := "machine/test"
+	stateKey := machineName
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -161,6 +163,8 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -190,7 +194,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -199,9 +203,8 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -251,6 +254,8 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -278,7 +283,7 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -287,9 +292,8 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -356,13 +360,15 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 		},
 	})
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -370,7 +376,8 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 
 	// Pre-populate with two peers. peerB is stale (not in state events).
 	daemon, _ := newTestDaemon(t)
-	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.session = session
 	daemon.machineRoomID = machineRoomID
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
@@ -434,20 +441,23 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 		},
 	})
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
 	daemon, _ := newTestDaemon(t)
-	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.session = session
 	daemon.machineRoomID = machineRoomID
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
@@ -502,13 +512,15 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 		},
 	})
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -517,7 +529,8 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	// Two peers sharing the same address (e.g., behind a load balancer).
 	sharedAddress := "10.0.0.1:9090"
 	daemon, _ := newTestDaemon(t)
-	daemon.machineUserID = "@machine/test:bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.session = session
 	daemon.machineRoomID = machineRoomID
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = sharedAddress
@@ -547,6 +560,8 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -557,7 +572,7 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -566,9 +581,8 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = "!config:test"
 	daemon.machineRoomID = "!machine:test"
 	daemon.serviceRoomID = "!service:test"
@@ -599,6 +613,9 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 func TestInitialSync(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -608,7 +625,7 @@ func TestInitialSync(t *testing.T) {
 	const serviceRoomID = "!service:test"
 
 	// Set up machine config.
-	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
 			AutoStart: true,
@@ -649,7 +666,7 @@ func TestInitialSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -658,9 +675,8 @@ func TestInitialSync(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -721,6 +737,9 @@ func TestInitialSync(t *testing.T) {
 func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -730,7 +749,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	const serviceRoomID = "!service:test"
 
 	// Set up machine config so reconcile sets lastConfig.
-	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
 			AutoStart: true,
@@ -743,7 +762,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -752,9 +771,8 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -795,6 +813,9 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -805,7 +826,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	const workspaceRoomID = "!workspace:test"
 
 	// Set up machine config so reconcile has something to process.
-	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
 			AutoStart: true,
@@ -818,7 +839,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -827,9 +848,8 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID
@@ -867,6 +887,9 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 func TestInitialSync_AcceptsInvites(t *testing.T) {
 	t.Parallel()
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -877,7 +900,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	const workspaceRoomID = "!workspace:test"
 
 	// Set up machine config.
-	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, "machine/test", schema.MachineConfig{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Localpart: "test/agent",
 			AutoStart: true,
@@ -894,7 +917,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -903,9 +926,8 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.machineRoomID = machineRoomID
 	daemon.serviceRoomID = serviceRoomID

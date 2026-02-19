@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -167,9 +168,6 @@ func runProvision(args []string) error {
 		return fmt.Errorf("--config, --machine, --principal, and --fleet are required")
 	}
 
-	if err := principal.ValidateLocalpart(machineName); err != nil {
-		return fmt.Errorf("invalid machine name: %w", err)
-	}
 	if err := principal.ValidateLocalpart(principalName); err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
@@ -226,14 +224,13 @@ func runProvision(args []string) error {
 	}
 
 	// Parse the fleet prefix to derive the fleet machine room alias.
-	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
 	if err != nil {
 		return fmt.Errorf("parsing fleet prefix: %w", err)
 	}
 
 	// Fetch the machine's public key from the fleet machine room.
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
-	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
+	machineRoomID, err := session.ResolveAlias(ctx, fleet.MachineRoomAlias())
 	if err != nil {
 		return fmt.Errorf("resolving fleet machine room: %w", err)
 	}
@@ -255,9 +252,15 @@ func runProvision(args []string) error {
 		return fmt.Errorf("invalid machine public key: %w", err)
 	}
 
+	// Parse the machine ref for typed identity construction.
+	machineRef, err := ref.ParseMachine(machineName, serverName)
+	if err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+
 	// Build the recipient list: machine key + optional escrow key.
 	recipientKeys := []string{machineKey.PublicKey}
-	encryptedFor := []string{principal.MatrixUserID(machineName, serverName)}
+	encryptedFor := []string{machineRef.UserID()}
 
 	if escrowKey != "" {
 		if err := sealed.ParsePublicKey(escrowKey); err != nil {
@@ -276,7 +279,7 @@ func runProvision(args []string) error {
 	// Resolve the config room. The config room must already exist (created
 	// by machine provisioning or the daemon's first boot). If it doesn't
 	// exist, that indicates the machine hasn't been provisioned.
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configRoomAlias := machineRef.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
@@ -333,7 +336,8 @@ func runAssign(args []string) error {
 		return fmt.Errorf("--config, --machine, --principal, and --template are required")
 	}
 
-	if err := principal.ValidateLocalpart(machineName); err != nil {
+	machineRef, err := ref.ParseMachine(machineName, serverName)
+	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
 	if err := principal.ValidateLocalpart(principalName); err != nil {
@@ -355,7 +359,7 @@ func runAssign(args []string) error {
 
 	// Resolve the config room. The config room must already exist (created
 	// by machine provisioning or the daemon's first boot).
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configRoomAlias := machineRef.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
@@ -428,7 +432,8 @@ func runList(args []string) error {
 		return fmt.Errorf("--config and --machine are required")
 	}
 
-	if err := principal.ValidateLocalpart(machineName); err != nil {
+	machineRef, err := ref.ParseMachine(machineName, serverName)
+	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
 
@@ -446,7 +451,7 @@ func runList(args []string) error {
 	}
 
 	// Resolve the config room.
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configRoomAlias := machineRef.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

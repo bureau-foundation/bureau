@@ -58,7 +58,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 
 func TestConfigRoomPowerLevels(t *testing.T) {
 	adminUserID := "@bureau-admin:bureau.local"
-	machineUserID := "@machine/workstation:bureau.local"
+	machine, _ := testMachineSetup(t, "workstation", "bureau.local")
+	machineUserID := machine.UserID()
 	levels := schema.ConfigRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.
@@ -126,8 +127,7 @@ func TestPublishStatus_SandboxCount(t *testing.T) {
 	// Verify that the running map count is correctly calculated.
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineName = "machine/test"
-	daemon.serverName = "bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
 	daemon.running["iree/amdgpu/pm"] = true
 	daemon.running["service/stt/whisper"] = true
 	daemon.running["service/tts/piper"] = true

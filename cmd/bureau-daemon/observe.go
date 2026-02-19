@@ -511,7 +511,7 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 		}
 	}
 
-	layout := observe.GenerateMachineLayout(d.machineName, authorizedPrincipals)
+	layout := observe.GenerateMachineLayout(d.machine.Localpart(), authorizedPrincipals)
 	if layout == nil {
 		d.sendObserveError(clientConnection,
 			"no observable principals running on this machine")
@@ -520,14 +520,14 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 
 	d.logger.Info("query_machine_layout completed",
 		"observer", request.Observer,
-		"machine", d.machineName,
+		"machine", d.machine.Localpart(),
 		"principals", len(authorizedPrincipals),
 	)
 
 	json.NewEncoder(clientConnection).Encode(observe.QueryLayoutResponse{
 		OK:      true,
 		Layout:  layout,
-		Machine: d.machineName,
+		Machine: d.machine.Localpart(),
 	})
 }
 
@@ -580,7 +580,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 
 		principals = append(principals, observe.ListPrincipal{
 			Localpart:  localpart,
-			Machine:    d.machineName,
+			Machine:    d.machine.Localpart(),
 			Observable: true,
 			Local:      true,
 		})
@@ -599,7 +599,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 			machineLocalpart = service.Machine
 		}
 
-		isLocal := service.Machine == d.machineUserID
+		isLocal := service.Machine == d.machine.UserID()
 		observable := isLocal && runningSet[localpart]
 		if !isLocal {
 			// Remote principal is observable if we have a transport
@@ -630,8 +630,8 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	// Collect machines.
 	var machines []observe.ListMachine
 	machines = append(machines, observe.ListMachine{
-		Name:      d.machineName,
-		UserID:    d.machineUserID,
+		Name:      d.machine.Localpart(),
+		UserID:    d.machine.UserID(),
 		Self:      true,
 		Reachable: true,
 	})
@@ -684,7 +684,7 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 	response := observeResponse{
 		OK:          true,
 		Session:     sessionName,
-		Machine:     d.machineName,
+		Machine:     d.machine.Localpart(),
 		GrantedMode: grantedMode,
 	}
 	clientConnection.SetDeadline(time.Time{})
@@ -994,7 +994,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	responseJSON, _ := json.Marshal(observeResponse{
 		OK:          true,
 		Session:     sessionName,
-		Machine:     d.machineName,
+		Machine:     d.machine.Localpart(),
 		GrantedMode: authz.GrantedMode,
 	})
 	fmt.Fprintf(transportBuffer, "HTTP/1.1 200 OK\r\n")
@@ -1112,7 +1112,7 @@ func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok boo
 		if serviceLocalpart != localpart {
 			continue
 		}
-		if service.Machine == d.machineUserID {
+		if service.Machine == d.machine.UserID() {
 			continue // Local, not remote.
 		}
 		address, exists := d.peerAddresses[service.Machine]

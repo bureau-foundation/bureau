@@ -267,7 +267,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		var sandboxSpec *schema.SandboxSpec
 		var resolvedTemplate *schema.TemplateContent
 		if assignment.Template != "" {
-			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
+			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
 			if err != nil {
 				d.logger.Error("resolving template", "principal", localpart, "template", assignment.Template, "error", err)
 				d.recordStartFailure(localpart, failureCategoryTemplate, err.Error())
@@ -600,7 +600,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	}
 
 	// Re-resolve the template to get the current desired spec.
-	template, err := resolveTemplate(ctx, d.session, assignment.Template, d.serverName)
+	template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
 	if err != nil {
 		d.logger.Error("re-resolving template for running principal",
 			"principal", localpart, "template", assignment.Template, "error", err)
@@ -895,7 +895,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 
 // readMachineConfig reads the MachineConfig state event from the config room.
 func (d *Daemon) readMachineConfig(ctx context.Context) (*schema.MachineConfig, error) {
-	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeMachineConfig, d.machineName)
+	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeMachineConfig, d.machine.Localpart())
 	if err != nil {
 		return nil, err
 	}
@@ -1096,7 +1096,7 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 // The invite is best-effort: failures are logged but do not block sandbox
 // creation. M_FORBIDDEN typically means the user is already a member.
 func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, roomID string) {
-	userID := principal.MatrixUserID(localpart, d.serverName)
+	userID := principal.MatrixUserID(localpart, d.machine.Server())
 
 	if err := d.session.InviteUser(ctx, roomID, userID); err != nil {
 		// M_FORBIDDEN typically means the user is already a member.
@@ -1276,7 +1276,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 
 		token := &servicetoken.Token{
 			Subject:   localpart,
-			Machine:   d.machineName,
+			Machine:   d.machine.Localpart(),
 			Audience:  role,
 			Grants:    tokenGrants,
 			ID:        tokenID,

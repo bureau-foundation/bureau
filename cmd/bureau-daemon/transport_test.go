@@ -70,13 +70,14 @@ func TestParseServiceFromPath(t *testing.T) {
 func TestServiceByProxyName(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   remoteMachine.UserID(),
 	}
 
 	t.Run("found", func(t *testing.T) {
@@ -87,8 +88,8 @@ func TestServiceByProxyName(t *testing.T) {
 		if localpart != "service/stt/whisper" {
 			t.Errorf("localpart = %q, want %q", localpart, "service/stt/whisper")
 		}
-		if service.Machine != "@machine/workstation:bureau.local" {
-			t.Errorf("machine = %q, want %q", service.Machine, "@machine/workstation:bureau.local")
+		if service.Machine != daemon.machine.UserID() {
+			t.Errorf("machine = %q, want %q", service.Machine, daemon.machine.UserID())
 		}
 	})
 
@@ -103,15 +104,16 @@ func TestServiceByProxyName(t *testing.T) {
 func TestLocalProviderSocket(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 	}
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   remoteMachine.UserID(),
 	}
 
 	t.Run("local service", func(t *testing.T) {
@@ -162,14 +164,15 @@ func TestRelayHandler(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   remoteMachine.UserID(),
 		Protocol:  "http",
 	}
-	daemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = peerAddress
+	daemon.peerAddresses[remoteMachine.UserID()] = peerAddress
 	daemon.transportDialer = &testTCPDialer{}
 
 	// Create a relay socket and serve the relay handler.
@@ -221,7 +224,7 @@ func TestRelayHandler(t *testing.T) {
 func TestRelayHandler_UnknownService(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
@@ -277,11 +280,11 @@ func TestTransportInboundHandler(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
-	daemon.machineUserID = "@machine/workstation:bureau.local"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Machine:   daemon.machine.UserID(),
 		Protocol:  "http",
 	}
 
@@ -404,11 +407,11 @@ func TestCrossTransportRouting(t *testing.T) {
 	// listener. Its inbound handler routes to the provider proxy.
 	providerDaemon, _ := newTestDaemon(t)
 	providerDaemon.runDir = principal.DefaultRunDir
-	providerDaemon.machineUserID = "@machine/cloud-gpu:bureau.local"
+	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cloud-gpu", "bureau.local")
 	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	providerDaemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   providerDaemon.machine.UserID(),
 		Protocol:  "http",
 	}
 
@@ -455,19 +458,17 @@ func TestCrossTransportRouting(t *testing.T) {
 	go transportServer.Serve(transportListener)
 	defer transportServer.Close()
 
-	_ = providerDaemon // Used for documentation; routing is handled by the custom mux above.
-
 	// 4. Set up the "consumer daemon" (machine A) with a relay socket.
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = principal.DefaultRunDir
-	consumerDaemon.machineUserID = "@machine/workstation:bureau.local"
+	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	consumerDaemon.services["service/stt/whisper"] = &schema.Service{
 		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Machine:   providerDaemon.machine.UserID(),
 		Protocol:  "http",
 	}
-	consumerDaemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = transportListener.Addr().String()
+	consumerDaemon.peerAddresses[providerDaemon.machine.UserID()] = transportListener.Addr().String()
 	consumerDaemon.transportDialer = &testTCPDialer{}
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
@@ -559,7 +560,7 @@ func TestTransportTunnel(t *testing.T) {
 	// with a /tunnel/ handler on a TCP listener.
 	providerDaemon, _ := newTestDaemon(t)
 	providerDaemon.runDir = socketDir
-	providerDaemon.machineUserID = "@machine/cache-server:bureau.local"
+	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cache-server", "bureau.local")
 	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// The tunnel handler uses principal.RunDirSocketPath to derive
@@ -611,7 +612,7 @@ func TestTransportTunnel(t *testing.T) {
 	// 3. Set up the "consumer daemon" (machine that wants the shared cache).
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = socketDir
-	consumerDaemon.machineUserID = "@machine/workstation:bureau.local"
+	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	consumerDaemon.transportDialer = &testTCPDialer{}
 

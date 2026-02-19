@@ -179,7 +179,7 @@ func (d *Daemon) executePipeline(
 	if socketPath := d.findLocalArtifactSocket(); socketPath != "" {
 		token := &servicetoken.Token{
 			Subject:   localpart,
-			Machine:   d.machineName,
+			Machine:   d.machine.Localpart(),
 			Audience:  "artifact",
 			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
 			IssuedAt:  d.clock.Now().Unix(),
@@ -209,7 +209,7 @@ func (d *Daemon) executePipeline(
 	// a valid token.
 	credentials := map[string]string{
 		"MATRIX_TOKEN":   d.session.AccessToken(),
-		"MATRIX_USER_ID": d.machineUserID,
+		"MATRIX_USER_ID": d.machine.UserID(),
 	}
 
 	// Create the ephemeral sandbox.
@@ -296,7 +296,7 @@ func (d *Daemon) executePipeline(
 // "content-addressed-store" capability.
 func (d *Daemon) findLocalArtifactSocket() string {
 	for localpart, service := range d.services {
-		if service.Machine != d.machineUserID {
+		if service.Machine != d.machine.UserID() {
 			continue
 		}
 		for _, capability := range service.Capabilities {

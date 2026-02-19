@@ -73,7 +73,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID, eventID 
 			"WORKTREE_PATH":     worktreePath,
 			"BRANCH":            branch,
 			"WORKSPACE_ROOM_ID": roomID,
-			"MACHINE":           d.machineName,
+			"MACHINE":           d.machine.Localpart(),
 		},
 	}
 
@@ -86,7 +86,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID, eventID 
 		Project:      project,
 		WorktreePath: worktreePath,
 		Branch:       branch,
-		Machine:      d.machineName,
+		Machine:      d.machine.Localpart(),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to publish worktree creating state: %w", err)
 	}
@@ -155,7 +155,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID, event
 			"WORKTREE_PATH":     worktreePath,
 			"MODE":              mode,
 			"WORKSPACE_ROOM_ID": roomID,
-			"MACHINE":           d.machineName,
+			"MACHINE":           d.machine.Localpart(),
 		},
 	}
 
@@ -167,7 +167,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID, event
 		Status:       "removing",
 		Project:      project,
 		WorktreePath: worktreePath,
-		Machine:      d.machineName,
+		Machine:      d.machine.Localpart(),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to publish worktree removing state: %w", err)
 	}

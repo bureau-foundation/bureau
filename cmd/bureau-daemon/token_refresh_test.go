@@ -28,7 +28,7 @@ func newTokenRefreshDaemon(t *testing.T) (*Daemon, *clock.FakeClock, ed25519.Pub
 	if err != nil {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
-	daemon.machineName = "machine/test"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
 	daemon.stateDir = t.TempDir()
 	daemon.tokenSigningPrivateKey = privateKey
 

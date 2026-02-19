@@ -11,8 +11,7 @@ package schema
 // Global rooms are fleet-independent: they hold definitions (templates,
 // pipelines, artifacts) and operational messages. Fleet-scoped rooms
 // (machines, services, fleet config) live under
-// <namespace>/fleet/<name>/ and are constructed via the
-// Fleet*RoomAlias helpers below.
+// <namespace>/fleet/<name>/ and are constructed via ref.Fleet methods.
 //
 // See naming-conventions.md for the full room topology.
 const (
@@ -31,33 +30,6 @@ const (
 	// RoomAliasArtifact is the artifact metadata room.
 	RoomAliasArtifact = "bureau/artifact"
 )
-
-// FleetRoomAlias returns the room alias localpart for a fleet's config
-// room. This room holds fleet configuration, HA leases, and fleet-wide
-// service definitions.
-//
-// Example: FleetRoomAlias("bureau", "prod") → "bureau/fleet/prod"
-func FleetRoomAlias(namespace, fleetName string) string {
-	return namespace + "/fleet/" + fleetName
-}
-
-// FleetMachineRoomAlias returns the room alias localpart for a fleet's
-// machine presence room. This room aggregates MachineInfo and
-// MachineStatus state events for all machines in the fleet.
-//
-// Example: FleetMachineRoomAlias("bureau", "prod") → "bureau/fleet/prod/machine"
-func FleetMachineRoomAlias(namespace, fleetName string) string {
-	return namespace + "/fleet/" + fleetName + "/machine"
-}
-
-// FleetServiceRoomAlias returns the room alias localpart for a fleet's
-// service directory room. This room holds service registrations for all
-// services running in the fleet.
-//
-// Example: FleetServiceRoomAlias("bureau", "prod") → "bureau/fleet/prod/service"
-func FleetServiceRoomAlias(namespace, fleetName string) string {
-	return namespace + "/fleet/" + fleetName + "/service"
-}
 
 // EntityConfigRoomAlias returns the room alias localpart for an
 // entity's config room. Under the @→# convention, an entity's Matrix

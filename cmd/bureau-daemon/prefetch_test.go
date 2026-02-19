@@ -242,9 +242,12 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, fakeClock := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Track messages sent to the config room (prefetch error messages).
 	var (
@@ -280,7 +283,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -307,11 +310,8 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 
 	// Start with prefetch that always fails.
 	prefetchError := fmt.Errorf("connection to attic refused")
-	daemon, fakeClock := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -386,9 +386,12 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	matrixState := newPrefetchTestMatrixState(t, configRoomID, templateRoomID, machineName)
 	// Override template to have no environment path.
@@ -405,7 +408,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -420,11 +423,8 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	prefetchCalled := false
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }

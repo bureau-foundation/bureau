@@ -53,9 +53,8 @@ func newCredentialTestDaemon(t *testing.T) (
 	daemon.machinePublicKey = keypair.PublicKey
 
 	// Set up daemon identity fields.
-	daemon.machineName = "machine/test"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	daemon.configRoomID = "!config:test.local"
-	daemon.serverName = "test.local"
 
 	// Set up launcher mock.
 	socketDir := testutil.SocketDir(t)
@@ -112,7 +111,7 @@ func newCredentialTestDaemon(t *testing.T) (
 	mintToken := func(subject string, grants []servicetoken.Grant) []byte {
 		token := &servicetoken.Token{
 			Subject:   subject,
-			Machine:   daemon.machineName,
+			Machine:   daemon.machine.Localpart(),
 			Audience:  credentialServiceRole,
 			Grants:    grants,
 			ID:        "test-token-id",
@@ -143,7 +142,7 @@ func TestCredentialService_ProvisionNewKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -251,7 +250,7 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -476,7 +475,7 @@ func TestCredentialService_NoMachinePublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -688,7 +687,7 @@ func TestCredentialService_WildcardGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

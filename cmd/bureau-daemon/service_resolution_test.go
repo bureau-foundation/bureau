@@ -29,9 +29,12 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -71,7 +74,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -100,12 +103,9 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
@@ -160,9 +160,11 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -186,7 +188,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newServiceResolutionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	tracker, cleanup := newServiceResolutionTestDaemon(t, daemon, matrixState, configRoomID)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -215,9 +217,12 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		configRoomID    = "!config:test.local"
 		templateRoomID  = "!template:test.local"
 		workspaceRoomID = "!workspace:test.local"
-		serverName      = "test.local"
-		machineName     = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -275,7 +280,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -302,12 +307,9 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
@@ -352,9 +354,12 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -396,7 +401,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -423,12 +428,9 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
@@ -483,9 +485,12 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -514,7 +519,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 		Ciphertext: "encrypted-test-credentials",
 	})
 
-	daemon, tracker, cleanup := newServiceResolutionTestDaemon(t, matrixState, configRoomID, serverName, machineName)
+	tracker, cleanup := newServiceResolutionTestDaemon(t, daemon, matrixState, configRoomID)
 	defer cleanup()
 
 	if err := daemon.reconcile(context.Background()); err != nil {
@@ -540,9 +545,11 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -575,7 +582,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -602,12 +609,9 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
@@ -637,9 +641,10 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	}
 }
 
-// newServiceResolutionTestDaemon creates a Daemon for service resolution
-// tests using the shared mock launcher pattern.
-func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, configRoomID, serverName, machineName string) (*Daemon, *principalTracker, func()) {
+// newServiceResolutionTestDaemon configures a pre-created Daemon for
+// service resolution tests using the shared mock launcher pattern.
+// The daemon must already have machine and fleet set via testMachineSetup.
+func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *mockMatrixState, configRoomID string) (*principalTracker, func()) {
 	t.Helper()
 
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -650,7 +655,7 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -679,12 +684,9 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 		t.Fatalf("GenerateKeypair: %v", err)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = tokenSigningPrivateKey
@@ -702,5 +704,5 @@ func newServiceResolutionTestDaemon(t *testing.T, matrixState *mockMatrixState, 
 		matrixServer.Close()
 	}
 
-	return daemon, tracker, cleanup
+	return tracker, cleanup
 }

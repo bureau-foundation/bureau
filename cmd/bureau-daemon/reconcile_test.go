@@ -439,11 +439,11 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	// We test this indirectly: if BureauVersion is nil, the launcher
 	// status should not be queried (no IPC call).
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -457,7 +457,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -471,11 +471,8 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	// all — an IPC attempt would error, and we check that reconcile
 	// succeeds without error.
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -510,11 +507,11 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		t.Fatalf("WriteFile daemon: %v", err)
 	}
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	// Configure MachineConfig with BureauVersion pointing to the desired paths.
 	state := newMockMatrixState()
@@ -552,7 +549,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -593,11 +590,8 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		daemonHash = binhash.FormatDigest(digest)
 	}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = daemonHash
@@ -641,9 +635,11 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
@@ -691,7 +687,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -715,11 +711,8 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true
@@ -791,9 +784,11 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
@@ -828,7 +823,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -850,11 +845,8 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Payload is nil in both old and new spec — only command differs.
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true
@@ -893,9 +885,11 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	// Template with same command but different payload.
 	state := newMockMatrixState()
@@ -924,7 +918,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -946,11 +940,8 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Old spec has same command but different payload.
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true
@@ -1443,7 +1434,8 @@ func TestMintServiceTokens(t *testing.T) {
 	stateDir := t.TempDir()
 
 	daemon, _ := newTestDaemon(t)
-	daemon.machineName = "machine/test"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 	daemon.stateDir = stateDir
 	daemon.tokenSigningPrivateKey = privateKey
 
@@ -1497,8 +1489,8 @@ func TestMintServiceTokens(t *testing.T) {
 	if token.Subject != "agent/alpha" {
 		t.Errorf("Subject = %q, want %q", token.Subject, "agent/alpha")
 	}
-	if token.Machine != "machine/test" {
-		t.Errorf("Machine = %q, want %q", token.Machine, "machine/test")
+	if token.Machine != machineName {
+		t.Errorf("Machine = %q, want %q", token.Machine, machineName)
 	}
 	if token.Audience != "ticket" {
 		t.Errorf("Audience = %q, want %q", token.Audience, "ticket")
@@ -1558,7 +1550,7 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 	stateDir := t.TempDir()
 
 	daemon, _ := newTestDaemon(t)
-	daemon.machineName = "machine/test"
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	daemon.stateDir = stateDir
 	daemon.tokenSigningPrivateKey = privateKey
 
@@ -1699,11 +1691,11 @@ func slicesEqual(a, b []string) bool {
 func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	t.Parallel()
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	// MachineConfig with a MatrixPolicy and ServiceVisibility — these get
 	// synthesized into grants since there's no explicit Authorization field.
@@ -1729,7 +1721,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1778,11 +1770,8 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	go adminServer.Serve(adminListener)
 	defer adminServer.Close()
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true
@@ -2057,6 +2046,9 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 // room, the daemon should succeed (treating it as "nothing to do") rather
 // than failing.
 func TestReconcileNoConfig(t *testing.T) {
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
+
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
@@ -2067,18 +2059,14 @@ func TestReconcileNoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(daemon.machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
 	daemon.configRoomID = "!config:test"
 	daemon.machineRoomID = "!machine:test"
 	daemon.serviceRoomID = "!service:test"
@@ -2286,9 +2274,11 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -2335,7 +2325,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -2357,11 +2347,8 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }

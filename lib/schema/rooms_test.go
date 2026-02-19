@@ -31,79 +31,6 @@ func TestRoomAliasConstants(t *testing.T) {
 	}
 }
 
-func TestFleetRoomAlias(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name      string
-		namespace string
-		fleetName string
-		want      string
-	}{
-		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod"},
-		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev"},
-		{"acme_staging", "acme", "staging", "acme/fleet/staging"},
-		{"custom_namespace", "company_a", "us-east-gpu", "company_a/fleet/us-east-gpu"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := FleetRoomAlias(test.namespace, test.fleetName)
-			if got != test.want {
-				t.Errorf("FleetRoomAlias(%q, %q) = %q, want %q",
-					test.namespace, test.fleetName, got, test.want)
-			}
-		})
-	}
-}
-
-func TestFleetMachineRoomAlias(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name      string
-		namespace string
-		fleetName string
-		want      string
-	}{
-		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod/machine"},
-		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev/machine"},
-		{"acme_staging", "acme", "staging", "acme/fleet/staging/machine"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := FleetMachineRoomAlias(test.namespace, test.fleetName)
-			if got != test.want {
-				t.Errorf("FleetMachineRoomAlias(%q, %q) = %q, want %q",
-					test.namespace, test.fleetName, got, test.want)
-			}
-		})
-	}
-}
-
-func TestFleetServiceRoomAlias(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name      string
-		namespace string
-		fleetName string
-		want      string
-	}{
-		{"bureau_prod", "bureau", "prod", "bureau/fleet/prod/service"},
-		{"bureau_dev", "bureau", "dev", "bureau/fleet/dev/service"},
-		{"acme_staging", "acme", "staging", "acme/fleet/staging/service"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := FleetServiceRoomAlias(test.namespace, test.fleetName)
-			if got != test.want {
-				t.Errorf("FleetServiceRoomAlias(%q, %q) = %q, want %q",
-					test.namespace, test.fleetName, got, test.want)
-			}
-		})
-	}
-}
-
 func TestEntityConfigRoomAlias(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -138,7 +65,7 @@ func TestFullRoomAlias(t *testing.T) {
 	}{
 		{
 			"fleet_machine_room",
-			FleetMachineRoomAlias("bureau", "prod"),
+			"bureau/fleet/prod/machine",
 			"bureau.local",
 			"#bureau/fleet/prod/machine:bureau.local",
 		},
@@ -150,7 +77,7 @@ func TestFullRoomAlias(t *testing.T) {
 		},
 		{
 			"fleet_service_room",
-			FleetServiceRoomAlias("bureau", "prod"),
+			"bureau/fleet/prod/service",
 			"example.com",
 			"#bureau/fleet/prod/service:example.com",
 		},

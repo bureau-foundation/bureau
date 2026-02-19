@@ -27,6 +27,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu"
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -86,16 +87,17 @@ func run() error {
 	if machineName == "" {
 		return fmt.Errorf("--machine-name is required")
 	}
-	if err := principal.ValidateLocalpart(machineName); err != nil {
+	machine, err := ref.ParseMachine(machineName, serverName)
+	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
+	fleet := machine.Fleet()
 
-	if fleetPrefix == "" {
-		return fmt.Errorf("--fleet is required")
-	}
-	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
-	if err != nil {
-		return fmt.Errorf("invalid fleet prefix: %w", err)
+	// Validate the --fleet flag matches the fleet embedded in the machine
+	// localpart. The launcher passes both flags, and a mismatch would
+	// produce wrong room aliases for fleet-scoped rooms.
+	if fleetPrefix != "" && fleetPrefix != fleet.Localpart() {
+		return fmt.Errorf("--fleet %q does not match fleet in --machine-name %q (expected %q)", fleetPrefix, machineName, fleet.Localpart())
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -188,7 +190,7 @@ func run() error {
 	// exist (created by "bureau machine provision"). The alias follows the
 	// @→# convention: the machine's fleet-scoped localpart IS the room
 	// alias localpart.
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := resolveConfigRoom(ctx, session, configRoomAlias, logger)
 	if err != nil {
 		return fmt.Errorf("resolving config room: %w", err)
@@ -200,7 +202,7 @@ func run() error {
 	// account must have been invited by the admin before the join can
 	// succeed. The daemon defensively re-joins on every startup to handle
 	// membership recovery (e.g., homeserver reset, account re-creation).
-	systemAlias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
+	systemAlias := schema.FullRoomAlias(schema.RoomAliasSystem, machine.Server())
 	systemRoomID, err := session.ResolveAlias(ctx, systemAlias)
 	if err != nil {
 		return fmt.Errorf("resolving system room alias %q: %w", systemAlias, err)
@@ -212,7 +214,7 @@ func run() error {
 
 	// Resolve and join the fleet-scoped rooms. Each fleet has its own
 	// machine, service, and config rooms derived from the fleet prefix.
-	fleetAlias := principal.RoomAlias(schema.FleetRoomAlias(fleetNamespace, fleetName), serverName)
+	fleetAlias := fleet.RoomAlias()
 	fleetRoomID, err := session.ResolveAlias(ctx, fleetAlias)
 	if err != nil {
 		return fmt.Errorf("resolving fleet room alias %q: %w", fleetAlias, err)
@@ -222,7 +224,7 @@ func run() error {
 			"room_id", fleetRoomID, "alias", fleetAlias, "error", err)
 	}
 
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(fleetNamespace, fleetName), serverName)
+	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving fleet machine room alias %q: %w", machineAlias, err)
@@ -232,7 +234,7 @@ func run() error {
 			"room_id", machineRoomID, "alias", machineAlias, "error", err)
 	}
 
-	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(fleetNamespace, fleetName), serverName)
+	serviceAlias := fleet.ServiceRoomAlias()
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		return fmt.Errorf("resolving fleet service room alias %q: %w", serviceAlias, err)
@@ -243,7 +245,7 @@ func run() error {
 	}
 
 	logger.Info("fleet rooms ready",
-		"fleet", fleetPrefix,
+		"fleet", fleet.Localpart(),
 		"fleet_room", fleetRoomID,
 		"system_room", systemRoomID,
 		"machine_room", machineRoomID,
@@ -264,8 +266,6 @@ func run() error {
 		)
 	}
 
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-
 	daemon := &Daemon{
 		session:                session,
 		clock:                  clock.Real(),
@@ -275,9 +275,8 @@ func run() error {
 		tokenSigningPrivateKey: tokenSigningPrivateKey,
 		authorizationIndex:     authorization.NewIndex(),
 		machinePublicKey:       machinePublicKey,
-		machineName:            machineName,
-		machineUserID:          machineUserID,
-		serverName:             serverName,
+		machine:                machine,
+		fleet:                  fleet,
 		adminUser:              adminUser,
 		systemRoomID:           systemRoomID,
 		configRoomID:           configRoomID,
@@ -475,9 +474,8 @@ type Daemon struct {
 	// error message.
 	machinePublicKey string
 
-	machineName    string
-	machineUserID  string
-	serverName     string
+	machine        ref.Machine
+	fleet          ref.Fleet
 	adminUser      string // admin account localpart (for fleet controller PL grants)
 	systemRoomID   string
 	configRoomID   string
@@ -992,7 +990,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 	principals := d.collectPrincipalResources(runningPrincipals)
 
 	status := schema.MachineStatus{
-		Principal: d.machineUserID,
+		Principal: d.machine.UserID(),
 		Sandboxes: schema.SandboxCounts{
 			Running: runningCount,
 		},
@@ -1005,7 +1003,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		Principals:       principals,
 	}
 
-	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machineName, status)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machine.Localpart(), status)
 	if err != nil {
 		d.logger.Error("publishing machine status", "error", err)
 		return
@@ -1071,10 +1069,10 @@ func (d *Daemon) collectPrincipalResources(principals []string) map[string]schem
 func (d *Daemon) publishMachineInfo(ctx context.Context) {
 	amdProber := amdgpu.NewProber()
 	nvidiaProber := nvidia.NewProber()
-	info := hwinfo.Probe(d.machineUserID, amdProber, nvidiaProber)
+	info := hwinfo.Probe(d.machine.UserID(), amdProber, nvidiaProber)
 	info.DaemonVersion = version.Info()
 
-	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machineName, info)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machine.Localpart(), info)
 	if err != nil {
 		d.logger.Error("publishing machine info", "error", err)
 		return
@@ -1091,7 +1089,7 @@ func (d *Daemon) publishMachineInfo(ctx context.Context) {
 
 // publishTokenSigningKey publishes the daemon's Ed25519 token signing
 // public key to #bureau/system as an m.bureau.token_signing_key state
-// event. The state key is the machine localpart (e.g., "machine/workstation").
+// event. The state key is the machine localpart (e.g., "bureau/fleet/prod/machine/workstation").
 //
 // The publish is conditional to avoid unnecessary state events on every
 // daemon restart. It always publishes when the key was freshly generated
@@ -1105,7 +1103,7 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 	if !keyWasGenerated {
 		// Check whether the current state event already has our key.
 		existing, err := d.session.GetStateEvent(ctx, d.systemRoomID,
-			schema.EventTypeTokenSigningKey, d.machineName)
+			schema.EventTypeTokenSigningKey, d.machine.Localpart())
 		if err == nil {
 			var content schema.TokenSigningKeyContent
 			if parseErr := json.Unmarshal(existing, &content); parseErr == nil {
@@ -1123,17 +1121,17 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 
 	content := schema.TokenSigningKeyContent{
 		PublicKey: publicKeyHex,
-		Machine:   d.machineName,
+		Machine:   d.machine.Localpart(),
 	}
 	_, err := d.session.SendStateEvent(ctx, d.systemRoomID,
-		schema.EventTypeTokenSigningKey, d.machineName, content)
+		schema.EventTypeTokenSigningKey, d.machine.Localpart(), content)
 	if err != nil {
 		d.logger.Error("publishing token signing key", "error", err)
 		return
 	}
 	d.logger.Info("published token signing key",
 		"room_id", d.systemRoomID,
-		"machine", d.machineName,
+		"machine", d.machine.Localpart(),
 	)
 }
 

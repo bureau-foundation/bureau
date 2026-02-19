@@ -435,19 +435,19 @@ func TestCgroupDefaultPath(t *testing.T) {
 		expected  string
 	}{
 		{
-			name:      "simple localpart",
-			localpart: "agent",
-			expected:  "/sys/fs/cgroup/bureau/agent",
+			name:      "fleet-scoped agent",
+			localpart: "bureau/fleet/prod/agent/codegen",
+			expected:  "/sys/fs/cgroup/bureau/bureau-fleet-prod-agent-codegen",
 		},
 		{
-			name:      "nested localpart",
-			localpart: "service/stt/whisper",
-			expected:  "/sys/fs/cgroup/bureau/service-stt-whisper",
+			name:      "fleet-scoped service with hierarchy",
+			localpart: "bureau/fleet/prod/service/stt/whisper",
+			expected:  "/sys/fs/cgroup/bureau/bureau-fleet-prod-service-stt-whisper",
 		},
 		{
-			name:      "machine localpart",
-			localpart: "machine/workstation",
-			expected:  "/sys/fs/cgroup/bureau/machine-workstation",
+			name:      "fleet-scoped machine",
+			localpart: "bureau/fleet/prod/machine/workstation",
+			expected:  "/sys/fs/cgroup/bureau/bureau-fleet-prod-machine-workstation",
 		},
 	}
 

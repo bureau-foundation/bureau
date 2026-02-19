@@ -215,7 +215,7 @@ func (w *haWatchdog) isEligible(definition *schema.FleetServiceContent) bool {
 	if len(constraints.AllowedMachines) > 0 {
 		matched := false
 		for _, pattern := range constraints.AllowedMachines {
-			if ok, _ := path.Match(pattern, w.daemon.machineName); ok {
+			if ok, _ := path.Match(pattern, w.daemon.machine.Localpart()); ok {
 				matched = true
 				break
 			}
@@ -249,7 +249,7 @@ func (w *haWatchdog) fetchMachineLabels() map[string]string {
 	defer cancel()
 
 	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.machineRoomID,
-		schema.EventTypeMachineInfo, w.daemon.machineName)
+		schema.EventTypeMachineInfo, w.daemon.machine.Localpart())
 	if err != nil {
 		w.logger.Debug("failed to fetch machine info for eligibility check", "error", err)
 		return nil
@@ -291,7 +291,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 		minDelay := 4 * w.baseDelay
 		maxDelay := 10 * w.baseDelay
 		for _, preferred := range definition.Placement.PreferredMachines {
-			if preferred == w.daemon.machineName {
+			if preferred == w.daemon.machine.Localpart() {
 				minDelay = 1 * w.baseDelay
 				maxDelay = 3 * w.baseDelay
 				break
@@ -340,7 +340,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 	now := w.clock.Now()
 	ttl := w.leaseTTL()
 	newLease := schema.HALeaseContent{
-		Holder:     w.daemon.machineName,
+		Holder:     w.daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
@@ -371,7 +371,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 		return fmt.Errorf("reading lease for verification: %w", err)
 	}
 
-	if verifiedLease == nil || verifiedLease.Holder != w.daemon.machineName {
+	if verifiedLease == nil || verifiedLease.Holder != w.daemon.machine.Localpart() {
 		w.logger.Info("lost HA lease race",
 			"service", serviceLocalpart,
 			"winner", leaseHolder(verifiedLease),
@@ -452,7 +452,7 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 // service, and writes the updated config back.
 func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalpart string, assignment schema.PrincipalAssignment) {
 	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.configRoomID,
-		schema.EventTypeMachineConfig, w.daemon.machineName)
+		schema.EventTypeMachineConfig, w.daemon.machine.Localpart())
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		w.logger.Error("reading machine config for HA assignment",
 			"service", serviceLocalpart, "error", err)
@@ -482,7 +482,7 @@ func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalp
 	}
 
 	if _, err := w.daemon.session.SendStateEvent(ctx, w.daemon.configRoomID,
-		schema.EventTypeMachineConfig, w.daemon.machineName, config); err != nil {
+		schema.EventTypeMachineConfig, w.daemon.machine.Localpart(), config); err != nil {
 		w.logger.Error("writing machine config for HA assignment",
 			"service", serviceLocalpart, "error", err)
 	}
@@ -502,7 +502,7 @@ func (w *haWatchdog) renewLease(ctx context.Context, serviceLocalpart string, tt
 		case <-ticker.C:
 			now := w.clock.Now()
 			lease := schema.HALeaseContent{
-				Holder:     w.daemon.machineName,
+				Holder:     w.daemon.machine.Localpart(),
 				Service:    serviceLocalpart,
 				AcquiredAt: now.UTC().Format(time.RFC3339),
 				ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
@@ -542,7 +542,7 @@ func (w *haWatchdog) releaseLease(ctx context.Context, serviceLocalpart string) 
 	// Write an expired lease so other daemons see it immediately.
 	now := w.clock.Now()
 	lease := schema.HALeaseContent{
-		Holder:     w.daemon.machineName,
+		Holder:     w.daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(-1 * time.Second).UTC().Format(time.RFC3339),

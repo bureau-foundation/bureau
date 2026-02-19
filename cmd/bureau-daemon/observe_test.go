@@ -188,15 +188,13 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	}
 
 	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.client = client
 	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{
 		Principals: principals,
 	}
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
 	for _, localpart := range runningPrincipals {
 		daemon.running[localpart] = true
 		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
@@ -277,8 +275,8 @@ func TestListLocalPrincipals(t *testing.T) {
 		if !principal.Local {
 			t.Errorf("%s should be local", localpart)
 		}
-		if principal.Machine != "machine/test" {
-			t.Errorf("%s machine = %q, want machine/test", localpart, principal.Machine)
+		if principal.Machine != daemon.machine.Localpart() {
+			t.Errorf("%s machine = %q, want %q", localpart, principal.Machine, daemon.machine.Localpart())
 		}
 	}
 
@@ -289,8 +287,8 @@ func TestListLocalPrincipals(t *testing.T) {
 	if !response.Machines[0].Self {
 		t.Error("expected self machine")
 	}
-	if response.Machines[0].Name != "machine/test" {
-		t.Errorf("machine name = %q, want machine/test", response.Machines[0].Name)
+	if response.Machines[0].Name != daemon.machine.Localpart() {
+		t.Errorf("machine name = %q, want %q", response.Machines[0].Name, daemon.machine.Localpart())
 	}
 }
 
@@ -472,8 +470,8 @@ func TestObserveLocalBridge(t *testing.T) {
 	if response.Session != "bureau/test/echo" {
 		t.Errorf("session = %q, want %q", response.Session, "bureau/test/echo")
 	}
-	if response.Machine != "machine/test" {
-		t.Errorf("machine = %q, want %q", response.Machine, "machine/test")
+	if response.Machine != daemon.machine.Localpart() {
+		t.Errorf("machine = %q, want %q", response.Machine, daemon.machine.Localpart())
 	}
 
 	// After the JSON handshake, the connection switches to the binary

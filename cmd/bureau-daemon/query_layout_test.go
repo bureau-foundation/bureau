@@ -64,27 +64,26 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	matrixServer := httptest.NewServer(combinedHandler)
 	t.Cleanup(matrixServer.Close)
 
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
+
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := matrixClient.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.client = matrixClient
 	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{}
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
 	daemon.configRoomID = "!config:test"
 	daemon.observeSocketPath = observeSocketPath
 	daemon.logger = logger

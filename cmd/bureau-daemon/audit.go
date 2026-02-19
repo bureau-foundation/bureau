@@ -60,7 +60,7 @@ func (d *Daemon) postAuditDeny(
 		Target:                 target,
 		Reason:                 reason.String(),
 		EnforcementPoint:       enforcementPoint,
-		Machine:                d.machineName,
+		Machine:                d.machine.Localpart(),
 		MatchedAllowance:       matchedAllowance,
 		MatchedAllowanceDenial: matchedAllowanceDenial,
 	}
@@ -86,7 +86,7 @@ func (d *Daemon) postAuditAllow(
 		Action:           action,
 		Target:           target,
 		EnforcementPoint: enforcementPoint,
-		Machine:          d.machineName,
+		Machine:          d.machine.Localpart(),
 		MatchedAllowance: matchedAllowance,
 	}
 	d.postAuditEventAsync(content)

@@ -84,6 +84,9 @@ func newCommandTestHarness(t *testing.T) *commandTestHarness {
 	t.Cleanup(matrixServer.Close)
 	harness.matrixServer = matrixServer
 
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
+
 	// Create a real messaging session pointing at the mock server.
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
@@ -91,17 +94,13 @@ func newCommandTestHarness(t *testing.T) *commandTestHarness {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:bureau.local", "syt_daemon_test_token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "syt_daemon_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.session = session
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
 	daemon.configRoomID = "!config:test"
 	daemon.machineRoomID = "!machine:test"
 	daemon.serviceRoomID = "!service:test"
@@ -340,7 +339,7 @@ func TestCommandSkipsSelfMessages(t *testing.T) {
 
 	const roomID = "!workspace:test"
 	// Event sender matches daemon's own user ID.
-	event := buildCommandEvent("$cmd5", "@machine/test:bureau.local", "workspace.list", "", "")
+	event := buildCommandEvent("$cmd5", harness.daemon.machine.UserID(), "workspace.list", "", "")
 
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})

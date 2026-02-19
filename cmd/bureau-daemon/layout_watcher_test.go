@@ -33,24 +33,23 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, *tmux.Ser
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
 
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
+
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:bureau.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
 	daemon.configRoomID = "!config:test"
 	daemon.tmuxServer = tmuxServer
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -153,9 +152,9 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 		t.Fatalf("unmarshal published layout: %v", err)
 	}
 
-	if content.SourceMachine != "@machine/test:bureau.local" {
+	if content.SourceMachine != daemon.machine.UserID() {
 		t.Errorf("SourceMachine = %q, want %q",
-			content.SourceMachine, "@machine/test:bureau.local")
+			content.SourceMachine, daemon.machine.UserID())
 	}
 
 	if len(content.Windows) == 0 {

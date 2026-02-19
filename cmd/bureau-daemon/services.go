@@ -143,7 +143,7 @@ func stringSlicesEqual(a, b []string) bool {
 func (d *Daemon) localServices() map[string]*schema.Service {
 	local := make(map[string]*schema.Service)
 	for localpart, service := range d.services {
-		if service.Machine == d.machineUserID {
+		if service.Machine == d.machine.UserID() {
 			local[localpart] = service
 		}
 	}
@@ -155,7 +155,7 @@ func (d *Daemon) localServices() map[string]*schema.Service {
 func (d *Daemon) remoteServices() map[string]*schema.Service {
 	remote := make(map[string]*schema.Service)
 	for localpart, service := range d.services {
-		if service.Machine != d.machineUserID {
+		if service.Machine != d.machine.UserID() {
 			remote[localpart] = service
 		}
 	}
@@ -208,7 +208,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, remove
 		service := d.services[localpart]
 		serviceName := principal.ProxyServiceName(localpart)
 
-		if service.Machine == d.machineUserID {
+		if service.Machine == d.machine.UserID() {
 			providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
 			if err != nil {
 				d.logger.Error("cannot derive provider socket from service principal",
@@ -273,7 +273,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, remove
 		service := d.services[localpart]
 		serviceName := principal.ProxyServiceName(localpart)
 
-		if service.Machine == d.machineUserID {
+		if service.Machine == d.machine.UserID() {
 			providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
 			if err != nil {
 				d.logger.Error("cannot derive provider socket from service principal",
@@ -741,7 +741,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		return
 	}
 
-	if cacheService.Machine == d.machineUserID {
+	if cacheService.Machine == d.machine.UserID() {
 		// Local shared cache: derive socket path directly. Stop any
 		// existing tunnel from a previous remote cache.
 		d.stopTunnel("upstream")
@@ -802,7 +802,7 @@ func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 	// directory for a local service with the "artifact" capability.
 	var artifactSocketPath string
 	for localpart, svc := range d.services {
-		if svc.Machine != d.machineUserID {
+		if svc.Machine != d.machine.UserID() {
 			continue
 		}
 		for _, cap := range svc.Capabilities {
@@ -841,8 +841,8 @@ func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 
 		now := d.clock.Now()
 		token := &servicetoken.Token{
-			Subject:   d.machineName,
-			Machine:   d.machineName,
+			Subject:   d.machine.Localpart(),
+			Machine:   d.machine.Localpart(),
 			Audience:  "artifact",
 			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 			ID:        tokenID,
@@ -917,7 +917,7 @@ func (d *Daemon) discoverPushTargets(ctx context.Context) {
 
 		// Skip our own local artifact service — no point pushing
 		// to ourselves.
-		if service.Machine == d.machineUserID {
+		if service.Machine == d.machine.UserID() {
 			continue
 		}
 
@@ -999,7 +999,7 @@ func (d *Daemon) pushPushTargetsConfig(ctx context.Context, targets map[string]s
 	// Find the local artifact service socket.
 	var artifactSocketPath string
 	for localpart, service := range d.services {
-		if service.Machine != d.machineUserID {
+		if service.Machine != d.machine.UserID() {
 			continue
 		}
 		for _, cap := range service.Capabilities {

@@ -278,10 +278,13 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	const (
 		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
 		localpart    = "agent/test"
 	)
+
+	daemon, fakeClock := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Mock Matrix: principal still in config with credentials.
 	state := newMockMatrixState()
@@ -378,11 +381,8 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
-	daemon, fakeClock := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running[localpart] = true
@@ -488,10 +488,13 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 
 	const (
 		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
 		localpart    = "agent/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -548,11 +551,8 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running[localpart] = true
@@ -627,9 +627,12 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -679,11 +682,8 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -720,9 +720,12 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	const (
 		configRoomID   = "!config:test.local"
 		templateRoomID = "!template:test.local"
-		serverName     = "test.local"
-		machineName    = "machine/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -762,11 +765,8 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
@@ -795,11 +795,12 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	t.Parallel()
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()
@@ -835,11 +836,8 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true
@@ -1059,10 +1057,13 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 
 	const (
 		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
 		localpart    = "agent/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Matrix state: principal in config with credentials (so rollback
 	// reaches the create-sandbox step before the launcher rejects it).
@@ -1133,11 +1134,8 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running[localpart] = true
@@ -1207,10 +1205,13 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 
 	const (
 		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
 		localpart    = "agent/test"
 	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Matrix state: principal in config but NO credentials. The
 	// readCredentials call during rollback returns M_NOT_FOUND.
@@ -1271,11 +1272,8 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running[localpart] = true
@@ -1344,11 +1342,12 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	t.Parallel()
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()
@@ -1386,11 +1385,8 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// structural restart). When the principal is destroyed (removed from
 	// config), the destroy-extras pass should clean up all associated
 	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.running["agent/test"] = true

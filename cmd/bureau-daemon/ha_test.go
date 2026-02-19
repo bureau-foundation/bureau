@@ -28,13 +28,15 @@ func newHATestDaemon(t *testing.T) (*Daemon, *mockMatrixState) {
 	matrixServer := httptest.NewServer(matrixState.handler())
 	t.Cleanup(matrixServer.Close)
 
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
 	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: matrixServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -42,9 +44,8 @@ func newHATestDaemon(t *testing.T) (*Daemon, *mockMatrixState) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.session = session
-	daemon.machineName = "machine/test"
-	daemon.machineUserID = "@machine/test:bureau.local"
-	daemon.serverName = "bureau.local"
+	daemon.machine = machine
+	daemon.fleet = fleet
 	daemon.configRoomID = "!config:test"
 	daemon.machineRoomID = "!machine:test"
 	daemon.serviceRoomID = "!service:test"
@@ -79,7 +80,7 @@ func TestHASyncFleetState(t *testing.T) {
 				"ha_class": "critical",
 				"replicas": map[string]any{"min": 1},
 				"placement": map[string]any{
-					"allowed_machines": []any{"machine/*"},
+					"allowed_machines": []any{"bureau/fleet/*/machine/*"},
 				},
 				"failover": "migrate",
 			},
@@ -160,7 +161,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 			name: "allowed machine matches glob",
 			definition: &schema.FleetServiceContent{
 				Placement: schema.PlacementConstraints{
-					AllowedMachines: []string{"machine/*"},
+					AllowedMachines: []string{"bureau/fleet/*/machine/*"},
 				},
 			},
 			want: true,
@@ -169,7 +170,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 			name: "allowed machine exact match",
 			definition: &schema.FleetServiceContent{
 				Placement: schema.PlacementConstraints{
-					AllowedMachines: []string{"machine/test"},
+					AllowedMachines: []string{"bureau/fleet/test/machine/test"},
 				},
 			},
 			want: true,
@@ -178,7 +179,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 			name: "allowed machine no match",
 			definition: &schema.FleetServiceContent{
 				Placement: schema.PlacementConstraints{
-					AllowedMachines: []string{"machine/gpu-*"},
+					AllowedMachines: []string{"bureau/fleet/*/machine/gpu-*"},
 				},
 			},
 			want: false,
@@ -243,9 +244,9 @@ func TestHAEligibilityCheck(t *testing.T) {
 
 			// Set up MachineInfo with the test labels.
 			matrixState.setStateEvent(daemon.machineRoomID,
-				schema.EventTypeMachineInfo, daemon.machineName,
+				schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 				schema.MachineInfo{
-					Principal: daemon.machineUserID,
+					Principal: daemon.machine.UserID(),
 					Labels:    test.labels,
 				})
 
@@ -268,7 +269,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 
 	// Set up existing machine config (empty).
 	matrixState.setStateEvent(daemon.configRoomID,
-		schema.EventTypeMachineConfig, daemon.machineName,
+		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Set up an expired lease from another machine.
@@ -333,14 +334,14 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if lease.Holder != daemon.machineName {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machineName)
+	if lease.Holder != daemon.machine.Localpart() {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.Localpart())
 	}
 
 	// Verify the config room has the PrincipalAssignment with authorization
 	// fields propagated from the FleetServiceContent definition.
 	raw, err = daemon.session.GetStateEvent(ctx, daemon.configRoomID,
-		schema.EventTypeMachineConfig, daemon.machineName)
+		schema.EventTypeMachineConfig, daemon.machine.Localpart())
 	if err != nil {
 		t.Fatalf("GetStateEvent config: %v", err)
 	}
@@ -403,7 +404,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 	serviceLocalpart := "service/fleet/prod"
 
 	matrixState.setStateEvent(daemon.configRoomID,
-		schema.EventTypeMachineConfig, daemon.machineName,
+		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Expired lease.
@@ -421,7 +422,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 		Template: "bureau/template:fleet-controller",
 		HAClass:  "critical",
 		Placement: schema.PlacementConstraints{
-			PreferredMachines: []string{"machine/test"},
+			PreferredMachines: []string{daemon.machine.Localpart()},
 		},
 	}
 
@@ -464,8 +465,8 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if lease.Holder != daemon.machineName {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machineName)
+	if lease.Holder != daemon.machine.Localpart() {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.Localpart())
 	}
 }
 
@@ -507,9 +508,9 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 
 	// This machine has no GPU label.
 	matrixState.setStateEvent(daemon.machineRoomID,
-		schema.EventTypeMachineInfo, daemon.machineName,
+		schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 		schema.MachineInfo{
-			Principal: daemon.machineUserID,
+			Principal: daemon.machine.UserID(),
 			Labels:    map[string]string{},
 		})
 
@@ -555,7 +556,7 @@ func TestHALeaseRenewal(t *testing.T) {
 	// Write initial lease.
 	now := daemon.clock.Now()
 	initialLease := schema.HALeaseContent{
-		Holder:     daemon.machineName,
+		Holder:     daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
@@ -600,8 +601,8 @@ func TestHALeaseRenewal(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if renewed.Holder != daemon.machineName {
-		t.Errorf("renewed holder = %q, want %q", renewed.Holder, daemon.machineName)
+	if renewed.Holder != daemon.machine.Localpart() {
+		t.Errorf("renewed holder = %q, want %q", renewed.Holder, daemon.machine.Localpart())
 	}
 
 	renewedExpiresAt, err := time.Parse(time.RFC3339, renewed.ExpiresAt)
@@ -881,7 +882,7 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 
 	// Config room needs to be set up for reconcile.
 	matrixState.setStateEvent(daemon.configRoomID,
-		schema.EventTypeMachineConfig, daemon.machineName,
+		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Set up fleet room state with a healthy lease (so evaluate is

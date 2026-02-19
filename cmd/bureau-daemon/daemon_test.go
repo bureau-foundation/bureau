@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -31,8 +32,24 @@ var testDaemonEpoch = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 	t.Helper()
 	fakeClock := clock.Fake(testDaemonEpoch)
+
+	namespace, err := ref.NewNamespace("test.local", "bureau")
+	if err != nil {
+		t.Fatalf("create test namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(namespace, "test")
+	if err != nil {
+		t.Fatalf("create test fleet: %v", err)
+	}
+	machine, err := ref.NewMachine(fleet, "testmachine")
+	if err != nil {
+		t.Fatalf("create test machine: %v", err)
+	}
+
 	daemon := &Daemon{
 		clock:              fakeClock,
+		machine:            machine,
+		fleet:              fleet,
 		authorizationIndex: authorization.NewIndex(),
 		logger:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
 
@@ -62,4 +79,24 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		validateCommandFunc:   func(string, string) error { return nil },
 	}
 	return daemon, fakeClock
+}
+
+// testMachineSetup constructs a valid ref.Machine and ref.Fleet for tests
+// that need a specific machine name and server. Uses namespace "bureau"
+// and fleet "test" for all test machines.
+func testMachineSetup(t *testing.T, name, server string) (ref.Machine, ref.Fleet) {
+	t.Helper()
+	namespace, err := ref.NewNamespace(server, "bureau")
+	if err != nil {
+		t.Fatalf("create test namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(namespace, "test")
+	if err != nil {
+		t.Fatalf("create test fleet: %v", err)
+	}
+	machine, err := ref.NewMachine(fleet, name)
+	if err != nil {
+		t.Fatalf("create test machine: %v", err)
+	}
+	return machine, fleet
 }

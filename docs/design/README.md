@@ -62,6 +62,10 @@ a Matrix account and a unix socket API.
 - **[authorization.md](authorization.md)** — Access control: grants,
   denials, allowances, temporal scoping, credential provisioning.
 
+- **[agent-context.md](agent-context.md)** — Agent understanding as a
+  first-class artifact: context commits, delta chains, forking,
+  materialization, format versioning, review discussion resumption.
+
 ### Applications
 
 How Bureau uses itself. These describe patterns built from everything

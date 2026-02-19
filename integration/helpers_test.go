@@ -511,9 +511,9 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 
 	// Create the three fleet-scoped rooms with aliases. The daemon and
 	// fleet controller resolve these aliases at startup.
-	fleetAlias := schema.FleetRoomAlias(namespace, fleetName)
-	machineAlias := schema.FleetMachineRoomAlias(namespace, fleetName)
-	serviceAlias := schema.FleetServiceRoomAlias(namespace, fleetName)
+	fleetAlias := fleetRef.Localpart()
+	machineAlias := fleetRef.MachineRoomAliasLocalpart()
+	serviceAlias := fleetRef.ServiceRoomAliasLocalpart()
 
 	fleetRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Preset:                    "private_chat",

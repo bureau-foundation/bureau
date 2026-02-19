@@ -183,13 +183,14 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	daemon, _ := newTestDaemon(t)
+
+	session, err := matrixClient.SessionFromToken(daemon.machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
@@ -258,13 +259,14 @@ func TestInitialSync_AuthFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := matrixClient.SessionFromToken("@machine/test:bureau.local", "syt_test_token")
+	daemon, _ := newTestDaemon(t)
+
+	session, err := matrixClient.SessionFromToken(daemon.machine.UserID(), "syt_test_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
 
-	daemon, _ := newTestDaemon(t)
 	daemon.session = session
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 

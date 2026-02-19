@@ -55,13 +55,13 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 	}
 
 	// Create the WebRTC transport (implements both Listener and Dialer).
-	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machineName, iceConfig, authenticator, d.logger)
+	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machine.Localpart(), iceConfig, authenticator, d.logger)
 	d.transportListener = webrtcTransport
 	d.transportDialer = webrtcTransport
 	d.relaySocketPath = relaySocketPath
 
 	d.logger.Info("WebRTC transport started",
-		"machine", d.machineName,
+		"machine", d.machine.Localpart(),
 		"relay_socket", relaySocketPath,
 		"turn_configured", turn != nil,
 	)
@@ -312,7 +312,7 @@ func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 		}
 
 		// Skip our own machine and entries without transport addresses.
-		if status.Principal == d.machineUserID || status.TransportAddress == "" {
+		if status.Principal == d.machine.UserID() || status.TransportAddress == "" {
 			continue
 		}
 
@@ -416,7 +416,7 @@ func (d *Daemon) localProviderSocket(proxyName string) (string, bool) {
 		if principal.ProxyServiceName(localpart) != proxyName {
 			continue
 		}
-		if service.Machine != d.machineUserID {
+		if service.Machine != d.machine.UserID() {
 			continue // Remote, not local.
 		}
 		providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
@@ -632,7 +632,7 @@ func (d *Daemon) bridgeWithTokenInjection(transportConn, serviceConn net.Conn) e
 	now := d.clock.Now()
 	token := &servicetoken.Token{
 		Subject:   "tunnel",
-		Machine:   d.machineName,
+		Machine:   d.machine.Localpart(),
 		Audience:  "artifact",
 		Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 		ID:        tokenID,

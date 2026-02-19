@@ -208,11 +208,13 @@ func TestCheckDaemonWatchdog_ReportsToMatrix(t *testing.T) {
 	}))
 	t.Cleanup(matrixServer.Close)
 
+	machine, _ := testMachineSetup(t, "test", "test.local")
+
 	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -358,17 +360,17 @@ func TestExecDaemon_ExecFailure(t *testing.T) {
 	}))
 	t.Cleanup(matrixServer.Close)
 
+	daemon, _ := newTestDaemon(t)
+
 	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
-
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
 	daemon.stateDir = stateDir
@@ -457,11 +459,12 @@ func TestExecDaemon_EmptyBinaryPath(t *testing.T) {
 func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	t.Parallel()
 
-	const (
-		configRoomID = "!config:test.local"
-		serverName   = "test.local"
-		machineName  = "machine/test"
-	)
+	const configRoomID = "!config:test.local"
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server()
 
 	// Create a real binary to hash (reuse the test binary itself).
 	testBinary, err := os.Executable()
@@ -495,7 +498,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@machine/test:test.local", "test-token")
+	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -521,11 +524,8 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		execBinary string
 	)
 
-	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.machineName = machineName
-	daemon.serverName = serverName
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = binhash.FormatDigest(testHash)
@@ -570,6 +570,8 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 // but don't care about Matrix interactions.
 func newNoopSession(t *testing.T) *messaging.DirectSession {
 	t.Helper()
+	machine, _ := testMachineSetup(t, "noop", "test.local")
+
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(writer, `{"event_id":"$noop"}`)
@@ -580,7 +582,7 @@ func newNoopSession(t *testing.T) *messaging.DirectSession {
 	if err != nil {
 		t.Fatalf("newNoopSession: creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@noop:test.local", "noop-token")
+	session, err := client.SessionFromToken(machine.UserID(), "noop-token")
 	if err != nil {
 		t.Fatalf("newNoopSession: creating session: %v", err)
 	}

@@ -163,14 +163,6 @@ func MatrixUserID(localpart, serverName string) string {
 	return "@" + localpart + ":" + serverName
 }
 
-// RoomAlias constructs a Matrix room alias from a local alias name and
-// server name.
-//
-//	RoomAlias("iree/amdgpu/general", "bureau.local") → "#iree/amdgpu/general:bureau.local"
-func RoomAlias(localAlias, serverName string) string {
-	return "#" + localAlias + ":" + serverName
-}
-
 // RoomAliasLocalpart extracts the local alias name from a full Matrix room alias.
 // Returns the part between # and :server. Uses the first colon as the separator
 // because colons cannot appear in room alias localparts (same invariant as
@@ -199,15 +191,6 @@ func RoomAliasLocalpart(fullAlias string) string {
 // The localpart should be validated with ValidateLocalpart before calling this.
 func SocketPath(localpart string) string {
 	return DefaultRunDir + "/" + localpart + SocketSuffix
-}
-
-// AdminSocketPath returns the daemon-only admin socket path for a principal
-// using the default run directory. The daemon connects here to configure
-// service routing; agents never see these sockets.
-//
-//	AdminSocketPath("iree/amdgpu/pm") → "/run/bureau/iree/amdgpu/pm.admin.sock"
-func AdminSocketPath(localpart string) string {
-	return DefaultRunDir + "/" + localpart + AdminSocketSuffix
 }
 
 // RunDirSocketPath returns the agent-facing socket path for a custom run directory.

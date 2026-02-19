@@ -34,7 +34,7 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias,
 		return "", cli.Validation("invalid alias %q: %w", alias, err)
 	}
 
-	fullAlias := principal.RoomAlias(alias, serverName)
+	fullAlias := schema.FullRoomAlias(alias, serverName)
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
 		return "", cli.NotFound("resolving room %s: %w", fullAlias, err)
@@ -61,7 +61,7 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias, 
 		candidate := remaining[:lastSlash]
 		remaining = candidate
 
-		fullAlias := principal.RoomAlias(candidate, serverName)
+		fullAlias := schema.FullRoomAlias(candidate, serverName)
 		roomID, err := session.ResolveAlias(ctx, fullAlias)
 		if err != nil {
 			// Room doesn't exist at this level — keep walking up.

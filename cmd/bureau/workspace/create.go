@@ -175,7 +175,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	machineUserID := principal.MatrixUserID(machine, serverName)
 
 	// Resolve the Bureau space. The workspace room will be added as a child.
-	spaceAlias := principal.RoomAlias("bureau", serverName)
+	spaceAlias := schema.FullRoomAlias("bureau", serverName)
 	spaceRoomID, err := sess.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
 		return cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
@@ -240,7 +240,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 		}
 	}
 
-	fullAlias := principal.RoomAlias(alias, serverName)
+	fullAlias := schema.FullRoomAlias(alias, serverName)
 
 	var principalNames []string
 	for _, assignment := range assignments {
@@ -291,7 +291,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // create → retry resolve if someone else created it between our check and
 // create).
 func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName, adminUserID, machineUserID, spaceRoomID string) (string, error) {
-	fullAlias := principal.RoomAlias(alias, serverName)
+	fullAlias := schema.FullRoomAlias(alias, serverName)
 
 	// Check if the room already exists.
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
@@ -347,7 +347,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
 func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine, workspaceRoomID string, params map[string]string) []schema.PrincipalAssignment {
-	workspaceRoomAlias := principal.RoomAlias(alias, serverName)
+	workspaceRoomAlias := schema.FullRoomAlias(alias, serverName)
 
 	// Derive workspace path components from the alias. The first segment
 	// is the project name; everything after is the worktree path (if any).

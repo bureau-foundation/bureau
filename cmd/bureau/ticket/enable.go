@@ -117,7 +117,7 @@ func runEnable(params *enableParams) error {
 	}
 
 	serviceUserID := principal.MatrixUserID(servicePrincipal, params.ServerName)
-	spaceAlias := principal.RoomAlias(params.Space, params.ServerName)
+	spaceAlias := schema.FullRoomAlias(params.Space, params.ServerName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

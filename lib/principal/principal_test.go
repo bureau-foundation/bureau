@@ -177,37 +177,6 @@ func TestMatrixUserID(t *testing.T) {
 	}
 }
 
-func TestRoomAlias(t *testing.T) {
-	tests := []struct {
-		name       string
-		localAlias string
-		serverName string
-		want       string
-	}{
-		{
-			name:       "simple",
-			localAlias: "agents",
-			serverName: "bureau.local",
-			want:       "#agents:bureau.local",
-		},
-		{
-			name:       "hierarchical",
-			localAlias: "iree/amdgpu/general",
-			serverName: "bureau.local",
-			want:       "#iree/amdgpu/general:bureau.local",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := RoomAlias(test.localAlias, test.serverName)
-			if got != test.want {
-				t.Errorf("RoomAlias(%q, %q) = %q, want %q", test.localAlias, test.serverName, got, test.want)
-			}
-		})
-	}
-}
-
 func TestSocketPath(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -374,43 +343,10 @@ func TestRoomAliasLocalpart(t *testing.T) {
 	}
 }
 
-func TestAdminSocketPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		localpart string
-		want      string
-	}{
-		{
-			name:      "simple",
-			localpart: "alice",
-			want:      "/run/bureau/alice.admin.sock",
-		},
-		{
-			name:      "hierarchical",
-			localpart: "iree/amdgpu/pm",
-			want:      "/run/bureau/iree/amdgpu/pm.admin.sock",
-		},
-		{
-			name:      "machine",
-			localpart: "machine/workstation",
-			want:      "/run/bureau/machine/workstation.admin.sock",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := AdminSocketPath(test.localpart)
-			if got != test.want {
-				t.Errorf("AdminSocketPath(%q) = %q, want %q", test.localpart, got, test.want)
-			}
-		})
-	}
-}
-
 func TestAdminSocketPathLength(t *testing.T) {
 	// Verify that the max localpart length keeps admin socket paths within
 	// the 108-byte sun_path limit for unix domain sockets.
-	maxPath := AdminSocketPath(strings.Repeat("a", MaxLocalpartLength))
+	maxPath := RunDirAdminSocketPath(DefaultRunDir, strings.Repeat("a", MaxLocalpartLength))
 	if length := len(maxPath); length > 108 {
 		t.Errorf("max admin socket path is %d bytes (%q), exceeds 108-byte sun_path limit", length, maxPath)
 	}
@@ -538,8 +474,9 @@ func TestRunDirConsistentWithDefaults(t *testing.T) {
 		t.Errorf("RunDirSocketPath(DefaultRunDir, %q) = %q, want %q (SocketPath)", localpart, got, want)
 	}
 
-	if got, want := RunDirAdminSocketPath(DefaultRunDir, localpart), AdminSocketPath(localpart); got != want {
-		t.Errorf("RunDirAdminSocketPath(DefaultRunDir, %q) = %q, want %q (AdminSocketPath)", localpart, got, want)
+	expectedAdminPath := DefaultRunDir + "/" + localpart + AdminSocketSuffix
+	if got := RunDirAdminSocketPath(DefaultRunDir, localpart); got != expectedAdminPath {
+		t.Errorf("RunDirAdminSocketPath(DefaultRunDir, %q) = %q, want %q", localpart, got, expectedAdminPath)
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -70,7 +69,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				return cli.Validation("room is required\n\nusage: bureau template list [flags] <room-alias-localpart>")
 			}
 
-			roomAlias := principal.RoomAlias(params.Room, params.ServerName)
+			roomAlias := schema.FullRoomAlias(params.Room, params.ServerName)
 
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {

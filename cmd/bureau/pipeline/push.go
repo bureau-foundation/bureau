@@ -9,7 +9,6 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -114,7 +113,7 @@ without actually publishing.`,
 			defer cancel()
 
 			// Verify the target room exists.
-			roomAlias := principal.RoomAlias(ref.Room, params.ServerName)
+			roomAlias := schema.FullRoomAlias(ref.Room, params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return cli.NotFound("resolving target room %q: %w", roomAlias, err)

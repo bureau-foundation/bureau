@@ -681,8 +681,8 @@ type Daemon struct {
 	proxyRoutes map[string]string
 
 	// adminSocketPathFunc returns the admin socket path for a consumer
-	// principal's proxy. Defaults to principal.AdminSocketPath. Tests
-	// override this to use temp directories.
+	// principal's proxy. Defaults to principal.RunDirAdminSocketPath.
+	// Tests override this to use temp directories.
 	adminSocketPathFunc func(localpart string) string
 
 	// prefetchFunc fetches a Nix store path and its closure from

@@ -8,6 +8,26 @@ import (
 	"fmt"
 )
 
+// Schema version constants for agent service events. CanModify methods
+// compare the event's Version field against these constants to prevent
+// silent data loss during rolling upgrades.
+const (
+	// AgentSessionVersion is the current schema version for
+	// AgentSessionContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentSessionVersion = 1
+
+	// AgentContextVersion is the current schema version for
+	// AgentContextContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentContextVersion = 1
+
+	// AgentMetricsVersion is the current schema version for
+	// AgentMetricsContent events. Increment when adding fields that
+	// existing code must not silently drop during read-modify-write.
+	AgentMetricsVersion = 1
+)
+
 // Agent service event type constants. These events live in per-machine
 // config rooms (alongside PrincipalAssignment and Credentials events)
 // and are read/written by the agent service. The state key for each is

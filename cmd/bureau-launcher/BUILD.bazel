@@ -8,8 +8,12 @@ go_library(
     srcs = [
         "doc.go",
         "exec.go",
+        "firstboot.go",
+        "handlers.go",
         "main.go",
+        "proxy.go",
         "sandbox.go",
+        "tmux.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-launcher",
     visibility = ["//visibility:private"],

@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -23,12 +23,23 @@ type Bridge struct {
 	// SocketPath is the path to the Unix socket to forward connections to.
 	SocketPath string
 
-	// Verbose enables per-connection logging.
-	Verbose bool
+	// Logger receives structured log output. If nil, slog.Default() is
+	// used. Per-connection events are logged at Debug level; errors and
+	// lifecycle events at Info/Error.
+	Logger *slog.Logger
 
-	listener net.Listener
-	cancel   context.CancelFunc
-	done     chan struct{}
+	listener    net.Listener
+	cancel      context.CancelFunc
+	done        chan struct{}
+	connections sync.WaitGroup
+}
+
+// logger returns the configured logger or the default.
+func (b *Bridge) logger() *slog.Logger {
+	if b.Logger != nil {
+		return b.Logger
+	}
+	return slog.Default()
 }
 
 // Start begins listening for TCP connections and forwarding them to the
@@ -44,9 +55,11 @@ func (b *Bridge) Start(ctx context.Context) error {
 	}
 
 	// Validate socket exists before starting.
-	if _, err := net.DialTimeout("unix", b.SocketPath, 5*time.Second); err != nil {
+	probeConnection, err := net.DialTimeout("unix", b.SocketPath, 5*time.Second)
+	if err != nil {
 		return fmt.Errorf("bridge: socket %s not reachable: %w", b.SocketPath, err)
 	}
+	probeConnection.Close()
 
 	listener, err := net.Listen("tcp", b.ListenAddr)
 	if err != nil {
@@ -63,7 +76,10 @@ func (b *Bridge) Start(ctx context.Context) error {
 		b.acceptLoop(ctx)
 	}()
 
-	log.Printf("bridge: %s -> %s", b.ListenAddr, b.SocketPath)
+	b.logger().Info("bridge started",
+		"listen_addr", b.ListenAddr,
+		"socket_path", b.SocketPath,
+	)
 	return nil
 }
 
@@ -98,41 +114,49 @@ func (b *Bridge) Wait() {
 }
 
 // acceptLoop accepts connections and bridges them to the Unix socket.
+// It waits for all in-flight connection goroutines to finish before
+// returning, so that closing the done channel signals full quiescence.
 func (b *Bridge) acceptLoop(ctx context.Context) {
 	var connectionCount int64
 
 	for {
-		conn, err := b.listener.Accept()
+		connection, err := b.listener.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():
+				b.connections.Wait()
 				return
 			default:
-				log.Printf("bridge: accept error: %v", err)
+				b.logger().Error("accept failed", "error", err)
 				continue
 			}
 		}
 
 		connectionCount++
 		connectionID := connectionCount
-		go b.handleConnection(ctx, conn, connectionID)
+		b.connections.Add(1)
+		go func() {
+			defer b.connections.Done()
+			b.handleConnection(connection, connectionID)
+		}()
 	}
 }
 
-func (b *Bridge) handleConnection(_ context.Context, tcpConn net.Conn, connectionID int64) {
-	defer tcpConn.Close()
+func (b *Bridge) handleConnection(tcpConnection net.Conn, connectionID int64) {
+	defer tcpConnection.Close()
 
-	if b.Verbose {
-		log.Printf("bridge: [%d] new connection from %s", connectionID, tcpConn.RemoteAddr())
-	}
+	logger := b.logger().With("connection_id", connectionID)
+	logger.Debug("connection accepted",
+		"remote_addr", tcpConnection.RemoteAddr(),
+	)
 
 	// Connect to Unix socket.
-	unixConn, err := net.DialTimeout("unix", b.SocketPath, 5*time.Second)
+	unixConnection, err := net.DialTimeout("unix", b.SocketPath, 5*time.Second)
 	if err != nil {
-		log.Printf("bridge: [%d] failed to connect to socket: %v", connectionID, err)
+		logger.Error("failed to connect to socket", "error", err)
 		return
 	}
-	defer unixConn.Close()
+	defer unixConnection.Close()
 
 	// Bridge the connections bidirectionally.
 	var waitGroup sync.WaitGroup
@@ -141,30 +165,34 @@ func (b *Bridge) handleConnection(_ context.Context, tcpConn net.Conn, connectio
 	// TCP -> Unix
 	go func() {
 		defer waitGroup.Done()
-		bytesCopied, err := io.Copy(unixConn, tcpConn)
-		if b.Verbose && err != nil && !netutil.IsExpectedCloseError(err) {
-			log.Printf("bridge: [%d] tcp->unix error after %d bytes: %v", connectionID, bytesCopied, err)
+		bytesCopied, copyError := io.Copy(unixConnection, tcpConnection)
+		if copyError != nil && !netutil.IsExpectedCloseError(copyError) {
+			logger.Debug("tcp->unix copy error",
+				"bytes_copied", bytesCopied,
+				"error", copyError,
+			)
 		}
-		if uc, ok := unixConn.(*net.UnixConn); ok {
-			uc.CloseWrite()
+		if unixConn, ok := unixConnection.(*net.UnixConn); ok {
+			unixConn.CloseWrite()
 		}
 	}()
 
 	// Unix -> TCP
 	go func() {
 		defer waitGroup.Done()
-		bytesCopied, err := io.Copy(tcpConn, unixConn)
-		if b.Verbose && err != nil && !netutil.IsExpectedCloseError(err) {
-			log.Printf("bridge: [%d] unix->tcp error after %d bytes: %v", connectionID, bytesCopied, err)
+		bytesCopied, copyError := io.Copy(tcpConnection, unixConnection)
+		if copyError != nil && !netutil.IsExpectedCloseError(copyError) {
+			logger.Debug("unix->tcp copy error",
+				"bytes_copied", bytesCopied,
+				"error", copyError,
+			)
 		}
-		if tc, ok := tcpConn.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		if tcpConn, ok := tcpConnection.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
 		}
 	}()
 
 	waitGroup.Wait()
 
-	if b.Verbose {
-		log.Printf("bridge: [%d] connection closed", connectionID)
-	}
+	logger.Debug("connection closed")
 }

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -62,10 +63,20 @@ func run() error {
 		}
 	}
 
+	// Configure logger: verbose enables Debug level for per-connection
+	// events; default Info level shows only lifecycle and errors.
+	logLevel := slog.LevelInfo
+	if verbose {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
 	b := &bridge.Bridge{
 		ListenAddr: listenAddr,
 		SocketPath: socketPath,
-		Verbose:    verbose,
+		Logger:     logger,
 	}
 
 	if len(execCommand) > 0 {
@@ -85,7 +96,7 @@ USAGE
 FLAGS
     -l, --listen <addr>    TCP address to listen on (default: 127.0.0.1:8642)
     -s, --socket <path>    Unix socket to forward to (default: /run/bureau/proxy.sock)
-    -v, --verbose          Enable verbose logging
+    -v, --verbose          Enable per-connection debug logging
     -h, --help             Show this help
 
 EXAMPLES

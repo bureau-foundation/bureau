@@ -6,7 +6,6 @@ package ticketui
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -174,16 +173,16 @@ func overlayBold(view string, screenY, startX, endX int) string {
 	var result strings.Builder
 	result.Grow(len(line) + 40)
 
-	runePosition := 0
+	columnPosition := 0
 	inBold := false
 
 	var state byte
 	remaining := line
 	for len(remaining) > 0 {
-		sequence, width, byteCount, newState := ansi.DecodeSequence(remaining, state, nil)
+		sequence, displayWidth, byteCount, newState := ansi.DecodeSequence(remaining, state, nil)
 		state = newState
 
-		if width == 0 {
+		if displayWidth == 0 {
 			// Control sequence or escape — pass through unchanged.
 			result.WriteString(sequence)
 			// Re-assert bold after every escape within the bold
@@ -196,22 +195,20 @@ func overlayBold(view string, screenY, startX, endX int) string {
 			continue
 		}
 
-		sequenceRuneCount := utf8.RuneCountInString(sequence)
-
 		// End bold if we've reached the end column.
-		if inBold && runePosition >= endX {
+		if inBold && columnPosition >= endX {
 			result.WriteString("\x1b[22m")
 			inBold = false
 		}
 
 		// Start bold if we've reached the start column.
-		if !inBold && runePosition >= startX && runePosition < endX {
+		if !inBold && columnPosition >= startX && columnPosition < endX {
 			result.WriteString("\x1b[1m")
 			inBold = true
 		}
 
 		result.WriteString(sequence)
-		runePosition += sequenceRuneCount
+		columnPosition += displayWidth
 		remaining = remaining[byteCount:]
 	}
 

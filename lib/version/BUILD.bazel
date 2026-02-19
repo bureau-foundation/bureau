@@ -1,14 +1,29 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "version",
     srcs = [
+        "diff.go",
         "doc.go",
         "version.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/version",
     visibility = ["//visibility:public"],
+    deps = [
+        "//lib/binhash",
+        "//lib/schema",
+    ],
+)
+
+go_test(
+    name = "version_test",
+    srcs = ["diff_test.go"],
+    embed = [":version"],
+    deps = [
+        "//lib/binhash",
+        "//lib/schema",
+    ],
 )

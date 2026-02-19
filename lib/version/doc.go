@@ -1,8 +1,10 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package version provides build version information for Bureau
-// binaries.
+// Package version provides build version information and binary
+// comparison logic for Bureau's self-update system.
+//
+// # Build information
 //
 // Four package-level variables are injected at build time via
 // -ldflags -X:
@@ -22,5 +24,11 @@
 //   - [Short] -- just the version number
 //   - [Commit] -- just the git SHA
 //
-// This package has no dependencies on other Bureau packages.
+// # Binary comparison
+//
+// [Compare] compares desired BureauVersion store paths against currently
+// running binary hashes to produce a [Diff] describing which components
+// (daemon, launcher, proxy) need updating. [ComputeSelfHash] returns the
+// SHA256 digest of the currently running binary for use as the "current"
+// input to Compare.
 package version

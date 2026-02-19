@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package hwinfo
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 	"syscall"
 )
 
-// cpuReading captures cumulative CPU time from /proc/stat for delta
+// CPUReading captures cumulative CPU time from /proc/stat for delta
 // computation. The first line of /proc/stat aggregates all CPUs:
 //
 //	cpu  user nice system idle iowait irq softirq steal guest guest_nice
@@ -22,21 +22,21 @@ import (
 //
 // guest and guest_nice are already included in user/nice (kernel
 // accounting) so they are not added separately.
-type cpuReading struct {
-	busy uint64
-	idle uint64
+type CPUReading struct {
+	Busy uint64
+	Idle uint64
 }
 
-// readCPUStats parses the first line of /proc/stat and returns the
+// ReadCPUStats parses the first line of /proc/stat and returns the
 // cumulative busy and idle jiffies. Returns nil on any parse failure
 // (the caller treats nil as "no reading available, report 0%").
-func readCPUStats() *cpuReading {
+func ReadCPUStats() *CPUReading {
 	return readCPUStatsFrom("/proc/stat")
 }
 
-// readCPUStatsFrom is the testable version of readCPUStats that accepts
-// a file path. Exported only within the package for testing.
-func readCPUStatsFrom(path string) *cpuReading {
+// readCPUStatsFrom is the testable version of ReadCPUStats that accepts
+// a file path.
+func readCPUStatsFrom(path string) *CPUReading {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -71,18 +71,18 @@ func readCPUStatsFrom(path string) *cpuReading {
 	busy := values[0] + values[1] + values[2] + values[5] + values[6] + values[7]
 	idle := values[3] + values[4]
 
-	return &cpuReading{busy: busy, idle: idle}
+	return &CPUReading{Busy: busy, Idle: idle}
 }
 
-// cpuPercent computes the CPU utilization percentage from two sequential
+// CPUPercent computes the CPU utilization percentage from two sequential
 // /proc/stat readings. Returns 0 if either reading is nil or the delta
 // is zero (no time has passed).
-func cpuPercent(previous, current *cpuReading) float64 {
+func CPUPercent(previous, current *CPUReading) float64 {
 	if previous == nil || current == nil {
 		return 0
 	}
-	busyDelta := current.busy - previous.busy
-	idleDelta := current.idle - previous.idle
+	busyDelta := current.Busy - previous.Busy
+	idleDelta := current.Idle - previous.Idle
 	totalDelta := busyDelta + idleDelta
 	if totalDelta == 0 {
 		return 0
@@ -90,11 +90,11 @@ func cpuPercent(previous, current *cpuReading) float64 {
 	return float64(busyDelta) / float64(totalDelta) * 100
 }
 
-// memoryUsedMB returns the current system memory usage in megabytes.
-// Uses syscall.Sysinfo (same call used by uptimeSeconds in main.go).
-// Returns 0 if the syscall fails. Integer megabytes comply with Matrix
-// canonical JSON (which forbids fractional numbers).
-func memoryUsedMB() int {
+// MemoryUsedMB returns the current system memory usage in megabytes.
+// Uses syscall.Sysinfo for the reading. Returns 0 if the syscall fails.
+// Integer megabytes comply with Matrix canonical JSON (which forbids
+// fractional numbers).
+func MemoryUsedMB() int {
 	var info syscall.Sysinfo_t
 	if err := syscall.Sysinfo(&info); err != nil {
 		return 0
@@ -107,18 +107,18 @@ func memoryUsedMB() int {
 	return int((totalBytes - freeBytes) / (1024 * 1024))
 }
 
-// cgroupCPUReading captures cumulative CPU time from a cgroup v2
+// CgroupCPUReading captures cumulative CPU time from a cgroup v2
 // cpu.stat file for delta computation across heartbeat intervals.
-type cgroupCPUReading struct {
-	usageUsec uint64
+type CgroupCPUReading struct {
+	UsageUsec uint64
 }
 
-// readCgroupCPUStats reads usage_usec from a cgroup v2 cpu.stat file.
+// ReadCgroupCPUStats reads usage_usec from a cgroup v2 cpu.stat file.
 // The cpu.stat format is a series of "key value" lines; this function
 // extracts the usage_usec field (total CPU time in microseconds).
 // Returns nil if the file doesn't exist or the usage_usec line is
 // absent or unparseable.
-func readCgroupCPUStats(cgroupPath string) *cgroupCPUReading {
+func ReadCgroupCPUStats(cgroupPath string) *CgroupCPUReading {
 	data, err := os.ReadFile(filepath.Join(cgroupPath, "cpu.stat"))
 	if err != nil {
 		return nil
@@ -132,32 +132,32 @@ func readCgroupCPUStats(cgroupPath string) *cgroupCPUReading {
 			if err != nil {
 				return nil
 			}
-			return &cgroupCPUReading{usageUsec: value}
+			return &CgroupCPUReading{UsageUsec: value}
 		}
 	}
 	return nil
 }
 
-// cgroupCPUPercent computes cgroup CPU utilization from two sequential
+// CgroupCPUPercent computes cgroup CPU utilization from two sequential
 // cpu.stat readings over the given interval. Returns the percentage
 // of one CPU core: a single-core fully utilized cgroup returns 100;
 // a cgroup using 2.5 cores returns 250. Returns 0 if either reading
 // is nil or the interval is zero.
-func cgroupCPUPercent(previous, current *cgroupCPUReading, intervalMicroseconds uint64) int {
+func CgroupCPUPercent(previous, current *CgroupCPUReading, intervalMicroseconds uint64) int {
 	if previous == nil || current == nil || intervalMicroseconds == 0 {
 		return 0
 	}
-	if current.usageUsec < previous.usageUsec {
+	if current.UsageUsec < previous.UsageUsec {
 		return 0
 	}
-	deltaUsec := current.usageUsec - previous.usageUsec
+	deltaUsec := current.UsageUsec - previous.UsageUsec
 	return int(deltaUsec * 100 / intervalMicroseconds)
 }
 
-// readCgroupMemoryBytes reads memory.current from a cgroup v2 directory.
+// ReadCgroupMemoryBytes reads memory.current from a cgroup v2 directory.
 // The file contains a single integer: the current memory usage in bytes.
 // Returns 0 if the file doesn't exist or can't be parsed.
-func readCgroupMemoryBytes(cgroupPath string) uint64 {
+func ReadCgroupMemoryBytes(cgroupPath string) uint64 {
 	data, err := os.ReadFile(filepath.Join(cgroupPath, "memory.current"))
 	if err != nil {
 		return 0
@@ -169,23 +169,23 @@ func readCgroupMemoryBytes(cgroupPath string) uint64 {
 	return value
 }
 
-// cgroupDefaultPath returns the default cgroup v2 path for a Bureau
+// CgroupDefaultPath returns the default cgroup v2 path for a Bureau
 // sandbox. The launcher creates sandboxes in a dedicated cgroup
 // hierarchy under /sys/fs/cgroup/bureau/<localpart>/, with slashes
 // in the localpart replaced by dashes (e.g., "service/stt/whisper"
 // becomes "service-stt-whisper").
-func cgroupDefaultPath(localpart string) string {
+func CgroupDefaultPath(localpart string) string {
 	return "/sys/fs/cgroup/bureau/" + strings.ReplaceAll(localpart, "/", "-")
 }
 
-// derivePrincipalStatus determines the lifecycle status of a principal
+// DerivePrincipalStatus determines the lifecycle status of a principal
 // from its cgroup metrics.
 //   - "running" if CPU > 1% (actively working)
 //   - "idle" if CPU <= 1% and we have a previous reading (has been running
 //     long enough for a delta computation)
 //   - "starting" if no previous CPU reading exists (first heartbeat after
 //     sandbox creation, no baseline for delta)
-func derivePrincipalStatus(cpuPercent int, hasPreviousReading bool) string {
+func DerivePrincipalStatus(cpuPercent int, hasPreviousReading bool) string {
 	if !hasPreviousReading {
 		return "starting"
 	}

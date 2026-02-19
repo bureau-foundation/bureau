@@ -23,6 +23,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -1578,7 +1579,7 @@ type (
 // queryLauncherStatus sends a "status" IPC request to the launcher and
 // returns the launcher's binary hash and the proxy binary path it is currently
 // using for new sandbox creation. These values are needed by
-// CompareBureauVersion to determine whether launcher or proxy updates are
+// version.Compare to determine whether launcher or proxy updates are
 // required.
 func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, proxyBinaryPath string, err error) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
@@ -1659,7 +1660,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	}
 
 	// Compare desired versions against running versions.
-	diff, err := CompareBureauVersion(desired, d.daemonBinaryHash, launcherHash, proxyBinaryPath)
+	diff, err := version.Compare(desired, d.daemonBinaryHash, launcherHash, proxyBinaryPath)
 	if err != nil {
 		d.logger.Error("comparing bureau versions", "error", err)
 		return

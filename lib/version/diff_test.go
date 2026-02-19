@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package version
 
 import (
 	"crypto/sha256"
@@ -13,17 +13,17 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-func TestCompareBureauVersionNil(t *testing.T) {
-	diff, err := CompareBureauVersion(nil, "abc", "def", "/some/path")
+func TestCompareNil(t *testing.T) {
+	diff, err := Compare(nil, "abc", "def", "/some/path")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if diff != nil {
 		t.Error("expected nil diff for nil BureauVersion")
 	}
 }
 
-func TestCompareBureauVersionAllIdentical(t *testing.T) {
+func TestCompareAllIdentical(t *testing.T) {
 	directory := t.TempDir()
 	content := []byte("identical binary content")
 
@@ -53,9 +53,9 @@ func TestCompareBureauVersionAllIdentical(t *testing.T) {
 		ProxyStorePath:    proxyDesiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, hexHash, hexHash, proxyCurrentPath)
+	diff, err := Compare(desired, hexHash, hexHash, proxyCurrentPath)
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if diff.DaemonChanged {
 		t.Error("daemon should not be changed (identical content)")
@@ -71,7 +71,7 @@ func TestCompareBureauVersionAllIdentical(t *testing.T) {
 	}
 }
 
-func TestCompareBureauVersionDaemonChanged(t *testing.T) {
+func TestCompareDaemonChanged(t *testing.T) {
 	directory := t.TempDir()
 
 	desiredContent := []byte("new daemon binary v2")
@@ -88,9 +88,9 @@ func TestCompareBureauVersionDaemonChanged(t *testing.T) {
 		DaemonStorePath: desiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, currentHash, "", "")
+	diff, err := Compare(desired, currentHash, "", "")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.DaemonChanged {
 		t.Error("daemon should be changed (different content)")
@@ -106,7 +106,7 @@ func TestCompareBureauVersionDaemonChanged(t *testing.T) {
 	}
 }
 
-func TestCompareBureauVersionLauncherChanged(t *testing.T) {
+func TestCompareLauncherChanged(t *testing.T) {
 	directory := t.TempDir()
 
 	desiredContent := []byte("new launcher binary")
@@ -122,9 +122,9 @@ func TestCompareBureauVersionLauncherChanged(t *testing.T) {
 		LauncherStorePath: desiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, "", currentHash, "")
+	diff, err := Compare(desired, "", currentHash, "")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if diff.DaemonChanged {
 		t.Error("daemon should not be changed (empty store path)")
@@ -134,7 +134,7 @@ func TestCompareBureauVersionLauncherChanged(t *testing.T) {
 	}
 }
 
-func TestCompareBureauVersionProxyChanged(t *testing.T) {
+func TestCompareProxyChanged(t *testing.T) {
 	directory := t.TempDir()
 
 	desiredContent := []byte("new proxy binary")
@@ -153,16 +153,16 @@ func TestCompareBureauVersionProxyChanged(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, "", "", currentPath)
+	diff, err := Compare(desired, "", "", currentPath)
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.ProxyChanged {
 		t.Error("proxy should be changed (different content)")
 	}
 }
 
-func TestCompareBureauVersionProxyIdenticalDifferentPath(t *testing.T) {
+func TestCompareProxyIdenticalDifferentPath(t *testing.T) {
 	// The core value of content hashing: two different store paths
 	// containing byte-identical binaries should NOT trigger an update.
 	directory := t.TempDir()
@@ -188,16 +188,16 @@ func TestCompareBureauVersionProxyIdenticalDifferentPath(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, "", "", currentPath)
+	diff, err := Compare(desired, "", "", currentPath)
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if diff.ProxyChanged {
 		t.Error("proxy should NOT be changed (byte-identical binary at different paths)")
 	}
 }
 
-func TestCompareBureauVersionProxyNoCurrentPath(t *testing.T) {
+func TestCompareProxyNoCurrentPath(t *testing.T) {
 	directory := t.TempDir()
 
 	desiredPath := filepath.Join(directory, "bureau-proxy")
@@ -209,16 +209,16 @@ func TestCompareBureauVersionProxyNoCurrentPath(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, "", "", "")
+	diff, err := Compare(desired, "", "", "")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.ProxyChanged {
 		t.Error("proxy should be changed when no current path is known")
 	}
 }
 
-func TestCompareBureauVersionEmptyCurrentHashes(t *testing.T) {
+func TestCompareEmptyCurrentHashes(t *testing.T) {
 	directory := t.TempDir()
 
 	daemonPath := filepath.Join(directory, "daemon")
@@ -237,9 +237,9 @@ func TestCompareBureauVersionEmptyCurrentHashes(t *testing.T) {
 
 	// Empty current hashes indicate the hash was not computed (e.g.,
 	// startup failure). Treat as changed to ensure an update is attempted.
-	diff, err := CompareBureauVersion(desired, "", "", "")
+	diff, err := Compare(desired, "", "", "")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.DaemonChanged {
 		t.Error("daemon should be changed when current hash is empty")
@@ -249,18 +249,18 @@ func TestCompareBureauVersionEmptyCurrentHashes(t *testing.T) {
 	}
 }
 
-func TestCompareBureauVersionDesiredPathMissing(t *testing.T) {
+func TestCompareDesiredPathMissing(t *testing.T) {
 	desired := &schema.BureauVersion{
 		DaemonStorePath: "/nonexistent/path/bureau-daemon",
 	}
 
-	_, err := CompareBureauVersion(desired, "abc123", "", "")
+	_, err := Compare(desired, "abc123", "", "")
 	if err == nil {
-		t.Fatal("CompareBureauVersion should fail when desired path doesn't exist")
+		t.Fatal("Compare should fail when desired path doesn't exist")
 	}
 }
 
-func TestCompareBureauVersionPartialConfig(t *testing.T) {
+func TestComparePartialConfig(t *testing.T) {
 	// BureauVersion with only DaemonStorePath set — the others are empty
 	// and should not trigger changes.
 	directory := t.TempDir()
@@ -278,9 +278,9 @@ func TestCompareBureauVersionPartialConfig(t *testing.T) {
 		DaemonStorePath: daemonPath,
 	}
 
-	diff, err := CompareBureauVersion(desired, hexHash, "", "")
+	diff, err := Compare(desired, hexHash, "", "")
 	if err != nil {
-		t.Fatalf("CompareBureauVersion: %v", err)
+		t.Fatalf("Compare: %v", err)
 	}
 	if diff.DaemonChanged {
 		t.Error("daemon should not be changed (identical content)")
@@ -297,9 +297,9 @@ func TestCompareBureauVersionPartialConfig(t *testing.T) {
 }
 
 func TestComputeSelfHash(t *testing.T) {
-	hash, binaryPath, err := computeSelfHash()
+	hash, binaryPath, err := ComputeSelfHash()
 	if err != nil {
-		t.Fatalf("computeSelfHash: %v", err)
+		t.Fatalf("ComputeSelfHash: %v", err)
 	}
 	if length := len(hash); length != 64 {
 		t.Errorf("hash length = %d, want 64 (hex-encoded SHA256)", length)
@@ -309,29 +309,29 @@ func TestComputeSelfHash(t *testing.T) {
 	}
 
 	// Deterministic: hashing the same running binary twice.
-	hash2, binaryPath2, err := computeSelfHash()
+	hash2, binaryPath2, err := ComputeSelfHash()
 	if err != nil {
-		t.Fatalf("computeSelfHash (second): %v", err)
+		t.Fatalf("ComputeSelfHash (second): %v", err)
 	}
 	if hash != hash2 {
-		t.Error("computeSelfHash hash should be deterministic")
+		t.Error("ComputeSelfHash hash should be deterministic")
 	}
 	if binaryPath != binaryPath2 {
-		t.Error("computeSelfHash path should be deterministic")
+		t.Error("ComputeSelfHash path should be deterministic")
 	}
 }
 
-func TestVersionDiffNeedsUpdate(t *testing.T) {
+func TestDiffNeedsUpdate(t *testing.T) {
 	tests := []struct {
 		name     string
-		diff     VersionDiff
+		diff     Diff
 		expected bool
 	}{
-		{"nothing changed", VersionDiff{}, false},
-		{"daemon changed", VersionDiff{DaemonChanged: true}, true},
-		{"launcher changed", VersionDiff{LauncherChanged: true}, true},
-		{"proxy changed", VersionDiff{ProxyChanged: true}, true},
-		{"all changed", VersionDiff{DaemonChanged: true, LauncherChanged: true, ProxyChanged: true}, true},
+		{"nothing changed", Diff{}, false},
+		{"daemon changed", Diff{DaemonChanged: true}, true},
+		{"launcher changed", Diff{LauncherChanged: true}, true},
+		{"proxy changed", Diff{ProxyChanged: true}, true},
+		{"all changed", Diff{DaemonChanged: true, LauncherChanged: true, ProxyChanged: true}, true},
 	}
 
 	for _, test := range tests {

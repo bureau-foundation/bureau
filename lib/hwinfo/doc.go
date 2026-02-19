@@ -1,17 +1,33 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package hwinfo probes system hardware and produces static inventory
-// data for Bureau's m.bureau.machine_info state events. It reads CPU
-// topology, memory, NUMA, board identity, and kernel version from
-// /proc and /sys on Linux. GPU enumeration is delegated to per-vendor
-// subpackages (hwinfo/amdgpu, hwinfo/nvidia) that implement the
-// GPUProber interface.
+// Package hwinfo probes system hardware and collects runtime metrics
+// for Bureau's machine status reporting.
 //
-// The package also provides shared sysfs/DRM helpers (drm.go) used by
-// all GPU vendor subpackages: card device filtering, PCI uevent
-// parsing, driver identification, thermal limit reading, and generic
-// sysfs integer/string file reading.
+// # Static inventory
+//
+// Reads CPU topology, memory, NUMA, board identity, and kernel version
+// from /proc and /sys on Linux for m.bureau.machine_info state events.
+// GPU enumeration is delegated to per-vendor subpackages that implement
+// the [GPUProber] interface.
+//
+// # Runtime metrics
+//
+// Provides system-level and per-sandbox resource metrics for periodic
+// heartbeat publishing (m.bureau.machine_status):
+//
+//   - Host CPU utilization from /proc/stat ([ReadCPUStats], [CPUPercent])
+//   - Host memory usage via syscall.Sysinfo ([MemoryUsedMB])
+//   - Per-sandbox CPU and memory from cgroup v2 ([ReadCgroupCPUStats],
+//     [CgroupCPUPercent], [ReadCgroupMemoryBytes])
+//   - Principal lifecycle status derivation ([DerivePrincipalStatus])
+//   - Bureau cgroup path convention ([CgroupDefaultPath])
+//
+// # DRM helpers
+//
+// Shared sysfs/DRM helpers (drm.go) used by all GPU vendor subpackages:
+// card device filtering, PCI uevent parsing, driver identification,
+// thermal limit reading, and generic sysfs integer/string file reading.
 //
 // # Subpackages
 //

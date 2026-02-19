@@ -123,7 +123,7 @@ func run() error {
 	// binary doesn't change while it's running (exec() creates a new
 	// process with its own hash and path).
 	var daemonBinaryHash, daemonBinaryPath string
-	if selfHash, selfPath, hashErr := computeSelfHash(); hashErr == nil {
+	if selfHash, selfPath, hashErr := version.ComputeSelfHash(); hashErr == nil {
 		daemonBinaryHash = selfHash
 		daemonBinaryPath = selfPath
 		logger.Info("daemon binary hash computed", "hash", daemonBinaryHash, "path", daemonBinaryPath)
@@ -289,8 +289,8 @@ func run() error {
 		daemonBinaryHash:       daemonBinaryHash,
 		daemonBinaryPath:       daemonBinaryPath,
 		stateDir:               stateDir,
-		previousCgroupCPU:      make(map[string]*cgroupCPUReading),
-		cgroupPathFunc:         cgroupDefaultPath,
+		previousCgroupCPU:      make(map[string]*hwinfo.CgroupCPUReading),
+		cgroupPathFunc:         hwinfo.CgroupDefaultPath,
 		failedExecPaths:        make(map[string]bool),
 		startFailures:          make(map[string]*startFailure),
 		running:                make(map[string]bool),
@@ -490,7 +490,7 @@ type Daemon struct {
 	// daemon binary, computed once at startup via os.Executable(). Used
 	// by BureauVersion comparison to determine whether a config update
 	// requires a daemon restart (via exec()). Empty if the hash could
-	// not be computed (treated as always-changed by CompareBureauVersion).
+	// not be computed (treated as always-changed by version.Compare).
 	daemonBinaryHash string
 
 	// daemonBinaryPath is the absolute filesystem path of the running
@@ -644,18 +644,18 @@ type Daemon struct {
 
 	// previousCPU stores the last /proc/stat reading for CPU utilization
 	// delta computation. First heartbeat after startup reports 0%.
-	previousCPU *cpuReading
+	previousCPU *hwinfo.CPUReading
 
 	// previousCgroupCPU stores the last cgroup cpu.stat reading for each
 	// running principal. Keyed by localpart. Used for delta computation
 	// across heartbeat intervals. Accessed only by publishStatus in the
 	// statusLoop goroutine, so no mutex is needed (same pattern as
 	// previousCPU).
-	previousCgroupCPU map[string]*cgroupCPUReading
+	previousCgroupCPU map[string]*hwinfo.CgroupCPUReading
 
 	// cgroupPathFunc returns the cgroup v2 directory path for a
-	// principal's sandbox. Defaults to cgroupDefaultPath. Tests override
-	// this to use temp directories with synthetic cgroup files.
+	// principal's sandbox. Defaults to hwinfo.CgroupDefaultPath. Tests
+	// override this to use temp directories with synthetic cgroup files.
 	cgroupPathFunc func(localpart string) string
 
 	// gpuCollectors holds per-vendor GPU metric collectors. Each collector
@@ -982,8 +982,8 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 
 	// Compute CPU utilization from the delta since the last heartbeat.
 	// The first heartbeat after startup reports 0% (no baseline yet).
-	currentCPU := readCPUStats()
-	cpuUtilization := cpuPercent(d.previousCPU, currentCPU)
+	currentCPU := hwinfo.ReadCPUStats()
+	cpuUtilization := hwinfo.CPUPercent(d.previousCPU, currentCPU)
 	d.previousCPU = currentCPU
 
 	// Per-principal resource collection from cgroup v2.
@@ -995,7 +995,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 			Running: runningCount,
 		},
 		CPUPercent:       int(cpuUtilization),
-		MemoryUsedMB:     memoryUsedMB(),
+		MemoryUsedMB:     hwinfo.MemoryUsedMB(),
 		GPUStats:         d.collectGPUStats(),
 		UptimeSeconds:    uptimeSeconds(),
 		LastActivityAt:   lastActivity,
@@ -1031,18 +1031,18 @@ func (d *Daemon) collectPrincipalResources(principals []string) map[string]schem
 		cgroupPath := d.cgroupPathFunc(localpart)
 
 		// CPU: read usage_usec and compute delta from previous reading.
-		currentCPU := readCgroupCPUStats(cgroupPath)
+		currentCPU := hwinfo.ReadCgroupCPUStats(cgroupPath)
 		previousCPU := d.previousCgroupCPU[localpart]
-		cpuPercent := cgroupCPUPercent(previousCPU, currentCPU, intervalMicroseconds)
+		cpuPercent := hwinfo.CgroupCPUPercent(previousCPU, currentCPU, intervalMicroseconds)
 		if currentCPU != nil {
 			d.previousCgroupCPU[localpart] = currentCPU
 		}
 
 		// Memory: read current usage.
-		memoryBytes := readCgroupMemoryBytes(cgroupPath)
+		memoryBytes := hwinfo.ReadCgroupMemoryBytes(cgroupPath)
 		memoryMB := int(memoryBytes / (1024 * 1024))
 
-		status := derivePrincipalStatus(cpuPercent, previousCPU != nil)
+		status := hwinfo.DerivePrincipalStatus(cpuPercent, previousCPU != nil)
 
 		result[localpart] = schema.PrincipalResourceUsage{
 			CPUPercent: cpuPercent,

@@ -8,7 +8,6 @@ go_library(
     srcs = [
         "admin.go",
         "audit.go",
-        "bureau_version.go",
         "command.go",
         "doc.go",
         "exec.go",
@@ -16,7 +15,6 @@ go_library(
         "health.go",
         "layout.go",
         "main.go",
-        "metrics.go",
         "observe.go",
         "observe_auth.go",
         "observe_auth_query.go",
@@ -39,7 +37,6 @@ go_library(
     deps = [
         "//lib/artifact",
         "//lib/authorization",
-        "//lib/binhash",
         "//lib/clock",
         "//lib/codec",
         "//lib/git",
@@ -76,7 +73,6 @@ go_test(
     srcs = [
         "admin_test.go",
         "audit_test.go",
-        "bureau_version_test.go",
         "command_test.go",
         "daemon_test.go",
         "exec_test.go",
@@ -85,7 +81,6 @@ go_test(
         "layout_watcher_test.go",
         "machine_layout_test.go",
         "main_test.go",
-        "metrics_test.go",
         "mock_matrix_test.go",
         "observe_auth_query_test.go",
         "observe_auth_test.go",

@@ -10,6 +10,7 @@ go_library(
         "drm.go",
         "hwinfo.go",
         "hwinfo_linux.go",
+        "metrics_linux.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/hwinfo",
     visibility = ["//visibility:public"],
@@ -28,7 +29,10 @@ go_library(
 
 go_test(
     name = "hwinfo_test",
-    srcs = ["hwinfo_linux_test.go"],
+    srcs = [
+        "hwinfo_linux_test.go",
+        "metrics_linux_test.go",
+    ],
     embed = [":hwinfo"],
     deps = select({
         "@rules_go//go/platform:android": [

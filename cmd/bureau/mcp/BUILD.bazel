@@ -21,6 +21,7 @@ go_library(
         "//lib/bm25",
         "//lib/schema",
         "//lib/toolsearch",
+        "//lib/toolserver",
         "//lib/version",
         "//messaging",
     ],

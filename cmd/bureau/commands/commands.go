@@ -4,6 +4,13 @@
 // Package commands builds the complete Bureau CLI command tree. Both
 // the bureau CLI binary and the bureau-agent binary import this
 // package to share a single source of truth for tool discovery.
+//
+// This creates a cross-binary dependency: bureau-agent's driver
+// imports this package (and transitively all subcommand packages)
+// to construct the MCP tool server. This is intentional — the agent
+// executes the same CLI commands as tools. The agent's core loop
+// logic depends on the [toolserver.Server] interface in lib/, not
+// on the concrete MCP types; only the driver layer imports from cmd/.
 package commands
 
 import (

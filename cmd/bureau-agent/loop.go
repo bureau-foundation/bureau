@@ -11,9 +11,9 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
+	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
 // providerType identifies the LLM provider for tool search strategy
@@ -57,8 +57,10 @@ type agentLoopConfig struct {
 	// providers use progressive disclosure meta-tools.
 	providerType providerType
 
-	// tools is the MCP server providing tool discovery and execution.
-	tools *mcp.Server
+	// tools provides tool discovery and execution. In production this
+	// is the MCP server backed by the CLI command tree; in tests it
+	// can be any implementation of the interface.
+	tools toolserver.Server
 
 	// contextManager controls how conversation history is stored,
 	// windowed, and prepared for LLM requests. Different implementations
@@ -278,7 +280,7 @@ func callLLM(ctx context.Context, config *agentLoopConfig, messages []llm.Messag
 
 // executeToolCalls runs each tool call through the MCP server's
 // in-process execution pipeline and returns the results for the LLM.
-func executeToolCalls(ctx context.Context, tools *mcp.Server, toolUses []llm.ToolUse, encoder *json.Encoder, logger *slog.Logger) []llm.ToolResult {
+func executeToolCalls(ctx context.Context, tools toolserver.Server, toolUses []llm.ToolUse, encoder *json.Encoder, logger *slog.Logger) []llm.ToolResult {
 	results := make([]llm.ToolResult, 0, len(toolUses))
 
 	for _, toolUse := range toolUses {
@@ -343,7 +345,7 @@ type toolCatalog struct {
 
 // buildToolCatalog converts the MCP server's authorized tool catalog
 // into llm.ToolDefinition values with deferral metadata.
-func buildToolCatalog(tools *mcp.Server) toolCatalog {
+func buildToolCatalog(tools toolserver.Server) toolCatalog {
 	exports := tools.AuthorizedTools()
 	catalog := toolCatalog{
 		definitions: make([]llm.ToolDefinition, len(exports)),
@@ -454,7 +456,7 @@ func applyAnthropicToolSearch(catalog toolCatalog) []llm.ToolDefinition {
 // the 3 progressive disclosure meta-tools (bureau_tools_list,
 // bureau_tools_describe, bureau_tools_call). Used for non-Anthropic
 // providers where server-side tool search is unavailable.
-func buildProgressiveToolDefinitions(tools *mcp.Server) []llm.ToolDefinition {
+func buildProgressiveToolDefinitions(tools toolserver.Server) []llm.ToolDefinition {
 	metaTools := tools.MetaToolDefinitions()
 	definitions := make([]llm.ToolDefinition, len(metaTools))
 	for i, meta := range metaTools {

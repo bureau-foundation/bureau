@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bm25"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/toolsearch"
+	"github.com/bureau-foundation/bureau/lib/toolserver"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -469,34 +470,12 @@ func captureRun(run func([]string) error) (string, error) {
 	return string(captured.data), runErr
 }
 
-// ToolExport describes a tool for callers that need tool metadata
-// without going through the MCP JSON-RPC protocol. The native Bureau
-// agent uses this to build LLM tool definitions from the same
-// discovery and authorization logic as the MCP server.
-type ToolExport struct {
-	// Name is the underscore-joined command path (e.g., "bureau_ticket_list").
-	Name string
-
-	// Description is the human-readable tool description.
-	Description string
-
-	// InputSchema is the JSON Schema for the tool's parameters,
-	// serialized as JSON.
-	InputSchema json.RawMessage
-
-	// Deferrable is true when the tool can be deferred for on-demand
-	// discovery via tool search. Read-only query tools (list, show,
-	// search, status) are NOT deferrable — they stay in context
-	// always. Everything else is deferrable.
-	Deferrable bool
-}
-
 // AuthorizedTools returns tool metadata for all tools that pass
 // authorization checks. Used by the native agent to build the LLM
 // tool catalog from the same discovery and grant-filtering logic
 // as the MCP JSON-RPC tools/list endpoint.
-func (s *Server) AuthorizedTools() []ToolExport {
-	var exports []ToolExport
+func (s *Server) AuthorizedTools() []toolserver.ToolExport {
+	var exports []toolserver.ToolExport
 	for i := range s.tools {
 		t := &s.tools[i]
 		if !s.toolAuthorized(t) {
@@ -510,7 +489,7 @@ func (s *Server) AuthorizedTools() []ToolExport {
 			// condition.
 			continue
 		}
-		exports = append(exports, ToolExport{
+		exports = append(exports, toolserver.ToolExport{
 			Name:        t.name,
 			Description: t.description,
 			InputSchema: schemaJSON,
@@ -592,17 +571,9 @@ func (s *Server) callMetaTool(name string, arguments json.RawMessage) (string, b
 // MetaToolDefinitions returns LLM tool definitions for the three
 // meta-tools. Used by the native agent loop when progressive
 // disclosure is selected for non-Anthropic providers.
-func (s *Server) MetaToolDefinitions() []struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
-} {
+func (s *Server) MetaToolDefinitions() []toolserver.MetaToolDefinition {
 	descriptions := metaToolDescriptions()
-	definitions := make([]struct {
-		Name        string
-		Description string
-		InputSchema json.RawMessage
-	}, len(descriptions))
+	definitions := make([]toolserver.MetaToolDefinition, len(descriptions))
 	for i, description := range descriptions {
 		schemaJSON, _ := json.Marshal(description.InputSchema)
 		definitions[i].Name = description.Name

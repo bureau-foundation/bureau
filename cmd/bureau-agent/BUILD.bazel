@@ -19,6 +19,7 @@ go_library(
         "//lib/llm",
         "//lib/llm/context",
         "//lib/proxyclient",
+        "//lib/toolserver",
     ],
 )
 

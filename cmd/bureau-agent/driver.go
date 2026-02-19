@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
 // nativeDriver implements agent.Driver for the Bureau-native agent.
@@ -273,7 +274,7 @@ const overheadFloorTokens = 512
 // but are counted here. This is the safe direction: the
 // CharEstimator calibration corrects the effective budget after the
 // first turn.
-func estimateOverheadTokens(systemPrompt string, tools *mcp.Server) int {
+func estimateOverheadTokens(systemPrompt string, tools toolserver.Server) int {
 	characters := len(systemPrompt)
 	for _, export := range tools.AuthorizedTools() {
 		characters += len(export.Name) + len(export.Description) + len(export.InputSchema)

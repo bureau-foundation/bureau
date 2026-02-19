@@ -46,8 +46,12 @@ func TestMachineLifecycle(t *testing.T) {
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
-	machineName := fleet.Prefix + "/machine/lifecycle"
-	machineUserID := "@" + machineName + ":" + testServerName
+	machineRef, err := ref.NewMachine(fleet.Ref, "lifecycle")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineName := machineRef.Localpart()
+	machineUserID := machineRef.UserID()
 	machineRoomID := fleet.MachineRoomID
 
 	// --- Phase 1: Provision via CLI ---
@@ -199,7 +203,7 @@ func TestMachineLifecycle(t *testing.T) {
 		}
 
 		// Verify the config room was created.
-		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
+		configAlias := machineRef.RoomAlias()
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
@@ -481,7 +485,7 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	// Resolve config rooms (created by daemons) and push credentials + config.
 	for _, p := range principals {
-		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(p.machineSetup.name), testServerName)
+		configAlias := p.machineSetup.machineRef.RoomAlias()
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room %s not created: %v", configAlias, err)

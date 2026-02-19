@@ -223,7 +223,7 @@ func TestBootstrapScript(t *testing.T) {
 		t.Log("daemon started and publishing status")
 
 		// Deploy a principal to verify sandbox creation (bwrap).
-		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
+		configAlias := machineRef.RoomAlias()
 		configRoomID, err := admin.ResolveAlias(t.Context(), configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)

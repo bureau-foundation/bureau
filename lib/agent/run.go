@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -25,7 +25,8 @@ type RunConfig struct {
 	// ProxySocketPath is the path to the Bureau proxy Unix socket.
 	ProxySocketPath string
 
-	// MachineName is the machine localpart (e.g., "machine/workstation").
+	// MachineName is the fleet-scoped machine localpart
+	// (e.g., "bureau/fleet/prod/machine/workstation").
 	MachineName string
 
 	// ServerName is the Matrix server name (e.g., "bureau.local").
@@ -124,11 +125,16 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		return fmt.Errorf("BUREAU_SERVER_NAME is required")
 	}
 
+	machine, err := ref.ParseMachine(config.MachineName, config.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid machine name %q: %w", config.MachineName, err)
+	}
+
 	// Create proxy client and verify connectivity.
 	proxy := proxyclient.New(config.ProxySocketPath, config.ServerName)
 
 	logger.Info("building agent context")
-	agentContext, err := BuildContext(ctx, proxy, config.MachineName)
+	agentContext, err := BuildContext(ctx, proxy, machine)
 	if err != nil {
 		return fmt.Errorf("building agent context: %w", err)
 	}
@@ -279,7 +285,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	defer cancelMessagePump()
 
 	ownUserID := agentContext.Identity.UserID
-	machineUserID := principal.MatrixUserID(config.MachineName, config.ServerName)
+	machineUserID := machine.UserID()
 	pumpReady := make(chan struct{})
 	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
 

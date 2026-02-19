@@ -333,7 +333,7 @@ func waitForDaemonReady(t *testing.T, admin *messaging.DirectSession, machine *t
 		schema.EventTypeMachineStatus, machine.Name)
 
 	// Resolve the per-machine config room and join as admin.
-	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machine.Name), testServerName)
+	configAlias := machine.Ref.RoomAlias()
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room %s not created: %v", configAlias, err)
@@ -373,7 +373,7 @@ func loginPrincipal(t *testing.T, localpart, password string) principalAccount {
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    "@" + localpart + ":" + testServerName,
+		UserID:    principal.MatrixUserID(localpart, testServerName),
 		Token:     token,
 	}
 }
@@ -415,7 +415,7 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    "@" + localpart + ":" + testServerName,
+		UserID:    principal.MatrixUserID(localpart, testServerName),
 		Token:     token,
 	}
 }

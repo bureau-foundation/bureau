@@ -119,7 +119,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		schema.EventTypeMachineStatus, machineName)
 
 	// Resolve config room and push credentials + config.
-	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
+	configAlias := machineRef.RoomAlias()
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room not created: %v", err)

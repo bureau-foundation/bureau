@@ -20,9 +20,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -51,6 +50,11 @@ func run() error {
 		return fmt.Errorf("BUREAU_SERVER_NAME not set")
 	}
 
+	machine, err := ref.ParseMachine(machineName, serverName)
+	if err != nil {
+		return fmt.Errorf("invalid machine name %q: %w", machineName, err)
+	}
+
 	proxy := proxyclient.New(proxySocket, serverName)
 
 	// Step 1: Verify proxy identity.
@@ -77,7 +81,7 @@ func run() error {
 	log("whoami: user_id=%s", whoamiUserID)
 
 	// Step 3: Resolve the config room.
-	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configAlias := machine.RoomAlias()
 	log("resolving config room %s...", configAlias)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
@@ -104,7 +108,7 @@ func run() error {
 	// long-polling. Skip messages from self and from the machine daemon —
 	// the daemon posts operational messages (service directory updates,
 	// policy changes) to the config room that are not intended for the agent.
-	machineUserID := principal.MatrixUserID(machineName, serverName)
+	machineUserID := machine.UserID()
 	log("waiting for incoming message...")
 	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {

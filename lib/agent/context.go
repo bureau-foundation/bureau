@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -43,7 +44,7 @@ type AgentContext struct {
 // BuildContext assembles the agent context from the proxy and filesystem.
 // It calls the proxy to get identity, grants, and services, reads the
 // payload file, and resolves the config room.
-func BuildContext(ctx context.Context, proxy *proxyclient.Client, machineName string) (*AgentContext, error) {
+func BuildContext(ctx context.Context, proxy *proxyclient.Client, machine ref.Machine) (*AgentContext, error) {
 	identity, err := proxy.Identity(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting identity from proxy: %w", err)
@@ -61,7 +62,7 @@ func BuildContext(ctx context.Context, proxy *proxyclient.Client, machineName st
 
 	payload := readPayload()
 
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), proxy.ServerName())
+	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := proxy.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config room %q: %w", configRoomAlias, err)

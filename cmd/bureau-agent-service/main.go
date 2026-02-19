@@ -17,7 +17,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -145,7 +144,7 @@ func run() error {
 	// service bindings during principal deployment. If the join fails,
 	// the service continues startup and accepts the invite via the sync
 	// loop when it arrives.
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
+	configRoomAlias := machineRef.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("resolving config room alias %q: %w", configRoomAlias, err)

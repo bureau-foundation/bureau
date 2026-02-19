@@ -26,6 +26,7 @@ go_library(
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",
+        "//lib/template",
         "//messaging",
     ],
 )

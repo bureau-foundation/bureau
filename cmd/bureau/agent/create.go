@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -172,9 +173,13 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 	fmt.Fprintf(os.Stderr, "Creating agent %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
 
 	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
-		Machine:       machine,
-		Localpart:     params.Name,
-		TemplateRef:   templateRef,
+		Machine:     machine,
+		Localpart:   params.Name,
+		TemplateRef: templateRef,
+		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
+			_, err := template.Fetch(ctx, adminSession, ref, serverName)
+			return err
+		},
 		HomeserverURL: homeserverURL,
 		AutoStart:     params.AutoStart,
 		MachineRoomID: machineRoomID,

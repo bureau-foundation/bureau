@@ -13,7 +13,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
-	libtemplate "github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -44,6 +43,14 @@ type CreateParams struct {
 	// bureau/template:claude-dev). The template must already exist in Matrix.
 	// Callers parse the string at the CLI boundary via schema.ParseTemplateRef.
 	TemplateRef schema.TemplateRef
+
+	// ValidateTemplate verifies that the referenced template exists and is
+	// resolvable before Create proceeds with account registration and
+	// credential provisioning. This breaks the import dependency between
+	// lib/principal and lib/template: callers that already have a
+	// messaging.Session close over template.Fetch to provide the validation.
+	// Required — Create returns an error if nil.
+	ValidateTemplate func(ctx context.Context, templateRef schema.TemplateRef, serverName string) error
 
 	// HomeserverURL is the Matrix homeserver URL included in the encrypted
 	// credential bundle. The launcher uses this to configure the proxy's
@@ -142,10 +149,14 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 		return nil, fmt.Errorf("machine room ID is required for credential provisioning")
 	}
 
+	if params.ValidateTemplate == nil {
+		return nil, fmt.Errorf("ValidateTemplate callback is required")
+	}
+
 	serverName := params.Machine.Server()
 
 	// Verify the template exists in Matrix before creating any accounts or state.
-	if _, err := libtemplate.Fetch(ctx, session, params.TemplateRef, serverName); err != nil {
+	if err := params.ValidateTemplate(ctx, params.TemplateRef, serverName); err != nil {
 		return nil, fmt.Errorf("template %q not found: %w", params.TemplateRef, err)
 	}
 

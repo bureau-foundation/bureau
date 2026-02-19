@@ -4,6 +4,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -706,9 +707,13 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	defer registrationTokenBuffer.Close()
 
 	result, err := principal.Create(ctx, client, admin, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
-		Machine:       machine.Ref,
-		Localpart:     options.Localpart,
-		TemplateRef:   templateRef,
+		Machine:     machine.Ref,
+		Localpart:   options.Localpart,
+		TemplateRef: templateRef,
+		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
+			_, err := template.Fetch(ctx, admin, ref, serverName)
+			return err
+		},
 		HomeserverURL: testHomeserverURL,
 		AutoStart:     true,
 		MachineRoomID: machine.MachineRoomID,

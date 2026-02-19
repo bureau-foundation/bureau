@@ -720,7 +720,6 @@ func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.T
 	score := pane.computeScore(source, entry, now)
 	pane.header = renderer.RenderHeader(entry, score)
 	body, clickTargets := renderer.RenderBody(source, entry, now)
-	pane.clickTargets = clickTargets
 
 	// Wrap body to contentWidth so no line exceeds the viewport width.
 	// Dependency/child/parent lines are already truncated by the
@@ -730,6 +729,15 @@ func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.T
 	// sections in the body, so their line numbers remain stable.
 	body = lipgloss.NewStyle().Width(contentWidth).Render(body)
 
+	// Detect and style inline ticket ID references. This runs after
+	// width constraint so character positions are final. Existing
+	// click targets (graph nodes, dep lists) are passed in to avoid
+	// double-styling IDs that already have visual treatment.
+	autolinkBody, autolinkTargets := detectAutolinks(body, clickTargets, source, pane.theme)
+	body = autolinkBody
+	clickTargets = append(clickTargets, autolinkTargets...)
+
+	pane.clickTargets = clickTargets
 	pane.rawBody = body
 	pane.applySearchHighlighting()
 	pane.viewport.GotoTop()
@@ -757,12 +765,17 @@ func (pane *DetailPane) rerender() {
 	score := pane.computeScore(pane.source, pane.entry, pane.renderTime)
 	pane.header = renderer.RenderHeader(pane.entry, score)
 	body, clickTargets := renderer.RenderBody(pane.source, pane.entry, pane.renderTime)
-	pane.clickTargets = clickTargets
 
 	// Same width constraint as SetContent: ensure no line exceeds the
 	// viewport width after re-rendering at the new width.
 	body = lipgloss.NewStyle().Width(contentWidth).Render(body)
 
+	// Detect and style autolinks (same as SetContent).
+	autolinkBody, autolinkTargets := detectAutolinks(body, clickTargets, pane.source, pane.theme)
+	body = autolinkBody
+	clickTargets = append(clickTargets, autolinkTargets...)
+
+	pane.clickTargets = clickTargets
 	pane.rawBody = body
 	pane.applySearchHighlighting()
 
@@ -878,6 +891,21 @@ func (pane DetailPane) ClickTarget(viewportY, relativeX int) string {
 		}
 	}
 	return ""
+}
+
+// HoverTarget returns the full BodyClickTarget at the given
+// viewport-relative position, or nil if the position is not a
+// clickable entry. Used by the hover tooltip system to get the
+// target's column bounds for bold highlighting.
+func (pane DetailPane) HoverTarget(viewportY, relativeX int) *BodyClickTarget {
+	bodyLine := pane.viewport.YOffset + viewportY
+	for index := range pane.clickTargets {
+		target := &pane.clickTargets[index]
+		if target.Line == bodyLine && relativeX >= target.StartX && relativeX < target.EndX {
+			return target
+		}
+	}
+	return nil
 }
 
 // applySearchHighlighting sets the viewport content to the rawBody

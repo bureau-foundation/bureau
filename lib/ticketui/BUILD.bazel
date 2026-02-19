@@ -7,6 +7,7 @@ go_library(
     name = "ticketui",
     srcs = [
         "animation.go",
+        "autolink.go",
         "beads.go",
         "dependency.go",
         "detail.go",
@@ -21,6 +22,7 @@ go_library(
         "search.go",
         "source.go",
         "theme.go",
+        "tooltip.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/ticketui",
     visibility = ["//visibility:public"],
@@ -47,6 +49,7 @@ go_library(
 go_test(
     name = "ticketui_test",
     srcs = [
+        "autolink_test.go",
         "beads_test.go",
         "dependency_test.go",
         "filter_test.go",
@@ -54,6 +57,7 @@ go_test(
         "markdown_test.go",
         "model_test.go",
         "search_test.go",
+        "tooltip_test.go",
     ],
     embed = [":ticketui"],
     deps = [

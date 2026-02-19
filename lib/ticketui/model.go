@@ -4,7 +4,9 @@
 package ticketui
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -68,6 +71,66 @@ type sourceEventMsg struct {
 // heatTickMsg is sent periodically to drive the heat decay animation.
 // While any tickets are hot, a new tick is scheduled after each one.
 type heatTickMsg struct{}
+
+// clipboardFadeMsg is sent after a short delay to clear the clipboard
+// feedback notice from the status bar.
+type clipboardFadeMsg struct{}
+
+// clipboardFadeDelay is how long the "Copied" notice stays visible.
+const clipboardFadeDelay = 2 * time.Second
+
+// copyToClipboard writes text to the system clipboard via the OSC 52
+// terminal escape sequence. Writes directly to /dev/tty to bypass
+// bubbletea's managed output — OSC 52 is invisible (no screen effect)
+// so it's safe to write alongside the TUI renderer.
+//
+// Uses BEL (\x07) as the OSC terminator rather than ST (\x1b\\)
+// because BEL is a single byte that survives intact through layered
+// terminal environments (SSH, tmux, screen). ST's two-byte escape
+// can be misinterpreted by intermediate layers.
+//
+// When tmux is detected (via $TMUX or $TERM prefix), sends the OSC 52
+// both via tmux DCS passthrough (for allow-passthrough configurations)
+// and directly (for set-clipboard configurations). This covers both
+// tmux forwarding modes; duplicate clipboard sets are harmless.
+//
+// After a short delay, sends clipboardFadeMsg to clear the UI notice.
+func copyToClipboard(text string) tea.Cmd {
+	return tea.Batch(
+		func() tea.Msg {
+			tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+			if err != nil {
+				return nil
+			}
+			defer tty.Close()
+
+			encoded := base64.StdEncoding.EncodeToString([]byte(text))
+			osc52 := fmt.Sprintf("\x1b]52;c;%s\x07", encoded)
+
+			// Detect tmux: TMUX env var (local tmux), or TERM prefix
+			// (forwarded through SSH from a local tmux session).
+			inTmux := os.Getenv("TMUX") != "" ||
+				strings.HasPrefix(os.Getenv("TERM"), "tmux") ||
+				strings.HasPrefix(os.Getenv("TERM"), "screen")
+
+			if inTmux {
+				// tmux DCS passthrough: escapes are doubled inside
+				// the DCS wrapper. Uses BEL as OSC terminator to
+				// avoid double-escaping ST. Requires tmux
+				// allow-passthrough on.
+				fmt.Fprintf(tty, "\x1bPtmux;\x1b%s\x1b\\", osc52)
+			}
+
+			// Direct OSC 52: works without tmux, or with tmux
+			// set-clipboard on/external (tmux intercepts and forwards).
+			tty.WriteString(osc52)
+			return nil
+		},
+		tea.Tick(clipboardFadeDelay, func(time.Time) tea.Msg {
+			return clipboardFadeMsg{}
+		}),
+	)
+}
 
 // ListItem is a single row in the rendered list. It is either a group
 // header (for the ready tab's epic grouping) or a ticket entry.
@@ -147,6 +210,16 @@ type Model struct {
 	// filter uses fuzzy matching; nil when no filter is active.
 	filterHighlights map[string][]int
 
+	// Hover tooltip: shown when the mouse rests on a clickable ticket
+	// reference in the detail pane (graph nodes, dependency entries,
+	// autolinked inline references). Nil when no tooltip is visible.
+	tooltip *tooltipState
+
+	// Clipboard feedback: set when a right-click copies a ticket ID
+	// to the system clipboard via OSC 52. Cleared after a short delay
+	// so the "Copied" indicator disappears.
+	clipboardNotice string
+
 	// Live update animation.
 	heatTracker  *HeatTracker // Tracks recently-changed tickets for glow animation.
 	eventChannel <-chan Event // Source event subscription; nil if no live updates.
@@ -218,6 +291,9 @@ func listenForSourceEvent(channel <-chan Event) tea.Cmd {
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.KeyMsg:
+		// Any keyboard input dismisses the hover tooltip.
+		model.tooltip = nil
+
 		// When filter is active, route all input to the filter first,
 		// except for Esc (clear) and Enter (confirm and return to list).
 		if model.focusRegion == FocusFilter {
@@ -302,7 +378,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		model.handleMouse(message)
+		if cmd := model.handleMouse(message); cmd != nil {
+			return model, cmd
+		}
+
+	case clipboardFadeMsg:
+		model.clipboardNotice = ""
 
 	case tea.WindowSizeMsg:
 		model.width = message.Width
@@ -333,8 +414,9 @@ func (model Model) contentStartY() int {
 // mouse position. Scroll wheel scrolls whichever pane the cursor is
 // over. Clicks in the list select the clicked row. Dragging the
 // divider resizes the split. Scrollbar clicks and drags scroll the
-// corresponding pane.
-func (model *Model) handleMouse(message tea.MouseMsg) {
+// corresponding pane. Right-click on a hoverable ticket reference
+// copies the ticket ID to the system clipboard.
+func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 	listWidth := model.listWidth()
 	contentStart := model.contentStartY()
 	listScrollX := listWidth - 1     // Right edge of the list pane.
@@ -348,13 +430,27 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 	inDetailPane := message.X > dividerX && message.X < detailScrollX
 	onDetailScroll := message.X == detailScrollX
 
+	// Motion events with no button held: update hover tooltip.
+	// This fires before drag handling because drags also produce
+	// motion events (with a button held), and those should continue
+	// to be handled by the drag logic below.
+	if message.Action == tea.MouseActionMotion && message.Button == tea.MouseButtonNone {
+		model.updateHoverTooltip(message, inDetailPane && inContentArea)
+		return nil
+	}
+
+	// Any non-motion interaction dismisses the tooltip.
+	if model.tooltip != nil {
+		model.tooltip = nil
+	}
+
 	// Handle active drags — motion updates position, release ends drag.
 	if model.draggingSplitter || model.draggingListScroll || model.draggingDetailScroll {
 		if message.Action == tea.MouseActionRelease {
 			model.draggingSplitter = false
 			model.draggingListScroll = false
 			model.draggingDetailScroll = false
-			return
+			return nil
 		}
 		switch {
 		case model.draggingSplitter:
@@ -364,13 +460,13 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 		case model.draggingDetailScroll:
 			model.scrollDetailToY(message.Y - contentStart)
 		}
-		return
+		return nil
 	}
 
 	switch message.Button {
 	case tea.MouseButtonWheelUp:
 		if !inContentArea {
-			return
+			return nil
 		}
 		if inListPane || onListScroll || onDivider {
 			model.scrollListUp(1)
@@ -380,7 +476,7 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 
 	case tea.MouseButtonWheelDown:
 		if !inContentArea {
-			return
+			return nil
 		}
 		if inListPane || onListScroll || onDivider {
 			model.scrollListDown(1)
@@ -390,33 +486,33 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 
 	case tea.MouseButtonLeft:
 		if message.Action != tea.MouseActionPress {
-			return
+			return nil
 		}
 		// Tab clicks: header row (Y=0) maps X to tab labels.
 		if message.Y == 0 {
 			for _, hit := range model.tabHitRanges {
 				if message.X >= hit.startX && message.X < hit.endX {
 					model.switchTab(hit.tab)
-					return
+					return nil
 				}
 			}
-			return
+			return nil
 		}
 		if !inContentArea {
-			return
+			return nil
 		}
 		// Scrollbar clicks: jump to position and start drag tracking.
 		if onListScroll {
 			model.focusRegion = FocusList
 			model.draggingListScroll = true
 			model.scrollListToY(message.Y - contentStart)
-			return
+			return nil
 		}
 		if onDetailScroll {
 			model.focusRegion = FocusDetail
 			model.draggingDetailScroll = true
 			model.scrollDetailToY(message.Y - contentStart)
-			return
+			return nil
 		}
 		if onDivider {
 			now := time.Now()
@@ -431,11 +527,11 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 				}
 				model.updatePaneSizes()
 				model.lastSplitterClick = time.Time{} // Reset to prevent triple-click toggling.
-				return
+				return nil
 			}
 			model.lastSplitterClick = now
 			model.draggingSplitter = true
-			return
+			return nil
 		}
 		if inListPane {
 			model.handleListClick(message.Y - contentStart)
@@ -455,6 +551,25 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 			}
 		}
 
+	case tea.MouseButtonRight:
+		if message.Action != tea.MouseActionRelease {
+			return nil
+		}
+		// Right-click on a hoverable ticket reference copies the
+		// ticket ID to the system clipboard via OSC 52.
+		if !inDetailPane || !inContentArea {
+			return nil
+		}
+		bodyRelativeY := message.Y - contentStart - detailHeaderLines
+		contentRelativeX := message.X - model.listWidth() - 1 - 1
+		if bodyRelativeY >= 0 && bodyRelativeY < model.detailPane.viewport.Height {
+			ticketID := model.detailPane.ClickTarget(bodyRelativeY, contentRelativeX)
+			if ticketID != "" {
+				model.clipboardNotice = ticketID
+				return copyToClipboard(ticketID)
+			}
+		}
+
 	case tea.MouseButtonBackward:
 		if message.Action == tea.MouseActionPress {
 			model.navigateBack()
@@ -465,6 +580,7 @@ func (model *Model) handleMouse(message tea.MouseMsg) {
 			model.navigateForward()
 		}
 	}
+	return nil
 }
 
 // scrollListToY sets the list scroll offset based on a Y position
@@ -530,6 +646,84 @@ func (model *Model) scrollDetailToY(relativeY int) {
 		offset = maxOffset
 	}
 	model.detailPane.viewport.SetYOffset(offset)
+}
+
+// updateHoverTooltip checks whether the mouse is hovering over a
+// clickable ticket reference in the detail pane body and updates
+// the tooltip state accordingly. Called on motion events with no
+// button held. The inDetailBody parameter indicates whether the
+// mouse position is within the detail pane's content area.
+func (model *Model) updateHoverTooltip(message tea.MouseMsg, inDetailBody bool) {
+	if !inDetailBody {
+		model.tooltip = nil
+		return
+	}
+
+	contentStart := model.contentStartY()
+	bodyRelativeY := message.Y - contentStart - detailHeaderLines
+	contentRelativeX := message.X - model.listWidth() - 1 - 1
+
+	if bodyRelativeY < 0 || bodyRelativeY >= model.detailPane.viewport.Height {
+		model.tooltip = nil
+		return
+	}
+
+	target := model.detailPane.HoverTarget(bodyRelativeY, contentRelativeX)
+	if target == nil {
+		model.tooltip = nil
+		return
+	}
+
+	// Don't re-lookup if already showing tooltip for this ticket.
+	if model.tooltip != nil && model.tooltip.ticketID == target.TicketID {
+		return
+	}
+
+	content, exists := model.source.Get(target.TicketID)
+	if !exists {
+		model.tooltip = nil
+		return
+	}
+
+	// Render tooltip to determine its dimensions for positioning.
+	tooltipLines := renderTooltip(target.TicketID, content, model.theme, tooltipMaxWidth)
+	tooltipHeight := len(tooltipLines)
+	tooltipWidth := 0
+	if len(tooltipLines) > 0 {
+		tooltipWidth = ansi.StringWidth(tooltipLines[0])
+	}
+
+	// Position: above the hover target if room, otherwise below.
+	anchorY := message.Y - tooltipHeight - 1
+	if anchorY < 0 {
+		anchorY = message.Y + 1
+	}
+
+	// Horizontal: aligned to the mouse X, clamped to screen bounds.
+	anchorX := message.X
+	if anchorX+tooltipWidth > model.width {
+		anchorX = model.width - tooltipWidth
+	}
+	if anchorX < 0 {
+		anchorX = 0
+	}
+
+	// Compute screen coordinates of the hovered target for bold highlighting.
+	// The detail pane content starts after: list pane + divider + left padding.
+	detailContentStartX := model.listWidth() + 1 + 1
+	hoverScreenY := message.Y
+	hoverScreenX0 := detailContentStartX + target.StartX
+	hoverScreenX1 := detailContentStartX + target.EndX
+
+	model.tooltip = &tooltipState{
+		ticketID:      target.TicketID,
+		content:       content,
+		anchorX:       anchorX,
+		anchorY:       anchorY,
+		hoverScreenY:  hoverScreenY,
+		hoverScreenX0: hoverScreenX0,
+		hoverScreenX1: hoverScreenX1,
+	}
 }
 
 // setSplitFromMouseX updates the split ratio based on the mouse X
@@ -1389,7 +1583,23 @@ func (model Model) View() string {
 	// Help bar.
 	sections = append(sections, model.renderHelp())
 
-	return strings.Join(sections, "\n")
+	output := strings.Join(sections, "\n")
+
+	// Overlay hover effects if a tooltip is active: bold the hovered
+	// link target, then splice the tooltip box on top.
+	if model.tooltip != nil {
+		output = overlayBold(output,
+			model.tooltip.hoverScreenY,
+			model.tooltip.hoverScreenX0,
+			model.tooltip.hoverScreenX1)
+		tooltipLines := renderTooltip(
+			model.tooltip.ticketID, model.tooltip.content,
+			model.theme, tooltipMaxWidth)
+		output = overlayTooltip(output, tooltipLines,
+			model.tooltip.anchorX, model.tooltip.anchorY)
+	}
+
+	return output
 }
 
 // renderListPane renders the ticket list with proper column layout.
@@ -1728,6 +1938,14 @@ func (model Model) renderHelp() string {
 			}
 		}
 		help += fmt.Sprintf("  %d/%d", selectablePosition, totalItems)
+	}
+
+	// Show clipboard feedback when a right-click copy just happened.
+	if model.clipboardNotice != "" {
+		clipStyle := lipgloss.NewStyle().
+			Foreground(model.theme.StatusColor("closed")).
+			Bold(true)
+		help += "  " + clipStyle.Render("Copied: "+model.clipboardNotice)
 	}
 
 	return style.Render(help)

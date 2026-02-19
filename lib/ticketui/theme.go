@@ -40,6 +40,13 @@ type Theme struct {
 	// Search and filter match highlighting.
 	SearchHighlightBackground lipgloss.Color // Background tint for matched characters.
 	SearchCurrentBackground   lipgloss.Color // Background for the current search match.
+
+	// Autolinked ticket references.
+	LinkForeground lipgloss.Color // Foreground color for inline ticket ID links.
+
+	// Hover tooltips.
+	TooltipForeground lipgloss.Color // Text color inside tooltip boxes.
+	TooltipBackground lipgloss.Color // Background color for tooltip boxes.
 }
 
 // PriorityColor returns the color for a priority level (0-4).
@@ -99,4 +106,9 @@ var DefaultTheme = Theme{
 
 	SearchHighlightBackground: lipgloss.Color("58"),  // dark amber (matches HotAccentPut)
 	SearchCurrentBackground:   lipgloss.Color("100"), // brighter amber for current match
+
+	LinkForeground: lipgloss.Color("75"), // blue (informational, matches P2 priority)
+
+	TooltipForeground: lipgloss.Color("252"), // same as NormalText
+	TooltipBackground: lipgloss.Color("237"), // slightly lighter than terminal background
 }

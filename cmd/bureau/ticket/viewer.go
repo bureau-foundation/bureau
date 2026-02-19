@@ -54,7 +54,7 @@ directory. Use --file to specify an alternate JSONL path.`,
 			}
 
 			model := ticketui.NewModel(source)
-			program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+			program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 			_, err = program.Run()
 			return err
 		},

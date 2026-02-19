@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -43,7 +44,7 @@ func run() error {
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
-	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
+	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., bureau/fleet/prod/machine/workstation) (required)")
 	flag.StringVar(&principalName, "principal-name", "", "service principal localpart (e.g., service/fleet/prod) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
 	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
@@ -78,10 +79,28 @@ func run() error {
 	if fleetPrefix == "" {
 		return fmt.Errorf("--fleet is required")
 	}
-	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+	// Construct typed identity refs from the string flags.
+	fleetRef, err := ref.ParseFleet(fleetPrefix, serverName)
 	if err != nil {
-		return fmt.Errorf("invalid fleet prefix: %w", err)
+		return fmt.Errorf("invalid fleet: %w", err)
 	}
+	_, bareMachineName, err := ref.ExtractEntityName(machineName)
+	if err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+	machineRef, err := ref.NewMachine(fleetRef, bareMachineName)
+	if err != nil {
+		return fmt.Errorf("invalid machine ref: %w", err)
+	}
+	_, bareServiceName, err := ref.ExtractEntityName(principalName)
+	if err != nil {
+		return fmt.Errorf("invalid principal name: %w", err)
+	}
+	serviceRef, err := ref.NewService(fleetRef, bareServiceName)
+	if err != nil {
+		return fmt.Errorf("invalid service ref: %w", err)
+	}
+	namespace := fleetRef.Namespace()
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
 		return fmt.Errorf("run directory validation: %w", err)
@@ -109,38 +128,26 @@ func run() error {
 	logger.Info("matrix session valid", "user_id", userID)
 
 	// Resolve and join the system room (global).
-	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)
+	systemRoomID, err := service.ResolveSystemRoom(ctx, session, namespace)
 	if err != nil {
 		return fmt.Errorf("resolving system room: %w", err)
 	}
 
 	// Resolve and join fleet-scoped rooms. Each fleet has its own config,
 	// machine, and service rooms derived from the fleet prefix.
-	fleetAlias := principal.RoomAlias(schema.FleetRoomAlias(fleetNamespace, fleetName), serverName)
-	fleetRoomID, err := session.ResolveAlias(ctx, fleetAlias)
+	fleetRoomID, err := service.ResolveRoom(ctx, session, fleetRef.RoomAlias())
 	if err != nil {
-		return fmt.Errorf("resolving fleet room alias %q: %w", fleetAlias, err)
-	}
-	if _, err := session.JoinRoom(ctx, fleetRoomID); err != nil {
-		return fmt.Errorf("joining fleet room %s: %w", fleetRoomID, err)
+		return fmt.Errorf("resolving fleet room: %w", err)
 	}
 
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(fleetNamespace, fleetName), serverName)
-	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
+	machineRoomID, err := service.ResolveRoom(ctx, session, fleetRef.MachineRoomAlias())
 	if err != nil {
-		return fmt.Errorf("resolving fleet machine room alias %q: %w", machineAlias, err)
-	}
-	if _, err := session.JoinRoom(ctx, machineRoomID); err != nil {
-		return fmt.Errorf("joining fleet machine room %s: %w", machineRoomID, err)
+		return fmt.Errorf("resolving fleet machine room: %w", err)
 	}
 
-	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(fleetNamespace, fleetName), serverName)
-	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
+	serviceRoomID, err := service.ResolveRoom(ctx, session, fleetRef.ServiceRoomAlias())
 	if err != nil {
-		return fmt.Errorf("resolving fleet service room alias %q: %w", serviceAlias, err)
-	}
-	if _, err := session.JoinRoom(ctx, serviceRoomID); err != nil {
-		return fmt.Errorf("joining fleet service room %s: %w", serviceRoomID, err)
+		return fmt.Errorf("resolving fleet service room: %w", err)
 	}
 
 	logger.Info("fleet rooms ready",
@@ -154,11 +161,11 @@ func run() error {
 	// Load the daemon's token signing public key for authenticating
 	// incoming service requests. The daemon publishes this key as a
 	// state event in #bureau/system at startup.
-	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineName)
+	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineRef)
 	if err != nil {
 		return fmt.Errorf("loading token signing key: %w", err)
 	}
-	logger.Info("token signing key loaded", "machine", machineName)
+	logger.Info("token signing key loaded", "machine", machineRef.Localpart())
 
 	clk := clock.Real()
 
@@ -191,9 +198,8 @@ func run() error {
 	}
 
 	// Register in the fleet's service room so daemons can discover us.
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-	if err := service.Register(ctx, session, serviceRoomID, principalName, serverName, service.Registration{
-		Machine:      machineUserID,
+	if err := service.Register(ctx, session, serviceRoomID, serviceRef, service.Registration{
+		Machine:      machineRef.UserID(),
 		Protocol:     "cbor",
 		Description:  "Fleet controller for service placement and machine lifecycle",
 		Capabilities: []string{"placement", "scaling", "failover"},
@@ -201,8 +207,8 @@ func run() error {
 		return fmt.Errorf("registering service: %w", err)
 	}
 	logger.Info("service registered",
-		"principal", principalName,
-		"machine", machineUserID,
+		"principal", serviceRef.Localpart(),
+		"machine", machineRef.UserID(),
 	)
 
 	// Deregister on shutdown. Use a background context since the main
@@ -210,7 +216,7 @@ func run() error {
 	defer func() {
 		deregisterContext, deregisterCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer deregisterCancel()
-		if err := service.Deregister(deregisterContext, session, serviceRoomID, principalName); err != nil {
+		if err := service.Deregister(deregisterContext, session, serviceRoomID, serviceRef); err != nil {
 			logger.Error("failed to deregister service", "error", err)
 		} else {
 			logger.Info("service deregistered")
@@ -270,7 +276,7 @@ type FleetController struct {
 	machineName   string
 	serverName    string
 	runDir        string
-	serviceRoomID string
+	serviceRoomID ref.RoomID
 	startedAt     time.Time
 
 	// In-memory fleet model, rebuilt from /sync.
@@ -285,10 +291,10 @@ type FleetController struct {
 	configRooms map[string]string
 
 	// fleetRoomID is the fleet config room, resolved from the fleet prefix.
-	fleetRoomID string
+	fleetRoomID ref.RoomID
 
 	// machineRoomID is the fleet-scoped machine room, resolved from the fleet prefix.
-	machineRoomID string
+	machineRoomID ref.RoomID
 
 	logger *slog.Logger
 }

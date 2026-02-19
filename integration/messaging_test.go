@@ -24,7 +24,7 @@ func TestTwoAgentMessaging(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/messaging")
+	machine := newTestMachine(t, fleet, "messaging")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

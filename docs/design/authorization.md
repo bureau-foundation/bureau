@@ -813,7 +813,8 @@ changes.
 ### Where audit events live
 
 Audit events are `m.bureau.audit` timeline events in the per-machine
-config room (`#bureau/config/<machine>`). Config rooms are the right
+config room (whose alias is the machine's fleet-scoped localpart — see
+architecture.md for the `@`→`#` convention). Config rooms are the right
 location because:
 
 - The audience is already correct — admin, machine daemon, fleet

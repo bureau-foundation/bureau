@@ -44,7 +44,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/native-agent-test")
+	machine := newTestMachine(t, fleet, "native-agent-test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -135,7 +135,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/native-truncation-test")
+	machine := newTestMachine(t, fleet, "native-truncation-test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

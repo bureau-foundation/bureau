@@ -18,9 +18,9 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		expected  string
 	}{
 		{
-			name:      "config room alias",
-			fullAlias: "#bureau/config/machine/workstation:bureau.local",
-			expected:  "bureau/config/machine/workstation",
+			name:      "fleet-scoped alias",
+			fullAlias: "#bureau/fleet/prod/machine/workstation:bureau.local",
+			expected:  "bureau/fleet/prod/machine/workstation",
 		},
 		{
 			name:      "simple alias",
@@ -29,8 +29,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		},
 		{
 			name:      "no prefix or suffix",
-			fullAlias: "bureau/config/test",
-			expected:  "bureau/config/test",
+			fullAlias: "bureau/fleet/staging/service/stt",
+			expected:  "bureau/fleet/staging/service/stt",
 		},
 	}
 

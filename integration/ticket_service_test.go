@@ -38,7 +38,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/ticket-agent")
+	machine := newTestMachine(t, fleet, "ticket-agent")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -81,11 +81,15 @@ func TestTicketServiceAgent(t *testing.T) {
 	)
 	waitForFile(t, ticketSocketPath)
 
+	// The service binary registers with a fleet-scoped localpart
+	// (fleet.Prefix + "/" + principalName), so the daemon's directory
+	// update message uses the fleet-scoped name.
+	fleetScopedTicketLocalpart := fleet.Prefix + "/" + ticketServiceLocalpart
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, ticketServiceLocalpart)
-		}, "service directory update adding "+ticketServiceLocalpart)
+			return slices.Contains(message.Added, fleetScopedTicketLocalpart)
+		}, "service directory update adding "+fleetScopedTicketLocalpart)
 
 	// --- Deploy agent with bureau-agent + mock LLM ---
 
@@ -179,7 +183,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/ticket-lifecycle")
+	machine := newTestMachine(t, fleet, "ticket-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -224,11 +228,12 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	)
 	waitForFile(t, ticketSocketPath)
 
+	fleetScopedTicketLocalpart := fleet.Prefix + "/" + ticketServiceLocalpart
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, ticketServiceLocalpart)
-		}, "service directory update adding "+ticketServiceLocalpart)
+			return slices.Contains(message.Added, fleetScopedTicketLocalpart)
+		}, "service directory update adding "+fleetScopedTicketLocalpart)
 
 	// --- Agent accounts and template ---
 	//

@@ -251,7 +251,7 @@ pushMachineConfig(t, admin, machine, deploymentConfig{
 
 **Resolving well-known rooms manually.** Room aliases for system rooms
 (`bureau/system`, `bureau/machine`, `bureau/template`, `bureau/service`,
-`bureau/config/<name>`) are resolved internally by the library functions
+per-machine config rooms) are resolved internally by the library functions
 and helpers. Test code should not resolve them unless it genuinely needs
 the room ID for a purpose the helpers don't cover (e.g., setting up a
 room watch on a specific global room).

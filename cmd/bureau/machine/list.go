@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -21,8 +21,6 @@ import (
 type listParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
 func listCommand() *cli.Command {
@@ -33,19 +31,22 @@ func listCommand() *cli.Command {
 		Summary: "List fleet machines",
 		Description: `List all machines that have published keys to the Bureau fleet.
 
+The argument is a fleet localpart (e.g., "bureau/fleet/prod"). The
+server name is derived from the connected session's identity.
+
 Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the fleet's machine room state.`,
-		Usage:          "bureau machine list [flags]",
+		Usage:          "bureau machine list <fleet-localpart> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]machineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return cli.Validation("unexpected argument: %s", args[0])
+			if len(args) == 0 {
+				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
-			if params.Fleet == "" {
-				return cli.Validation("--fleet is required")
+			if len(args) > 1 {
+				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -57,7 +58,7 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, params.Fleet, params.ServerName, &params.JSONOutput)
+			return runList(ctx, matrixSession, args[0], &params.JSONOutput)
 		},
 	}
 }
@@ -74,12 +75,19 @@ type machineEntry struct {
 	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
 }
 
-func runList(ctx context.Context, session messaging.Session, fleetPrefix, serverName string, jsonOutput *cli.JSONOutput) error {
-	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput) error {
+	// Derive server name from the connected session's identity.
+	server, err := ref.ServerFromUserID(session.UserID())
 	if err != nil {
-		return cli.Validation("invalid fleet prefix: %w", err)
+		return cli.Internal("cannot determine server name from session: %w", err)
 	}
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
+
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err)

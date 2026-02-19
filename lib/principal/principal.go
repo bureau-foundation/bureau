@@ -177,7 +177,7 @@ func RoomAlias(localAlias, serverName string) string {
 // Matrix user ID localparts), but server names may contain ports.
 //
 //	RoomAliasLocalpart("#bureau/machine:bureau.local") → "bureau/machine"
-//	RoomAliasLocalpart("#bureau/config/machine/workstation:bureau.local") → "bureau/config/machine/workstation"
+//	RoomAliasLocalpart("#bureau/fleet/prod/machine/workstation:bureau.local") → "bureau/fleet/prod/machine/workstation"
 //	RoomAliasLocalpart("#agents:example.org:8448") → "agents"
 func RoomAliasLocalpart(fullAlias string) string {
 	localpart := fullAlias

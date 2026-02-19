@@ -36,27 +36,25 @@ import (
 func TestMachineLifecycle(t *testing.T) {
 	t.Parallel()
 
-	const machineName = "machine/lifecycle"
-	machineUserID := "@machine/lifecycle:" + testServerName
-
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
 
 	ctx := t.Context()
 	admin := adminSession(t)
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
+	machineName := fleet.Prefix + "/machine/lifecycle"
+	machineUserID := "@" + machineName + ":" + testServerName
 	machineRoomID := fleet.MachineRoomID
 
 	// --- Phase 1: Provision via CLI ---
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
 
-	runBureauOrFail(t, "machine", "provision", machineName,
+	runBureauOrFail(t, "machine", "provision", fleet.Prefix, "lifecycle",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -86,6 +84,7 @@ func TestMachineLifecycle(t *testing.T) {
 		"--first-boot-only",
 		"--machine-name", machineName,
 		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
@@ -163,10 +162,12 @@ func TestMachineLifecycle(t *testing.T) {
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
 			"--server-name", testServerName,
+			"--fleet", fleet.Prefix,
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
+			"--proxy-binary", proxyBinary,
 		)
 		waitForFile(t, launcherSocket)
 
@@ -197,7 +198,7 @@ func TestMachineLifecycle(t *testing.T) {
 		}
 
 		// Verify the config room was created.
-		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
+		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
@@ -207,12 +208,10 @@ func TestMachineLifecycle(t *testing.T) {
 		}
 
 		// Verify machine appears in "bureau machine list".
-		listOutput := runBureauOrFail(t, "machine", "list",
+		listOutput := runBureauOrFail(t, "machine", "list", fleet.Prefix,
 			"--homeserver", testHomeserverURL,
 			"--token", admin.AccessToken(),
 			"--user-id", "@bureau-admin:"+testServerName,
-			"--server-name", testServerName,
-			"--fleet", fleet.Prefix,
 		)
 		if !strings.Contains(listOutput, machineName) {
 			t.Errorf("bureau machine list output does not contain %q:\n%s", machineName, listOutput)
@@ -230,10 +229,12 @@ func TestMachineLifecycle(t *testing.T) {
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
 			"--server-name", testServerName,
+			"--fleet", fleet.Prefix,
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
+			"--proxy-binary", proxyBinary,
 		)
 		waitForFile(t, launcherSocket)
 
@@ -257,10 +258,8 @@ func TestMachineLifecycle(t *testing.T) {
 	})
 
 	// --- Phase 6: Decommission ---
-	runBureauOrFail(t, "machine", "decommission", machineName,
+	runBureauOrFail(t, "machine", "decommission", fleet.Prefix, "lifecycle",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
 	)
 
 	// Verify machine key was cleared (empty content).
@@ -299,8 +298,6 @@ func TestMachineLifecycle(t *testing.T) {
 func TestTwoMachineFleet(t *testing.T) {
 	t.Parallel()
 
-	const machineAName = "machine/fleet-a"
-	const machineBName = "machine/fleet-b"
 	const principalALocalpart = "agent/fleet-a"
 	const principalBLocalpart = "agent/fleet-b"
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
@@ -312,6 +309,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	defer admin.Close()
 
 	twoMachineFleet := createTestFleet(t, admin)
+	machineAName := twoMachineFleet.Prefix + "/machine/fleet-a"
+	machineBName := twoMachineFleet.Prefix + "/machine/fleet-b"
 	machineRoomID := twoMachineFleet.MachineRoomID
 
 	// --- Provision both machines ---
@@ -320,16 +319,12 @@ func TestTwoMachineFleet(t *testing.T) {
 	bootstrapPathA := filepath.Join(stateDirA, "bootstrap.json")
 	bootstrapPathB := filepath.Join(stateDirB, "bootstrap.json")
 
-	runBureauOrFail(t, "machine", "provision", machineAName,
+	runBureauOrFail(t, "machine", "provision", twoMachineFleet.Prefix, "fleet-a",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", twoMachineFleet.Prefix,
 		"--output", bootstrapPathA,
 	)
-	runBureauOrFail(t, "machine", "provision", machineBName,
+	runBureauOrFail(t, "machine", "provision", twoMachineFleet.Prefix, "fleet-b",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", twoMachineFleet.Prefix,
 		"--output", bootstrapPathB,
 	)
 	t.Log("both machines provisioned")
@@ -368,6 +363,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--first-boot-only",
 			"--machine-name", machine.name,
 			"--server-name", testServerName,
+			"--fleet", twoMachineFleet.Prefix,
 			"--run-dir", machine.runDir,
 			"--state-dir", machine.stateDir,
 			"--workspace-root", machine.workspaceRoot,
@@ -399,6 +395,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machine.name,
 			"--server-name", testServerName,
+			"--fleet", twoMachineFleet.Prefix,
 			"--run-dir", machine.runDir,
 			"--state-dir", machine.stateDir,
 			"--workspace-root", machine.workspaceRoot,
@@ -473,7 +470,7 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	// Resolve config rooms (created by daemons) and push credentials + config.
 	for _, p := range principals {
-		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(p.machineSetup.name), testServerName)
+		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(p.machineSetup.name), testServerName)
 		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 		if err != nil {
 			t.Fatalf("config room %s not created: %v", configAlias, err)
@@ -570,15 +567,11 @@ func TestTwoMachineFleet(t *testing.T) {
 	t.Log("cross-machine message exchange verified")
 
 	// --- Decommission both machines ---
-	runBureauOrFail(t, "machine", "decommission", machineAName,
+	runBureauOrFail(t, "machine", "decommission", twoMachineFleet.Prefix, "fleet-a",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", twoMachineFleet.Prefix,
 	)
-	runBureauOrFail(t, "machine", "decommission", machineBName,
+	runBureauOrFail(t, "machine", "decommission", twoMachineFleet.Prefix, "fleet-b",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", twoMachineFleet.Prefix,
 	)
 
 	// Verify both machine keys are cleared.

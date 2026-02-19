@@ -18,5 +18,5 @@
 //   - Optionally add an escrow key for operator recovery
 //   - Encrypt the credential JSON with sealed.EncryptJSON
 //   - Publish the encrypted bundle as m.bureau.credentials in the
-//     machine's config room (#bureau/config/<machine>)
+//     machine's config room (fleet-scoped alias matching the machine's localpart)
 package credential

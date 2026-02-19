@@ -127,7 +127,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Resolve the config room for the target machine. The daemon
 			// monitors this room for m.bureau.command messages.
-			configRoomAlias := principal.RoomAlias("bureau/config/"+params.Machine, params.ServerName)
+			configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(params.Machine), params.ServerName)
 			configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 			if err != nil {
 				return cli.NotFound("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)

@@ -465,8 +465,12 @@ sockets, registered services):
 - **Templates** published to `#bureau/template` define sandbox
   configurations. The daemon watches for templates assigned to its
   machine.
-- **Principal assignments** in per-machine config rooms
-  (`#bureau/config/<machine>`) declare what should run on this machine.
+- **Principal assignments** in per-machine config rooms declare what
+  should run on this machine. Each machine's config room alias is the
+  machine's own fleet-scoped localpart (the `@`→`#` convention: swap
+  the sigil). For example, machine
+  `@bureau/fleet/prod/machine/workstation:bureau.local` has its config
+  room at `#bureau/fleet/prod/machine/workstation:bureau.local`.
   The daemon creates sandboxes (via the launcher) for each assignment.
 - **StartConditions** on assignments gate principal launch on specific
   state events. The daemon evaluates conditions on each sync tick and

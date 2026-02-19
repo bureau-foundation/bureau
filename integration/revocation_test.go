@@ -99,7 +99,6 @@ func invalidateMachineTokens(t *testing.T, admin *messaging.DirectSession, machi
 func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	t.Parallel()
 
-	const machineName = "machine/revoke-destruct"
 	const principalLocalpart = "agent/revoke-destruct"
 
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
@@ -112,7 +111,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Set up and start the machine.
-	machine := newTestMachine(t, machineName)
+	machine := newTestMachine(t, fleet, "revoke-destruct")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
@@ -178,7 +177,6 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	t.Parallel()
 
-	const machineName = "machine/revoke-cli"
 	const principalALocalpart = "agent/revoke-cli-a"
 	const principalBLocalpart = "agent/revoke-cli-b"
 
@@ -191,10 +189,11 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
-	machineUserID := "@" + machineName + ":" + testServerName
 
 	// Set up and start the machine.
-	machine := newTestMachine(t, machineName)
+	machine := newTestMachine(t, fleet, "revoke-cli")
+	machineName := machine.Name
+	machineUserID := machine.UserID
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
@@ -235,10 +234,8 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	// all credentials, causing the daemon to reconcile and remove
 	// principals.
 	const revokeReason = "integration test: emergency revocation"
-	runBureauOrFail(t, "machine", "revoke", machineName,
+	runBureauOrFail(t, "machine", "revoke", fleet.Prefix, "revoke-cli",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
 		"--reason", revokeReason,
 	)
 	t.Log("bureau machine revoke completed")

@@ -292,7 +292,7 @@ func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomI
 // AutoStart, so the service appears in the authorization index for
 // grant resolution and service token minting.
 func publishPrincipalAssignment(ctx context.Context, session messaging.Session, host, servicePrincipal, space, serverName string) error {
-	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(host), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)

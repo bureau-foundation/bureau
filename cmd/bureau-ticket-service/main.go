@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -42,7 +43,7 @@ func run() error {
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
-	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
+	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., bureau/fleet/prod/machine/workstation) (required)")
 	flag.StringVar(&principalName, "principal-name", "", "service principal localpart (e.g., service/ticket/iree) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
 	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
@@ -78,6 +79,28 @@ func run() error {
 		return fmt.Errorf("--fleet is required")
 	}
 
+	// Construct typed identity refs from the string flags.
+	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
+	if err != nil {
+		return fmt.Errorf("invalid fleet: %w", err)
+	}
+	_, bareMachineName, err := ref.ExtractEntityName(machineName)
+	if err != nil {
+		return fmt.Errorf("invalid machine name: %w", err)
+	}
+	machineRef, err := ref.NewMachine(fleet, bareMachineName)
+	if err != nil {
+		return fmt.Errorf("invalid machine ref: %w", err)
+	}
+	_, bareServiceName, err := ref.ExtractEntityName(principalName)
+	if err != nil {
+		return fmt.Errorf("invalid principal name: %w", err)
+	}
+	serviceRef, err := ref.NewService(fleet, bareServiceName)
+	if err != nil {
+		return fmt.Errorf("invalid service ref: %w", err)
+	}
+
 	if err := principal.ValidateRunDir(runDir); err != nil {
 		return fmt.Errorf("run directory validation: %w", err)
 	}
@@ -104,12 +127,13 @@ func run() error {
 	logger.Info("matrix session valid", "user_id", userID)
 
 	// Resolve and join fleet-scoped rooms the service needs.
-	serviceRoomID, err := service.ResolveFleetServiceRoom(ctx, session, fleetPrefix, serverName)
+	serviceRoomID, err := service.ResolveFleetServiceRoom(ctx, session, fleet)
 	if err != nil {
 		return fmt.Errorf("resolving fleet service room: %w", err)
 	}
 
-	systemRoomID, err := service.ResolveSystemRoom(ctx, session, serverName)
+	namespace := fleet.Namespace()
+	systemRoomID, err := service.ResolveSystemRoom(ctx, session, namespace)
 	if err != nil {
 		return fmt.Errorf("resolving system room: %w", err)
 	}
@@ -121,7 +145,7 @@ func run() error {
 	// Load the daemon's token signing public key for authenticating
 	// incoming service requests. The daemon publishes this key as a
 	// state event in #bureau/system at startup.
-	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineName)
+	signingKey, err := service.LoadTokenSigningKey(ctx, session, systemRoomID, machineRef)
 	if err != nil {
 		return fmt.Errorf("loading token signing key: %w", err)
 	}
@@ -153,10 +177,9 @@ func run() error {
 		logger:        logger,
 	}
 
-	// Register in #bureau/service so daemons can discover us.
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-	if err := service.Register(ctx, session, serviceRoomID, principalName, serverName, service.Registration{
-		Machine:      machineUserID,
+	// Register in the fleet service room so daemons can discover us.
+	if err := service.Register(ctx, session, serviceRoomID, serviceRef, service.Registration{
+		Machine:      machineRef.UserID(),
 		Protocol:     "cbor",
 		Description:  "Ticket tracking and coordination service",
 		Capabilities: []string{"dependency-graph", "gate-evaluation"},
@@ -164,8 +187,8 @@ func run() error {
 		return fmt.Errorf("registering service: %w", err)
 	}
 	logger.Info("service registered",
-		"principal", principalName,
-		"machine", machineUserID,
+		"principal", serviceRef.Localpart(),
+		"machine", machineRef.UserID(),
 	)
 
 	// Deregister on shutdown. Use a background context since the main
@@ -173,7 +196,7 @@ func run() error {
 	defer func() {
 		deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer deregCancel()
-		if err := service.Deregister(deregCtx, session, serviceRoomID, principalName); err != nil {
+		if err := service.Deregister(deregCtx, session, serviceRoomID, serviceRef); err != nil {
 			logger.Error("failed to deregister service", "error", err)
 		} else {
 			logger.Info("service deregistered")
@@ -254,7 +277,7 @@ type TicketService struct {
 	machineName   string
 	serverName    string
 	runDir        string
-	serviceRoomID string
+	serviceRoomID ref.RoomID
 	startedAt     time.Time
 
 	// rooms maps room IDs to per-room state. Only rooms with

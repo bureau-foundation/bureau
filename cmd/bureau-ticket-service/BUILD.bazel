@@ -19,6 +19,7 @@ go_library(
         "//lib/codec",
         "//lib/cron",
         "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/service",
         "//lib/servicetoken",

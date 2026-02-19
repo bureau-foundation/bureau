@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/template"
@@ -39,7 +40,7 @@ type testMachine struct {
 
 	// Populated by startMachine:
 	PublicKey     string // age public key from the machine_key state event
-	ConfigRoomID  string // per-machine config room (#bureau/config/<name>)
+	ConfigRoomID  string // per-machine config room
 	MachineRoomID string // fleet-scoped machine room (daemon status heartbeats)
 }
 
@@ -101,9 +102,15 @@ type deploymentConfig struct {
 // start any processes — call startMachine for that. Socket paths are
 // derived from RunDir using the principal package, matching the launcher
 // and daemon's internal path derivation.
-func newTestMachine(t *testing.T, name string) *testMachine {
+//
+// The bareName is the entity-level name (e.g., "restart"), not the
+// fleet-relative form ("machine/restart"). The fleet-scoped localpart
+// (e.g., "bureau/fleet/testxxx/machine/restart") is constructed from the
+// fleet prefix + "machine/" + bareName.
+func newTestMachine(t *testing.T, fleet *testFleet, bareName string) *testMachine {
 	t.Helper()
 
+	name := fleet.Prefix + "/machine/" + bareName
 	stateDir := t.TempDir()
 	runDir := tempSocketDir(t)
 
@@ -169,10 +176,12 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 	// the account, invites to all global rooms, creates the config room,
 	// and writes a bootstrap config with the one-time password.
 	bootstrapFile := filepath.Join(machine.StateDir, "bootstrap.json")
-	runBureauOrFail(t, "machine", "provision", machine.Name,
+	_, bareMachineName, err := ref.ExtractEntityName(machine.Name)
+	if err != nil {
+		t.Fatalf("extract entity name from %q: %v", machine.Name, err)
+	}
+	runBureauOrFail(t, "machine", "provision", options.Fleet.Prefix, bareMachineName,
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", options.Fleet.Prefix,
 		"--output", bootstrapFile,
 	)
 
@@ -188,6 +197,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		"--bootstrap-file", bootstrapFile,
 		"--machine-name", machine.Name,
 		"--server-name", testServerName,
+		"--fleet", options.Fleet.Prefix,
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
@@ -316,7 +326,7 @@ func waitForDaemonReady(t *testing.T, admin *messaging.DirectSession, machine *t
 		schema.EventTypeMachineStatus, machine.Name)
 
 	// Resolve the per-machine config room and join as admin.
-	configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machine.Name), testServerName)
+	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machine.Name), testServerName)
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room %s not created: %v", configAlias, err)

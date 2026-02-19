@@ -20,11 +20,25 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
+
+func testMachine(t *testing.T) ref.Machine {
+	t.Helper()
+	fleet, err := ref.ParseFleet("bureau/fleet/test", "bureau.local")
+	if err != nil {
+		t.Fatalf("ParseFleet: %v", err)
+	}
+	machine, err := ref.NewMachine(fleet, "test")
+	if err != nil {
+		t.Fatalf("NewMachine: %v", err)
+	}
+	return machine
+}
 
 func testBuffer(t *testing.T, value string) *secret.Buffer {
 	t.Helper()
@@ -567,7 +581,7 @@ func TestListenSocket_CreatesParentDirectory(t *testing.T) {
 func TestBuildCredentialPayload(t *testing.T) {
 	launcher := &Launcher{
 		homeserverURL: "http://localhost:6167",
-		serverName:    "bureau.local",
+		machine:       testMachine(t),
 		logger:        slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
@@ -730,8 +744,7 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 
 	launcher := &Launcher{
 		keypair:         keypair,
-		machineName:     "machine/test",
-		serverName:      "bureau.local",
+		machine:         testMachine(t),
 		homeserverURL:   "http://localhost:9999",
 		runDir:          tempDir,
 		stateDir:        filepath.Join(tempDir, "state"),

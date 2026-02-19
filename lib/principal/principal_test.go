@@ -334,8 +334,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		},
 		{
 			name:      "nested alias",
-			fullAlias: "#bureau/config/machine/workstation:bureau.local",
-			want:      "bureau/config/machine/workstation",
+			fullAlias: "#bureau/fleet/prod/machine/workstation:bureau.local",
+			want:      "bureau/fleet/prod/machine/workstation",
 		},
 		{
 			name:      "different server",
@@ -354,8 +354,8 @@ func TestRoomAliasLocalpart(t *testing.T) {
 		},
 		{
 			name:      "bare name no prefix no colon",
-			fullAlias: "bureau/config/test",
-			want:      "bureau/config/test",
+			fullAlias: "bureau/fleet/staging/service/stt",
+			want:      "bureau/fleet/staging/service/stt",
 		},
 		{
 			name:      "server with port",
@@ -818,8 +818,8 @@ func TestParseFleetLocalpart(t *testing.T) {
 		},
 		{
 			name:      "wrong literal at position 1",
-			localpart: "bureau/config/prod/machine/gpu-box",
-			wantErr:   "segment 1 is \"config\", expected \"fleet\"",
+			localpart: "bureau/armada/prod/machine/gpu-box",
+			wantErr:   "segment 1 is \"armada\", expected \"fleet\"",
 		},
 	}
 
@@ -911,7 +911,7 @@ func TestFleetRelativeName(t *testing.T) {
 		},
 		{
 			name:      "wrong literal",
-			localpart: "bureau/config/prod/machine/gpu-box",
+			localpart: "bureau/armada/prod/machine/gpu-box",
 			wantErr:   "expected \"fleet\"",
 		},
 	}
@@ -964,7 +964,7 @@ func TestIsFleetScoped(t *testing.T) {
 		},
 		{
 			name:      "four segments no fleet literal",
-			localpart: "bureau/config/prod/machine",
+			localpart: "bureau/armada/prod/machine",
 			want:      false,
 		},
 		{
@@ -974,7 +974,7 @@ func TestIsFleetScoped(t *testing.T) {
 		},
 		{
 			name:      "five segments wrong literal",
-			localpart: "bureau/config/prod/machine/gpu-box",
+			localpart: "bureau/armada/prod/machine/gpu-box",
 			want:      false,
 		},
 	}

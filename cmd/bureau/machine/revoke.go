@@ -12,17 +12,15 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // revokeParams holds the parameters for the machine revoke command.
 type revokeParams struct {
-	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
-	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
-	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
-	Reason         string `json:"reason"       flag:"reason"          desc:"reason for revocation (recorded in revocation event)"`
+	cli.SessionConfig
+	Reason string `json:"reason" flag:"reason" desc:"reason for revocation (recorded in revocation event)"`
 }
 
 func revokeCommand() *cli.Command {
@@ -32,6 +30,11 @@ func revokeCommand() *cli.Command {
 		Name:    "revoke",
 		Summary: "Emergency credential revocation for a compromised machine",
 		Description: `Immediately revoke all credentials for a machine and shut it down.
+
+The first argument is a fleet localpart (e.g., "bureau/fleet/prod").
+The second argument is the bare machine name within the fleet (e.g.,
+"worker-01"). The server name is derived from the connected session's
+identity.
 
 This is the emergency response command for a compromised machine. It
 executes three layers of defense:
@@ -51,44 +54,37 @@ executes three layers of defense:
 After revocation, the machine name can be re-provisioned with
 "bureau machine provision". Account deactivation may be permanent
 depending on the homeserver — this is by design for emergency revocation.`,
-		Usage: "bureau machine revoke <machine-name> [flags]",
+		Usage: "bureau machine revoke <fleet-localpart> <machine-name> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Revoke a compromised machine",
-				Command:     "bureau machine revoke machine/worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
+				Command:     "bureau machine revoke bureau/fleet/prod worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
 			},
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/revoke"},
 		Annotations:    cli.Destructive(),
 		Run: func(args []string) error {
-			if len(args) < 1 {
-				return cli.Validation("machine name is required\n\nUsage: bureau machine revoke <machine-name> [flags]")
+			if len(args) < 2 {
+				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine revoke <fleet-localpart> <machine-name> [flags]")
 			}
-			machineName := args[0]
-			if len(args) > 1 {
-				return cli.Validation("unexpected argument: %s", args[1])
+			if len(args) > 2 {
+				return cli.Validation("unexpected argument: %s", args[2])
 			}
-			if params.CredentialFile == "" {
+			if params.SessionConfig.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
-			if params.Fleet == "" {
-				return cli.Validation("--fleet is required")
-			}
-			if err := principal.ValidateLocalpart(machineName); err != nil {
-				return cli.Validation("invalid machine name: %w", err)
-			}
 
-			return runRevoke(machineName, params.CredentialFile, params.ServerName, params.Fleet, params.Reason)
+			return runRevoke(args[0], args[1], &params)
 		},
 	}
 }
 
-func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason string) error {
+func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	credentials, err := cli.ReadCredentialFile(credentialFile)
+	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
 		return cli.Internal("read credential file: %w", err)
 	}
@@ -101,6 +97,24 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserID == "" || adminToken == "" {
 		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	}
+
+	// Derive server name from admin user ID.
+	server, err := ref.ServerFromUserID(adminUserID)
+	if err != nil {
+		return cli.Internal("cannot determine server name from admin user ID: %w", err)
+	}
+
+	// Parse and validate the fleet localpart.
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	// Construct the machine ref within the fleet.
+	machine, err := ref.NewMachine(fleet, machineName)
+	if err != nil {
+		return cli.Validation("invalid machine name: %v", err)
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
@@ -116,8 +130,10 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 	}
 	defer adminSession.Close()
 
-	machineUserID := principal.MatrixUserID(machineName, serverName)
-	fmt.Fprintf(os.Stderr, "EMERGENCY REVOCATION: %s (%s)\n\n", machineName, machineUserID)
+	machineUsername := machine.Localpart()
+	machineUserID := machine.UserID()
+
+	fmt.Fprintf(os.Stderr, "EMERGENCY REVOCATION: %s (%s)\n\n", machineUsername, machineUserID)
 
 	// Layer 1: Deactivate the Matrix account. This causes the daemon to
 	// detect an auth failure on its next /sync, triggering emergency
@@ -159,26 +175,27 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 	fmt.Fprintf(os.Stderr, "\nLayer 2: Clearing state and revoking access...\n")
 
 	// Resolve global Bureau rooms (template, pipeline, system) for kick.
-	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
+	namespace := fleet.Namespace()
+	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, namespace)
 	for index, room := range failedRooms {
 		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
 	}
 
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
-	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleetPrefix, serverName)
+	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
 	if err != nil {
 		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
 	}
 
 	// Clear machine_key and machine_status.
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
 	} else {
 		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineName, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
 	} else {
@@ -188,7 +205,8 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 	// Resolve the config room and collect affected principals.
 	var principals []string
 	var credentialKeys []string
-	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
+	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
+	configAlias := schema.FullRoomAlias(configAliasLocalpart, server)
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -198,7 +216,7 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 		}
 	} else {
 		// Clear machine_config.
-		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName, map[string]any{})
+		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
 		} else {
@@ -225,12 +243,11 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 
 	// Kick from all global Bureau rooms.
 	for _, room := range globalRooms {
-		fullAlias := principal.RoomAlias(room.alias, serverName)
 		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", fullAlias, err)
+			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", fullAlias)
+			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.alias)
 		}
 	}
 
@@ -256,17 +273,17 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 	// Other machines and future connectors watch for this event to
 	// invalidate cached tokens and revoke external API keys.
 	revocationContent := schema.CredentialRevocationContent{
-		Machine:            machineName,
+		Machine:            machineUsername,
 		MachineUserID:      machineUserID,
 		Principals:         principals,
 		CredentialKeys:     credentialKeys,
 		InitiatedBy:        adminUserID,
 		InitiatedAt:        time.Now().UTC().Format(time.RFC3339),
-		Reason:             reason,
+		Reason:             params.Reason,
 		AccountDeactivated: accountDeactivated,
 	}
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID,
-		schema.EventTypeCredentialRevocation, machineName, revocationContent)
+		schema.EventTypeCredentialRevocation, machineUsername, revocationContent)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not publish revocation event: %v\n", err)
 	} else {
@@ -275,7 +292,7 @@ func runRevoke(machineName, credentialFile, serverName, fleetPrefix, reason stri
 
 	// Print summary.
 	fmt.Fprintf(os.Stderr, "\n--- Revocation Summary ---\n")
-	fmt.Fprintf(os.Stderr, "Machine:            %s\n", machineName)
+	fmt.Fprintf(os.Stderr, "Machine:            %s\n", machineUsername)
 	fmt.Fprintf(os.Stderr, "Account deactivated: %v\n", accountDeactivated)
 	fmt.Fprintf(os.Stderr, "Principals affected: %d\n", len(principals))
 	for _, name := range principals {

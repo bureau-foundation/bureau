@@ -276,7 +276,7 @@ func runProvision(args []string) error {
 	// Resolve the config room. The config room must already exist (created
 	// by machine provisioning or the daemon's first boot). If it doesn't
 	// exist, that indicates the machine hasn't been provisioned.
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
@@ -355,7 +355,7 @@ func runAssign(args []string) error {
 
 	// Resolve the config room. The config room must already exist (created
 	// by machine provisioning or the daemon's first boot).
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
@@ -446,7 +446,7 @@ func runList(args []string) error {
 	}
 
 	// Resolve the config room.
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

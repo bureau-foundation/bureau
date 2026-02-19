@@ -44,8 +44,6 @@ var bootstrapContainerName = fmt.Sprintf("bureau-bootstrap-test-%d", os.Getpid()
 func TestBootstrapScript(t *testing.T) {
 	t.Parallel()
 
-	const machineName = "machine/bootstrap-script"
-
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
@@ -58,10 +56,8 @@ func TestBootstrapScript(t *testing.T) {
 
 	// --- Provision the machine account on Matrix ---
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
-	runBureauOrFail(t, "machine", "provision", machineName,
+	runBureauOrFail(t, "machine", "provision", bootstrapFleet.Prefix, "bootstrap-script",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", bootstrapFleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -69,7 +65,8 @@ func TestBootstrapScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read bootstrap config: %v", err)
 	}
-	t.Logf("machine provisioned: %s (password length %d)", machineName, len(bootstrapConfig.Password))
+	t.Logf("machine provisioned: %s (password length %d)", bootstrapConfig.MachineName, len(bootstrapConfig.Password))
+	machineName := bootstrapConfig.MachineName
 
 	// --- Build the Docker image ---
 	dockerfilePath := filepath.Join(workspaceRoot, "deploy", "test", "Dockerfile.machine")
@@ -117,11 +114,14 @@ func TestBootstrapScript(t *testing.T) {
 	}
 	t.Log("binary symlinks verified")
 
-	// Verify: machine.conf written with correct content.
+	// Verify: machine.conf written with correct content. The bootstrap
+	// config stores the fleet-scoped machine name and fleet prefix, which
+	// the bootstrap-machine script writes to machine.conf as-is.
 	confOutput := dockerExecOutput(t, containerID, "cat", "/etc/bureau/machine.conf")
 	assertContains(t, confOutput, "BUREAU_HOMESERVER_URL="+testHomeserverURL, "machine.conf homeserver URL")
-	assertContains(t, confOutput, "BUREAU_MACHINE_NAME="+machineName, "machine.conf machine name")
+	assertContains(t, confOutput, "BUREAU_MACHINE_NAME="+bootstrapConfig.MachineName, "machine.conf machine name")
 	assertContains(t, confOutput, "BUREAU_SERVER_NAME="+testServerName, "machine.conf server name")
+	assertContains(t, confOutput, "BUREAU_FLEET="+bootstrapConfig.FleetPrefix, "machine.conf fleet prefix")
 	t.Log("machine.conf verified")
 
 	// Verify: systemd units installed.
@@ -184,11 +184,14 @@ func TestBootstrapScript(t *testing.T) {
 		// Start launcher in the background inside the container.
 		// The launcher reads its session from /var/lib/bureau/session.json
 		// (written during first boot) so no registration token is needed.
+		// The machine.conf BUREAU_MACHINE_NAME has the fleet-scoped name;
+		// we pass the same value here so the launcher can reconstruct the ref.
 		dockerExecBackground(t, containerID, "launcher",
 			"/usr/local/bin/bureau-launcher",
 			"--homeserver", testHomeserverURL,
-			"--machine-name", machineName,
+			"--machine-name", bootstrapConfig.MachineName,
 			"--server-name", testServerName,
+			"--fleet", bootstrapConfig.FleetPrefix,
 		)
 
 		// Wait for the launcher socket to appear.
@@ -215,7 +218,7 @@ func TestBootstrapScript(t *testing.T) {
 		t.Log("daemon started and publishing status")
 
 		// Deploy a principal to verify sandbox creation (bwrap).
-		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
+		configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
 		configRoomID, err := admin.ResolveAlias(t.Context(), configAlias)
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
@@ -257,10 +260,8 @@ func TestBootstrapScript(t *testing.T) {
 
 	// --- Cleanup ---
 	// Decommission the machine from Matrix.
-	runBureauOrFail(t, "machine", "decommission", machineName,
+	runBureauOrFail(t, "machine", "decommission", bootstrapFleet.Prefix, "bootstrap-script",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", bootstrapFleet.Prefix,
 	)
 	t.Log("bootstrap script test complete")
 }

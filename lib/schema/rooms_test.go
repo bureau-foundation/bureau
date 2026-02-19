@@ -128,27 +128,6 @@ func TestEntityConfigRoomAlias(t *testing.T) {
 	}
 }
 
-func TestConfigRoomAlias(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name             string
-		machineLocalpart string
-		want             string
-	}{
-		{"simple", "workstation", "bureau/config/workstation"},
-		{"hierarchical", "machine/rack-01", "bureau/config/machine/rack-01"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := ConfigRoomAlias(test.machineLocalpart)
-			if got != test.want {
-				t.Errorf("ConfigRoomAlias(%q) = %q, want %q", test.machineLocalpart, got, test.want)
-			}
-		})
-	}
-}
-
 func TestFullRoomAlias(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

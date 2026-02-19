@@ -32,7 +32,7 @@ func TestPipelineExecution(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/pipeline")
+	machine := newTestMachine(t, fleet, "pipeline")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/pipeline-fail")
+	machine := newTestMachine(t, fleet, "pipeline-fail")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/pipeline-params")
+	machine := newTestMachine(t, fleet, "pipeline-params")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}

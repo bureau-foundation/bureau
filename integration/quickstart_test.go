@@ -35,7 +35,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/quickstart-test")
+	machine := newTestMachine(t, fleet, "quickstart-test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

@@ -38,7 +38,7 @@ const (
 	// for denials and sensitive grants. Timeline event (not state) —
 	// each decision is a distinct occurrence, not a replacement.
 	//
-	// Room: #bureau/config/<machine>
+	// Room: #<machine-localpart>:<server>
 	EventTypeAudit = "m.bureau.audit"
 )
 

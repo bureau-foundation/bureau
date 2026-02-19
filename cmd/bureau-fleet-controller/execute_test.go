@@ -106,8 +106,9 @@ func (f *fakeConfigStore) latestConfig(roomID, stateKey string) *schema.MachineC
 
 // newExecuteTestController creates a FleetController with a
 // fakeConfigStore and principalName set for execute tests.
-func newExecuteTestController() (*FleetController, *fakeConfigStore) {
-	fc := newTestFleetController()
+func newExecuteTestController(t *testing.T) (*FleetController, *fakeConfigStore) {
+	t.Helper()
+	fc := newTestFleetController(t)
 	store := newFakeConfigStore()
 	fc.configStore = store
 	fc.principalName = "service/fleet/prod"
@@ -117,7 +118,7 @@ func newExecuteTestController() (*FleetController, *fakeConfigStore) {
 // --- readMachineConfig tests ---
 
 func TestReadMachineConfigExisting(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	fc.configRooms["machine/workstation"] = "!config-ws:local"
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
@@ -139,7 +140,7 @@ func TestReadMachineConfigExisting(t *testing.T) {
 }
 
 func TestReadMachineConfigNotFound(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.configRooms["machine/workstation"] = "!config-ws:local"
 	// Don't seed any config — should return empty MachineConfig.
@@ -154,7 +155,7 @@ func TestReadMachineConfigNotFound(t *testing.T) {
 }
 
 func TestReadMachineConfigNoConfigRoom(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 	// Don't add any config room mapping.
 
 	_, err := fc.readMachineConfig(context.Background(), "machine/workstation")
@@ -166,7 +167,7 @@ func TestReadMachineConfigNoConfigRoom(t *testing.T) {
 // --- writeMachineConfig tests ---
 
 func TestWriteMachineConfig(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	fc.configRooms["machine/workstation"] = "!config-ws:local"
 
@@ -198,7 +199,7 @@ func TestWriteMachineConfig(t *testing.T) {
 }
 
 func TestWriteMachineConfigNoConfigRoom(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	_, err := fc.writeMachineConfig(context.Background(), "machine/workstation", &schema.MachineConfig{})
 	if err == nil {
@@ -209,7 +210,7 @@ func TestWriteMachineConfigNoConfigRoom(t *testing.T) {
 // --- buildAssignment tests ---
 
 func TestBuildAssignment(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	definition := &schema.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
@@ -246,7 +247,7 @@ func TestBuildAssignment(t *testing.T) {
 }
 
 func TestBuildAssignmentMalformedPayload(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	definition := &schema.FleetServiceContent{
 		Template: "bureau/template:worker",
@@ -261,7 +262,7 @@ func TestBuildAssignmentMalformedPayload(t *testing.T) {
 }
 
 func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	definition := &schema.FleetServiceContent{
 		Template: "bureau/template:ticket-service",
@@ -309,7 +310,7 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 }
 
 func TestBuildAssignmentNilAuthorization(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	definition := &schema.FleetServiceContent{
 		Template: "bureau/template:worker",
@@ -335,7 +336,7 @@ func TestBuildAssignmentNilAuthorization(t *testing.T) {
 // --- place tests ---
 
 func TestPlaceHappyPath(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
@@ -391,7 +392,7 @@ func TestPlaceHappyPath(t *testing.T) {
 }
 
 func TestPlacePreservesExistingPrincipals(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
@@ -444,7 +445,7 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 }
 
 func TestPlaceServiceNotFound(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
@@ -459,7 +460,7 @@ func TestPlaceServiceNotFound(t *testing.T) {
 }
 
 func TestPlaceServiceNoDefinition(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
@@ -478,7 +479,7 @@ func TestPlaceServiceNoDefinition(t *testing.T) {
 }
 
 func TestPlaceMachineNotFound(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{Template: "t"},
@@ -492,7 +493,7 @@ func TestPlaceMachineNotFound(t *testing.T) {
 }
 
 func TestPlaceMachineNoConfigRoom(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
@@ -511,7 +512,7 @@ func TestPlaceMachineNoConfigRoom(t *testing.T) {
 }
 
 func TestPlaceAlreadyPlaced(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	existingAssignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -539,7 +540,7 @@ func TestPlaceAlreadyPlaced(t *testing.T) {
 // --- unplace tests ---
 
 func TestUnplaceHappyPath(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	existingAssignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -615,7 +616,7 @@ func TestUnplaceHappyPath(t *testing.T) {
 }
 
 func TestUnplaceNotPlaced(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
@@ -630,7 +631,7 @@ func TestUnplaceNotPlaced(t *testing.T) {
 }
 
 func TestUnplaceWrongFleetController(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	// Assignment managed by a different fleet controller.
 	fc.machines["machine/workstation"] = &machineState{
@@ -651,7 +652,7 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 }
 
 func TestUnplaceMachineNotFound(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	err := fc.unplace(context.Background(), "service/stt/whisper", "machine/nonexistent")
 	if err == nil {
@@ -662,7 +663,7 @@ func TestUnplaceMachineNotFound(t *testing.T) {
 // --- reconcile tests ---
 
 func TestReconcileUnderReplicated(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	// Two machines eligible for placement.
 	for _, name := range []string{"machine/alpha", "machine/beta"} {
@@ -703,7 +704,7 @@ func TestReconcileUnderReplicated(t *testing.T) {
 }
 
 func TestReconcileOverReplicated(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	// Service has max 1 but is on 2 machines.
 	definition := &schema.FleetServiceContent{
@@ -790,7 +791,7 @@ func TestReconcileOverReplicated(t *testing.T) {
 }
 
 func TestReconcileAlreadySatisfied(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	machine := standardMachine()
 	machine.configRoomID = "!config-ws:local"
@@ -832,7 +833,7 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 }
 
 func TestReconcileSkipsServicesWithoutDefinition(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	fc.services["service/orphan"] = &fleetServiceState{
 		definition: nil,
@@ -847,7 +848,7 @@ func TestReconcileSkipsServicesWithoutDefinition(t *testing.T) {
 }
 
 func TestReconcileInsufficientMachines(t *testing.T) {
-	fc, store := newExecuteTestController()
+	fc, store := newExecuteTestController(t)
 
 	// One eligible machine, but service wants min 3.
 	machine := standardMachine()
@@ -885,7 +886,7 @@ func TestReconcileInsufficientMachines(t *testing.T) {
 // --- rebuildServiceInstances tests ---
 
 func TestRebuildServiceInstances(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	assignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -933,7 +934,7 @@ func TestRebuildServiceInstances(t *testing.T) {
 }
 
 func TestRebuildServiceInstancesIgnoresUnknownServices(t *testing.T) {
-	fc, _ := newExecuteTestController()
+	fc, _ := newExecuteTestController(t)
 
 	// Machine has an assignment for a service not in fc.services.
 	fc.machines["machine/workstation"] = &machineState{

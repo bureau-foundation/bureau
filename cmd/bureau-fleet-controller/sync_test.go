@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -20,7 +21,16 @@ import (
 // newTestFleetController creates a FleetController suitable for unit
 // testing sync logic. The session is nil, which is safe for code paths
 // that don't make network calls.
-func newTestFleetController() *FleetController {
+func newTestFleetController(t *testing.T) *FleetController {
+	t.Helper()
+	fleetRoomID, err := ref.ParseRoomID("!fleet:local")
+	if err != nil {
+		t.Fatalf("invalid test room ID: %v", err)
+	}
+	machineRoomID, err := ref.ParseRoomID("!machine:local")
+	if err != nil {
+		t.Fatalf("invalid test room ID: %v", err)
+	}
 	return &FleetController{
 		clock:         clock.Real(),
 		startedAt:     time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
@@ -30,8 +40,8 @@ func newTestFleetController() *FleetController {
 		config:        make(map[string]*schema.FleetConfigContent),
 		leases:        make(map[string]*schema.HALeaseContent),
 		configRooms:   make(map[string]string),
-		fleetRoomID:   "!fleet:local",
-		machineRoomID: "!machine:local",
+		fleetRoomID:   fleetRoomID,
+		machineRoomID: machineRoomID,
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -101,7 +111,7 @@ func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 }
 
 func TestProcessFleetRoomState(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	fleetServiceContent := toContentMap(t, schema.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
@@ -176,7 +186,7 @@ func TestProcessFleetRoomState(t *testing.T) {
 }
 
 func TestProcessMachineRoomState(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	machineInfoContent := toContentMap(t, schema.MachineInfo{
 		Principal: "@machine/workstation:bureau.local",
@@ -237,7 +247,7 @@ func TestProcessMachineRoomState(t *testing.T) {
 }
 
 func TestProcessConfigRoomState(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -294,7 +304,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 }
 
 func TestProcessConfigRoomIgnoresNonFleetAssignments(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -327,7 +337,7 @@ func TestProcessConfigRoomIgnoresNonFleetAssignments(t *testing.T) {
 }
 
 func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	// Set up a machine with a config room.
 	fc.machines["machine/workstation"] = &machineState{
@@ -378,7 +388,7 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 }
 
 func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	assignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -424,7 +434,7 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 }
 
 func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	assignment := &schema.PrincipalAssignment{
 		Localpart: "service/worker",
@@ -471,7 +481,7 @@ func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 }
 
 func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	// Pre-populate a service definition so instance tracking works.
 	fc.services["service/stt/whisper"] = &fleetServiceState{
@@ -515,7 +525,7 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 }
 
 func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	oldAssignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -572,7 +582,7 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 }
 
 func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	// Pre-populate with initial machine state.
 	fc.machines["machine/workstation"] = &machineState{
@@ -644,7 +654,7 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 // arriving while a write is pending does not overwrite the optimistic
 // local state set by place() or unplace().
 func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	// Set up a machine with a placed service and a pending echo.
 	placedAssignment := &schema.PrincipalAssignment{
@@ -708,7 +718,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 // our own write arrives via /sync, the pending echo is cleared and
 // the event is applied normally.
 func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	placedAssignment := &schema.PrincipalAssignment{
 		Localpart: "service/stt/whisper",
@@ -767,7 +777,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 // TestPendingEchoAllowsSubsequentEvents verifies that after the echo
 // clears the pending state, subsequent /sync events apply normally.
 func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		assignments: map[string]*schema.PrincipalAssignment{
@@ -826,7 +836,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 // supersedes the earlier one. Only the latest echo clears the
 // pending state.
 func TestPendingEchoLatestWriteWins(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		assignments:        make(map[string]*schema.PrincipalAssignment),
@@ -875,7 +885,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 // TestNoPendingEchoPassesThrough verifies that when no write is
 // pending, /sync events are applied normally (no regression).
 func TestNoPendingEchoPassesThrough(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
 		assignments:  make(map[string]*schema.PrincipalAssignment),

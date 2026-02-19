@@ -180,8 +180,9 @@ func requireServiceError(t *testing.T, err error) *service.ServiceError {
 // data for socket API tests: two machines, two services, one definition.
 // Uses a fakeConfigStore so mutation handlers (place/unplace) can read
 // and write machine configs without a real homeserver.
-func sampleFleetController() *FleetController {
-	fc := newTestFleetController()
+func sampleFleetController(t *testing.T) *FleetController {
+	t.Helper()
+	fc := newTestFleetController(t)
 	fc.principalName = "service/fleet/prod"
 	fc.configStore = newFakeConfigStore()
 
@@ -272,7 +273,7 @@ func sampleFleetController() *FleetController {
 // --- Status tests ---
 
 func TestStatusUnauthenticated(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -290,7 +291,7 @@ func TestStatusUnauthenticated(t *testing.T) {
 }
 
 func TestStatusWithoutToken(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -339,7 +340,7 @@ func TestStatusWithoutToken(t *testing.T) {
 // --- Info tests ---
 
 func TestInfoReturnsModelCounts(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -366,7 +367,7 @@ func TestInfoReturnsModelCounts(t *testing.T) {
 }
 
 func TestInfoDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -378,7 +379,7 @@ func TestInfoDeniedWithoutGrant(t *testing.T) {
 // --- List machines tests ---
 
 func TestListMachinesReturnsSorted(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -422,7 +423,7 @@ func TestListMachinesReturnsSorted(t *testing.T) {
 }
 
 func TestListMachinesIncludesPartialMachines(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	// Add a machine with nil info.
 	fc.machines["machine/booting"] = &machineState{
 		status:      &schema.MachineStatus{CPUPercent: 5},
@@ -459,7 +460,7 @@ func TestListMachinesIncludesPartialMachines(t *testing.T) {
 }
 
 func TestListMachinesDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -471,7 +472,7 @@ func TestListMachinesDeniedWithoutGrant(t *testing.T) {
 // --- List services tests ---
 
 func TestListServicesReturnsSorted(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -494,7 +495,7 @@ func TestListServicesReturnsSorted(t *testing.T) {
 }
 
 func TestListServicesIncludesInstanceCount(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -531,7 +532,7 @@ func TestListServicesIncludesInstanceCount(t *testing.T) {
 }
 
 func TestListServicesDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -543,7 +544,7 @@ func TestListServicesDeniedWithoutGrant(t *testing.T) {
 // --- Show machine tests ---
 
 func TestShowMachineReturnsDetail(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -580,7 +581,7 @@ func TestShowMachineReturnsDetail(t *testing.T) {
 }
 
 func TestShowMachineNotFound(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -594,7 +595,7 @@ func TestShowMachineNotFound(t *testing.T) {
 }
 
 func TestShowMachineMissingField(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -604,7 +605,7 @@ func TestShowMachineMissingField(t *testing.T) {
 }
 
 func TestShowMachineDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -617,7 +618,7 @@ func TestShowMachineDeniedWithoutGrant(t *testing.T) {
 // --- Show service tests ---
 
 func TestShowServiceReturnsDetail(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -645,7 +646,7 @@ func TestShowServiceReturnsDetail(t *testing.T) {
 }
 
 func TestShowServiceNotFound(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -659,7 +660,7 @@ func TestShowServiceNotFound(t *testing.T) {
 }
 
 func TestShowServiceMissingField(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -669,7 +670,7 @@ func TestShowServiceMissingField(t *testing.T) {
 }
 
 func TestShowServiceDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -685,8 +686,9 @@ func TestShowServiceDeniedWithoutGrant(t *testing.T) {
 // seeded config store data suitable for place/unplace tests. The
 // machines have configs in the fake store that the mutation handlers
 // will read and write.
-func sampleFleetControllerForMutation() *FleetController {
-	fc := sampleFleetController()
+func sampleFleetControllerForMutation(t *testing.T) *FleetController {
+	t.Helper()
+	fc := sampleFleetController(t)
 	store := fc.configStore.(*fakeConfigStore)
 
 	// Seed the workstation config with its current assignment.
@@ -708,7 +710,7 @@ func sampleFleetControllerForMutation() *FleetController {
 }
 
 func TestPlaceAutoSelectsMachine(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -741,7 +743,7 @@ func TestPlaceAutoSelectsMachine(t *testing.T) {
 }
 
 func TestPlaceManualMachine(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -764,7 +766,7 @@ func TestPlaceManualMachine(t *testing.T) {
 }
 
 func TestPlaceNoEligibleMachine(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 
 	// Place whisper on both machines so no eligible machines remain.
 	// (workstation already has it via sampleFleetController)
@@ -784,7 +786,7 @@ func TestPlaceNoEligibleMachine(t *testing.T) {
 }
 
 func TestPlaceMissingServiceField(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -794,7 +796,7 @@ func TestPlaceMissingServiceField(t *testing.T) {
 }
 
 func TestPlaceDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -807,7 +809,7 @@ func TestPlaceDeniedWithoutGrant(t *testing.T) {
 // --- Unplace tests ---
 
 func TestUnplaceRemovesAssignment(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -849,7 +851,7 @@ func TestUnplaceRemovesAssignment(t *testing.T) {
 }
 
 func TestUnplaceNotPlacedReturnsError(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -863,7 +865,7 @@ func TestUnplaceNotPlacedReturnsError(t *testing.T) {
 }
 
 func TestUnplaceMissingFields(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -880,7 +882,7 @@ func TestUnplaceMissingFields(t *testing.T) {
 }
 
 func TestUnplaceDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -896,7 +898,7 @@ func TestUnplaceDeniedWithoutGrant(t *testing.T) {
 // --- Plan tests ---
 
 func TestPlanReturnsScores(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -932,7 +934,7 @@ func TestPlanReturnsScores(t *testing.T) {
 }
 
 func TestPlanServiceNotFound(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -943,7 +945,7 @@ func TestPlanServiceNotFound(t *testing.T) {
 }
 
 func TestPlanMissingField(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -953,7 +955,7 @@ func TestPlanMissingField(t *testing.T) {
 }
 
 func TestPlanDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetControllerForMutation()
+	fc := sampleFleetControllerForMutation(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 

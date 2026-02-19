@@ -122,6 +122,7 @@ fi
 HOMESERVER_URL=$(jq -r '.homeserver_url' "$BOOTSTRAP_CONFIG")
 SERVER_NAME=$(jq -r '.server_name' "$BOOTSTRAP_CONFIG")
 MACHINE_NAME=$(jq -r '.machine_name' "$BOOTSTRAP_CONFIG")
+FLEET_PREFIX=$(jq -r '.fleet_prefix' "$BOOTSTRAP_CONFIG")
 
 if [ "$HOMESERVER_URL" = "null" ] || [ -z "$HOMESERVER_URL" ]; then
     echo "Error: bootstrap config missing homeserver_url" >&2
@@ -135,6 +136,10 @@ if [ "$MACHINE_NAME" = "null" ] || [ -z "$MACHINE_NAME" ]; then
     echo "Error: bootstrap config missing machine_name" >&2
     exit 1
 fi
+if [ "$FLEET_PREFIX" = "null" ] || [ -z "$FLEET_PREFIX" ]; then
+    echo "Error: bootstrap config missing fleet_prefix" >&2
+    exit 1
+fi
 
 # Determine step count for progress display.
 if [ "$NO_START" = true ]; then
@@ -145,6 +150,7 @@ fi
 
 echo "=== Bureau Machine Bootstrap ==="
 echo "  Machine:    $MACHINE_NAME"
+echo "  Fleet:      $FLEET_PREFIX"
 echo "  Homeserver: $HOMESERVER_URL"
 echo "  Server:     $SERVER_NAME"
 if [ -n "$BINARY_DIR" ]; then
@@ -244,6 +250,7 @@ sudo bureau-launcher \
     --bootstrap-file "$BOOTSTRAP_CONFIG" \
     --machine-name "$MACHINE_NAME" \
     --server-name "$SERVER_NAME" \
+    --fleet "$FLEET_PREFIX" \
     --first-boot-only
 
 echo "  First boot complete. Password rotated, key published."
@@ -256,6 +263,7 @@ sudo tee /etc/bureau/machine.conf > /dev/null <<EOF
 BUREAU_HOMESERVER_URL=$HOMESERVER_URL
 BUREAU_MACHINE_NAME=$MACHINE_NAME
 BUREAU_SERVER_NAME=$SERVER_NAME
+BUREAU_FLEET=$FLEET_PREFIX
 EOF
 
 # Copy systemd units from the repo (if available) or from a known path.

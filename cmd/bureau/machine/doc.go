@@ -11,8 +11,8 @@
 // Subcommands:
 //
 //   - provision: registers a new machine's Matrix account with a
-//     random one-time password, creates the per-machine config room
-//     (#bureau/config/<machine>), invites the machine to all global
+//     random one-time password, creates the per-machine config room,
+//     invites the machine to all global
 //     rooms (system, machine, service, template, pipeline, fleet),
 //     and writes a bootstrap config file. The bootstrap file is
 //     transferred to the new machine and consumed by bureau-launcher

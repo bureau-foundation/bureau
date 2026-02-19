@@ -98,7 +98,7 @@ func TestGrants(t *testing.T) {
 	mux.HandleFunc("GET /v1/grants", func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(writer).Encode([]schema.Grant{
-			{Actions: []string{"matrix/send"}, Targets: []string{"bureau/config/*"}},
+			{Actions: []string{"matrix/send"}, Targets: []string{"bureau/fleet/*/machine/*"}},
 		})
 	})
 
@@ -219,7 +219,7 @@ func TestResolveAlias(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/matrix/resolve", func(writer http.ResponseWriter, request *http.Request) {
 		alias := request.URL.Query().Get("alias")
-		if alias != "#bureau/config/machine/ws:test.local" {
+		if alias != "#bureau/fleet/prod/machine/ws:test.local" {
 			writer.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(writer).Encode(map[string]string{"error": "not found"})
 			return
@@ -230,7 +230,7 @@ func TestResolveAlias(t *testing.T) {
 
 	client := testServer(t, mux)
 
-	roomID, err := client.ResolveAlias(context.Background(), "#bureau/config/machine/ws:test.local")
+	roomID, err := client.ResolveAlias(context.Background(), "#bureau/fleet/prod/machine/ws:test.local")
 	if err != nil {
 		t.Fatalf("ResolveAlias: %v", err)
 	}

@@ -32,7 +32,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ws-cmds")
+	machine := newTestMachine(t, fleet, "ws-cmds")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ws-worktree")
+	machine := newTestMachine(t, fleet, "ws-worktree")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
@@ -603,7 +603,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ws-wt-lifecycle")
+	machine := newTestMachine(t, fleet, "ws-wt-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}

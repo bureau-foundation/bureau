@@ -455,7 +455,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 // new principal assignments (skipping duplicates by localpart), and
 // publishes the updated config.
 func updateMachineConfig(ctx context.Context, session messaging.Session, machine, serverName string, newAssignments []schema.PrincipalAssignment) error {
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machine, serverName)
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machine), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return cli.NotFound("resolve config room %s: %w (has the machine been registered?)", configRoomAlias, err)

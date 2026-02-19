@@ -48,7 +48,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/agent-svc-test")
+	machine := newTestMachine(t, fleet, "agent-svc-test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -87,11 +87,15 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	)
 	waitForFile(t, agentServiceSocketPath)
 
+	// The service binary registers with a fleet-scoped localpart
+	// (fleet.Prefix + "/" + principalName), so the daemon's directory
+	// update message uses the fleet-scoped name.
+	fleetScopedServiceLocalpart := fleet.Prefix + "/" + agentServiceLocalpart
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, agentServiceLocalpart)
-		}, "service directory update adding "+agentServiceLocalpart)
+			return slices.Contains(message.Added, fleetScopedServiceLocalpart)
+		}, "service directory update adding "+fleetScopedServiceLocalpart)
 
 	// Publish room service binding so the daemon maps "agent" role to
 	// this service. Must be published before deploying any principal

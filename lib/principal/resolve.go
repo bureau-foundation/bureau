@@ -150,7 +150,7 @@ func listOnMachine(ctx context.Context, session messaging.Session, machineName, 
 // readMachineConfig resolves a machine's config room and reads its
 // MachineConfig state event.
 func readMachineConfig(ctx context.Context, session messaging.Session, machineName, serverName string) (string, *schema.MachineConfig, error) {
-	configAlias := RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
+	configAlias := RoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve config room for %s: %w", machineName, err)

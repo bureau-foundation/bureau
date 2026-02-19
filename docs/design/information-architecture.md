@@ -196,7 +196,10 @@ daemons that serve principals.
 
 ### Per-machine config rooms
 
-Each machine gets a config room at `#bureau/config/<machine-localpart>`.
+Each machine gets a config room whose alias is the machine's
+fleet-scoped localpart (the `@`→`#` convention: swap the sigil). For
+example, `@bureau/fleet/prod/machine/workstation:bureau.local` has its
+config room at `#bureau/fleet/prod/machine/workstation:bureau.local`.
 Created during machine bootstrap, these rooms hold the machine-specific
 desired state:
 
@@ -298,8 +301,8 @@ publishing.
 
 | Event type | State key | Room | Purpose |
 |---|---|---|---|
-| `m.bureau.machine_config` | machine localpart | `#bureau/config/<machine>` | principal assignments, policies, Bureau version |
-| `m.bureau.credentials` | principal localpart | `#bureau/config/<machine>` | age-encrypted credential bundle per principal |
+| `m.bureau.machine_config` | machine localpart | machine's config room | principal assignments, policies, Bureau version |
+| `m.bureau.credentials` | principal localpart | machine's config room | age-encrypted credential bundle per principal |
 
 The config room is the daemon's source of truth. When the daemon syncs
 and sees changes here, it reconciles — creating, destroying, or updating
@@ -565,9 +568,9 @@ source. Handlers are idempotent — calling them redundantly is safe.
 
 The daemon categorizes rooms by function:
 
-1. **Config room** (`#bureau/config/<machine>`) — `machine_config` and
-   `credentials` changes trigger full reconciliation (sandbox
-   creation, destruction, updates)
+1. **Config room** (alias = machine's fleet-scoped localpart) —
+   `machine_config` and `credentials` changes trigger full
+   reconciliation (sandbox creation, destruction, updates)
 2. **Machine room** (`#bureau/machine`) — `machine_status` changes
    update peer transport addresses
 3. **Service room** (`#bureau/service`) — `service` changes update the

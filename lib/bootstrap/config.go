@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // Config is the bootstrap configuration transferred from the hub to a
@@ -29,8 +29,9 @@ type Config struct {
 	// (e.g., "bureau.local").
 	ServerName string `json:"server_name"`
 
-	// MachineName is the machine's localpart (e.g., "machine/worker-01").
-	// Must pass principal.ValidateLocalpart.
+	// MachineName is the machine's fleet-scoped localpart
+	// (e.g., "bureau/fleet/prod/machine/worker-01"). Validated with
+	// ref.ParseMachine using the ServerName field.
 	MachineName string `json:"machine_name"`
 
 	// Password is the one-time password for initial login. Generated
@@ -56,7 +57,7 @@ func (config *Config) Validate() error {
 	if config.MachineName == "" {
 		return fmt.Errorf("bootstrap config: machine_name is required")
 	}
-	if err := principal.ValidateLocalpart(config.MachineName); err != nil {
+	if _, err := ref.ParseMachine(config.MachineName, config.ServerName); err != nil {
 		return fmt.Errorf("bootstrap config: invalid machine_name: %w", err)
 	}
 	if config.Password == "" {
@@ -65,7 +66,7 @@ func (config *Config) Validate() error {
 	if config.FleetPrefix == "" {
 		return fmt.Errorf("bootstrap config: fleet_prefix is required")
 	}
-	if _, _, err := principal.ParseFleetPrefix(config.FleetPrefix); err != nil {
+	if _, err := ref.ParseFleet(config.FleetPrefix, config.ServerName); err != nil {
 		return fmt.Errorf("bootstrap config: invalid fleet_prefix: %w", err)
 	}
 	return nil

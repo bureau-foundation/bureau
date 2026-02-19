@@ -32,7 +32,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/payload-test")
+	machine := newTestMachine(t, fleet, "payload-test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -167,7 +167,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot a machine.
-	machine := newTestMachine(t, "machine/payload-empty")
+	machine := newTestMachine(t, fleet, "payload-empty")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

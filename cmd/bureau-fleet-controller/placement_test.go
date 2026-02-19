@@ -13,8 +13,9 @@ import (
 
 // newPlacementTestController creates a FleetController with a fake clock
 // for deterministic placement scoring tests.
-func newPlacementTestController(now time.Time) *FleetController {
-	fc := newTestFleetController()
+func newPlacementTestController(t *testing.T, now time.Time) *FleetController {
+	t.Helper()
+	fc := newTestFleetController(t)
 	fc.clock = clock.Fake(now)
 	return fc
 }
@@ -81,7 +82,7 @@ func standardService() *schema.FleetServiceContent {
 }
 
 func TestScoreMachineIneligibleNoInfo(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.machines["machine/noinfo"] = &machineState{
 		status:      &schema.MachineStatus{CPUPercent: 10},
 		assignments: make(map[string]*schema.PrincipalAssignment),
@@ -94,7 +95,7 @@ func TestScoreMachineIneligibleNoInfo(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleNoStatus(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.machines["machine/nostatus"] = &machineState{
 		info: &schema.MachineInfo{
 			MemoryTotalMB: 65536,
@@ -110,7 +111,7 @@ func TestScoreMachineIneligibleNoStatus(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleCordoned(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels["cordoned"] = "maintenance"
 	fc.machines["machine/cordoned"] = machine
@@ -122,7 +123,7 @@ func TestScoreMachineIneligibleCordoned(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleMissingLabel(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{} // no labels
 	fc.machines["machine/nolabel"] = machine
@@ -137,7 +138,7 @@ func TestScoreMachineIneligibleMissingLabel(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleLabelValueMismatch(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{"gpu": "rtx4090"}
 	fc.machines["machine/wronggpu"] = machine
@@ -152,7 +153,7 @@ func TestScoreMachineIneligibleLabelValueMismatch(t *testing.T) {
 }
 
 func TestScoreMachineLabelPresenceCheck(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{"gpu": "rtx4090", "persistent": "true"}
 	fc.machines["machine/haslabels"] = machine
@@ -168,7 +169,7 @@ func TestScoreMachineLabelPresenceCheck(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleNotInAllowedMachines(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	fc.machines["machine/workstation"] = machine
 
@@ -182,7 +183,7 @@ func TestScoreMachineIneligibleNotInAllowedMachines(t *testing.T) {
 }
 
 func TestScoreMachineAllowedMachinesGlobMatch(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	fc.machines["machine/cloud-gpu-1"] = machine
 	machine.info.Principal = "@machine/cloud-gpu-1:bureau.local"
@@ -197,7 +198,7 @@ func TestScoreMachineAllowedMachinesGlobMatch(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleInsufficientMemory(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.MemoryTotalMB = 8192
 	machine.status.MemoryUsedMB = 7000 // only 1192 MB free
@@ -213,7 +214,7 @@ func TestScoreMachineIneligibleInsufficientMemory(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleNoGPU(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.GPUs = nil
 	machine.status.GPUStats = nil
@@ -230,7 +231,7 @@ func TestScoreMachineIneligibleNoGPU(t *testing.T) {
 }
 
 func TestScoreMachineIneligibleAntiAffinity(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.assignments["service/llm/large"] = &schema.PrincipalAssignment{
 		Localpart: "service/llm/large",
@@ -248,7 +249,7 @@ func TestScoreMachineIneligibleAntiAffinity(t *testing.T) {
 }
 
 func TestScoreMachineEligibleBasic(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	fc.machines["machine/workstation"] = machine
 
@@ -263,7 +264,7 @@ func TestScoreMachineEligibleBasic(t *testing.T) {
 }
 
 func TestScoreMachineNotFound(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	score := fc.scoreMachine("machine/nonexistent", standardService())
 	if score != ineligible {
@@ -272,7 +273,7 @@ func TestScoreMachineNotFound(t *testing.T) {
 }
 
 func TestScoreMachinePreferredMachineBonus(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Create three identical machines.
 	for _, name := range []string{"machine/alpha", "machine/beta", "machine/gamma"} {
@@ -296,7 +297,7 @@ func TestScoreMachinePreferredMachineBonus(t *testing.T) {
 }
 
 func TestScoreMachineCoLocateBonus(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Machine with co-located service.
 	machineWith := standardMachine()
@@ -322,7 +323,7 @@ func TestScoreMachineCoLocateBonus(t *testing.T) {
 }
 
 func TestScoreMachineLowUtilizationPreferred(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Low utilization machine.
 	machineIdle := standardMachine()
@@ -345,7 +346,7 @@ func TestScoreMachineLowUtilizationPreferred(t *testing.T) {
 }
 
 func TestScorePlacementSortOrder(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Create machines with different utilization levels.
 	machineA := standardMachine()
@@ -384,7 +385,7 @@ func TestScorePlacementSortOrder(t *testing.T) {
 }
 
 func TestScorePlacementFiltersIneligible(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// One eligible machine.
 	eligible := standardMachine()
@@ -411,7 +412,7 @@ func TestScorePlacementFiltersIneligible(t *testing.T) {
 }
 
 func TestScorePlacementTieBreaking(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Create identical machines — scores will be equal.
 	for _, name := range []string{"machine/charlie", "machine/alpha", "machine/bravo"} {
@@ -538,13 +539,13 @@ func TestScoreMachineBatchTimeOfDay(t *testing.T) {
 	}
 
 	// Score during preferred window.
-	fcInWindow := newPlacementTestController(inWindowTime)
+	fcInWindow := newPlacementTestController(t, inWindowTime)
 	machineIn := standardMachine()
 	fcInWindow.machines["machine/worker"] = machineIn
 	scoreInWindow := fcInWindow.scoreMachine("machine/worker", service)
 
 	// Score outside preferred window.
-	fcOutside := newPlacementTestController(outsideWindowTime)
+	fcOutside := newPlacementTestController(t, outsideWindowTime)
 	machineOut := standardMachine()
 	fcOutside.machines["machine/worker"] = machineOut
 	scoreOutside := fcOutside.scoreMachine("machine/worker", service)
@@ -570,12 +571,12 @@ func TestScoreMachineNonBatchIgnoresTimeOfDay(t *testing.T) {
 	service := standardService()
 	// No Scheduling — always-on service.
 
-	fcMorning := newPlacementTestController(morningTime)
+	fcMorning := newPlacementTestController(t, morningTime)
 	machineMorning := standardMachine()
 	fcMorning.machines["machine/worker"] = machineMorning
 	scoreMorning := fcMorning.scoreMachine("machine/worker", service)
 
-	fcAfternoon := newPlacementTestController(afternoonTime)
+	fcAfternoon := newPlacementTestController(t, afternoonTime)
 	machineAfternoon := standardMachine()
 	fcAfternoon.machines["machine/worker"] = machineAfternoon
 	scoreAfternoon := fcAfternoon.scoreMachine("machine/worker", service)
@@ -588,7 +589,7 @@ func TestScoreMachineNonBatchIgnoresTimeOfDay(t *testing.T) {
 }
 
 func TestScoreMachineGPUMemoryInsufficient(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	// GPU has 24576 MB total, 20480 MB used (only ~4096 MB free).
 	machine.status.GPUStats[0].VRAMUsedBytes = 21474836480 // 20480 MB
@@ -604,7 +605,7 @@ func TestScoreMachineGPUMemoryInsufficient(t *testing.T) {
 }
 
 func TestScoreMachineGPUNoStatsNeutralScore(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	// Has GPU hardware but no GPU stats (monitoring unavailable).
 	machine.status.GPUStats = nil
@@ -620,7 +621,7 @@ func TestScoreMachineGPUNoStatsNeutralScore(t *testing.T) {
 }
 
 func TestScoreMachineNoGPUServiceNoGPURequirement(t *testing.T) {
-	fc := newPlacementTestController(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.GPUs = nil
 	machine.status.GPUStats = nil

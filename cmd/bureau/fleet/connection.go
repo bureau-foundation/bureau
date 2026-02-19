@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/service"
 )
 
@@ -21,6 +20,11 @@ const (
 	sandboxTokenPath  = "/run/bureau/service/token/fleet.token"
 )
 
+// hostFallbackSocketPath is the fleet controller socket path on the
+// host side (outside a sandbox). This is the default run directory
+// (/run/bureau/principal/) plus the service localpart and .sock suffix.
+const hostFallbackSocketPath = "/run/bureau/principal/service/fleet/main.sock"
+
 // defaultFleetSocketPath returns the default fleet controller socket path.
 // Inside a sandbox (detected by the presence of the RequiredServices mount
 // point), the standard /run/bureau/service/fleet.sock path is used.
@@ -30,7 +34,7 @@ func defaultFleetSocketPath() string {
 	if _, err := os.Stat(sandboxSocketPath); err == nil {
 		return sandboxSocketPath
 	}
-	return principal.SocketPath("service/fleet/main")
+	return hostFallbackSocketPath
 }
 
 // defaultFleetTokenPath returns the default fleet service token path.

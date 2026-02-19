@@ -74,7 +74,7 @@ type ProvisionResult struct {
 //
 // The machine's public key is fetched from the m.bureau.machine_key state
 // event in the fleet's machine room (params.MachineRoomID). The config
-// room is resolved from the standard alias #bureau/config/<machineName>.
+// room is resolved from the machine's config room alias.
 //
 // The session must have permission to read the machine room (for the public
 // key) and write state events to the config room.
@@ -146,7 +146,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 
 	// Resolve the config room. The room must already exist (created by
 	// bureau machine provision or the daemon's first-boot flow).
-	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(params.MachineName), params.ServerName)
+	configAlias := principal.RoomAlias(schema.EntityConfigRoomAlias(params.MachineName), params.ServerName)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config room %q: %w", configAlias, err)

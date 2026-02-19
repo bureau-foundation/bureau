@@ -491,9 +491,10 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	ctx := t.Context()
 
 	// Derive a fleet prefix from the test name. The homeserver is fresh
-	// per test run, so t.Name() is sufficient for uniqueness. Slashes in
-	// test names (from subtests) are valid in Matrix aliases.
-	fleetName := t.Name()
+	// per test run, so t.Name() is sufficient for uniqueness. Lowercased
+	// because Matrix localparts only allow a-z, and ref.ParseFleet
+	// validates this constraint.
+	fleetName := strings.ToLower(t.Name())
 	namespace := "bureau"
 	prefix := principal.FleetPrefix(namespace, fleetName)
 

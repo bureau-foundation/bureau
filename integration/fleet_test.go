@@ -28,7 +28,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/test")
+	machine := newTestMachine(t, fleet, "test")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -119,7 +119,7 @@ func TestPrincipalAssignment(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/sandbox")
+	machine := newTestMachine(t, fleet, "sandbox")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -159,7 +159,7 @@ func TestOperatorFlow(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/observe")
+	machine := newTestMachine(t, fleet, "observe")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:       resolvedBinary(t, "DAEMON_BINARY"),
@@ -350,7 +350,7 @@ func TestCredentialRotation(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/rotate")
+	machine := newTestMachine(t, fleet, "rotate")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -435,8 +435,8 @@ func TestCrossMachineObservation(t *testing.T) {
 	// (to fork a relay for the observation session). The consumer just
 	// needs a daemon — it routes observation requests but doesn't host
 	// any principals.
-	provider := newTestMachine(t, "machine/xm-prov")
-	consumer := newTestMachine(t, "machine/xm-cons")
+	provider := newTestMachine(t, fleet, "xm-prov")
+	consumer := newTestMachine(t, fleet, "xm-cons")
 
 	startMachine(t, admin, provider, machineOptions{
 		LauncherBinary:     resolvedBinary(t, "LAUNCHER_BINARY"),
@@ -620,7 +620,7 @@ func TestConfigReconciliation(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/reconcile")
+	machine := newTestMachine(t, fleet, "reconcile")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

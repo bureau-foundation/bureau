@@ -23,6 +23,7 @@ ExecStart=/usr/local/bin/bureau-daemon \
     --homeserver ${BUREAU_HOMESERVER_URL} \
     --machine-name ${BUREAU_MACHINE_NAME} \
     --server-name ${BUREAU_SERVER_NAME} \
+    --fleet ${BUREAU_FLEET} \
     --state-dir /var/lib/bureau \
     --launcher-socket /run/bureau/launcher.sock \
     --admin-user bureau-admin

@@ -9,7 +9,7 @@
 // Environment variables (set via template variable expansion):
 //
 //	BUREAU_PROXY_SOCKET  — Unix socket path to the proxy
-//	BUREAU_MACHINE_NAME  — machine localpart (e.g., "machine/workstation")
+//	BUREAU_MACHINE_NAME  — fleet-scoped machine localpart (e.g., "bureau/fleet/prod/machine/workstation")
 //	BUREAU_SERVER_NAME   — Matrix server name (e.g., "bureau.local")
 package main
 
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -75,7 +76,7 @@ func run() error {
 	log("whoami: user_id=%s", whoamiUserID)
 
 	// Step 3: Resolve the config room.
-	configAlias := fmt.Sprintf("#bureau/config/%s:%s", machineName, serverName)
+	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	log("resolving config room %s...", configAlias)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {

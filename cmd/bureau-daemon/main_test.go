@@ -24,9 +24,9 @@ func TestRoomAliasLocalpart(t *testing.T) {
 			expected:  "bureau/machine",
 		},
 		{
-			name:      "nested config alias",
-			fullAlias: "#bureau/config/machine/workstation:bureau.local",
-			expected:  "bureau/config/machine/workstation",
+			name:      "fleet-scoped alias",
+			fullAlias: "#bureau/fleet/prod/machine/workstation:bureau.local",
+			expected:  "bureau/fleet/prod/machine/workstation",
 		},
 		{
 			name:      "different server",

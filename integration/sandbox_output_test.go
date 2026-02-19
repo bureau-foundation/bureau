@@ -30,7 +30,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/output-capture")
+	machine := newTestMachine(t, fleet, "output-capture")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}

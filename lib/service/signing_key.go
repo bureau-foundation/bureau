@@ -10,44 +10,34 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// ResolveSystemRoom resolves the #bureau/system room alias and joins
-// it. Returns the room ID. Called once at startup by services that
-// need to fetch state from the system room (e.g., token signing keys).
-func ResolveSystemRoom(ctx context.Context, session *messaging.DirectSession, serverName string) (string, error) {
-	alias := principal.RoomAlias(schema.RoomAliasSystem, serverName)
-
-	roomID, err := session.ResolveAlias(ctx, alias)
-	if err != nil {
-		return "", fmt.Errorf("resolving system room alias %q: %w", alias, err)
-	}
-
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return "", fmt.Errorf("joining system room %s: %w", roomID, err)
-	}
-
-	return roomID, nil
+// ResolveSystemRoom resolves the namespace's system room alias and joins
+// it. Called once at startup by services that need to fetch state from
+// the system room (e.g., token signing keys).
+func ResolveSystemRoom(ctx context.Context, session *messaging.DirectSession, namespace ref.Namespace) (ref.RoomID, error) {
+	return ResolveRoom(ctx, session, namespace.SystemRoomAlias())
 }
 
 // LoadTokenSigningKey fetches the daemon's Ed25519 token signing
-// public key from the #bureau/system room. The daemon publishes the
-// key as an m.bureau.token_signing_key state event with the machine
-// localpart as the state key.
+// public key from the system room. The daemon publishes the key as an
+// m.bureau.token_signing_key state event with the machine's fleet-scoped
+// localpart (e.g., "bureau/fleet/prod/machine/workstation") as the state key.
 //
 // Returns the decoded public key suitable for use in AuthConfig. Fails
 // if the state event doesn't exist, the public key field is empty, or
 // the hex decoding produces a key of the wrong length.
-func LoadTokenSigningKey(ctx context.Context, session *messaging.DirectSession, systemRoomID, machineLocalpart string) (ed25519.PublicKey, error) {
-	raw, err := session.GetStateEvent(ctx, systemRoomID, schema.EventTypeTokenSigningKey, machineLocalpart)
+func LoadTokenSigningKey(ctx context.Context, session *messaging.DirectSession, systemRoomID ref.RoomID, machine ref.Machine) (ed25519.PublicKey, error) {
+	stateKey := machine.Localpart()
+	raw, err := session.GetStateEvent(ctx, systemRoomID.String(), schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
-		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", machineLocalpart, systemRoomID, err)
+		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", stateKey, systemRoomID, err)
 	}
 
-	return parseTokenSigningKey(raw, machineLocalpart)
+	return parseTokenSigningKey(raw, stateKey)
 }
 
 // parseTokenSigningKey decodes a TokenSigningKeyContent JSON payload

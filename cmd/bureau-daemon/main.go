@@ -63,7 +63,7 @@ func run() error {
 	)
 
 	flag.StringVar(&homeserverURL, "homeserver", "http://localhost:6167", "Matrix homeserver URL")
-	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
+	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., bureau/fleet/prod/machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
 	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (must match the launcher's --run-dir)")
@@ -185,8 +185,10 @@ func run() error {
 	}
 
 	// Resolve and join the per-machine config room. The room must already
-	// exist (created by "bureau machine provision").
-	configRoomAlias := principal.RoomAlias("bureau/config/"+machineName, serverName)
+	// exist (created by "bureau machine provision"). The alias follows the
+	// @→# convention: the machine's fleet-scoped localpart IS the room
+	// alias localpart.
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := resolveConfigRoom(ctx, session, configRoomAlias, logger)
 	if err != nil {
 		return fmt.Errorf("resolving config room: %w", err)

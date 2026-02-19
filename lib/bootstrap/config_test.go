@@ -14,7 +14,7 @@ func validConfig() *Config {
 	return &Config{
 		HomeserverURL: "http://matrix.internal:6167",
 		ServerName:    "bureau.local",
-		MachineName:   "machine/worker-01",
+		MachineName:   "bureau/fleet/prod/machine/worker-01",
 		Password:      "random-one-time-password",
 		FleetPrefix:   "bureau/fleet/prod",
 	}
@@ -175,7 +175,7 @@ func TestReadConfig_MissingRequiredField(t *testing.T) {
 	configPath := filepath.Join(directory, "bootstrap.json")
 
 	// Valid JSON but missing the password field.
-	data := `{"homeserver_url": "http://localhost:6167", "server_name": "bureau.local", "machine_name": "machine/test", "fleet_prefix": "bureau/fleet/prod"}`
+	data := `{"homeserver_url": "http://localhost:6167", "server_name": "bureau.local", "machine_name": "bureau/fleet/prod/machine/test", "fleet_prefix": "bureau/fleet/prod"}`
 	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
 		t.Fatalf("write file failed: %v", err)
 	}

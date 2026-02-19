@@ -21,7 +21,7 @@ func TestSystemPrompt(t *testing.T) {
 			ServerName: "bureau.local",
 		},
 		Grants: []schema.Grant{
-			{Actions: []string{"matrix/send"}, Targets: []string{"bureau/config/*"}},
+			{Actions: []string{"matrix/send"}, Targets: []string{"bureau/fleet/*/machine/*"}},
 			{Actions: []string{"service/discover"}},
 		},
 		Services: []proxyclient.ServiceEntry{
@@ -35,7 +35,7 @@ func TestSystemPrompt(t *testing.T) {
 			"prompt":  "Fix the failing test",
 			"project": "bureau",
 		},
-		ConfigRoomAlias: "#bureau/config/machine/ws:bureau.local",
+		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:bureau.local",
 		ConfigRoomID:    "!config:bureau.local",
 	}
 
@@ -65,7 +65,7 @@ func TestSystemPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "matrix/send") {
 		t.Error("system prompt should contain grant actions")
 	}
-	if !strings.Contains(prompt, "bureau/config/*") {
+	if !strings.Contains(prompt, "bureau/fleet/*/machine/*") {
 		t.Error("system prompt should contain grant targets")
 	}
 
@@ -94,7 +94,7 @@ func TestSystemPromptMinimal(t *testing.T) {
 			UserID:     "@agent/test:test.local",
 			ServerName: "test.local",
 		},
-		ConfigRoomAlias: "#bureau/config/machine/ws:test.local",
+		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:test.local",
 	}
 
 	prompt := agentContext.SystemPrompt()
@@ -119,7 +119,7 @@ func TestWriteSystemPromptFile(t *testing.T) {
 			UserID:     "@agent/test:test.local",
 			ServerName: "test.local",
 		},
-		ConfigRoomAlias: "#bureau/config/machine/ws:test.local",
+		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:test.local",
 	}
 
 	path, err := agentContext.WriteSystemPromptFile()

@@ -29,8 +29,8 @@
 //   - #bureau/machine: machine info (static inventory) and status
 //     (periodic heartbeats)
 //   - #bureau/service: service registrations and status
-//   - #bureau/config/*: per-machine config rooms containing
-//     PrincipalAssignment events (joined via invites, not by alias)
+//   - per-machine config rooms containing PrincipalAssignment events
+//     (joined via invites, not by alias)
 //
 // # Socket API
 //

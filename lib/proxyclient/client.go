@@ -35,7 +35,7 @@ type Client struct {
 
 // New creates a Client that communicates with the proxy over the given
 // Unix socket path. The serverName is used for constructing Matrix room
-// aliases (e.g., "#bureau/config/machine/ws:serverName").
+// aliases (e.g., "#bureau/fleet/prod/machine/ws:serverName").
 func New(socketPath string, serverName string) *Client {
 	return &Client{
 		httpClient: &http.Client{

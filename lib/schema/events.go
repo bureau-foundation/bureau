@@ -46,7 +46,7 @@ const (
 	// and defines which principals should run on that machine.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
-	// Room: #bureau/config/<machine-localpart>:<server>
+	// Room: #<machine-localpart>:<server>
 	EventTypeMachineConfig = "m.bureau.machine_config"
 
 	// EventTypeCredentials is published to a per-machine config room
@@ -54,7 +54,7 @@ const (
 	// principal on that machine.
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
-	// Room: #bureau/config/<machine-localpart>:<server>
+	// Room: #<machine-localpart>:<server>
 	EventTypeCredentials = "m.bureau.credentials"
 
 	// EventTypeService is published to #bureau/service when a principal
@@ -716,6 +716,8 @@ type BureauVersion struct {
 
 // PrincipalAssignment defines a single principal that should run on a machine.
 type PrincipalAssignment struct {
+	// XXX: should be a ref entity type (ref.Machine, ref.Service, or ref.Agent)
+	// once the daemon reconciliation loop is migrated to ref types.
 	// Localpart is the principal's localpart (e.g., "iree/amdgpu/pm").
 	// Must pass principal.ValidateLocalpart.
 	Localpart string `json:"localpart"`
@@ -1967,9 +1969,10 @@ type Service struct {
 //
 // State key: the service role name (e.g., "ticket", "rag", "ci")
 type RoomServiceContent struct {
+	// XXX: should be ref.Service once service identity is fleet-scoped.
 	// Principal is the full Matrix user ID of the service instance
 	// that handles this role in this room (e.g.,
-	// "@service/ticket/iree:bureau.local").
+	// "@bureau/fleet/prod/service/ticket:bureau.local").
 	Principal string `json:"principal"`
 }
 

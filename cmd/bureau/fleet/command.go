@@ -10,11 +10,16 @@ func Command() *cli.Command {
 	return &cli.Command{
 		Name:    "fleet",
 		Summary: "Fleet management operations",
-		Description: `Commands for managing fleet controller placement, health monitoring,
-and configuration.
+		Description: `Commands for managing fleets, fleet controller placement, health
+monitoring, and configuration.
+
+A fleet is an infrastructure isolation boundary within a namespace.
+Each fleet has its own machines, services, and fleet controller.
+Use "bureau fleet create" to create the fleet rooms, then
+"bureau fleet enable" to bootstrap a fleet controller on a machine.
 
 The fleet controller manages service placement across machines. It
-watches for FleetServiceContent events in #bureau/fleet, scores
+watches for FleetServiceContent events in the fleet room, scores
 candidate machines based on resource availability and placement
 constraints, and writes PrincipalAssignment events to machine config
 rooms.
@@ -26,10 +31,11 @@ provisioned locations. Outside a sandbox, use --socket and
 --token-file flags (or BUREAU_FLEET_SOCKET and BUREAU_FLEET_TOKEN
 environment variables).
 
-Operator commands (enable, config) use direct Matrix access via
---credential-file.`,
+Operator commands (create, enable, config) use direct Matrix access
+via --credential-file.`,
 		Subcommands: []*cli.Command{
 			// Operator commands.
+			createCommand(),
 			enableCommand(),
 			configCommand(),
 
@@ -46,6 +52,10 @@ Operator commands (enable, config) use direct Matrix access via
 			unplaceCommand(),
 		},
 		Examples: []cli.Example{
+			{
+				Description: "Create a production fleet",
+				Command:     "bureau fleet create bureau/fleet/prod --credential-file ./creds",
+			},
 			{
 				Description: "Check fleet controller status",
 				Command:     "bureau fleet status",
@@ -76,7 +86,7 @@ Operator commands (enable, config) use direct Matrix access via
 			},
 			{
 				Description: "Bootstrap the fleet controller on a machine",
-				Command:     "bureau fleet enable --name prod --host machine/workstation --credential-file ./creds",
+				Command:     "bureau fleet enable bureau/fleet/prod --host workstation --credential-file ./creds",
 			},
 		},
 	}

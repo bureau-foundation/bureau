@@ -61,7 +61,7 @@ func BuildContext(ctx context.Context, proxy *proxyclient.Client, machineName st
 
 	payload := readPayload()
 
-	configRoomAlias := fmt.Sprintf("#bureau/config/%s:%s", machineName, proxy.ServerName())
+	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), proxy.ServerName())
 	configRoomID, err := proxy.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config room %q: %w", configRoomAlias, err)

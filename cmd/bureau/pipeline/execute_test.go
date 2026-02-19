@@ -16,13 +16,13 @@ func TestExecutePipeline(t *testing.T) {
 	state := newPipelineTestState()
 	// Register the config room that the execute command resolves.
 	state.mu.Lock()
-	state.roomAliases["#bureau/config/machine/workstation:test.local"] = "!config-ws:test"
+	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
 	state.mu.Unlock()
 	startTestServer(t, state)
 
 	cmd := executeCommand()
 	if err := cmd.FlagSet().Parse([]string{
-		"--machine", "machine/workstation",
+		"--machine", "bureau/fleet/prod/machine/workstation",
 		"--param", "PROJECT=iree",
 		"--param", "BRANCH=main",
 		"--server-name", "test.local",
@@ -106,13 +106,13 @@ func TestExecuteBadParamFormat(t *testing.T) {
 
 	state := newPipelineTestState()
 	state.mu.Lock()
-	state.roomAliases["#bureau/config/machine/workstation:test.local"] = "!config-ws:test"
+	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
 	state.mu.Unlock()
 	startTestServer(t, state)
 
 	cmd := executeCommand()
 	if err := cmd.FlagSet().Parse([]string{
-		"--machine", "machine/workstation",
+		"--machine", "bureau/fleet/prod/machine/workstation",
 		"--param", "no-equals-sign",
 		"--server-name", "test.local",
 	}); err != nil {
@@ -131,13 +131,13 @@ func TestExecuteEmptyParamKey(t *testing.T) {
 
 	state := newPipelineTestState()
 	state.mu.Lock()
-	state.roomAliases["#bureau/config/machine/workstation:test.local"] = "!config-ws:test"
+	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
 	state.mu.Unlock()
 	startTestServer(t, state)
 
 	cmd := executeCommand()
 	if err := cmd.FlagSet().Parse([]string{
-		"--machine", "machine/workstation",
+		"--machine", "bureau/fleet/prod/machine/workstation",
 		"--param", "=value-without-key",
 		"--server-name", "test.local",
 	}); err != nil {
@@ -176,7 +176,7 @@ func TestExecuteConfigRoomNotFound(t *testing.T) {
 
 	cmd := executeCommand()
 	if err := cmd.FlagSet().Parse([]string{
-		"--machine", "machine/workstation",
+		"--machine", "bureau/fleet/prod/machine/workstation",
 		"--server-name", "test.local",
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)

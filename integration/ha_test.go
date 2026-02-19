@@ -26,7 +26,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ha-acq")
+	machine := newTestMachine(t, fleet, "ha-acq")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -129,8 +129,8 @@ func TestHALeaseFailover(t *testing.T) {
 	// Boot two machines with manual daemon lifecycle so we can kill
 	// the winner mid-test. Both use startMachineLauncher +
 	// startMachineDaemonManual so we get *exec.Cmd handles.
-	machineA := newTestMachine(t, "machine/ha-fo-a")
-	machineB := newTestMachine(t, "machine/ha-fo-b")
+	machineA := newTestMachine(t, fleet, "ha-fo-a")
+	machineB := newTestMachine(t, fleet, "ha-fo-b")
 
 	options := machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),

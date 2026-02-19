@@ -31,9 +31,7 @@ import (
 //   - CRITICAL message posted to the config room
 func TestProxyCrashRecovery(t *testing.T) {
 	t.Parallel()
-	const machineName = "machine/proxy-crash"
 	const principalLocalpart = "agent/proxy-crash"
-	machineUserID := "@machine/proxy-crash:" + testServerName
 	principalUserID := "@agent/proxy-crash:" + testServerName
 
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
@@ -45,6 +43,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
+	machineName := fleet.Prefix + "/machine/proxy-crash"
+	machineUserID := "@" + machineName + ":" + testServerName
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -54,10 +54,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	cacheRoot := filepath.Join(stateDir, "cache")
 	launcherSocket := principal.LauncherSocketPath(runDir)
 
-	runBureauOrFail(t, "machine", "provision", machineName,
+	runBureauOrFail(t, "machine", "provision", fleet.Prefix, "proxy-crash",
 		"--credential-file", credentialFile,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
 		"--output", bootstrapPath,
 	)
 
@@ -72,6 +70,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--first-boot-only",
 		"--machine-name", machineName,
 		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
@@ -88,6 +87,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machineName,
 		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
 		"--run-dir", runDir,
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
@@ -114,7 +114,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		schema.EventTypeMachineStatus, machineName)
 
 	// Resolve config room and push credentials + config.
-	configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineName), testServerName)
+	configAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machineName), testServerName)
 	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		t.Fatalf("config room not created: %v", err)

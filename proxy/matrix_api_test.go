@@ -911,9 +911,9 @@ func TestMatrixGetRoomState(t *testing.T) {
 	})
 
 	t.Run("alias resolution", func(t *testing.T) {
-		mock.resolveResponses["#bureau/config/machine/ws:bureau.local"] = `{"room_id":"!room1:bureau.local"}`
+		mock.resolveResponses["#bureau/fleet/prod/machine/ws:bureau.local"] = `{"room_id":"!room1:bureau.local"}`
 
-		resp, err := client.Get("http://localhost/v1/matrix/room-state?room=" + url.QueryEscape("#bureau/config/machine/ws:bureau.local"))
+		resp, err := client.Get("http://localhost/v1/matrix/room-state?room=" + url.QueryEscape("#bureau/fleet/prod/machine/ws:bureau.local"))
 		if err != nil {
 			t.Fatalf("request failed: %v", err)
 		}

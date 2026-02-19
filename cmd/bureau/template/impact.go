@@ -13,7 +13,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -100,7 +99,7 @@ With a file argument, also classifies each change:
 			}
 
 			if len(machineConfigs) == 0 {
-				fmt.Fprintln(os.Stderr, "no config rooms found (is the operator joined to bureau/config/* rooms?)")
+				fmt.Fprintln(os.Stderr, "no machine configs found (is the operator joined to machine config rooms?)")
 				return nil
 			}
 
@@ -149,8 +148,9 @@ type machineConfig struct {
 }
 
 // discoverMachineConfigs scans all rooms the operator has joined, identifies
-// config rooms by their canonical alias (bureau/config/*), and reads each
-// machine's MachineConfig state event.
+// config rooms by the presence of m.bureau.machine_config state events, and
+// returns each machine's MachineConfig. The machine name is taken from the
+// state event's state key (the fleet-scoped machine localpart).
 func (a *impactAnalyzer) discoverMachineConfigs() ([]machineConfig, error) {
 	roomIDs, err := a.session.JoinedRooms(a.ctx)
 	if err != nil {
@@ -165,31 +165,13 @@ func (a *impactAnalyzer) discoverMachineConfigs() ([]machineConfig, error) {
 			continue // Skip rooms we can't read.
 		}
 
-		// Find the canonical alias to check if this is a config room.
-		var canonicalAlias string
-		for _, event := range events {
-			if event.Type == "m.room.canonical_alias" {
-				if alias, ok := event.Content["alias"].(string); ok {
-					canonicalAlias = alias
-				}
-				break
-			}
-		}
-
-		if canonicalAlias == "" {
-			continue
-		}
-
-		localpart := principal.RoomAliasLocalpart(canonicalAlias)
-		if !strings.HasPrefix(localpart, "bureau/config/") {
-			continue
-		}
-
-		machineName := strings.TrimPrefix(localpart, "bureau/config/")
-
-		// Find the MachineConfig state event.
+		// Look for MachineConfig state events. The state key is the
+		// fleet-scoped machine localpart.
 		for _, event := range events {
 			if event.Type != schema.EventTypeMachineConfig {
+				continue
+			}
+			if event.StateKey == nil || *event.StateKey == "" {
 				continue
 			}
 
@@ -204,7 +186,7 @@ func (a *impactAnalyzer) discoverMachineConfigs() ([]machineConfig, error) {
 			}
 
 			results = append(results, machineConfig{
-				machine: machineName,
+				machine: *event.StateKey,
 				config:  config,
 			})
 			break

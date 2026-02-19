@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -21,16 +21,13 @@ import (
 type enableParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Name       string `json:"name"        flag:"name"        desc:"fleet controller name suffix (e.g., prod) — becomes service/fleet/<name>"`
-	Host       string `json:"host"        flag:"host"        desc:"machine localpart to run the fleet controller on (e.g., machine/workstation; use 'local' to auto-detect)"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	Host string `json:"host" flag:"host" desc:"machine name within the fleet (e.g., workstation); use 'local' to auto-detect from the launcher session"`
 }
 
-// enableResult is the JSON output of the enable command.
+// enableResult is the JSON output of the fleet enable command.
 type enableResult struct {
-	ServicePrincipal string `json:"service_principal" desc:"fleet controller principal localpart"`
-	ServiceUserID    string `json:"service_user_id"   desc:"fleet controller Matrix user ID"`
-	Machine          string `json:"machine"           desc:"machine hosting the fleet controller"`
+	Service ref.Service `json:"service" desc:"fleet controller service reference"`
+	Machine ref.Machine `json:"machine" desc:"machine hosting the fleet controller"`
 }
 
 func enableCommand() *cli.Command {
@@ -39,33 +36,35 @@ func enableCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "enable",
 		Summary: "Bootstrap a fleet controller on a machine",
-		Description: `Bootstrap the fleet controller for a Bureau deployment.
+		Description: `Bootstrap the fleet controller for a fleet.
 
-This operator command creates the fleet controller's service account,
-publishes a PrincipalAssignment to the target machine's config room,
-and waits for the daemon to register the service.
+The argument is a fleet localpart in the form "namespace/fleet/name"
+(e.g., "bureau/fleet/prod"). The server name is derived from the
+connected session's identity.
 
-The command:
-  - Registers a Matrix account for the fleet controller
-  - Publishes a PrincipalAssignment to the machine's config room
-  - The daemon starts the fleet controller and registers it in
-    #bureau/service
+This operator command:
+  - Registers a Matrix account for the fleet controller service
+  - Publishes a PrincipalAssignment to the target machine's config room
+  - Publishes fleet service bindings to all machine config rooms in the
+    fleet, making the controller discoverable via RequiredServices
 
-Example:
+The fleet controller service is always named "fleet" within its fleet:
+if the fleet is bureau/fleet/prod, the service account is
+@bureau/fleet/prod/service/fleet:server.
 
-  bureau fleet enable --name prod --host machine/workstation --credential-file ./creds
-
-This creates service principal "service/fleet/prod", adds it to the
-workstation's MachineConfig, and the daemon starts the fleet controller.`,
-		Usage: "bureau fleet enable --name <name> --host <machine> [flags]",
+The --host flag specifies which machine in the fleet should run the
+controller. This is the bare machine name (e.g., "workstation"), not
+the full localpart — the fleet from the positional argument provides
+the scope. Use "local" to auto-detect from the launcher's session file.`,
+		Usage: "bureau fleet enable <namespace/fleet/name> --host <machine-name> [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Enable the fleet controller on a workstation",
-				Command:     "bureau fleet enable --name prod --host machine/workstation --credential-file ./creds",
+				Description: "Enable fleet controller on workstation",
+				Command:     "bureau fleet enable bureau/fleet/prod --host workstation --credential-file ./creds",
 			},
 			{
 				Description: "Enable on the local machine (auto-detect)",
-				Command:     "bureau fleet enable --name prod --host local --credential-file ./creds",
+				Command:     "bureau fleet enable bureau/fleet/prod --host local --credential-file ./creds",
 			},
 		},
 		Params:         func() any { return &params },
@@ -73,44 +72,21 @@ workstation's MachineConfig, and the daemon starts the fleet controller.`,
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/enable"},
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return cli.Validation("unexpected argument: %s", args[0])
+			if len(args) == 0 {
+				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
-			if params.Name == "" {
-				return cli.Validation("--name is required")
+			if len(args) > 1 {
+				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
 			if params.Host == "" {
-				return cli.Validation("--host is required")
+				return cli.Validation("--host is required (machine name within the fleet, e.g., workstation)")
 			}
-			return runEnable(&params)
+			return runEnable(args[0], &params)
 		},
 	}
 }
 
-func runEnable(params *enableParams) error {
-	// Resolve "local" to the actual machine localpart.
-	host := params.Host
-	if host == "local" {
-		resolved, err := cli.ResolveLocalMachine()
-		if err != nil {
-			return cli.Internal("resolving local machine identity: %w", err)
-		}
-		host = resolved
-		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
-	}
-
-	if err := principal.ValidateLocalpart(host); err != nil {
-		return cli.Validation("invalid host: %w", err)
-	}
-
-	// Derive the service principal localpart from the name.
-	servicePrincipal := "service/fleet/" + params.Name
-	if err := principal.ValidateLocalpart(servicePrincipal); err != nil {
-		return cli.Validation("invalid service principal %q: %w", servicePrincipal, err)
-	}
-
-	serviceUserID := principal.MatrixUserID(servicePrincipal, params.ServerName)
-
+func runEnable(fleetLocalpart string, params *enableParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -130,47 +106,120 @@ func runEnable(params *enableParams) error {
 	}
 	defer adminSession.Close()
 
+	// Derive server name from the connected session's identity.
+	server, err := ref.ServerFromUserID(adminSession.UserID())
+	if err != nil {
+		return cli.Internal("cannot determine server name from session: %w", err)
+	}
+
+	// Parse and validate the fleet localpart.
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	// Resolve the machine within the fleet.
+	machine, err := resolveHostMachine(fleet, params.Host)
+	if err != nil {
+		return err
+	}
+
+	// The fleet controller service is always named "fleet" within its fleet.
+	service, err := ref.NewService(fleet, "fleet")
+	if err != nil {
+		return cli.Internal("constructing fleet controller service ref: %w", err)
+	}
+
 	// Step 1: Register the fleet controller Matrix account (idempotent).
-	if err := registerFleetServiceAccount(ctx, credentials, servicePrincipal, params.ServerName); err != nil {
+	if err := registerServiceAccount(ctx, credentials, service); err != nil {
 		return cli.Internal("registering service account: %w", err)
 	}
 
 	// Step 2: Publish PrincipalAssignment to the machine config room.
-	if err := publishFleetAssignment(ctx, adminSession, host, servicePrincipal, params.Name, params.ServerName); err != nil {
+	if err := publishFleetAssignment(ctx, adminSession, machine, service); err != nil {
 		return cli.Internal("publishing principal assignment: %w", err)
 	}
 
-	// Step 3: Publish fleet room_service binding in all machine config rooms.
-	// This makes the fleet controller discoverable via RequiredServices for
-	// any agent on any machine in the deployment.
-	fleetPrefix := "bureau/fleet/" + params.Name
-	bindingCount, err := publishFleetBindings(ctx, adminSession, serviceUserID, fleetPrefix, params.ServerName)
+	// Step 3: Publish fleet service binding to all machine config rooms.
+	bindingCount, err := publishFleetBindings(ctx, adminSession, fleet, service)
 	if err != nil {
 		return cli.Internal("publishing fleet bindings: %w", err)
 	}
 
-	if done, err := params.EmitJSON(enableResult{
-		ServicePrincipal: servicePrincipal,
-		ServiceUserID:    serviceUserID,
-		Machine:          host,
-	}); done {
-		return err
+	result := enableResult{
+		Service: service,
+		Machine: machine,
+	}
+
+	if done, emitErr := params.EmitJSON(result); done {
+		return emitErr
 	}
 
 	fmt.Fprintf(os.Stderr, "\nFleet controller enabled:\n")
-	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", servicePrincipal, serviceUserID)
-	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", host)
+	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", service.Localpart(), service.UserID())
+	fmt.Fprintf(os.Stderr, "  Machine:  %s (%s)\n", machine.Localpart(), machine.UserID())
 	fmt.Fprintf(os.Stderr, "  Bindings: %d config room(s)\n", bindingCount)
 	fmt.Fprintf(os.Stderr, "\nThe daemon will start the fleet controller and register it in\n")
-	fmt.Fprintf(os.Stderr, "the service room. The fleet controller will begin tracking machines\n")
-	fmt.Fprintf(os.Stderr, "and processing FleetServiceContent events from the fleet room.\n")
+	fmt.Fprintf(os.Stderr, "the service room.\n")
 
 	return nil
 }
 
-// registerFleetServiceAccount registers a Matrix account for the fleet
-// controller. Idempotent: M_USER_IN_USE is silently ignored.
-func registerFleetServiceAccount(ctx context.Context, credentials map[string]string, servicePrincipal, serverName string) error {
+// resolveHostMachine constructs a Machine ref from the fleet and host flag.
+// The host is either a bare machine name (e.g., "workstation") or the
+// literal "local" which auto-detects from the launcher's session file.
+func resolveHostMachine(fleet ref.Fleet, host string) (ref.Machine, error) {
+	machineName := host
+	if host == "local" {
+		resolved, err := resolveLocalMachineName()
+		if err != nil {
+			return ref.Machine{}, cli.Internal("resolving local machine identity: %w", err)
+		}
+		machineName = resolved
+		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", machineName)
+	}
+	machine, err := ref.NewMachine(fleet, machineName)
+	if err != nil {
+		return ref.Machine{}, cli.Validation("invalid host machine: %w", err)
+	}
+	return machine, nil
+}
+
+// resolveLocalMachineName reads the launcher's session file and extracts
+// the bare machine name. The launcher's user ID may use fleet-scoped
+// format (@namespace/fleet/name/machine/name:server) or legacy format
+// (@machine/name:server). Both are handled: the function finds the
+// "machine" entity-type segment and returns everything after it.
+func resolveLocalMachineName() (string, error) {
+	localpart, err := cli.ResolveLocalMachine()
+	if err != nil {
+		return "", err
+	}
+	name, extractErr := extractMachineName(localpart)
+	if extractErr != nil {
+		return "", extractErr
+	}
+	return name, nil
+}
+
+// extractMachineName extracts the bare machine name from a machine
+// localpart. Handles both fleet-scoped format
+// (namespace/fleet/name/machine/entityName) and legacy format
+// (machine/entityName) via ref.ExtractEntityName.
+func extractMachineName(localpart string) (string, error) {
+	entityType, entityName, err := ref.ExtractEntityName(localpart)
+	if err != nil {
+		return "", err
+	}
+	if entityType != "machine" {
+		return "", fmt.Errorf("expected machine entity, got %q in localpart %q", entityType, localpart)
+	}
+	return entityName, nil
+}
+
+// registerServiceAccount registers a Matrix account for a service.
+// Idempotent: M_USER_IN_USE is silently ignored.
+func registerServiceAccount(ctx context.Context, credentials map[string]string, service ref.Service) error {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		homeserverURL = "http://localhost:6167"
@@ -209,16 +258,16 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 	defer registrationTokenBuffer.Close()
 
 	session, registerErr := client.Register(ctx, messaging.RegisterRequest{
-		Username:          servicePrincipal,
+		Username:          service.Localpart(),
 		Password:          passwordBuffer,
 		RegistrationToken: registrationTokenBuffer,
 	})
 	if registerErr != nil {
 		if messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
-			fmt.Fprintf(os.Stderr, "Service account %s already exists.\n", principal.MatrixUserID(servicePrincipal, serverName))
+			fmt.Fprintf(os.Stderr, "Service account %s already exists.\n", service.UserID())
 			return nil
 		}
-		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
+		return cli.Internal("registering %s: %w", service.UserID(), registerErr)
 	}
 	defer session.Close()
 
@@ -232,19 +281,12 @@ func registerFleetServiceAccount(ctx context.Context, credentials map[string]str
 // required_services: ["fleet"] can discover the fleet controller socket.
 //
 // Active machines are discovered from m.bureau.machine_key state events in
-// the fleet's machine room (resolved from the fleet prefix). Machines with
-// empty key content (decommissioned) are skipped. Returns the number of
-// config rooms successfully updated.
-func publishFleetBindings(ctx context.Context, session messaging.Session, serviceUserID, fleetPrefix, serverName string) (int, error) {
-	namespace, fleetName, parseErr := principal.ParseFleetPrefix(fleetPrefix)
-	if parseErr != nil {
-		return 0, cli.Validation("invalid fleet prefix %q: %w", fleetPrefix, parseErr)
-	}
-	machineAliasLocalpart := schema.FleetMachineRoomAlias(namespace, fleetName)
-	machineAlias := schema.FullRoomAlias(machineAliasLocalpart, serverName)
-	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
+// the fleet's machine room. Machines with empty key content (decommissioned)
+// are skipped. Returns the number of config rooms successfully updated.
+func publishFleetBindings(ctx context.Context, session messaging.Session, fleet ref.Fleet, service ref.Service) (int, error) {
+	machineRoomID, err := session.ResolveAlias(ctx, fleet.MachineRoomAlias())
 	if err != nil {
-		return 0, cli.NotFound("resolving fleet machine room %s: %w", machineAlias, err)
+		return 0, cli.NotFound("resolving fleet machine room %s: %w", fleet.MachineRoomAlias(), err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
@@ -252,7 +294,7 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, servic
 		return 0, cli.Internal("reading machine room state: %w", err)
 	}
 
-	binding := schema.RoomServiceContent{Principal: serviceUserID}
+	binding := schema.RoomServiceContent{Principal: service.UserID()}
 	count := 0
 
 	for _, event := range events {
@@ -264,21 +306,33 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, servic
 			continue
 		}
 
-		machineLocalpart := *event.StateKey
-		configAlias := schema.FullRoomAlias(schema.ConfigRoomAlias(machineLocalpart), serverName)
-		configRoomID, err := session.ResolveAlias(ctx, configAlias)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING: cannot resolve config room for %s: %v\n", machineLocalpart, err)
+		// The state key is a machine localpart (fleet-scoped or legacy).
+		// Extract the bare machine name and construct a typed ref within
+		// this fleet so we can derive the config room alias.
+		machineName, extractErr := extractMachineName(*event.StateKey)
+		if extractErr != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: cannot parse machine state key %q: %v\n", *event.StateKey, extractErr)
+			continue
+		}
+		machine, refErr := ref.NewMachine(fleet, machineName)
+		if refErr != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: invalid machine ref for %q: %v\n", *event.StateKey, refErr)
 			continue
 		}
 
-		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeRoomService, "fleet", binding)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING: cannot publish fleet binding in %s: %v\n", machineLocalpart, err)
+		configRoomID, resolveErr := session.ResolveAlias(ctx, machine.RoomAlias())
+		if resolveErr != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: cannot resolve config room for %s: %v\n", machine.Localpart(), resolveErr)
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "  Published fleet binding in config room for %s\n", machineLocalpart)
+		_, sendErr := session.SendStateEvent(ctx, configRoomID, schema.EventTypeRoomService, "fleet", binding)
+		if sendErr != nil {
+			fmt.Fprintf(os.Stderr, "  WARNING: cannot publish fleet binding in %s: %v\n", machine.Localpart(), sendErr)
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "  Published fleet binding in config room for %s\n", machine.Localpart())
 		count++
 	}
 
@@ -288,16 +342,15 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, servic
 // publishFleetAssignment adds the fleet controller to the machine's
 // MachineConfig via read-modify-write. AutoStart is false because the
 // fleet controller binary is externally managed.
-func publishFleetAssignment(ctx context.Context, session messaging.Session, host, servicePrincipal, name, serverName string) error {
-	configRoomAlias := principal.RoomAlias("bureau/config/"+host, serverName)
-	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
+func publishFleetAssignment(ctx context.Context, session messaging.Session, machine ref.Machine, service ref.Service) error {
+	configRoomID, err := session.ResolveAlias(ctx, machine.RoomAlias())
 	if err != nil {
-		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
+		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", machine.RoomAlias(), err)
 	}
 
 	// Read existing MachineConfig.
 	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host)
+	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
 			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
@@ -308,27 +361,26 @@ func publishFleetAssignment(ctx context.Context, session messaging.Session, host
 
 	// Check if the principal already exists.
 	for _, existing := range config.Principals {
-		if existing.Localpart == servicePrincipal {
-			fmt.Fprintf(os.Stderr, "Principal %s already in MachineConfig, skipping.\n", servicePrincipal)
+		if existing.Localpart == service.Localpart() {
+			fmt.Fprintf(os.Stderr, "Principal %s already in MachineConfig, skipping.\n", service.Localpart())
 			return nil
 		}
 	}
 
 	config.Principals = append(config.Principals, schema.PrincipalAssignment{
-		Localpart: servicePrincipal,
+		Localpart: service.Localpart(),
 		AutoStart: false,
 		Labels: map[string]string{
 			"role":    "service",
 			"service": "fleet",
-			"name":    name,
 		},
 	})
 
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, host, config)
+	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
 	if err != nil {
 		return cli.Internal("publishing machine config: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, host)
+	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", service.Localpart(), machine.Localpart())
 	return nil
 }

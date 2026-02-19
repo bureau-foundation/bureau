@@ -19,6 +19,7 @@ go_library(
         "//lib/codec",
         "//lib/ipc",
         "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/sealed",
         "//lib/secret",
@@ -50,6 +51,7 @@ go_test(
     deps = [
         "//lib/codec",
         "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/sealed",
         "//lib/secret",

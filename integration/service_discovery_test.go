@@ -32,8 +32,8 @@ func TestServiceDiscovery(t *testing.T) {
 
 	// Boot two machines. The provider hosts the service principal. The
 	// consumer has principals that query for services through their proxies.
-	provider := newTestMachine(t, "machine/svc-prov")
-	consumer := newTestMachine(t, "machine/svc-cons")
+	provider := newTestMachine(t, fleet, "svc-prov")
+	consumer := newTestMachine(t, fleet, "svc-cons")
 
 	startMachine(t, admin, provider, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),

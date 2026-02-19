@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -15,7 +15,7 @@ import (
 // Registration describes a service for the fleet's service directory room.
 type Registration struct {
 	// Machine is the full Matrix user ID of the machine running this
-	// service instance (e.g., "@machine/workstation:bureau.local").
+	// service instance (e.g., "@bureau/fleet/prod/machine/workstation:bureau.local").
 	Machine string
 
 	// Protocol is the wire protocol on the service socket. Bureau
@@ -38,12 +38,13 @@ type Registration struct {
 }
 
 // Register publishes an m.bureau.service state event to the service
-// room. The state key is the service's localpart. The daemon's
-// syncServiceDirectory picks this up and makes the service available
-// for routing.
-func Register(ctx context.Context, session *messaging.DirectSession, serviceRoomID, localpart, serverName string, reg Registration) error {
-	service := schema.Service{
-		Principal:    principal.MatrixUserID(localpart, serverName),
+// room. The state key is the service's fleet-scoped localpart (e.g.,
+// "bureau/fleet/prod/service/stt/whisper"). The daemon's syncServiceDirectory
+// picks this up and makes the service available for routing.
+func Register(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
+	stateKey := svc.Localpart()
+	entry := schema.Service{
+		Principal:    svc.UserID(),
 		Machine:      reg.Machine,
 		Protocol:     reg.Protocol,
 		Description:  reg.Description,
@@ -51,8 +52,8 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 		Metadata:     reg.Metadata,
 	}
 
-	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, localpart, service); err != nil {
-		return fmt.Errorf("registering service %s in %s: %w", localpart, serviceRoomID, err)
+	if _, err := session.SendStateEvent(ctx, serviceRoomID.String(), schema.EventTypeService, stateKey, entry); err != nil {
+		return fmt.Errorf("registering service %s in %s: %w", stateKey, serviceRoomID, err)
 	}
 	return nil
 }
@@ -61,37 +62,41 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 // by publishing a state event with an empty Principal field. The daemon's
 // syncServiceDirectory skips entries with empty principals, effectively
 // removing the service from the directory.
-func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID, localpart string) error {
+func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service) error {
+	stateKey := svc.Localpart()
 	empty := schema.Service{}
-	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, localpart, empty); err != nil {
-		return fmt.Errorf("deregistering service %s from %s: %w", localpart, serviceRoomID, err)
+	if _, err := session.SendStateEvent(ctx, serviceRoomID.String(), schema.EventTypeService, stateKey, empty); err != nil {
+		return fmt.Errorf("deregistering service %s from %s: %w", stateKey, serviceRoomID, err)
 	}
 	return nil
 }
 
-// ResolveFleetServiceRoom resolves the fleet-scoped service room alias
-// and joins it. Returns the room ID. This is called once at startup to
-// establish the service's connection to the fleet's service directory.
-//
-// The fleet prefix (e.g., "bureau/fleet/prod") is parsed to derive the
-// fleet service room alias (e.g., "#bureau/fleet/prod/service:server").
-func ResolveFleetServiceRoom(ctx context.Context, session *messaging.DirectSession, fleetPrefix, serverName string) (string, error) {
-	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
+// ResolveRoom resolves a room alias, validates the returned room ID,
+// and joins the room. This is the common pattern for services
+// discovering fleet-scoped and global rooms at startup. The alias
+// parameter is typically produced by a ref method (e.g.,
+// fleet.ServiceRoomAlias(), namespace.SystemRoomAlias()).
+func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias string) (ref.RoomID, error) {
+	rawID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
-		return "", fmt.Errorf("parsing fleet prefix %q: %w", fleetPrefix, err)
+		return ref.RoomID{}, fmt.Errorf("resolving room alias %q: %w", alias, err)
 	}
 
-	localpart := schema.FleetServiceRoomAlias(namespace, fleetName)
-	alias := principal.RoomAlias(localpart, serverName)
-
-	roomID, err := session.ResolveAlias(ctx, alias)
+	roomID, err := ref.ParseRoomID(rawID)
 	if err != nil {
-		return "", fmt.Errorf("resolving fleet service room alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("invalid room ID from alias %q: %w", alias, err)
 	}
 
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return "", fmt.Errorf("joining fleet service room %s: %w", roomID, err)
+	if _, err := session.JoinRoom(ctx, roomID.String()); err != nil {
+		return ref.RoomID{}, fmt.Errorf("joining room %s: %w", roomID, err)
 	}
 
 	return roomID, nil
+}
+
+// ResolveFleetServiceRoom resolves the fleet-scoped service room alias
+// and joins it. This is called once at startup to establish the
+// service's connection to the fleet's service directory.
+func ResolveFleetServiceRoom(ctx context.Context, session *messaging.DirectSession, fleet ref.Fleet) (ref.RoomID, error) {
+	return ResolveRoom(ctx, session, fleet.ServiceRoomAlias())
 }

@@ -19,14 +19,14 @@ import (
 // --- heartbeatInterval ---
 
 func TestHeartbeatIntervalDefault(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	if got := fc.heartbeatInterval(); got != defaultHeartbeatInterval {
 		t.Errorf("heartbeatInterval() = %v, want %v", got, defaultHeartbeatInterval)
 	}
 }
 
 func TestHeartbeatIntervalFromConfig(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fc.config["global"] = &schema.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
@@ -36,7 +36,7 @@ func TestHeartbeatIntervalFromConfig(t *testing.T) {
 }
 
 func TestHeartbeatIntervalIgnoresZero(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fc.config["global"] = &schema.FleetConfigContent{
 		HeartbeatIntervalSeconds: 0,
 	}
@@ -48,7 +48,7 @@ func TestHeartbeatIntervalIgnoresZero(t *testing.T) {
 // --- checkMachineHealth ---
 
 func TestCheckMachineHealthOnline(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -69,7 +69,7 @@ func TestCheckMachineHealthOnline(t *testing.T) {
 }
 
 func TestCheckMachineHealthSuspect(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -91,7 +91,7 @@ func TestCheckMachineHealthSuspect(t *testing.T) {
 }
 
 func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	store := newFakeConfigStore()
@@ -160,7 +160,7 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 }
 
 func TestCheckMachineHealthOfflineNotReTriggered(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -183,7 +183,7 @@ func TestCheckMachineHealthOfflineNotReTriggered(t *testing.T) {
 }
 
 func TestCheckMachineHealthSkipsNoHeartbeat(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -204,7 +204,7 @@ func TestCheckMachineHealthSkipsNoHeartbeat(t *testing.T) {
 }
 
 func TestCheckMachineHealthCustomInterval(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -231,7 +231,7 @@ func TestCheckMachineHealthCustomInterval(t *testing.T) {
 }
 
 func TestCheckMachineHealthCustomIntervalOffline(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
@@ -260,7 +260,7 @@ func TestCheckMachineHealthCustomIntervalOffline(t *testing.T) {
 // --- executeFailover ---
 
 func TestExecuteFailoverMultipleServices(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fakeClock := clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	fc.clock = fakeClock
 	store := newFakeConfigStore()
@@ -336,7 +336,7 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 }
 
 func TestExecuteFailoverNoAssignments(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fc.clock = clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	store := newFakeConfigStore()
 	fc.configStore = store
@@ -356,7 +356,7 @@ func TestExecuteFailoverNoAssignments(t *testing.T) {
 // --- publishFleetAlert ---
 
 func TestPublishFleetAlert(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	store := newFakeConfigStore()
 	fc.configStore = store
 
@@ -425,7 +425,7 @@ func TestAlertStateKey(t *testing.T) {
 // --- processMachineStatusEvent recovery ---
 
 func TestProcessMachineStatusEventSetsHeartbeat(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	fc.clock = clock.Fake(epoch)
 
@@ -450,7 +450,7 @@ func TestProcessMachineStatusEventSetsHeartbeat(t *testing.T) {
 }
 
 func TestProcessMachineStatusEventRecovery(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	fc.clock = clock.Fake(epoch)
 
@@ -481,7 +481,7 @@ func TestProcessMachineStatusEventRecovery(t *testing.T) {
 }
 
 func TestProcessMachineStatusEventNoRecoveryLogWhenAlreadyOnline(t *testing.T) {
-	fc := newTestFleetController()
+	fc := newTestFleetController(t)
 	fc.clock = clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	fc.machines["machine/a"] = &machineState{
@@ -508,7 +508,7 @@ func TestProcessMachineStatusEventNoRecoveryLogWhenAlreadyOnline(t *testing.T) {
 // --- Machine health socket action ---
 
 func TestMachineHealthAllMachines(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	// Set health states on the sample machines.
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	fc.machines["machine/workstation"].lastHeartbeat = epoch.Add(-10 * time.Second)
@@ -537,7 +537,7 @@ func TestMachineHealthAllMachines(t *testing.T) {
 }
 
 func TestMachineHealthSingleMachine(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	fc.machines["machine/workstation"].lastHeartbeat = epoch.Add(-10 * time.Second)
 	fc.machines["machine/workstation"].healthState = healthOnline
@@ -560,7 +560,7 @@ func TestMachineHealthSingleMachine(t *testing.T) {
 }
 
 func TestMachineHealthNotFound(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
@@ -573,7 +573,7 @@ func TestMachineHealthNotFound(t *testing.T) {
 }
 
 func TestMachineHealthDeniedWithoutGrant(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	client, cleanup := testServerNoGrants(t, fc)
 	defer cleanup()
 
@@ -585,7 +585,7 @@ func TestMachineHealthDeniedWithoutGrant(t *testing.T) {
 }
 
 func TestMachineHealthUnknownState(t *testing.T) {
-	fc := sampleFleetController()
+	fc := sampleFleetController(t)
 	// Machine with no heartbeat should show "unknown".
 	fc.machines["machine/workstation"].lastHeartbeat = time.Time{}
 	fc.machines["machine/workstation"].healthState = ""

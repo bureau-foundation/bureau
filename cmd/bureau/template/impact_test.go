@@ -26,7 +26,7 @@ type impactTestState struct {
 	// joinedRooms is the list of room IDs returned by JoinedRooms.
 	joinedRooms []string
 
-	// roomAliases maps full aliases ("#bureau/config/machine:test.local") to room IDs.
+	// roomAliases maps full aliases ("#machine/workstation:test.local") to room IDs.
 	roomAliases map[string]string
 
 	// roomEvents maps roomID to the list of state events returned by GetRoomState.
@@ -45,12 +45,14 @@ func newImpactTestState() *impactTestState {
 	}
 }
 
-// addConfigRoom sets up a config room with a canonical alias and MachineConfig.
+// addConfigRoom sets up a config room with a MachineConfig state event.
+// The machineName is used as the state key for the m.bureau.machine_config
+// event, which is how the impact scanner identifies config rooms.
 func (s *impactTestState) addConfigRoom(roomID, machineName, serverName string, config schema.MachineConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	alias := fmt.Sprintf("#bureau/config/%s:%s", machineName, serverName)
+	alias := fmt.Sprintf("#%s:%s", machineName, serverName)
 	s.roomAliases[alias] = roomID
 	s.joinedRooms = append(s.joinedRooms, roomID)
 

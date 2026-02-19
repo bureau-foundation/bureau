@@ -136,7 +136,7 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 // machine to allow multiple active alerts without collision.
 func (fc *FleetController) publishFleetAlert(ctx context.Context, alert schema.FleetAlertContent) {
 	stateKey := alertStateKey(alert)
-	_, err := fc.configStore.SendStateEvent(ctx, fc.fleetRoomID,
+	_, err := fc.configStore.SendStateEvent(ctx, fc.fleetRoomID.String(),
 		schema.EventTypeFleetAlert, stateKey, alert)
 	if err != nil {
 		fc.logger.Error("failed to publish fleet alert",

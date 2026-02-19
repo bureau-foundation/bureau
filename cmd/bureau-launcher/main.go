@@ -31,6 +31,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -69,9 +70,9 @@ func run() error {
 	flag.StringVar(&registrationTokenFile, "registration-token-file", "", "path to file containing registration token, or - for stdin (first boot only)")
 	flag.StringVar(&bootstrapFile, "bootstrap-file", "", "path to bootstrap config from 'bureau machine provision' (first boot only, mutually exclusive with --registration-token-file)")
 	flag.BoolVar(&firstBootOnly, "first-boot-only", false, "exit after first boot setup instead of entering the main loop")
-	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., machine/workstation) (required)")
+	flag.StringVar(&machineName, "machine-name", "", "machine localpart (e.g., bureau/fleet/prod/machine/workstation) (required)")
 	flag.StringVar(&serverName, "server-name", "bureau.local", "Matrix server name")
-	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required for --registration-token-file first boot)")
+	flag.StringVar(&fleetPrefix, "fleet", "", "fleet prefix (e.g., bureau/fleet/prod) (required)")
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (all socket paths derive from this)")
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory for persistent state (keypair, session)")
 	flag.StringVar(&proxyBinaryPath, "proxy-binary", "", "path to bureau-proxy binary (auto-detected if empty)")
@@ -92,8 +93,22 @@ func run() error {
 	if machineName == "" {
 		return fmt.Errorf("--machine-name is required")
 	}
-	if err := principal.ValidateLocalpart(machineName); err != nil {
+	if fleetPrefix == "" {
+		return fmt.Errorf("--fleet is required")
+	}
+
+	// Construct typed identity refs from the string flags.
+	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
+	if err != nil {
+		return fmt.Errorf("invalid fleet: %w", err)
+	}
+	_, bareMachineName, err := ref.ExtractEntityName(machineName)
+	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
+	}
+	machine, err := ref.NewMachine(fleet, bareMachineName)
+	if err != nil {
+		return fmt.Errorf("invalid machine ref: %w", err)
 	}
 
 	if err := principal.ValidateRunDir(runDir); err != nil {
@@ -139,14 +154,11 @@ func run() error {
 			return fmt.Errorf("first boot requires --registration-token-file or --bootstrap-file")
 		}
 		if bootstrapFile != "" {
-			if err := firstBootFromBootstrapConfig(ctx, bootstrapFile, machineName, serverName, keypair, stateDir, logger); err != nil {
+			if err := firstBootFromBootstrapConfig(ctx, bootstrapFile, machine, keypair, stateDir, logger); err != nil {
 				return fmt.Errorf("bootstrap first boot: %w", err)
 			}
 		} else {
-			if fleetPrefix == "" {
-				return fmt.Errorf("--fleet is required for --registration-token-file first boot")
-			}
-			if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machineName, serverName, fleetPrefix, keypair, stateDir, logger); err != nil {
+			if err := firstBootSetup(ctx, homeserverURL, registrationTokenFile, machine, keypair, stateDir, logger); err != nil {
 				return fmt.Errorf("first boot setup: %w", err)
 			}
 		}
@@ -211,8 +223,7 @@ func run() error {
 	launcher := &Launcher{
 		session:         session,
 		keypair:         keypair,
-		machineName:     machineName,
-		serverName:      serverName,
+		machine:         machine,
 		homeserverURL:   homeserverURL,
 		runDir:          runDir,
 		stateDir:        stateDir,
@@ -359,7 +370,7 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 }
 
 // firstBootSetup registers the machine with Matrix and publishes its key.
-func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, machineName, serverName, fleetPrefix string, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
+func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile string, machine ref.Machine, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -379,25 +390,22 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 
 	// Register the machine account. Use a password derived from the
 	// registration token (deterministic, so re-running is idempotent).
-	password, err := derivePassword(registrationToken, machineName)
+	username := machine.Localpart()
+	password, err := derivePassword(registrationToken, username)
 	if err != nil {
 		return fmt.Errorf("derive machine password: %w", err)
 	}
 	defer password.Close()
-	session, err := registerOrLogin(ctx, client, machineName, password, registrationToken)
+	session, err := registerOrLogin(ctx, client, username, password, registrationToken)
 	if err != nil {
 		return fmt.Errorf("registering machine account: %w", err)
 	}
 	logger.Info("machine account ready", "user_id", session.UserID())
 
-	// Parse the fleet prefix to derive fleet-scoped room aliases.
-	namespace, fleetName, err := principal.ParseFleetPrefix(fleetPrefix)
-	if err != nil {
-		return fmt.Errorf("parsing fleet prefix: %w", err)
-	}
+	fleet := machine.Fleet()
 
 	// Join the fleet machine room and publish the public key.
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
+	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
@@ -413,7 +421,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 		Algorithm: "age-x25519",
 		PublicKey: keypair.PublicKey,
 	}
-	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, username, machineKeyContent)
 	if err != nil {
 		return fmt.Errorf("publishing machine key: %w", err)
 	}
@@ -426,7 +434,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 	// state events via /sync and GetRoomState. Like machines, this requires
 	// an admin invitation (the room is invite-only). Non-fatal because the
 	// daemon will retry on every startup.
-	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(namespace, fleetName), serverName)
+	serviceAlias := fleet.ServiceRoomAlias()
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		logger.Warn("could not resolve service room (daemon will retry on startup)",
@@ -455,7 +463,7 @@ func firstBootSetup(ctx context.Context, homeserverURL, registrationTokenFile, m
 // immediately rotates the password to a value derived from the machine's
 // private key material. After rotation, the one-time password is useless
 // even if the bootstrap config file is captured.
-func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machineName, serverName string, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
+func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath string, machine ref.Machine, keypair *sealed.Keypair, stateDir string, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -465,11 +473,11 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	}
 
 	// Validate that the bootstrap config matches the --machine-name flag.
-	if config.MachineName != machineName {
-		return fmt.Errorf("bootstrap config machine_name %q does not match --machine-name %q", config.MachineName, machineName)
+	if config.MachineName != machine.Localpart() {
+		return fmt.Errorf("bootstrap config machine_name %q does not match machine localpart %q", config.MachineName, machine.Localpart())
 	}
-	if config.ServerName != serverName {
-		return fmt.Errorf("bootstrap config server_name %q does not match --server-name %q", config.ServerName, serverName)
+	if config.ServerName != machine.Server() {
+		return fmt.Errorf("bootstrap config server_name %q does not match --server-name %q", config.ServerName, machine.Server())
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
@@ -482,13 +490,14 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 
 	// Log in with the one-time password (not register — the account was
 	// already created by "bureau machine provision").
+	username := machine.Localpart()
 	bootstrapPassword, err := secret.NewFromString(config.Password)
 	if err != nil {
 		return fmt.Errorf("protecting bootstrap password: %w", err)
 	}
 	defer bootstrapPassword.Close()
 
-	session, err := client.Login(ctx, machineName, bootstrapPassword)
+	session, err := client.Login(ctx, username, bootstrapPassword)
 	if err != nil {
 		return fmt.Errorf("logging in with bootstrap password: %w", err)
 	}
@@ -499,7 +508,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	// it produces the same password. The private key never leaves the
 	// machine, so this password can't be derived by anyone who captured
 	// the bootstrap config.
-	permanentPassword, err := derivePermanentPassword(machineName, keypair)
+	permanentPassword, err := derivePermanentPassword(username, keypair)
 	if err != nil {
 		return fmt.Errorf("deriving permanent password: %w", err)
 	}
@@ -512,16 +521,11 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	}
 	logger.Info("rotated one-time password to permanent password")
 
-	// Parse the fleet prefix from the bootstrap config to derive
-	// fleet-scoped room aliases.
-	namespace, fleetName, err := principal.ParseFleetPrefix(config.FleetPrefix)
-	if err != nil {
-		return fmt.Errorf("parsing fleet prefix from bootstrap config: %w", err)
-	}
+	fleet := machine.Fleet()
 
 	// Join the fleet machine room and publish the public key — same as
 	// the registration-token first boot path.
-	machineAlias := principal.RoomAlias(schema.FleetMachineRoomAlias(namespace, fleetName), serverName)
+	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return fmt.Errorf("resolving machine room alias %q: %w", machineAlias, err)
@@ -535,7 +539,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 		Algorithm: "age-x25519",
 		PublicKey: keypair.PublicKey,
 	}
-	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName, machineKeyContent)
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, username, machineKeyContent)
 	if err != nil {
 		return fmt.Errorf("publishing machine key: %w", err)
 	}
@@ -545,7 +549,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath, machin
 	)
 
 	// Join the fleet service room (non-fatal, daemon retries on startup).
-	serviceAlias := principal.RoomAlias(schema.FleetServiceRoomAlias(namespace, fleetName), serverName)
+	serviceAlias := fleet.ServiceRoomAlias()
 	serviceRoomID, err := session.ResolveAlias(ctx, serviceAlias)
 	if err != nil {
 		logger.Warn("could not resolve service room (daemon will retry on startup)",
@@ -610,14 +614,13 @@ type managedSandbox struct {
 // Launcher handles IPC requests from the daemon. The serve loop accepts
 // connections concurrently (each handleConnection runs in its own goroutine),
 // so all mutable state is protected by mu. Immutable-after-startup fields
-// (session, keypair, machineName, serverName, homeserverURL, runDir, stateDir,
-// workspaceRoot, cacheRoot, binaryHash, binaryPath) are set before the listener starts
-// and are safe to read without the lock.
+// (session, keypair, machine, homeserverURL, runDir, stateDir, workspaceRoot,
+// cacheRoot, binaryHash, binaryPath) are set before the listener starts and
+// are safe to read without the lock.
 type Launcher struct {
 	session       *messaging.DirectSession
 	keypair       *sealed.Keypair
-	machineName   string
-	serverName    string
+	machine       ref.Machine
 	homeserverURL string
 	runDir        string       // runtime directory for sockets (e.g., /run/bureau)
 	stateDir      string       // persistent state directory (e.g., /var/lib/bureau)
@@ -1276,8 +1279,8 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"CACHE_ROOT":     l.cacheRoot,
 		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
 		"TERM":           os.Getenv("TERM"),
-		"MACHINE_NAME":   l.machineName,
-		"SERVER_NAME":    l.serverName,
+		"MACHINE_NAME":   l.machine.Localpart(),
+		"SERVER_NAME":    l.machine.Server(),
 	}
 	// Extract workspace variables from the payload. The daemon populates
 	// these for workspace principals via PrincipalAssignment.Payload;
@@ -1661,7 +1664,8 @@ func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials
 	matrixUserID := credentials["MATRIX_USER_ID"]
 	if matrixUserID == "" {
 		// Default to the principal's canonical Matrix user ID.
-		matrixUserID = principal.MatrixUserID(principalLocalpart, l.serverName)
+		// XXX: should use a ref type once IPC carries entity type information.
+		matrixUserID = principal.MatrixUserID(principalLocalpart, l.machine.Server())
 	}
 
 	remaining := make(map[string]string, len(credentials))

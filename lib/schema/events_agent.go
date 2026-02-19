@@ -28,7 +28,7 @@ const (
 	// index artifact listing all historical sessions.
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
-	// Room: #bureau/config/<machine-localpart>:<server>
+	// Room: #<machine-localpart>:<server>
 	EventTypeAgentSession = "m.bureau.agent_session"
 
 	// EventTypeAgentContext tracks the LLM conversation context for
@@ -38,7 +38,7 @@ const (
 	// next session can resume the conversation.
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
-	// Room: #bureau/config/<machine-localpart>:<server>
+	// Room: #<machine-localpart>:<server>
 	EventTypeAgentContext = "m.bureau.agent_context"
 
 	// EventTypeAgentMetrics tracks aggregated metrics across all
@@ -48,7 +48,7 @@ const (
 	// is stored as an artifact.
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
-	// Room: #bureau/config/<machine-localpart>:<server>
+	// Room: #<machine-localpart>:<server>
 	EventTypeAgentMetrics = "m.bureau.agent_metrics"
 )
 

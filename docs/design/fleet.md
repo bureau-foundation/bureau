@@ -282,7 +282,7 @@ The fleet controller maintains:
 | Fleet room | Fleet service definitions, machine definitions, fleet config, HA leases |
 | `#bureau/machine` | Machine keys, info (labels, hardware), status heartbeats |
 | `#bureau/service` | Service registrations, service status metrics |
-| `#bureau/config/*` | Current PrincipalAssignment events (to track what is already placed) |
+| Per-machine config rooms | Current PrincipalAssignment events (to track what is already placed) |
 
 The fleet controller is invited to all machine config rooms so it can
 both read current assignments and write new ones. Its power level in

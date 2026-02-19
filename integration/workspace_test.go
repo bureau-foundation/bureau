@@ -45,7 +45,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ws-lifecycle")
+	machine := newTestMachine(t, fleet, "ws-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/ws-cli")
+	machine := newTestMachine(t, fleet, "ws-cli")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}

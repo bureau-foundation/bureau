@@ -15,20 +15,16 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // provisionParams holds the parameters for the machine provision command.
-// Credential file paths are excluded from MCP schema since they involve reading
-// secrets from files.
 type provisionParams struct {
-	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
-	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
-	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) — required"`
-	OutputPath     string `json:"-"            flag:"output"          desc:"path to write bootstrap config (default: stdout)"`
+	cli.SessionConfig
+	OutputPath string `json:"-" flag:"output" desc:"path to write bootstrap config (default: stdout)"`
 }
 
 func provisionCommand() *cli.Command {
@@ -38,6 +34,12 @@ func provisionCommand() *cli.Command {
 		Name:    "provision",
 		Summary: "Create a machine account and bootstrap config",
 		Description: `Provision a new machine for the Bureau fleet.
+
+The first argument is a fleet localpart (e.g., "bureau/fleet/prod").
+The second argument is the bare machine name within the fleet (e.g.,
+"worker-01"). The server name is derived from the connected session's
+identity. The full machine localpart is derived from these:
+bureau/fleet/prod/machine/worker-01.
 
 This creates the machine's Matrix account with a random one-time password,
 sets up its per-machine config room, and invites it to the global rooms
@@ -60,49 +62,45 @@ If a machine was previously decommissioned and the account already exists,
 provision verifies it has been fully decommissioned (zero Bureau room
 memberships, cleared state events) before re-provisioning. This prevents
 accidental or intentional spoofing of active machines.`,
-		Usage: "bureau machine provision <machine-name> [flags]",
+		Usage: "bureau machine provision <fleet-localpart> <machine-name> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Provision and write config to a file",
-				Command:     "bureau machine provision machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json",
+				Command:     "bureau machine provision bureau/fleet/prod worker-01 --credential-file ./bureau-creds --output bootstrap.json",
 			},
 			{
 				Description: "Provision and pipe config to scp",
-				Command:     "bureau machine provision machine/gpu-box --credential-file ./bureau-creds | ssh user@host 'cat > /tmp/bootstrap.json'",
+				Command:     "bureau machine provision bureau/fleet/prod gpu-box --credential-file ./bureau-creds | ssh user@host 'cat > /tmp/bootstrap.json'",
 			},
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
-			if len(args) < 1 {
-				return cli.Validation("machine name is required\n\nUsage: bureau machine provision <machine-name> [flags]")
+			if len(args) < 2 {
+				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine provision <fleet-localpart> <machine-name> [flags]")
 			}
-			machineName := args[0]
-			if len(args) > 1 {
-				return cli.Validation("unexpected argument: %s", args[1])
+			if len(args) > 2 {
+				return cli.Validation("unexpected argument: %s", args[2])
 			}
-			if params.CredentialFile == "" {
+			if params.SessionConfig.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
-			if params.Fleet == "" {
-				return cli.Validation("--fleet is required")
-			}
-			if err := principal.ValidateLocalpart(machineName); err != nil {
-				return cli.Validation("invalid machine name: %w", err)
-			}
 
-			return runProvision(machineName, params.CredentialFile, params.ServerName, params.Fleet, params.OutputPath)
+			return runProvision(args[0], args[1], &params)
 		},
 	}
 }
 
-func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPath string) error {
+func runProvision(fleetLocalpart, machineName string, params *provisionParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Read the credential file for admin access and the registration token.
-	credentials, err := cli.ReadCredentialFile(credentialFile)
+	// Read credentials for registration token and admin session.
+	if params.SessionConfig.CredentialFile == "" {
+		return cli.Validation("--credential-file is required for machine account registration")
+	}
+	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
 		return cli.Internal("read credential file: %w", err)
 	}
@@ -120,6 +118,27 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 	if adminUserID == "" || adminToken == "" {
 		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
+
+	// Derive server name from admin user ID.
+	server, err := ref.ServerFromUserID(adminUserID)
+	if err != nil {
+		return cli.Internal("cannot determine server name from admin user ID: %w", err)
+	}
+
+	// Parse and validate the fleet localpart.
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	// Construct the machine ref within the fleet.
+	machine, err := ref.NewMachine(fleet, machineName)
+	if err != nil {
+		return cli.Validation("invalid machine name: %v", err)
+	}
+
+	machineUsername := machine.Localpart()
+	machineUserID := machine.UserID()
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,
@@ -152,11 +171,10 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 	// Register the machine account. Use the one-time password (NOT a
 	// derived password from the registration token). The launcher will
 	// rotate this password on first boot.
-	machineUserID := principal.MatrixUserID(machineName, serverName)
 	fmt.Fprintf(os.Stderr, "Registering machine account %s...\n", machineUserID)
 
 	_, registerError := client.Register(ctx, messaging.RegisterRequest{
-		Username:          machineName,
+		Username:          machineUsername,
 		Password:          oneTimePassword,
 		RegistrationToken: registrationTokenBuffer,
 	})
@@ -167,7 +185,7 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 			// memberships and cleared state events. Otherwise it could be
 			// an active machine or a partially decommissioned one.
 			fmt.Fprintf(os.Stderr, "  Account already exists — verifying decommission status...\n")
-			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machineUserID, machineName, fleetPrefix, serverName); err != nil {
+			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machine, machineUsername, machineUserID); err != nil {
 				return err
 			}
 			// Decommission verified. Reset the password to our one-time
@@ -181,7 +199,7 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 			if resetErr != nil {
 				if messaging.IsMatrixError(resetErr, messaging.ErrCodeUnrecognized) {
 					return cli.Internal("this homeserver does not support admin password reset (Synapse admin API) — "+
-						"the decommissioned machine name %q cannot be reused; choose a new machine name", machineName)
+						"the decommissioned machine %q cannot be reused; choose a new machine name", machineUsername)
 				}
 				return cli.Internal("reset password for re-provisioned machine: %w", resetErr)
 			}
@@ -201,7 +219,8 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 	defer adminSession.Close()
 
 	// Resolve all global Bureau rooms and invite the machine to each.
-	globalRooms, _, resolveErrors := resolveGlobalRooms(ctx, adminSession, serverName)
+	namespace := fleet.Namespace()
+	globalRooms, _, resolveErrors := resolveGlobalRooms(ctx, adminSession, namespace)
 	if len(resolveErrors) > 0 {
 		// All global rooms must be resolvable for provisioning. Unlike
 		// decommission (where best-effort is acceptable), a provision that
@@ -210,19 +229,18 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 	}
 
 	for _, room := range globalRooms {
-		fullAlias := principal.RoomAlias(room.alias, serverName)
 		if err := adminSession.InviteUser(ctx, room.roomID, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-				return cli.Internal("invite machine to %s: %w", fullAlias, err)
+				return cli.Internal("invite machine to %s: %w", room.alias, err)
 			}
-			fmt.Fprintf(os.Stderr, "  Already invited to %s\n", fullAlias)
+			fmt.Fprintf(os.Stderr, "  Already invited to %s\n", room.alias)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Invited to %s\n", fullAlias)
+			fmt.Fprintf(os.Stderr, "  Invited to %s\n", room.alias)
 		}
 	}
 
 	// Resolve and invite to fleet-scoped rooms.
-	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleetPrefix, serverName)
+	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
 	if err != nil {
 		return cli.NotFound("resolve fleet rooms: %w", err)
 	}
@@ -243,14 +261,15 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 
 	// Create the per-machine config room. The admin creates it (not the
 	// machine) so the admin has PL 100 from the start. The machine account
-	// is invited.
-	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
-	configAliasLocalpart := principal.RoomAliasLocalpart(configAlias)
+	// is invited. The config room alias uses the @→# convention: the
+	// fleet-scoped localpart IS the room alias localpart.
+	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
+	configAlias := schema.FullRoomAlias(configAliasLocalpart, server)
 
 	fmt.Fprintf(os.Stderr, "Creating config room %s...\n", configAlias)
 	configRoom, createError := adminSession.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:       "Config: " + machineName,
-		Topic:      "Machine configuration and credentials for " + machineName,
+		Name:       "Config: " + machineUsername,
+		Topic:      "Machine configuration and credentials for " + machineUsername,
 		Alias:      configAliasLocalpart,
 		Preset:     "private_chat",
 		Invite:     []string{machineUserID},
@@ -288,20 +307,21 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 		fmt.Fprintf(os.Stderr, "  Config room created: %s\n", configRoom.RoomID)
 	}
 
-	// Write the bootstrap config.
+	// Write the bootstrap config. The MachineName and FleetPrefix fields
+	// use the fleet-scoped localpart format consumed by the launcher.
 	config := &bootstrap.Config{
 		HomeserverURL: homeserverURL,
-		ServerName:    serverName,
-		MachineName:   machineName,
+		ServerName:    server,
+		MachineName:   machine.Localpart(),
 		Password:      oneTimePassword.String(),
-		FleetPrefix:   fleetPrefix,
+		FleetPrefix:   fleet.Localpart(),
 	}
 
-	if outputPath != "" {
-		if err := bootstrap.WriteConfig(outputPath, config); err != nil {
+	if params.OutputPath != "" {
+		if err := bootstrap.WriteConfig(params.OutputPath, config); err != nil {
 			return cli.Internal("write bootstrap config: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "\nBootstrap config written to %s\n", outputPath)
+		fmt.Fprintf(os.Stderr, "\nBootstrap config written to %s\n", params.OutputPath)
 	} else {
 		if err := bootstrap.WriteToStdout(config); err != nil {
 			return cli.Internal("write bootstrap config to stdout: %w", err)
@@ -322,7 +342,7 @@ func runProvision(machineName, credentialFile, serverName, fleetPrefix, outputPa
 // This is the security gate for re-provisioning. Without it, provision
 // could be used to take over an active machine's identity by resetting
 // its password and re-bootstrapping.
-func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID, adminToken, machineUserID, machineName, fleetPrefix, serverName string) error {
+func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID, adminToken string, machine ref.Machine, machineUsername, machineUserID string) error {
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
 		return cli.Internal("create admin session for decommission check: %w", err)
@@ -330,7 +350,8 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 	defer adminSession.Close()
 
 	// Resolve all global Bureau rooms.
-	globalRooms, failedRooms, _ := resolveGlobalRooms(ctx, adminSession, serverName)
+	namespace := machine.Fleet().Namespace()
+	globalRooms, failedRooms, _ := resolveGlobalRooms(ctx, adminSession, namespace)
 	if len(failedRooms) > 0 {
 		// If we can't resolve all rooms, we can't verify full decommission.
 		// Fail-safe: refuse re-provisioning.
@@ -345,12 +366,14 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 	// Check for active memberships in all global rooms.
 	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, globalRooms)
 
-	// Also check the config room.
-	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
+	// Also check the config room (@→# convention).
+	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
+	configAlias := schema.FullRoomAlias(configAliasLocalpart, machine.Server())
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err == nil {
 		configResolved := resolvedRoom{
-			machineRoom: machineRoom{alias: schema.ConfigRoomAlias(machineName), displayName: "config room"},
+			machineRoom: machineRoom{displayName: "config room"},
+			alias:       configAlias,
 			roomID:      configRoomID,
 		}
 		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
@@ -364,13 +387,13 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 		for _, room := range activeRooms {
 			fmt.Fprintf(os.Stderr, "    - %s (%s)\n", room.displayName, room.roomID)
 		}
-		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s' first",
-			machineUserID, machineName)
+		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s %s' first",
+			machineUserID, machine.Fleet().Localpart(), machine.Name())
 	}
 
 	// Check that machine_key and machine_status are cleared in the fleet
 	// machine room.
-	machineRoomID, _, _, err := resolveFleetRooms(ctx, adminSession, fleetPrefix, serverName)
+	machineRoomID, _, _, err := resolveFleetRooms(ctx, adminSession, machine.Fleet())
 	if err != nil {
 		return cli.Internal("resolve fleet rooms for decommission check: %w", err)
 	}
@@ -381,7 +404,7 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 	}
 
 	for _, event := range events {
-		if event.StateKey == nil || *event.StateKey != machineName {
+		if event.StateKey == nil || *event.StateKey != machineUsername {
 			continue
 		}
 		if event.Type != schema.EventTypeMachineKey && event.Type != schema.EventTypeMachineStatus {
@@ -394,8 +417,8 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 		}
 		content := string(contentBytes)
 		if content != "{}" && content != "null" && content != "" {
-			return cli.Conflict("machine account %s has active %s state event — run 'bureau machine decommission %s' first",
-				machineUserID, event.Type, machineName)
+			return cli.Conflict("machine account %s has active %s state event — run 'bureau machine decommission %s %s' first",
+				machineUserID, event.Type, machine.Fleet().Localpart(), machine.Name())
 		}
 	}
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -23,9 +24,6 @@ import (
 type configParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Name                     string `json:"name"                      flag:"name"                      desc:"fleet controller name (state key in the fleet room, e.g., service/fleet/prod)"`
-	FleetRoom                string `json:"fleet_room"                flag:"fleet-room"                desc:"fleet room ID (overrides MATRIX_FLEET_ROOM from credential file)"`
-	ServerName               string `json:"server_name"               flag:"server-name"               desc:"Matrix server name" default:"bureau.local"`
 	RebalancePolicy          string `json:"rebalance_policy"          flag:"rebalance-policy"          desc:"rebalance policy: auto or alert"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds" flag:"heartbeat-interval"       desc:"expected heartbeat interval in seconds"`
 	PressureThresholdCPU     int    `json:"pressure_threshold_cpu"    flag:"pressure-threshold-cpu"    desc:"CPU pressure threshold percentage"`
@@ -37,8 +35,9 @@ type configParams struct {
 
 // configResult is the JSON output of the config command.
 type configResult struct {
-	Name   string                    `json:"name"   desc:"fleet controller state key"`
-	Config schema.FleetConfigContent `json:"config" desc:"fleet controller configuration"`
+	Fleet   ref.Fleet                 `json:"fleet"   desc:"fleet reference"`
+	Service ref.Service               `json:"service" desc:"fleet controller service reference"`
+	Config  schema.FleetConfigContent `json:"config"  desc:"fleet controller configuration"`
 }
 
 func configCommand() *cli.Command {
@@ -49,25 +48,31 @@ func configCommand() *cli.Command {
 		Summary: "View or update fleet controller configuration",
 		Description: `Read or write the FleetConfigContent for a fleet controller.
 
+The argument is a fleet localpart in the form "namespace/fleet/name"
+(e.g., "bureau/fleet/prod"). The server name is derived from the
+connected session's identity. The fleet controller's service localpart
+(used as the state key) is derived from the fleet: for bureau/fleet/prod,
+the state key is "bureau/fleet/prod/service/fleet".
+
 Without any config flags, displays the current configuration. With
 config flags (--rebalance-policy, --heartbeat-interval, etc.), performs
 a read-modify-write to update the configuration.
 
 Requires direct Matrix access via --credential-file, since the fleet
 controller's socket API does not expose a config-write action.`,
-		Usage: "bureau fleet config --name <name> [flags]",
+		Usage: "bureau fleet config <namespace/fleet/name> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "View current fleet config",
-				Command:     "bureau fleet config --name service/fleet/prod --credential-file ./creds",
+				Command:     "bureau fleet config bureau/fleet/prod --credential-file ./creds",
 			},
 			{
 				Description: "Set rebalance policy to auto",
-				Command:     "bureau fleet config --name service/fleet/prod --rebalance-policy auto --credential-file ./creds",
+				Command:     "bureau fleet config bureau/fleet/prod --rebalance-policy auto --credential-file ./creds",
 			},
 			{
 				Description: "Set heartbeat interval and pressure thresholds",
-				Command:     "bureau fleet config --name service/fleet/prod --heartbeat-interval 60 --pressure-threshold-cpu 80 --credential-file ./creds",
+				Command:     "bureau fleet config bureau/fleet/prod --heartbeat-interval 60 --pressure-threshold-cpu 80 --credential-file ./creds",
 			},
 		},
 		Params:         func() any { return &params },
@@ -75,13 +80,13 @@ controller's socket API does not expose a config-write action.`,
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/config"},
 		Run: func(args []string) error {
-			if len(args) > 0 {
-				return cli.Validation("unexpected argument: %s", args[0])
+			if len(args) == 0 {
+				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
-			if params.Name == "" {
-				return cli.Validation("--name is required (the fleet controller's principal localpart, e.g., service/fleet/prod)")
+			if len(args) > 1 {
+				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
-			return runConfig(&params)
+			return runConfig(args[0], &params)
 		},
 	}
 }
@@ -97,7 +102,7 @@ func hasConfigUpdates(params *configParams) bool {
 		params.RebalanceCooldownSeconds != 0
 }
 
-func runConfig(params *configParams) error {
+func runConfig(fleetLocalpart string, params *configParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -107,22 +112,35 @@ func runConfig(params *configParams) error {
 	}
 	defer session.Close()
 
-	// Resolve fleet room ID from explicit flag or credential file.
-	fleetRoomID := params.FleetRoom
-	if fleetRoomID == "" && params.SessionConfig.CredentialFile != "" {
-		credentials, credErr := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
-		if credErr != nil {
-			return cli.Internal("reading credentials for fleet room: %w", credErr)
-		}
-		fleetRoomID = credentials["MATRIX_FLEET_ROOM"]
+	// Derive server name from the connected session's identity.
+	server, err := ref.ServerFromUserID(session.UserID())
+	if err != nil {
+		return cli.Internal("cannot determine server name from session: %w", err)
 	}
-	if fleetRoomID == "" {
-		return cli.Validation("--fleet-room is required (or set MATRIX_FLEET_ROOM in the credential file)")
+
+	// Parse and validate the fleet localpart.
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	// The fleet controller service is always named "fleet" within its fleet.
+	// Its localpart is the state key for the FleetConfigContent event.
+	service, err := ref.NewService(fleet, "fleet")
+	if err != nil {
+		return cli.Internal("constructing fleet controller service ref: %w", err)
+	}
+	stateKey := service.Localpart()
+
+	// Resolve fleet room from the fleet's room alias.
+	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
+	if err != nil {
+		return cli.NotFound("resolving fleet room %s: %w (run 'bureau fleet create' first)", fleet.RoomAlias(), err)
 	}
 
 	// Read existing config.
 	var config schema.FleetConfigContent
-	existingContent, err := session.GetStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, params.Name)
+	existingContent, err := session.GetStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, stateKey)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
 			return cli.Internal("parsing existing fleet config: %w", unmarshalErr)
@@ -134,8 +152,9 @@ func runConfig(params *configParams) error {
 	if !hasConfigUpdates(params) {
 		// Read-only mode: display current config.
 		result := configResult{
-			Name:   params.Name,
-			Config: config,
+			Fleet:   fleet,
+			Service: service,
+			Config:  config,
 		}
 
 		if done, err := params.EmitJSON(result); done {
@@ -143,7 +162,7 @@ func runConfig(params *configParams) error {
 		}
 
 		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(writer, "Fleet Config: %s\n\n", params.Name)
+		fmt.Fprintf(writer, "Fleet Config: %s (key: %s)\n\n", fleet.Localpart(), stateKey)
 		fmt.Fprintf(writer, "  Rebalance Policy:\t%s\n", defaultString(config.RebalancePolicy, "(not set)"))
 		fmt.Fprintf(writer, "  Heartbeat Interval:\t%s\n", formatOptionalSeconds(config.HeartbeatIntervalSeconds, 30))
 		fmt.Fprintf(writer, "  Pressure CPU:\t%s\n", formatOptionalPercent(config.PressureThresholdCPU, 85))
@@ -181,21 +200,22 @@ func runConfig(params *configParams) error {
 		config.RebalanceCooldownSeconds = params.RebalanceCooldownSeconds
 	}
 
-	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, params.Name, config)
+	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, stateKey, config)
 	if err != nil {
 		return cli.Internal("publishing fleet config: %w", err)
 	}
 
 	result := configResult{
-		Name:   params.Name,
-		Config: config,
+		Fleet:   fleet,
+		Service: service,
+		Config:  config,
 	}
 
 	if done, err := params.EmitJSON(result); done {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Updated fleet config for %s\n", params.Name)
+	fmt.Fprintf(os.Stderr, "Updated fleet config for %s (key: %s)\n", fleet.Localpart(), stateKey)
 	return nil
 }
 

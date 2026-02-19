@@ -71,15 +71,6 @@ func EntityConfigRoomAlias(entityLocalpart string) string {
 	return entityLocalpart
 }
 
-// ConfigRoomAlias returns the room alias localpart for a per-machine
-// config room: "bureau/config/<machineLocalpart>". Under fleet-scoped
-// naming, entity config rooms use the @→# convention via
-// EntityConfigRoomAlias instead. This function is used by callers
-// that have not yet migrated to fleet-scoped naming.
-func ConfigRoomAlias(machineLocalpart string) string {
-	return "bureau/config/" + machineLocalpart
-}
-
 // FullRoomAlias constructs a full Matrix room alias from a localpart
 // and server name: "#<localpart>:<serverName>".
 func FullRoomAlias(localpart, serverName string) string {

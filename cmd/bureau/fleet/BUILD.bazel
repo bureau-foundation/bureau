@@ -9,6 +9,7 @@ go_library(
         "command.go",
         "config.go",
         "connection.go",
+        "create.go",
         "doc.go",
         "enable.go",
         "machines.go",
@@ -20,7 +21,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
-        "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/secret",
         "//lib/service",
@@ -33,8 +34,5 @@ go_test(
     name = "fleet_test",
     srcs = ["command_test.go"],
     embed = [":fleet"],
-    deps = [
-        "//lib/principal",
-        "@com_github_spf13_pflag//:pflag",
-    ],
+    deps = ["@com_github_spf13_pflag//:pflag"],
 )

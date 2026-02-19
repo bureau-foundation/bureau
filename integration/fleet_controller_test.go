@@ -449,7 +449,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// the fleet controller's initial /sync will see this machine.
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/fleet-lifecycle")
+	machine := newTestMachine(t, fleet, "fleet-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -747,7 +747,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// Boot a machine with proxy support. The daemon needs the proxy
 	// binary to create sandboxes when the fleet controller places a
 	// service.
-	machine := newTestMachine(t, "machine/fleet-place")
+	machine := newTestMachine(t, fleet, "fleet-place")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -952,8 +952,8 @@ func TestFleetReconciliation(t *testing.T) {
 	fleet := createTestFleet(t, admin)
 
 	// Boot two machines with proxy support.
-	machineA := newTestMachine(t, "machine/fleet-recon-a")
-	machineB := newTestMachine(t, "machine/fleet-recon-b")
+	machineA := newTestMachine(t, fleet, "fleet-recon-a")
+	machineB := newTestMachine(t, fleet, "fleet-recon-b")
 	options := machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
@@ -1110,7 +1110,7 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	defer admin.Close()
 	fleet := createTestFleet(t, admin)
 
-	machine := newTestMachine(t, "machine/fleet-auth")
+	machine := newTestMachine(t, fleet, "fleet-auth")
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
 		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),

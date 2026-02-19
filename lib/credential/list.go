@@ -57,7 +57,7 @@ func List(ctx context.Context, session messaging.Session, machineName, serverNam
 	}
 
 	// Resolve the config room.
-	configAlias := principal.RoomAlias(schema.ConfigRoomAlias(machineName), serverName)
+	configAlias := principal.RoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

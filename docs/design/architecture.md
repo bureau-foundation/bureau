@@ -81,7 +81,7 @@ Room aliases mirror the principal namespace:
 #iree/amdgpu/ci:bureau.local         — CI notifications
 #bureau/service:bureau.local          — service directory
 #bureau/template:bureau.local         — sandbox templates
-#bureau/config/workstation:bureau.local — per-machine config
+#bureau/fleet/prod/machine/workstation:bureau.local — per-machine config
 #home/kitchen:bureau.local            — kitchen automations
 ```
 
@@ -402,7 +402,11 @@ add project-specific or role-specific overrides.
 
 Principal assignments declare what should run on a specific machine.
 They are published as `m.bureau.machine_config` state events in
-per-machine config rooms (`#bureau/config/<machine>`).
+per-machine config rooms. Each machine's config room alias is the
+machine's fleet-scoped localpart (the `@`→`#` convention — see
+`EntityConfigRoomAlias()` in `lib/schema/rooms.go`). For example,
+`@bureau/fleet/prod/machine/workstation:bureau.local` has its config
+room at `#bureau/fleet/prod/machine/workstation:bureau.local`.
 
 A `MachineConfig` event contains:
 

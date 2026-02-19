@@ -3,5 +3,6 @@
 # Used by both bureau-launcher.service and bureau-daemon.service.
 
 BUREAU_HOMESERVER_URL=http://matrix.internal:6167
-BUREAU_MACHINE_NAME=machine/worker-01
+BUREAU_MACHINE_NAME=bureau/fleet/prod/machine/worker-01
 BUREAU_SERVER_NAME=bureau.local
+BUREAU_FLEET=bureau/fleet/prod

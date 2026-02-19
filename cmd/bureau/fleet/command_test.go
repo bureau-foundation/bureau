@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/spf13/pflag"
-
-	"github.com/bureau-foundation/bureau/lib/principal"
 )
 
 // TestFleetCommandHasSubcommands verifies the fleet command group
@@ -21,6 +19,7 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 
 	expectedSubcommands := map[string]bool{
+		"create":        false,
 		"enable":        false,
 		"config":        false,
 		"status":        false,
@@ -54,9 +53,8 @@ func TestDefaultFleetSocketPath(t *testing.T) {
 	// Tests run outside a sandbox, so the sandbox mount point does not
 	// exist and the function falls back to the host-side path.
 	got := defaultFleetSocketPath()
-	want := principal.SocketPath("service/fleet/main")
-	if got != want {
-		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, want)
+	if got != hostFallbackSocketPath {
+		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, hostFallbackSocketPath)
 	}
 }
 
@@ -113,22 +111,28 @@ func TestConnectionAddFlags(t *testing.T) {
 	}
 }
 
-// TestEnableRequiresFlags verifies the enable command validates required flags.
-func TestEnableRequiresFlags(t *testing.T) {
+// TestEnableRequiresArgs verifies the enable command validates required
+// arguments: fleet localpart (positional) and --host flag.
+func TestEnableRequiresArgs(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    []string
 		wantErr string
 	}{
 		{
-			name:    "missing name",
-			args:    []string{"--host", "machine/test"},
-			wantErr: "--name is required",
+			name:    "no arguments",
+			args:    nil,
+			wantErr: "fleet localpart is required (e.g., bureau/fleet/prod)",
+		},
+		{
+			name:    "too many arguments",
+			args:    []string{"bureau/fleet/prod", "bureau/fleet/staging"},
+			wantErr: "expected exactly one argument (fleet localpart), got 2",
 		},
 		{
 			name:    "missing host",
-			args:    []string{"--name", "prod"},
-			wantErr: "--host is required",
+			args:    []string{"bureau/fleet/prod"},
+			wantErr: "--host is required (machine name within the fleet, e.g., workstation)",
 		},
 	}
 
@@ -137,6 +141,139 @@ func TestEnableRequiresFlags(t *testing.T) {
 			// Create a fresh command for each test case so flag state
 			// from a previous parse does not carry over.
 			command := enableCommand()
+			err := command.Execute(test.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != test.wantErr {
+				t.Errorf("error: got %q, want %q", err.Error(), test.wantErr)
+			}
+		})
+	}
+}
+
+// TestExtractMachineName verifies the machine name extraction from both
+// fleet-scoped and legacy localpart formats.
+func TestExtractMachineName(t *testing.T) {
+	tests := []struct {
+		name      string
+		localpart string
+		wantName  string
+		wantErr   bool
+	}{
+		{
+			name:      "legacy simple",
+			localpart: "machine/workstation",
+			wantName:  "workstation",
+		},
+		{
+			name:      "legacy multi-segment",
+			localpart: "machine/ec2/us-east-1/gpu-01",
+			wantName:  "ec2/us-east-1/gpu-01",
+		},
+		{
+			name:      "fleet-scoped simple",
+			localpart: "bureau/fleet/prod/machine/workstation",
+			wantName:  "workstation",
+		},
+		{
+			name:      "fleet-scoped multi-segment",
+			localpart: "bureau/fleet/prod/machine/ec2/us-east-1/gpu-01",
+			wantName:  "ec2/us-east-1/gpu-01",
+		},
+		{
+			name:      "not a machine",
+			localpart: "service/fleet/prod",
+			wantErr:   true,
+		},
+		{
+			name:      "empty",
+			localpart: "",
+			wantErr:   true,
+		},
+		{
+			name:      "bare machine word",
+			localpart: "machine",
+			wantErr:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			name, err := extractMachineName(test.localpart)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got name %q", name)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if name != test.wantName {
+				t.Errorf("name = %q, want %q", name, test.wantName)
+			}
+		})
+	}
+}
+
+// TestConfigRequiresFleetLocalpart verifies the config command validates
+// that a fleet localpart argument is provided.
+func TestConfigRequiresFleetLocalpart(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "no arguments",
+			args:    nil,
+			wantErr: "fleet localpart is required (e.g., bureau/fleet/prod)",
+		},
+		{
+			name:    "too many arguments",
+			args:    []string{"bureau/fleet/prod", "bureau/fleet/staging"},
+			wantErr: "expected exactly one argument (fleet localpart), got 2",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := configCommand()
+			err := command.Execute(test.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != test.wantErr {
+				t.Errorf("error: got %q, want %q", err.Error(), test.wantErr)
+			}
+		})
+	}
+}
+
+// TestCreateRequiresFleetLocalpart verifies the create command validates
+// that a fleet localpart argument is provided.
+func TestCreateRequiresFleetLocalpart(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "no arguments",
+			args:    nil,
+			wantErr: "fleet localpart is required (e.g., bureau/fleet/prod)",
+		},
+		{
+			name:    "too many arguments",
+			args:    []string{"bureau/fleet/prod", "bureau/fleet/staging"},
+			wantErr: "expected exactly one argument (fleet localpart), got 2",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := createCommand()
 			err := command.Execute(test.args)
 			if err == nil {
 				t.Fatal("expected error, got nil")

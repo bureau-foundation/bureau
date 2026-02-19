@@ -13,8 +13,9 @@
 // first login, so even if the bootstrap config file is captured after
 // delivery, the password is useless.
 //
-// Machine names are validated against [principal.ValidateLocalpart] to
-// ensure they are safe for use as Matrix user IDs and filesystem paths.
+// Machine names are fleet-scoped localparts validated against
+// [ref.ParseMachine] to ensure they are structurally valid Bureau
+// machine references.
 //
 // File operations:
 //
@@ -24,5 +25,5 @@
 //   - [WriteToStdout] -- writes formatted JSON to stdout for piping,
 //     used by "bureau machine provision" when no --output flag is given
 //
-// Depends on lib/principal for localpart validation.
+// Depends on lib/ref for identity validation.
 package bootstrap

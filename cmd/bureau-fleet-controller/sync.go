@@ -577,7 +577,7 @@ func (fc *FleetController) processLeave(roomID string) {
 	}
 
 	// Check if this is the machine room.
-	if roomID == fc.machineRoomID {
+	if roomID == fc.machineRoomID.String() {
 		fc.logger.Warn("left machine room", "room_id", roomID)
 		// Clean up all machine state since we can no longer
 		// receive heartbeats. Replace with a fresh map rather
@@ -591,7 +591,7 @@ func (fc *FleetController) processLeave(roomID string) {
 	}
 
 	// Check if this is the fleet room.
-	if roomID == fc.fleetRoomID {
+	if roomID == fc.fleetRoomID.String() {
 		fc.logger.Warn("left fleet room", "room_id", roomID)
 		return
 	}
@@ -699,7 +699,7 @@ func (fc *FleetController) sendFleetNotification(ctx context.Context, content an
 	if fc.session == nil {
 		return
 	}
-	eventID, err := fc.session.SendEvent(ctx, fc.fleetRoomID, schema.MatrixEventTypeMessage, content)
+	eventID, err := fc.session.SendEvent(ctx, fc.fleetRoomID.String(), schema.MatrixEventTypeMessage, content)
 	if err != nil {
 		fc.logger.Error("failed to send fleet notification",
 			"error", err,

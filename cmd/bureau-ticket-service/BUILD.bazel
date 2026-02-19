@@ -10,6 +10,8 @@ go_library(
         "gate.go",
         "main.go",
         "socket.go",
+        "socket_mutate.go",
+        "socket_query.go",
         "sync.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-ticket-service",

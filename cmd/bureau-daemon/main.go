@@ -407,7 +407,10 @@ func run() error {
 
 	// Start the incremental sync loop, status heartbeat loop, and
 	// token refresh loop.
-	go daemon.syncLoop(ctx, sinceToken)
+	go service.RunSyncLoop(ctx, daemon.session, service.SyncConfig{
+		Filter:      syncFilter,
+		OnSyncError: daemon.syncErrorHandler,
+	}, sinceToken, daemon.processSyncResponse, daemon.clock, daemon.logger)
 	go daemon.statusLoop(ctx)
 	go daemon.tokenRefreshLoop(ctx)
 

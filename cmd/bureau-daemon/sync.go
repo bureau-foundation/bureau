@@ -33,9 +33,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -184,63 +184,19 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	return response.NextBatch, nil
 }
 
-// syncLoop runs the incremental Matrix /sync long-poll loop. It receives
-// the since token from initialSync and long-polls for changes. When state
-// events arrive for a monitored room, the corresponding handler is called.
-//
-// The long-poll timeout is 30 seconds. When no events arrive within that
-// window, the homeserver returns an empty response and the loop immediately
-// re-polls. When events do arrive, the homeserver returns immediately.
-//
-// On transient errors, the loop retries with exponential backoff (1s → 30s).
-// On context cancellation (daemon shutdown), the loop exits cleanly.
-func (d *Daemon) syncLoop(ctx context.Context, sinceToken string) {
-	backoff := time.Second
-	const maxBackoff = 30 * time.Second
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		options := messaging.SyncOptions{
-			Since:      sinceToken,
-			Timeout:    30000, // 30 seconds in milliseconds
-			SetTimeout: true,
-			Filter:     syncFilter,
-		}
-
-		response, err := d.session.Sync(ctx, options)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if isAuthError(err) {
-				d.logger.Error("machine account authentication failed, initiating emergency shutdown",
-					"error", err)
-				d.emergencyShutdown()
-				return
-			}
-			d.logger.Error("sync failed, retrying", "error", err, "backoff", backoff)
-			select {
-			case <-ctx.Done():
-				return
-			case <-d.clock.After(backoff):
-			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-			continue
-		}
-
-		backoff = time.Second
-		sinceToken = response.NextBatch
-
-		d.processSyncResponse(ctx, response)
+// syncErrorHandler classifies /sync errors for the shared
+// service.RunSyncLoop. Authentication failures (token revoked,
+// account deactivated) are unrecoverable — the daemon triggers
+// emergency shutdown and tells the loop to abort. All other errors
+// are retried with exponential backoff by the loop.
+func (d *Daemon) syncErrorHandler(err error) service.SyncErrorAction {
+	if isAuthError(err) {
+		d.logger.Error("machine account authentication failed, initiating emergency shutdown",
+			"error", err)
+		d.emergencyShutdown()
+		return service.SyncAbort
 	}
+	return service.SyncRetry
 }
 
 // processSyncResponse inspects a /sync response for invites and state

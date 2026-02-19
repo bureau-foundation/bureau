@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -203,12 +205,16 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 	daemon.shutdownCtx = shutdownCtx
 	daemon.shutdownCancel = shutdownCancel
 
-	// Run syncLoop in a goroutine — it should detect the auth error
-	// and trigger emergency shutdown.
+	// Run the shared sync loop in a goroutine — the daemon's
+	// syncErrorHandler should detect the auth error and trigger
+	// emergency shutdown.
 	syncDone := make(chan struct{})
 	go func() {
 		defer close(syncDone)
-		daemon.syncLoop(context.Background(), "batch_0")
+		service.RunSyncLoop(context.Background(), session, service.SyncConfig{
+			Filter:      syncFilter,
+			OnSyncError: daemon.syncErrorHandler,
+		}, "batch_0", daemon.processSyncResponse, clock.Real(), daemon.logger)
 	}()
 
 	// Wait for sync loop to exit (should be fast — one failed /sync call).

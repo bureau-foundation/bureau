@@ -13,6 +13,21 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// SyncErrorAction determines how [RunSyncLoop] reacts to a /sync error
+// classified by [SyncConfig.OnSyncError].
+type SyncErrorAction int
+
+const (
+	// SyncRetry causes the loop to retry with exponential backoff.
+	SyncRetry SyncErrorAction = iota
+
+	// SyncAbort causes the loop to exit immediately. The caller's
+	// OnSyncError callback is responsible for any cleanup (e.g.,
+	// emergency shutdown, context cancellation) before returning
+	// SyncAbort.
+	SyncAbort
+)
+
 // SyncConfig configures the Matrix /sync long-poll loop.
 type SyncConfig struct {
 	// Filter is the inline JSON filter restricting which event types
@@ -29,6 +44,15 @@ type SyncConfig struct {
 	// transient /sync errors. The loop uses exponential backoff
 	// starting at 1 second. Default: 30 seconds.
 	MaxBackoff time.Duration
+
+	// OnSyncError classifies /sync errors as retriable or fatal.
+	// Called when /sync returns a non-context error. If the callback
+	// returns SyncAbort, the loop exits immediately. If nil, all
+	// non-context errors are retried with exponential backoff.
+	//
+	// The daemon uses this to detect authentication failures (token
+	// revoked, account deactivated) and trigger emergency shutdown.
+	OnSyncError func(err error) SyncErrorAction
 }
 
 // SyncHandler is called for each /sync response. Implementations
@@ -56,14 +80,17 @@ func InitialSync(ctx context.Context, session *messaging.DirectSession, filter s
 
 // RunSyncLoop runs the incremental Matrix /sync long-poll loop. It
 // polls the homeserver with the given since token and calls handler
-// for each response. The loop continues until ctx is cancelled.
+// for each response. The loop continues until ctx is cancelled or
+// [SyncConfig.OnSyncError] returns [SyncAbort].
 //
 // On transient errors, the loop retries with exponential backoff
 // (1 second to config.MaxBackoff). On context cancellation (service
-// shutdown), the loop returns cleanly.
+// shutdown), the loop returns cleanly. If OnSyncError is set and
+// returns SyncAbort, the loop exits immediately — the callback is
+// responsible for any cleanup before returning SyncAbort.
 //
 // The caller is responsible for performing the initial sync (via
-// InitialSync) and processing that response before starting this
+// [InitialSync]) and processing that response before starting this
 // loop. This separation lets services build their initial state
 // (indexes, caches) synchronously before entering the event-driven
 // incremental phase.
@@ -96,6 +123,9 @@ func RunSyncLoop(ctx context.Context, session *messaging.DirectSession, config S
 		response, err := session.Sync(ctx, options)
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			if config.OnSyncError != nil && config.OnSyncError(err) == SyncAbort {
 				return
 			}
 			logger.Error("sync failed, retrying", "error", err, "backoff", backoff)

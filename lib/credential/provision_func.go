@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -15,11 +16,10 @@ import (
 // provisioning workflow (machine key lookup, age encryption, state event
 // publishing) into the function signature that principal.Create expects.
 func AsProvisionFunc() principal.ProvisionFunc {
-	return func(ctx context.Context, session messaging.Session, machineName, localpart, serverName, machineRoomID string, credentials map[string]string) (string, error) {
+	return func(ctx context.Context, session messaging.Session, machine ref.Machine, localpart, machineRoomID string, credentials map[string]string) (string, error) {
 		result, err := Provision(ctx, session, ProvisionParams{
-			MachineName:   machineName,
+			Machine:       machine,
 			Principal:     localpart,
-			ServerName:    serverName,
 			MachineRoomID: machineRoomID,
 			Credentials:   credentials,
 		})

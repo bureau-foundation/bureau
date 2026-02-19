@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -27,15 +28,15 @@ type DestroyResult struct {
 // The daemon detects the config change via /sync and tears down the
 // principal's sandbox. The principal's Matrix account is preserved
 // for audit trail purposes.
-func Destroy(ctx context.Context, session messaging.Session, configRoomID, machineName, localpart string) (*DestroyResult, error) {
-	configRaw, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName)
+func Destroy(ctx context.Context, session messaging.Session, configRoomID string, machine ref.Machine, localpart string) (*DestroyResult, error) {
+	configRaw, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
 	if err != nil {
-		return nil, fmt.Errorf("read machine config for %s: %w", machineName, err)
+		return nil, fmt.Errorf("read machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	var config schema.MachineConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
-		return nil, fmt.Errorf("parse machine config for %s: %w", machineName, err)
+		return nil, fmt.Errorf("parse machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	found := false
@@ -48,13 +49,13 @@ func Destroy(ctx context.Context, session messaging.Session, configRoomID, machi
 		filtered = append(filtered, assignment)
 	}
 	if !found {
-		return nil, fmt.Errorf("principal %q not found in machine config for %s", localpart, machineName)
+		return nil, fmt.Errorf("principal %q not found in machine config for %s", localpart, machine.Localpart())
 	}
 	config.Principals = filtered
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName, config)
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
 	if err != nil {
-		return nil, fmt.Errorf("publish machine config for %s: %w", machineName, err)
+		return nil, fmt.Errorf("publish machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	return &DestroyResult{ConfigEventID: eventID}, nil

@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libcred "github.com/bureau-foundation/bureau/lib/credential"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // credentialProvisionParams holds the parameters for credential provision.
@@ -82,6 +83,11 @@ machine and an operator escrow key for recovery.`,
 				return cli.Validation("--principal is required")
 			}
 
+			machine, err := ref.ParseMachine(params.MachineName, params.ServerName)
+			if err != nil {
+				return cli.Validation("invalid machine name: %v", err)
+			}
+
 			// Read the credential JSON from file or stdin.
 			credentials, err := readCredentialInput(params.FromFile)
 			if err != nil {
@@ -97,9 +103,8 @@ machine and an operator escrow key for recovery.`,
 			}
 
 			result, err := libcred.Provision(ctx, session, libcred.ProvisionParams{
-				MachineName: params.MachineName,
+				Machine:     machine,
 				Principal:   params.Principal,
-				ServerName:  params.ServerName,
 				EscrowKey:   params.EscrowKey,
 				Credentials: credentials,
 			})

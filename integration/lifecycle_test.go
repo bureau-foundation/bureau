@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -309,8 +310,16 @@ func TestTwoMachineFleet(t *testing.T) {
 	defer admin.Close()
 
 	twoMachineFleet := createTestFleet(t, admin)
-	machineAName := twoMachineFleet.Prefix + "/machine/fleet-a"
-	machineBName := twoMachineFleet.Prefix + "/machine/fleet-b"
+	machineARef, err := ref.NewMachine(twoMachineFleet.Ref, "fleet-a")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineBRef, err := ref.NewMachine(twoMachineFleet.Ref, "fleet-b")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineAName := machineARef.Localpart()
+	machineBName := machineBRef.Localpart()
 	machineRoomID := twoMachineFleet.MachineRoomID
 
 	// --- Provision both machines ---
@@ -335,6 +344,7 @@ func TestTwoMachineFleet(t *testing.T) {
 
 	type machineSetup struct {
 		name          string
+		machineRef    ref.Machine
 		stateDir      string
 		runDir        string
 		bootstrapPath string
@@ -342,9 +352,10 @@ func TestTwoMachineFleet(t *testing.T) {
 		cacheRoot     string
 	}
 
-	setupMachine := func(name, stateDir, runDir, bootstrapPath string) machineSetup {
+	setupMachine := func(name string, machineRef ref.Machine, stateDir, runDir, bootstrapPath string) machineSetup {
 		return machineSetup{
 			name:          name,
+			machineRef:    machineRef,
 			stateDir:      stateDir,
 			runDir:        runDir,
 			bootstrapPath: bootstrapPath,
@@ -353,8 +364,8 @@ func TestTwoMachineFleet(t *testing.T) {
 		}
 	}
 
-	machineA := setupMachine(machineAName, stateDirA, runDirA, bootstrapPathA)
-	machineB := setupMachine(machineBName, stateDirB, runDirB, bootstrapPathB)
+	machineA := setupMachine(machineAName, machineARef, stateDirA, runDirA, bootstrapPathA)
+	machineB := setupMachine(machineBName, machineBRef, stateDirB, runDirB, bootstrapPathB)
 
 	// First-boot both in sequence (each is fast — just login + rotate + publish).
 	for _, machine := range []machineSetup{machineA, machineB} {
@@ -480,9 +491,8 @@ func TestTwoMachineFleet(t *testing.T) {
 		}
 
 		_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-			MachineName:   p.machineSetup.name,
+			Machine:       p.machineSetup.machineRef,
 			Principal:     p.account.Localpart,
-			ServerName:    testServerName,
 			MachineRoomID: twoMachineFleet.MachineRoomID,
 			Credentials: map[string]string{
 				"MATRIX_TOKEN":          p.account.Token,

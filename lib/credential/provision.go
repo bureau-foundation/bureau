@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -19,14 +20,11 @@ import (
 // ProvisionParams holds the parameters for encrypting and publishing a
 // credential bundle to a machine's config room.
 type ProvisionParams struct {
-	// MachineName is the machine's localpart (e.g., "machine/workstation").
-	MachineName string
+	// Machine identifies the target machine.
+	Machine ref.Machine
 
 	// Principal is the principal's localpart (e.g., "iree/amdgpu/pm").
 	Principal string
-
-	// ServerName is the Matrix server name (e.g., "bureau.local").
-	ServerName string
 
 	// MachineRoomID is the Matrix room ID of the fleet's machine room
 	// where the machine's public key is published. This is the
@@ -79,8 +77,8 @@ type ProvisionResult struct {
 // The session must have permission to read the machine room (for the public
 // key) and write state events to the config room.
 func Provision(ctx context.Context, session messaging.Session, params ProvisionParams) (*ProvisionResult, error) {
-	if err := principal.ValidateLocalpart(params.MachineName); err != nil {
-		return nil, fmt.Errorf("invalid machine name: %w", err)
+	if params.Machine.IsZero() {
+		return nil, fmt.Errorf("machine is required")
 	}
 	if err := principal.ValidateLocalpart(params.Principal); err != nil {
 		return nil, fmt.Errorf("invalid principal name: %w", err)
@@ -91,9 +89,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	if params.MachineRoomID == "" {
 		return nil, fmt.Errorf("machine room ID is required")
 	}
-	if params.ServerName == "" {
-		return nil, fmt.Errorf("server name is required")
-	}
+
+	machineLocalpart := params.Machine.Localpart()
+	serverName := params.Machine.Server()
 
 	// Collect and sort credential key names for deterministic output.
 	credentialKeys := make([]string, 0, len(params.Credentials))
@@ -109,9 +107,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 
 	// Fetch the machine's public key from the fleet machine room.
-	machineKeyContent, err := session.GetStateEvent(ctx, params.MachineRoomID, schema.EventTypeMachineKey, params.MachineName)
+	machineKeyContent, err := session.GetStateEvent(ctx, params.MachineRoomID, schema.EventTypeMachineKey, machineLocalpart)
 	if err != nil {
-		return nil, fmt.Errorf("fetching machine key for %q: %w", params.MachineName, err)
+		return nil, fmt.Errorf("fetching machine key for %q: %w", machineLocalpart, err)
 	}
 
 	var machineKey schema.MachineKey
@@ -128,7 +126,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 
 	// Build the recipient list: machine key + optional escrow key.
 	recipientKeys := []string{machineKey.PublicKey}
-	encryptedFor := []string{principal.MatrixUserID(params.MachineName, params.ServerName)}
+	encryptedFor := []string{params.Machine.UserID()}
 
 	if params.EscrowKey != "" {
 		if err := sealed.ParsePublicKey(params.EscrowKey); err != nil {
@@ -146,14 +144,13 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 
 	// Resolve the config room. The room must already exist (created by
 	// bureau machine provision or the daemon's first-boot flow).
-	configAlias := principal.RoomAlias(schema.EntityConfigRoomAlias(params.MachineName), params.ServerName)
-	configRoomID, err := session.ResolveAlias(ctx, configAlias)
+	configRoomID, err := session.ResolveAlias(ctx, params.Machine.RoomAlias())
 	if err != nil {
-		return nil, fmt.Errorf("resolving config room %q: %w", configAlias, err)
+		return nil, fmt.Errorf("resolving config room %q: %w", params.Machine.RoomAlias(), err)
 	}
 
 	// Publish the credentials state event.
-	principalUserID := principal.MatrixUserID(params.Principal, params.ServerName)
+	principalUserID := principal.MatrixUserID(params.Principal, serverName)
 	credentialEvent := schema.Credentials{
 		Version:       schema.CredentialsVersion,
 		Principal:     principalUserID,

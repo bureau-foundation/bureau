@@ -20,6 +20,7 @@ go_library(
         "//cmd/bureau/cli",
         "//lib/credential",
         "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/secret",
         "//messaging",

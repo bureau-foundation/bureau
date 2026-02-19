@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -43,8 +44,12 @@ func TestProxyCrashRecovery(t *testing.T) {
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
-	machineName := fleet.Prefix + "/machine/proxy-crash"
-	machineUserID := "@" + machineName + ":" + testServerName
+	machineRef, err := ref.NewMachine(fleet.Ref, "proxy-crash")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineName := machineRef.Localpart()
+	machineUserID := machineRef.UserID()
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -127,9 +132,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	account := registerPrincipal(t, principalLocalpart, "pass-proxy-crash-agent")
 
 	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-		MachineName:   machineName,
+		Machine:       machineRef,
 		Principal:     principalLocalpart,
-		ServerName:    testServerName,
 		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,

@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -38,8 +38,8 @@ type Bundle struct {
 
 // ListResult holds the result of listing credentials for a machine.
 type ListResult struct {
-	// MachineName is the machine's localpart.
-	MachineName string
+	// Machine identifies the machine whose credentials were listed.
+	Machine ref.Machine
 
 	// ConfigRoomID is the machine's config room.
 	ConfigRoomID string
@@ -51,19 +51,19 @@ type ListResult struct {
 // List reads all m.bureau.credentials state events from a machine's config
 // room and returns their metadata. Returns an error if the config room
 // cannot be found or read.
-func List(ctx context.Context, session messaging.Session, machineName, serverName string) (*ListResult, error) {
-	if err := principal.ValidateLocalpart(machineName); err != nil {
-		return nil, fmt.Errorf("invalid machine name: %w", err)
+func List(ctx context.Context, session messaging.Session, machine ref.Machine) (*ListResult, error) {
+	if machine.IsZero() {
+		return nil, fmt.Errorf("machine is required")
 	}
 
 	// Resolve the config room.
-	configAlias := principal.RoomAlias(schema.EntityConfigRoomAlias(machineName), serverName)
-	configRoomID, err := session.ResolveAlias(ctx, configAlias)
+	configRoomAlias := machine.RoomAlias()
+	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return nil, fmt.Errorf("no config room found for %q (expected alias %q)", machineName, configAlias)
+			return nil, fmt.Errorf("no config room found for %q (expected alias %q)", machine.Localpart(), configRoomAlias)
 		}
-		return nil, fmt.Errorf("resolving config room %q: %w", configAlias, err)
+		return nil, fmt.Errorf("resolving config room %q: %w", configRoomAlias, err)
 	}
 
 	// Read all state events to find credential bundles.
@@ -99,7 +99,7 @@ func List(ctx context.Context, session messaging.Session, machineName, serverNam
 	}
 
 	return &ListResult{
-		MachineName:  machineName,
+		Machine:      machine,
 		ConfigRoomID: configRoomID,
 		Bundles:      bundles,
 	}, nil

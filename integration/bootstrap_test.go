@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -67,6 +68,10 @@ func TestBootstrapScript(t *testing.T) {
 	}
 	t.Logf("machine provisioned: %s (password length %d)", bootstrapConfig.MachineName, len(bootstrapConfig.Password))
 	machineName := bootstrapConfig.MachineName
+	machineRef, err := ref.ParseMachine(machineName, testServerName)
+	if err != nil {
+		t.Fatalf("parse machine ref: %v", err)
+	}
 
 	// --- Build the Docker image ---
 	dockerfilePath := filepath.Join(workspaceRoot, "deploy", "test", "Dockerfile.machine")
@@ -230,6 +235,7 @@ func TestBootstrapScript(t *testing.T) {
 		// Register and deploy a minimal principal (no template, just proxy).
 		principalAccount := registerPrincipal(t, "agent/bootstrap-test", "test-password")
 		pushCredentials(t, admin, &testMachine{
+			Ref:           machineRef,
 			Name:          machineName,
 			PublicKey:     machineKey.PublicKey,
 			ConfigRoomID:  configRoomID,

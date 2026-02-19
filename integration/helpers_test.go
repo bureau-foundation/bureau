@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -477,10 +478,11 @@ func loadCredentials(t *testing.T) map[string]string {
 // that uses a daemon or fleet controller gets its own fleet to prevent
 // cross-contamination through shared rooms.
 type testFleet struct {
-	Prefix        string // e.g., "bureau/fleet/TestSomeTest"
-	FleetRoomID   string // fleet config room
-	MachineRoomID string // fleet machine presence room
-	ServiceRoomID string // fleet service directory room
+	Ref           ref.Fleet // typed reference (carries namespace, fleet name, server)
+	Prefix        string    // e.g., "bureau/fleet/TestSomeTest"
+	FleetRoomID   string    // fleet config room
+	MachineRoomID string    // fleet machine presence room
+	ServiceRoomID string    // fleet service directory room
 }
 
 // createTestFleet creates the three fleet-scoped rooms (config, machine,
@@ -497,6 +499,15 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	fleetName := strings.ToLower(t.Name())
 	namespace := "bureau"
 	prefix := principal.FleetPrefix(namespace, fleetName)
+
+	namespaceRef, err := ref.NewNamespace(testServerName, namespace)
+	if err != nil {
+		t.Fatalf("create namespace ref: %v", err)
+	}
+	fleetRef, err := ref.NewFleet(namespaceRef, fleetName)
+	if err != nil {
+		t.Fatalf("create fleet ref: %v", err)
+	}
 
 	// Create the three fleet-scoped rooms with aliases. The daemon and
 	// fleet controller resolve these aliases at startup.
@@ -532,6 +543,7 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	}
 
 	return &testFleet{
+		Ref:           fleetRef,
 		Prefix:        prefix,
 		FleetRoomID:   fleetRoom.RoomID,
 		MachineRoomID: machineRoom.RoomID,

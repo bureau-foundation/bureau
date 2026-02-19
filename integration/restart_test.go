@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
@@ -42,8 +43,12 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
-	machineName := fleet.Prefix + "/machine/restart"
-	machineUserID := "@" + machineName + ":" + testServerName
+	machineRef, err := ref.NewMachine(fleet.Ref, "restart")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineName := machineRef.Localpart()
+	machineUserID := machineRef.UserID()
 
 	// --- Phase 1: Provision and first boot ---
 	stateDir := t.TempDir()
@@ -118,9 +123,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	account := registerPrincipal(t, principalLocalpart, "pass-restart-agent")
 
 	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-		MachineName:   machineName,
+		Machine:       machineRef,
 		Principal:     principalLocalpart,
-		ServerName:    testServerName,
 		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,

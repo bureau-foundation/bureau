@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -91,7 +92,25 @@ func runList(params agentListParams) error {
 	}
 	defer session.Close()
 
-	locations, machineCount, err := principal.List(ctx, session, params.Machine, params.Fleet, params.ServerName)
+	var machine ref.Machine
+	if params.Machine != "" {
+		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid machine: %v", err)
+		}
+	}
+
+	var fleet ref.Fleet
+	if machine.IsZero() {
+		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid fleet: %v", err)
+		}
+	} else {
+		fleet = machine.Fleet()
+	}
+
+	locations, machineCount, err := principal.List(ctx, session, machine, fleet)
 	if err != nil {
 		return cli.Internal("list agents: %w", err)
 	}
@@ -100,7 +119,7 @@ func runList(params agentListParams) error {
 	entries := make([]agentListEntry, len(locations))
 	for i, location := range locations {
 		entry := agentListEntry{
-			MachineName: location.MachineName,
+			MachineName: location.Machine.Localpart(),
 			Localpart:   location.Assignment.Localpart,
 			Template:    location.Assignment.Template,
 			AutoStart:   location.Assignment.AutoStart,

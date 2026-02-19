@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	libtemplate "github.com/bureau-foundation/bureau/lib/template"
@@ -28,23 +29,21 @@ import (
 // credential.Provision under the hood. This function type breaks the import
 // cycle between lib/principal (which defines Create) and lib/credential
 // (which implements the encryption and publishing workflow).
-type ProvisionFunc func(ctx context.Context, session messaging.Session, machineName, principalLocalpart, serverName, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
+type ProvisionFunc func(ctx context.Context, session messaging.Session, machine ref.Machine, principalLocalpart, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
 
 // CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
-	// MachineName is the machine's localpart (e.g., "machine/workstation").
-	MachineName string
+	// Machine identifies the target machine for this principal.
+	Machine ref.Machine
 
 	// Localpart is the principal's localpart (e.g., "agent/code-review"
 	// or "service/ticket").
 	Localpart string
 
-	// TemplateRef is the template reference string (e.g.,
-	// "bureau/template:claude-dev"). The template must already exist in Matrix.
-	TemplateRef string
-
-	// ServerName is the Matrix server name (e.g., "bureau.local").
-	ServerName string
+	// TemplateRef identifies which template to use for this principal (e.g.,
+	// bureau/template:claude-dev). The template must already exist in Matrix.
+	// Callers parse the string at the CLI boundary via schema.ParseTemplateRef.
+	TemplateRef schema.TemplateRef
 
 	// HomeserverURL is the Matrix homeserver URL included in the encrypted
 	// credential bundle. The launcher uses this to configure the proxy's
@@ -88,11 +87,11 @@ type CreateResult struct {
 	// (e.g., "@agent/code-review:bureau.local").
 	PrincipalUserID string
 
-	// MachineName is the machine the principal was assigned to.
-	MachineName string
+	// Machine is the machine the principal was assigned to.
+	Machine ref.Machine
 
-	// TemplateRef is the template reference string.
-	TemplateRef string
+	// TemplateRef is the parsed template reference.
+	TemplateRef schema.TemplateRef
 
 	// ConfigRoomID is the Matrix room ID of the machine's config room.
 	ConfigRoomID string
@@ -127,17 +126,14 @@ type CreateResult struct {
 // Re-provisioning an existing principal requires explicit credential rotation
 // via bureau credential provision.
 func Create(ctx context.Context, client *messaging.Client, session messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (*CreateResult, error) {
-	if err := ValidateLocalpart(params.MachineName); err != nil {
-		return nil, fmt.Errorf("invalid machine name: %w", err)
+	if params.Machine.IsZero() {
+		return nil, fmt.Errorf("machine is required")
 	}
 	if err := ValidateLocalpart(params.Localpart); err != nil {
 		return nil, fmt.Errorf("invalid principal localpart: %w", err)
 	}
-	if params.TemplateRef == "" {
+	if params.TemplateRef == (schema.TemplateRef{}) {
 		return nil, fmt.Errorf("template reference is required")
-	}
-	if params.ServerName == "" {
-		return nil, fmt.Errorf("server name is required")
 	}
 	if params.HomeserverURL == "" {
 		return nil, fmt.Errorf("homeserver URL is required")
@@ -146,13 +142,10 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 		return nil, fmt.Errorf("machine room ID is required for credential provisioning")
 	}
 
-	// Validate the template reference format and verify the template exists
-	// in Matrix before creating any accounts or state.
-	templateRef, err := schema.ParseTemplateRef(params.TemplateRef)
-	if err != nil {
-		return nil, fmt.Errorf("invalid template reference %q: %w", params.TemplateRef, err)
-	}
-	if _, err := libtemplate.Fetch(ctx, session, templateRef, params.ServerName); err != nil {
+	serverName := params.Machine.Server()
+
+	// Verify the template exists in Matrix before creating any accounts or state.
+	if _, err := libtemplate.Fetch(ctx, session, params.TemplateRef, serverName); err != nil {
 		return nil, fmt.Errorf("template %q not found: %w", params.TemplateRef, err)
 	}
 
@@ -198,7 +191,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	}
 
 	// Provision encrypted credentials to the machine's config room.
-	configRoomID, err := provision(ctx, session, params.MachineName, params.Localpart, params.ServerName, params.MachineRoomID, credentials)
+	configRoomID, err := provision(ctx, session, params.Machine, params.Localpart, params.MachineRoomID, credentials)
 	if err != nil {
 		return nil, fmt.Errorf("provision credentials: %w", err)
 	}
@@ -229,7 +222,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 
 	return &CreateResult{
 		PrincipalUserID: principalUserID,
-		MachineName:     params.MachineName,
+		Machine:         params.Machine,
 		TemplateRef:     params.TemplateRef,
 		ConfigRoomID:    configRoomID,
 		ConfigEventID:   configEventID,
@@ -241,19 +234,21 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 // PrincipalAssignment, and publishes the updated config. If the principal
 // is already assigned, its entry is updated in place.
 func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID string, params CreateParams) (string, error) {
+	machineLocalpart := params.Machine.Localpart()
+
 	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, params.MachineName)
+	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
 	if err == nil {
 		if err := json.Unmarshal(existingContent, &config); err != nil {
-			return "", fmt.Errorf("parse existing machine config for %s: %w", params.MachineName, err)
+			return "", fmt.Errorf("parse existing machine config for %s: %w", machineLocalpart, err)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("read machine config for %s: %w", params.MachineName, err)
+		return "", fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
 	}
 
 	assignment := schema.PrincipalAssignment{
 		Localpart:                 params.Localpart,
-		Template:                  params.TemplateRef,
+		Template:                  params.TemplateRef.String(),
 		AutoStart:                 params.AutoStart,
 		Labels:                    params.Labels,
 		Authorization:             params.Authorization,
@@ -274,9 +269,9 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 		config.Principals = append(config.Principals, assignment)
 	}
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, params.MachineName, config)
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
-		return "", fmt.Errorf("publish machine config for %s: %w", params.MachineName, err)
+		return "", fmt.Errorf("publish machine config for %s: %w", machineLocalpart, err)
 	}
 
 	return eventID, nil

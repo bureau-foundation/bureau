@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 type serviceListParams struct {
@@ -79,7 +80,21 @@ func runList(params serviceListParams) error {
 	}
 	defer session.Close()
 
-	locations, machineCount, err := principal.List(ctx, session, params.Machine, params.Fleet, params.ServerName)
+	var machine ref.Machine
+	var fleet ref.Fleet
+	if params.Machine != "" {
+		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid machine: %v", err)
+		}
+	} else {
+		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid fleet: %v", err)
+		}
+	}
+
+	locations, machineCount, err := principal.List(ctx, session, machine, fleet)
 	if err != nil {
 		return cli.Internal("list services: %w", err)
 	}
@@ -87,7 +102,7 @@ func runList(params serviceListParams) error {
 	entries := make([]serviceListEntry, len(locations))
 	for i, location := range locations {
 		entries[i] = serviceListEntry{
-			MachineName: location.MachineName,
+			MachineName: location.Machine.Localpart(),
 			Localpart:   location.Assignment.Localpart,
 			Template:    location.Assignment.Template,
 			AutoStart:   location.Assignment.AutoStart,

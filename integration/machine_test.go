@@ -24,6 +24,7 @@ import (
 // newTestMachine to create the directory structure, then startMachine to
 // boot the launcher and daemon.
 type testMachine struct {
+	Ref      ref.Machine // typed reference (carries Name, UserID, Fleet, Server)
 	Name     string
 	UserID   string
 	StateDir string
@@ -110,13 +111,19 @@ type deploymentConfig struct {
 func newTestMachine(t *testing.T, fleet *testFleet, bareName string) *testMachine {
 	t.Helper()
 
-	name := fleet.Prefix + "/machine/" + bareName
+	machineRef, err := ref.NewMachine(fleet.Ref, bareName)
+	if err != nil {
+		t.Fatalf("create machine ref for %q: %v", bareName, err)
+	}
+
+	name := machineRef.Localpart()
 	stateDir := t.TempDir()
 	runDir := tempSocketDir(t)
 
 	return &testMachine{
+		Ref:            machineRef,
 		Name:           name,
-		UserID:         "@" + name + ":" + testServerName,
+		UserID:         machineRef.UserID(),
 		StateDir:       stateDir,
 		RunDir:         runDir,
 		LauncherSocket: principal.LauncherSocketPath(runDir),
@@ -453,9 +460,8 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 	}
 
 	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
-		MachineName:   machine.Name,
+		Machine:       machine.Ref,
 		Principal:     account.Localpart,
-		ServerName:    testServerName,
 		MachineRoomID: machine.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
@@ -580,7 +586,7 @@ type agentOptions struct {
 // interactions (e.g., registering mock LLM services on the admin socket).
 type agentDeployment struct {
 	Account         principalAccount
-	TemplateRef     string
+	TemplateRef     schema.TemplateRef
 	ProxySocketPath string
 	AdminSocketPath string
 }
@@ -670,11 +676,11 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	// Publish the template — Create() validates it exists but doesn't push it.
 	grantTemplateAccess(t, admin, machine)
 
-	ref, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
 	if err != nil {
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
-	_, err = template.Push(ctx, admin, ref,
+	_, err = template.Push(ctx, admin, templateRef,
 		agentTemplateContent(options.Binary, options), testServerName)
 	if err != nil {
 		t.Fatalf("push agent template %q: %v", templateName, err)
@@ -700,10 +706,9 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	defer registrationTokenBuffer.Close()
 
 	result, err := principal.Create(ctx, client, admin, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
-		MachineName:   machine.Name,
+		Machine:       machine.Ref,
 		Localpart:     options.Localpart,
-		TemplateRef:   ref.String(),
-		ServerName:    testServerName,
+		TemplateRef:   templateRef,
 		HomeserverURL: testHomeserverURL,
 		AutoStart:     true,
 		MachineRoomID: machine.MachineRoomID,
@@ -727,7 +732,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 			UserID:    result.PrincipalUserID,
 			Token:     result.AccessToken,
 		},
-		TemplateRef:     ref.String(),
+		TemplateRef:     templateRef,
 		ProxySocketPath: proxySocketPath,
 		AdminSocketPath: machine.PrincipalAdminSocketPath(options.Localpart),
 	}

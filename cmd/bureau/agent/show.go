@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -76,20 +77,38 @@ func runShow(localpart string, params agentShowParams) error {
 	}
 	defer session.Close()
 
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.Fleet, params.ServerName)
+	var machine ref.Machine
+	if params.Machine != "" {
+		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid machine: %v", err)
+		}
+	}
+
+	var fleet ref.Fleet
+	if machine.IsZero() {
+		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid fleet: %v", err)
+		}
+	} else {
+		fleet = machine.Fleet()
+	}
+
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {
 		return cli.NotFound("resolve agent: %w", err)
 	}
 
-	if params.Machine == "" && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.MachineName, machineCount)
+	if machine.IsZero() && machineCount > 0 {
+		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
 	sessionContent, metricsContent := readAgentServiceState(ctx, session, *location)
 
 	result := agentShowResult{
 		PrincipalUserID: principal.MatrixUserID(localpart, params.ServerName),
-		MachineName:     location.MachineName,
+		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,
 		Labels:          location.Assignment.Labels,

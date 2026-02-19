@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -79,16 +80,30 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 	}
 	defer session.Close()
 
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.Fleet, params.ServerName)
+	var machine ref.Machine
+	var fleet ref.Fleet
+	if params.Machine != "" {
+		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid machine: %v", err)
+		}
+	} else {
+		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid fleet: %v", err)
+		}
+	}
+
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {
 		return cli.NotFound("resolve service: %w", err)
 	}
 
-	if params.Machine == "" && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.MachineName, machineCount)
+	if machine.IsZero() && machineCount > 0 {
+		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
-	destroyResult, err := principal.Destroy(ctx, session, location.ConfigRoomID, location.MachineName, localpart)
+	destroyResult, err := principal.Destroy(ctx, session, location.ConfigRoomID, location.Machine, localpart)
 	if err != nil {
 		return cli.Internal("remove service assignment: %w", err)
 	}
@@ -108,7 +123,7 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 
 	if done, err := params.EmitJSON(serviceDestroyResult{
 		Localpart:     localpart,
-		MachineName:   location.MachineName,
+		MachineName:   location.Machine.Localpart(),
 		ConfigRoomID:  location.ConfigRoomID,
 		ConfigEventID: destroyResult.ConfigEventID,
 		Purged:        purged,
@@ -116,7 +131,7 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Removed %s from %s\n", localpart, location.MachineName)
+	fmt.Fprintf(os.Stderr, "Removed %s from %s\n", localpart, location.Machine.Localpart())
 	if purged {
 		fmt.Fprintf(os.Stderr, "  Credentials purged\n")
 	}

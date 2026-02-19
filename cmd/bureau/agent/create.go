@@ -12,6 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -24,7 +25,6 @@ type agentCreateParams struct {
 	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
 	Machine        string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
 	Name           string `json:"name"         flag:"name"            desc:"agent principal localpart (required)"`
-	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
 	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
 	AutoStart      bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
 
@@ -85,7 +85,6 @@ token for creating the agent's account.`,
 			if len(args) < 1 {
 				return cli.Validation("template reference is required\n\nUsage: bureau agent create <template-ref> --machine <machine> --name <name> --credential-file <path>")
 			}
-			templateRef := args[0]
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
@@ -98,21 +97,15 @@ token for creating the agent's account.`,
 			if params.Name == "" {
 				return cli.Validation("--name is required")
 			}
-			if params.Fleet == "" {
-				return cli.Validation("--fleet is required")
-			}
-			if _, _, err := principal.ParseFleetPrefix(params.Fleet); err != nil {
-				return cli.Validation("invalid fleet prefix: %v", err)
-			}
-			if err := principal.ValidateLocalpart(params.Machine); err != nil {
-				return cli.Validation("invalid machine name: %v", err)
+			if _, err := ref.ParseMachine(params.Machine, params.ServerName); err != nil {
+				return cli.Validation("invalid machine: %v", err)
 			}
 			if err := principal.ValidateLocalpart(params.Name); err != nil {
 				return cli.Validation("invalid agent name: %v", err)
 			}
 
-			// Validate the template ref format early, before doing any I/O.
-			if _, err := schema.ParseTemplateRef(templateRef); err != nil {
+			templateRef, err := schema.ParseTemplateRef(args[0])
+			if err != nil {
 				return cli.Validation("invalid template reference: %v", err)
 			}
 
@@ -121,7 +114,7 @@ token for creating the agent's account.`,
 	}
 }
 
-func runCreate(templateRef string, params agentCreateParams) error {
+func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -164,13 +157,13 @@ func runCreate(templateRef string, params agentCreateParams) error {
 	}
 	defer adminSession.Close()
 
-	// Resolve the fleet machine room for credential provisioning.
-	fleetNamespace, fleetName, err := principal.ParseFleetPrefix(params.Fleet)
+	// Parse the machine ref and resolve the fleet machine room for credential provisioning.
+	machine, err := ref.ParseMachine(params.Machine, params.ServerName)
 	if err != nil {
-		return cli.Internal("parse fleet prefix: %w", err)
+		return cli.Internal("parse machine: %w", err)
 	}
-	machineRoomAlias := schema.FullRoomAlias(
-		schema.FleetMachineRoomAlias(fleetNamespace, fleetName), params.ServerName)
+	fleet := machine.Fleet()
+	machineRoomAlias := schema.FullRoomAlias(fleet.MachineRoomAliasLocalpart(), fleet.Server())
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
 		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
@@ -179,10 +172,9 @@ func runCreate(templateRef string, params agentCreateParams) error {
 	fmt.Fprintf(os.Stderr, "Creating agent %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
 
 	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
-		MachineName:   params.Machine,
+		Machine:       machine,
 		Localpart:     params.Name,
 		TemplateRef:   templateRef,
-		ServerName:    params.ServerName,
 		HomeserverURL: homeserverURL,
 		AutoStart:     params.AutoStart,
 		MachineRoomID: machineRoomID,
@@ -193,8 +185,8 @@ func runCreate(templateRef string, params agentCreateParams) error {
 
 	if done, err := params.EmitJSON(agentCreateResult{
 		PrincipalUserID: result.PrincipalUserID,
-		MachineName:     result.MachineName,
-		TemplateRef:     result.TemplateRef,
+		MachineName:     result.Machine.Localpart(),
+		TemplateRef:     result.TemplateRef.String(),
 		ConfigRoomID:    result.ConfigRoomID,
 		ConfigEventID:   result.ConfigEventID,
 	}); done {
@@ -202,8 +194,8 @@ func runCreate(templateRef string, params agentCreateParams) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "  Principal: %s\n", result.PrincipalUserID)
-	fmt.Fprintf(os.Stderr, "  Machine:   %s\n", result.MachineName)
-	fmt.Fprintf(os.Stderr, "  Template:  %s\n", result.TemplateRef)
+	fmt.Fprintf(os.Stderr, "  Machine:   %s\n", result.Machine.Localpart())
+	fmt.Fprintf(os.Stderr, "  Template:  %s\n", result.TemplateRef.String())
 	fmt.Fprintf(os.Stderr, "  Config:    %s\n", result.ConfigRoomID)
 	fmt.Fprintf(os.Stderr, "  Event:     %s\n", result.ConfigEventID)
 	fmt.Fprintf(os.Stderr, "\nThe daemon will create the sandbox on its next reconciliation cycle.\n")

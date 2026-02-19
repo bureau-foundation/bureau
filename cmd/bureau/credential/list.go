@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libcred "github.com/bureau-foundation/bureau/lib/credential"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // credentialListParams holds the parameters for credential list.
@@ -67,6 +68,11 @@ Useful for auditing which principals have credentials on a machine.`,
 				return cli.Validation("--machine is required")
 			}
 
+			machine, err := ref.ParseMachine(params.MachineName, params.ServerName)
+			if err != nil {
+				return cli.Validation("invalid machine name: %v", err)
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
@@ -75,7 +81,7 @@ Useful for auditing which principals have credentials on a machine.`,
 				return err
 			}
 
-			result, err := libcred.List(ctx, session, params.MachineName, params.ServerName)
+			result, err := libcred.List(ctx, session, machine)
 			if err != nil {
 				return cli.Internal("list credentials: %w", err)
 			}

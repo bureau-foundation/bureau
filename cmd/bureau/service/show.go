@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 type serviceShowParams struct {
@@ -70,18 +71,32 @@ func runShow(localpart string, params serviceShowParams) error {
 	}
 	defer session.Close()
 
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, params.Machine, params.Fleet, params.ServerName)
+	var machine ref.Machine
+	var fleet ref.Fleet
+	if params.Machine != "" {
+		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid machine: %v", err)
+		}
+	} else {
+		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		if err != nil {
+			return cli.Validation("invalid fleet: %v", err)
+		}
+	}
+
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {
 		return cli.NotFound("resolve service: %w", err)
 	}
 
-	if params.Machine == "" && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.MachineName, machineCount)
+	if machine.IsZero() && machineCount > 0 {
+		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
 	result := serviceShowResult{
 		PrincipalUserID: principal.MatrixUserID(localpart, params.ServerName),
-		MachineName:     location.MachineName,
+		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,
 		Labels:          location.Assignment.Labels,

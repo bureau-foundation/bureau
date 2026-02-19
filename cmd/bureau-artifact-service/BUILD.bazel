@@ -18,7 +18,6 @@ go_library(
         "//lib/artifact/fuse",
         "//lib/clock",
         "//lib/codec",
-        "//lib/principal",
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",

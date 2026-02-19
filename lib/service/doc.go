@@ -23,9 +23,17 @@
 //     service sockets. Handles token inclusion, connection lifecycle,
 //     and response decoding.
 //
-// Services compose these utilities in their own main() function rather
-// than subclassing a framework. The package provides building blocks,
-// not a runtime.
+// [Bootstrap] orchestrates the common startup sequence: flag validation,
+// identity ref construction, Matrix session loading, room resolution,
+// signing key discovery, auth configuration, and service registration.
+// Services call Bootstrap from their main() to eliminate ~130 lines of
+// repeated boilerplate, then add service-specific logic (initial sync,
+// socket server, sync loop) using the [BootstrapResult] fields.
+//
+// Services that need pre-Bootstrap work (e.g., reading secrets from
+// stdin) create their logger via [NewLogger], perform the work, then
+// pass the logger to [BootstrapConfig]. Services without such needs
+// let Bootstrap create the logger automatically.
 //
 // # Authentication
 //

@@ -19,7 +19,6 @@ go_library(
     deps = [
         "//lib/clock",
         "//lib/codec",
-        "//lib/principal",
         "//lib/ref",
         "//lib/schema",
         "//lib/service",

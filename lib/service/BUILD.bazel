@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "service",
     srcs = [
+        "bootstrap.go",
         "client.go",
         "doc.go",
         "registration.go",
@@ -19,6 +20,7 @@ go_library(
     deps = [
         "//lib/clock",
         "//lib/codec",
+        "//lib/principal",
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",

@@ -75,7 +75,7 @@ func List(ctx context.Context, session messaging.Session, machine ref.Machine, f
 	}
 
 	// Resolve the fleet's machine room.
-	machineRoomAlias := schema.FullRoomAlias(fleet.MachineRoomAliasLocalpart(), fleet.Server())
+	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
 		return nil, 0, fmt.Errorf("resolving fleet machine room %q: %w", machineRoomAlias, err)

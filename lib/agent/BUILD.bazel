@@ -17,6 +17,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/agent",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/principal",
         "//lib/proxyclient",
         "//lib/schema",
         "//lib/service",

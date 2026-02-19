@@ -164,7 +164,7 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	fleet := machine.Fleet()
 
 	// Resolve the fleet machine room for credential provisioning.
-	machineRoomAlias := schema.FullRoomAlias(fleet.MachineRoomAliasLocalpart(), fleet.Server())
+	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
 		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)

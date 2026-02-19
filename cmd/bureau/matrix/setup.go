@@ -255,7 +255,7 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username str
 
 // ensureSpace creates the Bureau space if it doesn't exist.
 func ensureSpace(ctx context.Context, session messaging.Session, serverName string, logger *slog.Logger) (string, error) {
-	alias := fmt.Sprintf("#bureau:%s", serverName)
+	alias := schema.FullRoomAlias("bureau", serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {
@@ -286,7 +286,7 @@ func ensureSpace(ctx context.Context, session messaging.Session, serverName stri
 // ensureRoom creates a room if it doesn't exist and adds it as a child of the space.
 // The powerLevels parameter sets the room's power level structure directly.
 func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name, topic, spaceRoomID, serverName string, powerLevels map[string]any, logger *slog.Logger) (string, error) {
-	alias := fmt.Sprintf("#%s:%s", aliasLocal, serverName)
+	alias := schema.FullRoomAlias(aliasLocal, serverName)
 
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {

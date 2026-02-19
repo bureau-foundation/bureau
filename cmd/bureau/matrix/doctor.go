@@ -318,7 +318,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 2: Space and rooms exist.
-	spaceAlias := fmt.Sprintf("#bureau:%s", serverName)
+	spaceAlias := schema.FullRoomAlias("bureau", serverName)
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
 	if spaceResult.Status == statusFail {
 		spaceResult.FixHint = "create Bureau space"
@@ -336,7 +336,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	roomIDs := make(map[string]string) // local alias → room ID
 	for _, room := range standardRooms {
 		room := room // capture for closure
-		fullAlias := fmt.Sprintf("#%s:%s", room.alias, serverName)
+		fullAlias := schema.FullRoomAlias(room.alias, serverName)
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
 		if result.Status == statusFail {
 			result.FixHint = fmt.Sprintf("create %s", room.name)

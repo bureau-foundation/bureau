@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -103,7 +104,7 @@ func run() error {
 	// long-polling. Skip messages from self and from the machine daemon —
 	// the daemon posts operational messages (service directory updates,
 	// policy changes) to the config room that are not intended for the agent.
-	machineUserID := fmt.Sprintf("@%s:%s", machineName, serverName)
+	machineUserID := principal.MatrixUserID(machineName, serverName)
 	log("waiting for incoming message...")
 	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {

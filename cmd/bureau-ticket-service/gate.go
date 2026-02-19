@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/cron"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -815,7 +816,7 @@ func (ts *TicketService) fireDeadlineLocked(ctx context.Context, entry timerHeap
 
 	content.Notes = append(content.Notes, schema.TicketNote{
 		ID:        noteID,
-		Author:    "@" + ts.principalName + ":" + ts.serverName,
+		Author:    principal.MatrixUserID(ts.principalName, ts.serverName),
 		CreatedAt: now,
 		Body:      fmt.Sprintf("Deadline passed: %s", content.Deadline),
 	})

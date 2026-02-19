@@ -205,8 +205,7 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 	// Resolve the config room and collect affected principals.
 	var principals []string
 	var credentialKeys []string
-	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
-	configAlias := schema.FullRoomAlias(configAliasLocalpart, server)
+	configAlias := machine.RoomAlias()
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

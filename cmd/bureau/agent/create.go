@@ -163,7 +163,7 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 		return cli.Internal("parse machine: %w", err)
 	}
 	fleet := machine.Fleet()
-	machineRoomAlias := schema.FullRoomAlias(fleet.MachineRoomAliasLocalpart(), fleet.Server())
+	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
 		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)

@@ -263,14 +263,13 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 	// machine) so the admin has PL 100 from the start. The machine account
 	// is invited. The config room alias uses the @→# convention: the
 	// fleet-scoped localpart IS the room alias localpart.
-	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
-	configAlias := schema.FullRoomAlias(configAliasLocalpart, server)
+	configAlias := machine.RoomAlias()
 
 	fmt.Fprintf(os.Stderr, "Creating config room %s...\n", configAlias)
 	configRoom, createError := adminSession.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Config: " + machineUsername,
 		Topic:      "Machine configuration and credentials for " + machineUsername,
-		Alias:      configAliasLocalpart,
+		Alias:      machine.Localpart(),
 		Preset:     "private_chat",
 		Invite:     []string{machineUserID},
 		Visibility: "private",
@@ -367,8 +366,7 @@ func verifyFullDecommission(ctx context.Context, client *messaging.Client, admin
 	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, globalRooms)
 
 	// Also check the config room (@→# convention).
-	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
-	configAlias := schema.FullRoomAlias(configAliasLocalpart, machine.Server())
+	configAlias := machine.RoomAlias()
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err == nil {
 		configResolved := resolvedRoom{

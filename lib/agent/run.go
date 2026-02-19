@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -278,7 +279,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	defer cancelMessagePump()
 
 	ownUserID := agentContext.Identity.UserID
-	machineUserID := fmt.Sprintf("@%s:%s", config.MachineName, config.ServerName)
+	machineUserID := principal.MatrixUserID(config.MachineName, config.ServerName)
 	pumpReady := make(chan struct{})
 	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
 

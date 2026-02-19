@@ -157,8 +157,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	}
 
 	// Clean up the per-machine config room: clear state events and kick.
-	configAliasLocalpart := schema.EntityConfigRoomAlias(machineUsername)
-	configAlias := schema.FullRoomAlias(configAliasLocalpart, server)
+	configAlias := machine.RoomAlias()
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -204,7 +205,7 @@ and proceeds directly to ensuring room membership.`,
 			// Register the account. In operator mode, M_USER_IN_USE means
 			// the account already exists — verify the password matches
 			// (if one was explicitly provided) and proceed to room invites.
-			userID := fmt.Sprintf("@%s:%s", username, params.ServerName)
+			userID := principal.MatrixUserID(username, params.ServerName)
 			registrationTokenBuffer, tokenErr := secret.NewFromString(registrationToken)
 			if tokenErr != nil {
 				return cli.Internal("protecting registration token: %w", tokenErr)

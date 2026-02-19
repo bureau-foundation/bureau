@@ -227,7 +227,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machine, workspaceRoomID, paramMap)
 
 	// Update the machine's MachineConfig with the new principals.
-	err = updateMachineConfig(ctx, sess, machine, serverName, assignments)
+	err = updateMachineConfig(ctx, sess, machineRef, assignments)
 	if err != nil {
 		return cli.Internal("updating machine config: %w", err)
 	}
@@ -456,8 +456,8 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 // MachineConfig state event: reads the existing config (if any), appends
 // new principal assignments (skipping duplicates by localpart), and
 // publishes the updated config.
-func updateMachineConfig(ctx context.Context, session messaging.Session, machine, serverName string, newAssignments []schema.PrincipalAssignment) error {
-	configRoomAlias := schema.FullRoomAlias(schema.EntityConfigRoomAlias(machine), serverName)
+func updateMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine, newAssignments []schema.PrincipalAssignment) error {
+	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return cli.NotFound("resolve config room %s: %w (has the machine been registered?)", configRoomAlias, err)
@@ -465,7 +465,7 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 
 	// Read the existing MachineConfig.
 	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine)
+	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
 	if err == nil {
 		if unmarshalError := json.Unmarshal(existingContent, &config); unmarshalError != nil {
 			return cli.Internal("parsing existing machine config: %w", unmarshalError)
@@ -496,7 +496,7 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 		return nil
 	}
 
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine, config)
+	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
 	if err != nil {
 		return cli.Internal("publishing machine config: %w", err)
 	}

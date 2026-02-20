@@ -21,7 +21,7 @@ import (
 // via Client.Identity or Client.Whoami.
 type ProxySession struct {
 	client *Client
-	userID string
+	userID ref.UserID
 }
 
 // Compile-time check: *ProxySession implements messaging.Session.
@@ -30,7 +30,7 @@ var _ messaging.Session = (*ProxySession)(nil)
 // NewProxySession creates a ProxySession wrapping the given Client.
 // The userID should be the fully-qualified Matrix user ID for this
 // principal, typically obtained from Client.Identity or Client.Whoami.
-func NewProxySession(client *Client, userID string) *ProxySession {
+func NewProxySession(client *Client, userID ref.UserID) *ProxySession {
 	return &ProxySession{
 		client: client,
 		userID: userID,
@@ -44,7 +44,7 @@ func (session *ProxySession) Client() *Client {
 	return session.client
 }
 
-func (session *ProxySession) UserID() string {
+func (session *ProxySession) UserID() ref.UserID {
 	return session.userID
 }
 
@@ -54,8 +54,16 @@ func (session *ProxySession) Close() error {
 	return nil
 }
 
-func (session *ProxySession) WhoAmI(ctx context.Context) (string, error) {
-	return session.client.Whoami(ctx)
+func (session *ProxySession) WhoAmI(ctx context.Context) (ref.UserID, error) {
+	raw, err := session.client.Whoami(ctx)
+	if err != nil {
+		return ref.UserID{}, err
+	}
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		return ref.UserID{}, fmt.Errorf("proxy: whoami returned invalid user ID %q: %w", raw, err)
+	}
+	return userID, nil
 }
 
 func (session *ProxySession) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
@@ -99,8 +107,8 @@ func (session *ProxySession) CreateRoom(ctx context.Context, request messaging.C
 	return session.client.CreateRoom(ctx, request)
 }
 
-func (session *ProxySession) InviteUser(ctx context.Context, roomID ref.RoomID, userID string) error {
-	return session.client.InviteUser(ctx, roomID.String(), userID)
+func (session *ProxySession) InviteUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID) error {
+	return session.client.InviteUser(ctx, roomID.String(), userID.String())
 }
 
 func (session *ProxySession) JoinRoom(ctx context.Context, roomID ref.RoomID) (ref.RoomID, error) {
@@ -134,8 +142,8 @@ func (session *ProxySession) GetRoomMembers(ctx context.Context, roomID ref.Room
 	return session.client.GetRoomMembers(ctx, roomID.String())
 }
 
-func (session *ProxySession) GetDisplayName(ctx context.Context, userID string) (string, error) {
-	return session.client.GetDisplayName(ctx, userID)
+func (session *ProxySession) GetDisplayName(ctx context.Context, userID ref.UserID) (string, error) {
+	return session.client.GetDisplayName(ctx, userID.String())
 }
 
 func (session *ProxySession) RoomMessages(ctx context.Context, roomID ref.RoomID, options messaging.RoomMessagesOptions) (*messaging.RoomMessagesResponse, error) {

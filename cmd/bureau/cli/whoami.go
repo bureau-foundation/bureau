@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -85,7 +86,12 @@ session file is read (no network access).`,
 					return Internal("create client: %w", err)
 				}
 
-				matrixSession, err := client.SessionFromToken(session.UserID, session.AccessToken)
+				userID, err := ref.ParseUserID(session.UserID)
+				if err != nil {
+					return Internal("parse session user ID: %w", err)
+				}
+
+				matrixSession, err := client.SessionFromToken(userID, session.AccessToken)
 				if err != nil {
 					return Internal("create session: %w", err)
 				}

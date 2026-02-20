@@ -267,7 +267,7 @@ reclaim the room.`,
 			if !ok {
 				return cli.Validation("space leave requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.LeaveRoom(ctx, roomID.String()); err != nil {
+			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
 				return cli.Internal("leave space: %w", err)
 			}
 

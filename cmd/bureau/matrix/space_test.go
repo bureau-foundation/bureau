@@ -178,7 +178,7 @@ func TestInspectSpaceState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session, err := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken(mustParseUserID(t, "@test:local"), "test-token")
 		if err != nil {
 			t.Fatalf("SessionFromToken: %v", err)
 		}
@@ -220,7 +220,7 @@ func TestInspectSpaceState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient failed: %v", err)
 		}
-		session, err := client.SessionFromToken("@test:local", "test-token")
+		session, err := client.SessionFromToken(mustParseUserID(t, "@test:local"), "test-token")
 		if err != nil {
 			t.Fatalf("SessionFromToken: %v", err)
 		}

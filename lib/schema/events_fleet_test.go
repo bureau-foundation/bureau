@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestFleetServiceContentRoundTrip(t *testing.T) {
@@ -992,16 +994,25 @@ func TestFleetAlertContentOmitsOptionalFields(t *testing.T) {
 	}
 }
 
+func mustUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("parse user ID %q: %v", raw, err)
+	}
+	return userID
+}
+
 func TestMachineRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:bureau.local"
+	adminUserID := mustUserID(t, "@bureau-admin:bureau.local")
 	levels := MachineRoomPowerLevels(adminUserID)
 
 	users, ok := levels["users"].(map[string]any)
 	if !ok {
 		t.Fatal("power levels missing 'users' map")
 	}
-	if users[adminUserID] != 100 {
-		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
 	}
 	if levels["users_default"] != 0 {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])
@@ -1044,15 +1055,15 @@ func TestMachineRoomPowerLevels(t *testing.T) {
 }
 
 func TestServiceRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:bureau.local"
+	adminUserID := mustUserID(t, "@bureau-admin:bureau.local")
 	levels := ServiceRoomPowerLevels(adminUserID)
 
 	users, ok := levels["users"].(map[string]any)
 	if !ok {
 		t.Fatal("power levels missing 'users' map")
 	}
-	if users[adminUserID] != 100 {
-		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
 	}
 	if levels["users_default"] != 0 {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])

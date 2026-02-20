@@ -146,7 +146,7 @@ func newTemplateTestSession(t *testing.T, state *templateTestState) *messaging.D
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@daemon:test.local", "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@daemon:test.local"), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

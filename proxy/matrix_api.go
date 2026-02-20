@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -86,6 +87,20 @@ type matrixErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
+// respondError writes a JSON error response with the given HTTP status code
+// and message. Used by Matrix API handlers for both client errors (400) and
+// gateway errors (502).
+func respondError(w http.ResponseWriter, statusCode int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(matrixErrorResponse{Error: message})
+}
+
+// respondErrorf is like respondError but accepts a format string.
+func respondErrorf(w http.ResponseWriter, statusCode int, format string, args ...any) {
+	respondError(w, statusCode, fmt.Sprintf(format, args...))
+}
+
 // getMatrixService looks up the "matrix" HTTPService and returns it. If the
 // service is not registered, writes a 503 error response and returns nil.
 func (h *Handler) getMatrixService(w http.ResponseWriter) *HTTPService {
@@ -94,11 +109,7 @@ func (h *Handler) getMatrixService(w http.ResponseWriter) *HTTPService {
 	h.mu.RUnlock()
 
 	if service == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(matrixErrorResponse{
-			Error: "matrix service not configured",
-		})
+		respondError(w, http.StatusServiceUnavailable, "matrix service not configured")
 		return nil
 	}
 	return service
@@ -164,9 +175,7 @@ func (h *Handler) forwardSimpleGet(w http.ResponseWriter, r *http.Request, matri
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, matrixPath, nil)
 	if err != nil {
 		h.logger.Error("matrix "+endpoint+" failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -187,18 +196,14 @@ func (h *Handler) forwardRoomGet(w http.ResponseWriter, r *http.Request, pathSuf
 
 	room := r.URL.Query().Get("room")
 	if room == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room query parameter is required"})
+		respondError(w, http.StatusBadRequest, "room query parameter is required")
 		return
 	}
 
 	roomID, err := h.resolveRoom(r, service, room)
 	if err != nil {
 		h.logger.Error("matrix "+endpoint+": room resolution failed", "room", room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -206,9 +211,7 @@ func (h *Handler) forwardRoomGet(w http.ResponseWriter, r *http.Request, pathSuf
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix "+endpoint+" failed", "room", roomID, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -234,9 +237,7 @@ func (h *Handler) HandleMatrixResolve(w http.ResponseWriter, r *http.Request) {
 
 	alias := r.URL.Query().Get("alias")
 	if alias == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "alias query parameter is required"})
+		respondError(w, http.StatusBadRequest, "alias query parameter is required")
 		return
 	}
 
@@ -244,9 +245,7 @@ func (h *Handler) HandleMatrixResolve(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix resolve failed", "alias", alias, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -270,11 +269,7 @@ func (h *Handler) HandleMatrixGetState(w http.ResponseWriter, r *http.Request) {
 	stateKey := r.URL.Query().Get("key")
 
 	if room == "" || eventType == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{
-			Error: "room and type query parameters are required",
-		})
+		respondError(w, http.StatusBadRequest, "room and type query parameters are required")
 		return
 	}
 
@@ -282,9 +277,7 @@ func (h *Handler) HandleMatrixGetState(w http.ResponseWriter, r *http.Request) {
 	roomID, err := h.resolveRoom(r, service, room)
 	if err != nil {
 		h.logger.Error("matrix get state: room resolution failed", "room", room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -292,9 +285,7 @@ func (h *Handler) HandleMatrixGetState(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix get state failed", "room", roomID, "type", eventType, "key", stateKey, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -317,16 +308,12 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 
 	var request MatrixStateRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
 
 	if request.Room == "" || request.EventType == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and event_type are required"})
+		respondError(w, http.StatusBadRequest, "room and event_type are required")
 		return
 	}
 
@@ -334,18 +321,14 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 	roomID, err := h.resolveRoom(r, service, request.Room)
 	if err != nil {
 		h.logger.Error("matrix put state: room resolution failed", "room", request.Room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	// Marshal just the content for the upstream PUT body.
 	contentBody, err := json.Marshal(request.Content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid content: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid content: %v", err)
 		return
 	}
 
@@ -360,9 +343,7 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodPut, path, bytes.NewReader(contentBody))
 	if err != nil {
 		h.logger.Error("matrix put state failed", "room", roomID, "type", request.EventType, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -385,16 +366,12 @@ func (h *Handler) HandleMatrixSendMessage(w http.ResponseWriter, r *http.Request
 
 	var request MatrixMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
 
 	if request.Room == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room is required"})
+		respondError(w, http.StatusBadRequest, "room is required")
 		return
 	}
 
@@ -402,18 +379,14 @@ func (h *Handler) HandleMatrixSendMessage(w http.ResponseWriter, r *http.Request
 	roomID, err := h.resolveRoom(r, service, request.Room)
 	if err != nil {
 		h.logger.Error("matrix send message: room resolution failed", "room", request.Room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	// Marshal the content for the upstream PUT body.
 	contentBody, err := json.Marshal(request.Content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid content: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid content: %v", err)
 		return
 	}
 
@@ -429,9 +402,7 @@ func (h *Handler) HandleMatrixSendMessage(w http.ResponseWriter, r *http.Request
 	response, err := service.ForwardRequest(r.Context(), http.MethodPut, path, bytes.NewReader(contentBody))
 	if err != nil {
 		h.logger.Error("matrix send message failed", "room", roomID, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -470,18 +441,14 @@ func (h *Handler) HandleMatrixMessages(w http.ResponseWriter, r *http.Request) {
 
 	room := r.URL.Query().Get("room")
 	if room == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room query parameter is required"})
+		respondError(w, http.StatusBadRequest, "room query parameter is required")
 		return
 	}
 
 	roomID, err := h.resolveRoom(r, service, room)
 	if err != nil {
 		h.logger.Error("matrix messages: room resolution failed", "room", room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -503,9 +470,7 @@ func (h *Handler) HandleMatrixMessages(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix messages failed", "room", roomID, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -526,18 +491,14 @@ func (h *Handler) HandleMatrixThreadMessages(w http.ResponseWriter, r *http.Requ
 	room := r.URL.Query().Get("room")
 	thread := r.URL.Query().Get("thread")
 	if room == "" || thread == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and thread query parameters are required"})
+		respondError(w, http.StatusBadRequest, "room and thread query parameters are required")
 		return
 	}
 
 	roomID, err := h.resolveRoom(r, service, room)
 	if err != nil {
 		h.logger.Error("matrix thread messages: room resolution failed", "room", room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -557,9 +518,7 @@ func (h *Handler) HandleMatrixThreadMessages(w http.ResponseWriter, r *http.Requ
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix thread messages failed", "room", roomID, "thread", thread, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -579,9 +538,7 @@ func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Requ
 
 	userID := r.URL.Query().Get("user")
 	if userID == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "user query parameter is required"})
+		respondError(w, http.StatusBadRequest, "user query parameter is required")
 		return
 	}
 
@@ -589,9 +546,7 @@ func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Requ
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix get display name failed", "user", userID, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -622,9 +577,7 @@ func (h *Handler) HandleMatrixCreateRoom(w http.ResponseWriter, r *http.Request)
 	// The request body is the Matrix createRoom JSON (room name, alias, etc.).
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("reading request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "reading request body: %v", err)
 		return
 	}
 
@@ -633,9 +586,7 @@ func (h *Handler) HandleMatrixCreateRoom(w http.ResponseWriter, r *http.Request)
 	response, err := service.ForwardRequest(r.Context(), http.MethodPost, "/_matrix/client/v3/createRoom", bytes.NewReader(body))
 	if err != nil {
 		h.logger.Error("matrix create room failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -665,16 +616,12 @@ func (h *Handler) HandleMatrixJoinRoom(w http.ResponseWriter, r *http.Request) {
 
 	var request MatrixJoinRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
 
 	if request.Room == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room is required"})
+		respondError(w, http.StatusBadRequest, "room is required")
 		return
 	}
 
@@ -686,9 +633,7 @@ func (h *Handler) HandleMatrixJoinRoom(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodPost, path, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		h.logger.Error("matrix join room failed", "room", request.Room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -721,30 +666,31 @@ func (h *Handler) HandleMatrixInviteUser(w http.ResponseWriter, r *http.Request)
 
 	var request MatrixInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
 
 	if request.Room == "" || request.UserID == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and user_id are required"})
+		respondError(w, http.StatusBadRequest, "room and user_id are required")
 		return
 	}
 
 	roomID, err := h.resolveRoom(r, service, request.Room)
 	if err != nil {
 		h.logger.Error("matrix invite: room resolution failed", "room", request.Room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	// Parse and validate the user ID at the proxy boundary.
+	inviteUserID, err := ref.ParseUserID(request.UserID)
+	if err != nil {
+		respondErrorf(w, http.StatusBadRequest, "invalid user_id: %v", err)
 		return
 	}
 
 	// Build the invite request body for the homeserver.
-	inviteBody, _ := json.Marshal(messaging.InviteRequest{UserID: request.UserID})
+	inviteBody, _ := json.Marshal(messaging.InviteRequest{UserID: inviteUserID})
 
 	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/invite"
 
@@ -753,9 +699,7 @@ func (h *Handler) HandleMatrixInviteUser(w http.ResponseWriter, r *http.Request)
 	response, err := service.ForwardRequest(r.Context(), http.MethodPost, path, bytes.NewReader(inviteBody))
 	if err != nil {
 		h.logger.Error("matrix invite failed", "room", roomID, "user", request.UserID, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -794,9 +738,7 @@ func (h *Handler) HandleMatrixSync(w http.ResponseWriter, r *http.Request) {
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
 		h.logger.Error("matrix sync failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()
@@ -828,33 +770,25 @@ func (h *Handler) HandleMatrixSendEvent(w http.ResponseWriter, r *http.Request) 
 
 	var request MatrixSendEventRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid request body: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
 
 	if request.Room == "" || request.EventType == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: "room and event_type are required"})
+		respondError(w, http.StatusBadRequest, "room and event_type are required")
 		return
 	}
 
 	roomID, err := h.resolveRoom(r, service, request.Room)
 	if err != nil {
 		h.logger.Error("matrix send event: room resolution failed", "room", request.Room, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	contentBody, err := json.Marshal(request.Content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: fmt.Sprintf("invalid content: %v", err)})
+		respondErrorf(w, http.StatusBadRequest, "invalid content: %v", err)
 		return
 	}
 
@@ -870,9 +804,7 @@ func (h *Handler) HandleMatrixSendEvent(w http.ResponseWriter, r *http.Request) 
 	response, err := service.ForwardRequest(r.Context(), http.MethodPut, path, bytes.NewReader(contentBody))
 	if err != nil {
 		h.logger.Error("matrix send event failed", "room", roomID, "event_type", request.EventType, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(matrixErrorResponse{Error: err.Error()})
+		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer response.Body.Close()

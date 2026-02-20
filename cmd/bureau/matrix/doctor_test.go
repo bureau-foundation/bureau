@@ -19,6 +19,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/content"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -26,6 +27,16 @@ import (
 // testLogger returns a logger that discards all output.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// mustParseUserID parses a user ID string for test use, failing the test on error.
+func mustParseUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
 }
 
 // mockDoctorServer is a configurable Matrix homeserver mock for doctor tests.
@@ -171,7 +182,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			roomID := extractRoomIDFromPath(rawPath)
 
 			m.mu.Lock()
-			m.invitesSent[roomID] = append(m.invitesSent[roomID], inviteRequest.UserID)
+			m.invitesSent[roomID] = append(m.invitesSent[roomID], inviteRequest.UserID.String())
 			m.mu.Unlock()
 			json.NewEncoder(writer).Encode(map[string]any{})
 			return
@@ -403,7 +414,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -480,7 +491,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -512,7 +523,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -550,7 +561,7 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@admin:local", "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@admin:local"), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -595,7 +606,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@admin:local", "bad-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@admin:local"), "bad-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -634,7 +645,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -694,7 +705,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -768,7 +779,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -818,7 +829,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -902,7 +913,7 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -936,7 +947,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -969,7 +980,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(adminUserID, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -1020,7 +1031,7 @@ func TestCheckAuth_Mismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@expected:local", "token")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@expected:local"), "token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

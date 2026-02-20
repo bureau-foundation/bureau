@@ -38,6 +38,7 @@ go_test(
     deps = [
         "//cmd/bureau/cli",
         "//lib/pipeline",
+        "//lib/ref",
         "//lib/schema",
         "//messaging",
     ],

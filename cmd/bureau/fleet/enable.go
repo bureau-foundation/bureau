@@ -107,7 +107,7 @@ func runEnable(fleetLocalpart string, params *enableParams) error {
 	defer adminSession.Close()
 
 	// Derive server name from the connected session's identity.
-	server, err := ref.ServerFromUserID(adminSession.UserID())
+	server, err := ref.ServerFromUserID(adminSession.UserID().String())
 	if err != nil {
 		return cli.Internal("cannot determine server name from session: %w", err)
 	}

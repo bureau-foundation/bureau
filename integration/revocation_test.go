@@ -73,7 +73,11 @@ func invalidateMachineTokens(t *testing.T, admin *messaging.DirectSession, machi
 	if err != nil {
 		t.Fatalf("create machine client: %v", err)
 	}
-	machineSession, err := machineClient.SessionFromToken(sessionData.UserID, sessionData.AccessToken)
+	parsedUserID, err := ref.ParseUserID(sessionData.UserID)
+	if err != nil {
+		t.Fatalf("parse machine user ID from session: %v", err)
+	}
+	machineSession, err := machineClient.SessionFromToken(parsedUserID, sessionData.AccessToken)
 	if err != nil {
 		t.Fatalf("create machine session from saved token: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	proxySocket := proxySockets[principalLocalpart]
 	proxyClient := proxyHTTPClient(proxySocket)
 	whoami := proxyWhoami(t, proxyClient)
-	if whoami != account.UserID {
+	if whoami != account.UserID.String() {
 		t.Fatalf("proxy whoami = %q, want %q", whoami, account.UserID)
 	}
 
@@ -260,7 +264,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	if revocation.Machine != machineName {
 		t.Errorf("revocation machine = %q, want %q", revocation.Machine, machineName)
 	}
-	if revocation.MachineUserID != machineUserID {
+	if revocation.MachineUserID != machineUserID.String() {
 		t.Errorf("revocation machine_user_id = %q, want %q", revocation.MachineUserID, machineUserID)
 	}
 	t.Logf("revocation account_deactivated = %v (depends on homeserver admin API support)", revocation.AccountDeactivated)
@@ -347,7 +351,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 		t.Fatalf("get machine room members: %v", err)
 	}
 	for _, member := range members {
-		if member.UserID == machineUserID && member.Membership == "join" {
+		if member.UserID == machineUserID.String() && member.Membership == "join" {
 			t.Errorf("machine %s should have been kicked from machine room but is still joined", machineUserID)
 		}
 	}

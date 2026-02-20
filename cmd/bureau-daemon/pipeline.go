@@ -195,7 +195,7 @@ func (d *Daemon) executePipeline(
 	// a valid token.
 	credentials := map[string]string{
 		"MATRIX_TOKEN":   d.session.AccessToken(),
-		"MATRIX_USER_ID": d.machine.UserID(),
+		"MATRIX_USER_ID": d.machine.UserID().String(),
 	}
 
 	// Create the ephemeral sandbox.

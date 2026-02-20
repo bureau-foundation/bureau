@@ -198,7 +198,7 @@ func TestMachineLifecycle(t *testing.T) {
 		if err := json.Unmarshal(statusJSON, &status); err != nil {
 			t.Fatalf("unmarshal machine status: %v", err)
 		}
-		if status.Principal != machineUserID {
+		if status.Principal != machineUserID.String() {
 			t.Errorf("machine status principal = %q, want %q", status.Principal, machineUserID)
 		}
 
@@ -505,7 +505,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			MachineRoomID: twoMachineFleet.MachineRoomID,
 			Credentials: map[string]string{
 				"MATRIX_TOKEN":          p.account.Token,
-				"MATRIX_USER_ID":        p.account.UserID,
+				"MATRIX_USER_ID":        p.account.UserID.String(),
 				"MATRIX_HOMESERVER_URL": testHomeserverURL,
 			},
 		})
@@ -542,10 +542,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	clientB := proxyHTTPClient(proxySocketB)
 	whoamiA := proxyWhoami(t, clientA)
 	whoamiB := proxyWhoami(t, clientB)
-	if whoamiA != principalAAccount.UserID {
+	if whoamiA != principalAAccount.UserID.String() {
 		t.Errorf("proxy A whoami = %q, want %q", whoamiA, principalAAccount.UserID)
 	}
-	if whoamiB != principalBAccount.UserID {
+	if whoamiB != principalBAccount.UserID.String() {
 		t.Errorf("proxy B whoami = %q, want %q", whoamiB, principalBAccount.UserID)
 	}
 
@@ -554,7 +554,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	sharedRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Fleet Test Room",
 		Preset:     "private_chat",
-		Invite:     []string{principalAAccount.UserID, principalBAccount.UserID},
+		Invite:     []string{principalAAccount.UserID.String(), principalBAccount.UserID.String()},
 		Visibility: "private",
 	})
 	if err != nil {
@@ -578,10 +578,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	// meaning the homeserver has persisted the events. A subsequent /sync
 	// sees them immediately.
 	eventsB := proxySyncRoomTimeline(t, clientB, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsB, principalAAccount.UserID, messageFromA)
+	assertMessagePresent(t, eventsB, principalAAccount.UserID.String(), messageFromA)
 
 	eventsA := proxySyncRoomTimeline(t, clientA, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsA, principalBAccount.UserID, messageFromB)
+	assertMessagePresent(t, eventsA, principalBAccount.UserID.String(), messageFromB)
 
 	t.Log("cross-machine message exchange verified")
 

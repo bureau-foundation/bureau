@@ -122,7 +122,7 @@ func TestServiceDiscovery(t *testing.T) {
 	// iterates — all consumer proxies have the updated directory by
 	// the time this returns.
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID.String(),
 		func(m schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(m.Added, "service/stt/test")
 		}, "service directory update adding service/stt/test")
@@ -140,10 +140,10 @@ func TestServiceDiscovery(t *testing.T) {
 		if entry.Localpart != "service/stt/test" {
 			t.Errorf("localpart = %q, want %q", entry.Localpart, "service/stt/test")
 		}
-		if entry.Principal != serviceEntity.UserID() {
+		if entry.Principal != serviceEntity.UserID().String() {
 			t.Errorf("principal = %q, want %q", entry.Principal, serviceEntity.UserID())
 		}
-		if entry.Machine != provider.UserID {
+		if entry.Machine != provider.UserID.String() {
 			t.Errorf("machine = %q, want %q", entry.Machine, provider.UserID)
 		}
 		if entry.Protocol != "http" {
@@ -217,7 +217,7 @@ func TestServiceDiscovery(t *testing.T) {
 		// Wait for the daemon to process the deregistration and push the
 		// empty directory to all consumer proxies.
 		waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-			t, &deregWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+			t, &deregWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID.String(),
 			func(m schema.ServiceDirectoryUpdatedMessage) bool {
 				return slices.Contains(m.Removed, "service/stt/test")
 			}, "service directory update removing service/stt/test")
@@ -262,7 +262,7 @@ func TestServiceDiscovery(t *testing.T) {
 		// Wait for the consumer daemon to process the new service event
 		// and push the updated directory to all consumer proxies.
 		waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-			t, &partialWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID,
+			t, &partialWatch, schema.MsgTypeServiceDirectoryUpdated, consumer.UserID.String(),
 			func(m schema.ServiceDirectoryUpdatedMessage) bool {
 				return slices.Contains(m.Added, "service/embedding/test")
 			}, "service directory update adding service/embedding/test")

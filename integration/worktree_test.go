@@ -80,7 +80,7 @@ func TestWorkspaceCommands(t *testing.T) {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
 
 	// Publish workspace state.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
@@ -355,7 +355,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
 
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", schema.WorkspaceState{
@@ -713,7 +713,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	agentProxyClient := proxyHTTPClient(agentSocket)
 	agentIdentity := proxyWhoami(t, agentProxyClient)
-	if agentIdentity != agentAccount.UserID {
+	if agentIdentity != agentAccount.UserID.String() {
 		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
 	}
 	t.Log("agent started with verified proxy identity: " + agentIdentity)

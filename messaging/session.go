@@ -25,13 +25,13 @@ import (
 type Session interface {
 	// UserID returns the fully-qualified Matrix user ID
 	// (e.g., "@agent/test:bureau.local").
-	UserID() string
+	UserID() ref.UserID
 
 	// Close releases any resources held by the session. Idempotent.
 	Close() error
 
 	// WhoAmI validates the session and returns the user ID.
-	WhoAmI(ctx context.Context) (string, error)
+	WhoAmI(ctx context.Context) (ref.UserID, error)
 
 	// ResolveAlias resolves a room alias to a room ID.
 	ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error)
@@ -56,7 +56,7 @@ type Session interface {
 	CreateRoom(ctx context.Context, request CreateRoomRequest) (*CreateRoomResponse, error)
 
 	// InviteUser invites a user to a room.
-	InviteUser(ctx context.Context, roomID ref.RoomID, userID string) error
+	InviteUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID) error
 
 	// JoinRoom joins a room by room ID. Returns the room ID. To join
 	// by alias, resolve with ResolveAlias first.
@@ -69,7 +69,7 @@ type Session interface {
 	GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]RoomMember, error)
 
 	// GetDisplayName fetches a user's display name.
-	GetDisplayName(ctx context.Context, userID string) (string, error)
+	GetDisplayName(ctx context.Context, userID ref.UserID) (string, error)
 
 	// RoomMessages fetches paginated messages from a room.
 	RoomMessages(ctx context.Context, roomID ref.RoomID, options RoomMessagesOptions) (*RoomMessagesResponse, error)

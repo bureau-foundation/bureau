@@ -77,7 +77,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	if err := json.Unmarshal(statusJSON, &status); err != nil {
 		t.Fatalf("unmarshal machine status: %v", err)
 	}
-	if status.Principal != machine.UserID {
+	if status.Principal != machine.UserID.String() {
 		t.Errorf("machine status principal = %q, want %q", status.Principal, machine.UserID)
 	}
 	if status.Sandboxes.Running != 0 {
@@ -103,7 +103,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	if level, ok := powerLevels.Users[adminUserID]; !ok || level != 100 {
 		t.Errorf("admin power level = %d (present=%v), want 100", level, ok)
 	}
-	if level, ok := powerLevels.Users[machine.UserID]; !ok || level != 50 {
+	if level, ok := powerLevels.Users[machine.UserID.String()]; !ok || level != 50 {
 		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
 	}
 }
@@ -136,7 +136,7 @@ func TestPrincipalAssignment(t *testing.T) {
 	// Verify the proxy serves the principal's identity.
 	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
 	whoamiUserID := proxyWhoami(t, proxyClient)
-	if whoamiUserID != agent.UserID {
+	if whoamiUserID != agent.UserID.String() {
 		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, agent.UserID)
 	}
 
@@ -369,7 +369,7 @@ func TestCredentialRotation(t *testing.T) {
 	// Verify the proxy serves the correct identity with the original token.
 	proxySocket := proxySockets[agent.Localpart]
 	proxyClient := proxyHTTPClient(proxySocket)
-	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID {
+	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID.String() {
 		t.Fatalf("initial whoami = %q, want %q", whoami, agent.UserID)
 	}
 
@@ -393,7 +393,7 @@ func TestCredentialRotation(t *testing.T) {
 	// credentials_rotated notification with status "completed" after
 	// destroying the old sandbox and creating the new one.
 	waitForNotification[schema.CredentialsRotatedMessage](
-		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID,
+		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID.String(),
 		func(m schema.CredentialsRotatedMessage) bool {
 			return m.Principal == agent.Localpart && m.Status == "completed"
 		}, "credentials rotation completed for "+agent.Localpart)
@@ -402,7 +402,7 @@ func TestCredentialRotation(t *testing.T) {
 	// process holds the rotated token, so whoami still returns the same
 	// user_id (the account didn't change, only its access token).
 	newProxyClient := proxyHTTPClient(proxySocket)
-	if whoami := proxyWhoami(t, newProxyClient); whoami != agent.UserID {
+	if whoami := proxyWhoami(t, newProxyClient); whoami != agent.UserID.String() {
 		t.Fatalf("post-rotation whoami = %q, want %q", whoami, agent.UserID)
 	}
 }
@@ -655,7 +655,7 @@ func TestConfigReconciliation(t *testing.T) {
 		waitForFile(t, alphaSocket)
 
 		alphaClient := proxyHTTPClient(alphaSocket)
-		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID {
+		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID.String() {
 			t.Errorf("alpha whoami = %q, want %q", whoami, alpha.UserID)
 		}
 
@@ -677,13 +677,13 @@ func TestConfigReconciliation(t *testing.T) {
 
 		// Beta should now be reachable with the correct identity.
 		betaClient := proxyHTTPClient(betaSocket)
-		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID {
+		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID.String() {
 			t.Errorf("beta whoami = %q, want %q", whoami, beta.UserID)
 		}
 
 		// Alpha should still be running and unaffected by the config update.
 		alphaClient := proxyHTTPClient(alphaSocket)
-		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID {
+		if whoami := proxyWhoami(t, alphaClient); whoami != alpha.UserID.String() {
 			t.Errorf("alpha whoami = %q, want %q (should survive config update)", whoami, alpha.UserID)
 		}
 	})
@@ -700,7 +700,7 @@ func TestConfigReconciliation(t *testing.T) {
 
 		// Beta should still be running and unaffected.
 		betaClient := proxyHTTPClient(betaSocket)
-		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID {
+		if whoami := proxyWhoami(t, betaClient); whoami != beta.UserID.String() {
 			t.Errorf("beta whoami = %q, want %q (should survive alpha removal)", whoami, beta.UserID)
 		}
 	})

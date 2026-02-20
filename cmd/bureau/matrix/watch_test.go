@@ -102,7 +102,7 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@test:local", "tok")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@test:local"), "tok")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@test:local", "tok")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@test:local"), "tok")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRunWatchLoop_HistoryFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@test:local", "tok")
+	session, err := client.SessionFromToken(mustParseUserID(t, "@test:local"), "tok")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

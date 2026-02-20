@@ -25,6 +25,7 @@ go_library(
         "//lib/codec",
         "//lib/ipc",
         "//lib/netutil",
+        "//lib/ref",
         "//lib/schema",
         "//lib/secret",
         "//messaging",

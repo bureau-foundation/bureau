@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -405,7 +406,13 @@ func acceptPendingInvites(credentials proxy.CredentialSource, logger *slog.Logge
 		return
 	}
 
-	session, err := client.SessionFromToken(userIDBuffer.String(), tokenBuffer.String())
+	parsedUserID, err := ref.ParseUserID(userIDBuffer.String())
+	if err != nil {
+		logger.Warn("failed to parse user ID for invite acceptance", "error", err)
+		return
+	}
+
+	session, err := client.SessionFromToken(parsedUserID, tokenBuffer.String())
 	if err != nil {
 		logger.Warn("failed to create session for invite acceptance", "error", err)
 		return

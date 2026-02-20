@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
@@ -211,7 +212,7 @@ func (c *Client) Login(ctx context.Context, username string, password *secret.Bu
 //
 // userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local"),
 // typically obtained from the proxy's /v1/identity endpoint.
-func (c *Client) ProxySession(userID string) *DirectSession {
+func (c *Client) ProxySession(userID ref.UserID) *DirectSession {
 	return &DirectSession{
 		client: c,
 		userID: userID,
@@ -227,7 +228,7 @@ func (c *Client) ProxySession(userID string) *DirectSession {
 // userID must be the fully-qualified Matrix user ID (e.g., "@alice:bureau.local").
 //
 // The caller must call Close on the returned DirectSession when done.
-func (c *Client) SessionFromToken(userID, accessToken string) (*DirectSession, error) {
+func (c *Client) SessionFromToken(userID ref.UserID, accessToken string) (*DirectSession, error) {
 	tokenBuffer, err := secret.NewFromBytes([]byte(accessToken))
 	if err != nil {
 		return nil, fmt.Errorf("messaging: protecting access token: %w", err)

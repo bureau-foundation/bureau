@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -39,7 +40,13 @@ func ConnectOperator() (context.Context, context.CancelFunc, messaging.Session, 
 		return nil, nil, nil, Internal("create matrix client: %w", err)
 	}
 
-	session, err := client.SessionFromToken(operatorSession.UserID, operatorSession.AccessToken)
+	userID, err := ref.ParseUserID(operatorSession.UserID)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, Internal("parse operator user ID: %w", err)
+	}
+
+	session, err := client.SessionFromToken(userID, operatorSession.AccessToken)
 	if err != nil {
 		cancel()
 		return nil, nil, nil, Internal("create session: %w", err)

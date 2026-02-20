@@ -150,7 +150,12 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	}
 	defer registrationTokenBuffer.Close()
 
-	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	parsedAdminUserID, err := ref.ParseUserID(adminUserID)
+	if err != nil {
+		return cli.Internal("parse admin user ID: %w", err)
+	}
+
+	adminSession, err := client.SessionFromToken(parsedAdminUserID, adminToken)
 	if err != nil {
 		return cli.Internal("create admin session: %w", err)
 	}
@@ -195,7 +200,7 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	}
 
 	if done, err := params.EmitJSON(serviceCreateResult{
-		PrincipalUserID: result.PrincipalUserID,
+		PrincipalUserID: result.PrincipalUserID.String(),
 		MachineName:     result.Machine.Localpart(),
 		TemplateRef:     result.TemplateRef.String(),
 		ConfigRoomID:    result.ConfigRoomID,

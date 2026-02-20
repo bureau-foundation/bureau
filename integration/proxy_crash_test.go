@@ -141,7 +141,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
-			"MATRIX_USER_ID":        account.UserID,
+			"MATRIX_USER_ID":        account.UserID.String(),
 			"MATRIX_HOMESERVER_URL": testHomeserverURL,
 		},
 	})
@@ -173,7 +173,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// Verify the proxy works before the crash.
 	proxyClient := proxyHTTPClient(proxySocket)
 	initialWhoami := proxyWhoami(t, proxyClient)
-	if initialWhoami != account.UserID {
+	if initialWhoami != account.UserID.String() {
 		t.Fatalf("initial whoami = %q, want %q", initialWhoami, account.UserID)
 	}
 	t.Log("proxy serving correctly")
@@ -198,7 +198,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// "recovered". This is the definitive signal that the full cycle
 	// (detection → cleanup → re-creation) completed.
 	waitForNotification[schema.ProxyCrashMessage](
-		t, &watch, schema.MsgTypeProxyCrash, machineUserID,
+		t, &watch, schema.MsgTypeProxyCrash, machineUserID.String(),
 		func(m schema.ProxyCrashMessage) bool {
 			return m.Principal == principalLocalpart && m.Status == "recovered"
 		}, "proxy crash recovery for "+principalLocalpart)
@@ -210,7 +210,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// because the old transport has a broken connection to the dead proxy.
 	newProxyClient := proxyHTTPClient(proxySocket)
 	recoveredWhoami := proxyWhoami(t, newProxyClient)
-	if recoveredWhoami != account.UserID {
+	if recoveredWhoami != account.UserID.String() {
 		t.Fatalf("recovered whoami = %q, want %q", recoveredWhoami, account.UserID)
 	}
 	t.Log("new proxy serves correct identity")

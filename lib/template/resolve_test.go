@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -132,7 +133,8 @@ func newTestSession(t *testing.T, state *templateTestState) *messaging.DirectSes
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@test:test.local", "test-token")
+	testUserID, _ := ref.ParseUserID("@test:test.local")
+	session, err := client.SessionFromToken(testUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

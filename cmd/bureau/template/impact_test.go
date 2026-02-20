@@ -239,7 +239,11 @@ func newImpactTestSession(t *testing.T, state *impactTestState) *messaging.Direc
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@operator:test.local", "operator-token")
+	operatorUserID, err := ref.ParseUserID("@operator:test.local")
+	if err != nil {
+		t.Fatalf("ParseUserID: %v", err)
+	}
+	session, err := client.SessionFromToken(operatorUserID, "operator-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

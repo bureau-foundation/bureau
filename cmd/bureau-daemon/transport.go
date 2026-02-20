@@ -199,7 +199,7 @@ func (d *Daemon) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up the machine's transport address.
-	peerAddress, ok := d.peerAddresses[service.Machine.UserID()]
+	peerAddress, ok := d.peerAddresses[service.Machine.UserID().String()]
 	if !ok || peerAddress == "" {
 		d.logger.Warn("no transport address for remote service's machine",
 			"service", serviceName,
@@ -313,7 +313,7 @@ func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 		}
 
 		// Skip our own machine and entries without transport addresses.
-		if status.Principal == d.machine.UserID() || status.TransportAddress == "" {
+		if status.Principal == d.machine.UserID().String() || status.TransportAddress == "" {
 			continue
 		}
 

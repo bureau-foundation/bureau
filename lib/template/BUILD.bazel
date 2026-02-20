@@ -24,6 +24,7 @@ go_test(
     srcs = ["resolve_test.go"],
     embed = [":template"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//messaging",
     ],

@@ -22,7 +22,7 @@ type entity struct {
 	name       string
 	entityType string
 	localpart  string // pre-computed: "my_bureau/fleet/prod/machine/gpu-box"
-	userID     string // pre-computed: "@my_bureau/fleet/prod/machine/gpu-box:server"
+	userID     UserID // pre-computed: "@my_bureau/fleet/prod/machine/gpu-box:server"
 	roomAlias  string // pre-computed: "#my_bureau/fleet/prod/machine/gpu-box:server"
 }
 
@@ -99,7 +99,7 @@ func (e entity) Name() string { return e.name }
 func (e entity) Localpart() string { return e.localpart }
 
 // UserID returns the full Matrix user ID: @localpart:server.
-func (e entity) UserID() string { return e.userID }
+func (e entity) UserID() UserID { return e.userID }
 
 // RoomAlias returns the entity's config room alias: #localpart:server.
 // This is the @ -> # rule: swap the sigil to get the room.
@@ -112,7 +112,7 @@ func (e entity) Server() string { return e.fleet.ns.server }
 func (e entity) String() string { return e.localpart }
 
 // IsZero reports whether this is an uninitialized zero-value entity.
-func (e entity) IsZero() bool { return e.userID == "" }
+func (e entity) IsZero() bool { return e.userID.IsZero() }
 
 // SocketPath returns the agent-facing socket path within a fleet's
 // run directory.
@@ -132,10 +132,7 @@ func (e entity) AdminSocketPath(runDir string) string {
 // as empty string — used by service deregistration (publishing
 // schema.Service{} to clear a directory entry).
 func (e entity) MarshalText() ([]byte, error) {
-	if e.userID == "" {
-		return []byte{}, nil
-	}
-	return []byte(e.userID), nil
+	return e.userID.MarshalText()
 }
 
 // AccountLocalpart returns the bare account localpart (entityType/entityName)

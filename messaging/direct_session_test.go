@@ -27,7 +27,7 @@ func newTestSession(t *testing.T, handler http.Handler) (*Client, *DirectSession
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	session, err := client.SessionFromToken("@test:local", "test-token")
+	session, err := client.SessionFromToken(mustUserID("@test:local"), "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken failed: %v", err)
 	}
@@ -41,14 +41,14 @@ func TestWhoAmI(t *testing.T) {
 		if request.URL.Path != "/_matrix/client/v3/account/whoami" {
 			t.Errorf("unexpected path: %s", request.URL.Path)
 		}
-		writeJSON(writer, WhoAmIResponse{UserID: "@test:local", DeviceID: "DEV1"})
+		writeJSON(writer, WhoAmIResponse{UserID: mustUserID("@test:local"), DeviceID: "DEV1"})
 	}))
 
 	userID, err := session.WhoAmI(context.Background())
 	if err != nil {
 		t.Fatalf("WhoAmI failed: %v", err)
 	}
-	if userID != "@test:local" {
+	if userID != mustUserID("@test:local") {
 		t.Errorf("unexpected user ID: %s", userID)
 	}
 }
@@ -147,13 +147,13 @@ func TestInviteUser(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("failed to decode invite: %v", err)
 		}
-		if body.UserID != "@alice:local" {
+		if body.UserID != mustUserID("@alice:local") {
 			t.Errorf("unexpected invite target: %s", body.UserID)
 		}
 		writeJSON(writer, map[string]any{})
 	}))
 
-	err := session.InviteUser(context.Background(), mustRoomID("!room1:local"), "@alice:local")
+	err := session.InviteUser(context.Background(), mustRoomID("!room1:local"), mustUserID("@alice:local"))
 	if err != nil {
 		t.Fatalf("InviteUser failed: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestLeaveRoom(t *testing.T) {
 		writeJSON(writer, map[string]any{})
 	}))
 
-	err := session.LeaveRoom(context.Background(), "!room1:local")
+	err := session.LeaveRoom(context.Background(), mustRoomID("!room1:local"))
 	if err != nil {
 		t.Fatalf("LeaveRoom failed: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestKickUser(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("failed to decode kick request: %v", err)
 			}
-			if body.UserID != "@alice:local" {
+			if body.UserID != mustUserID("@alice:local") {
 				t.Errorf("unexpected kick target: %s", body.UserID)
 			}
 			if body.Reason != "misbehaving" {
@@ -682,7 +682,7 @@ func TestKickUser(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.KickUser(context.Background(), "!room1:local", "@alice:local", "misbehaving")
+		err := session.KickUser(context.Background(), mustRoomID("!room1:local"), mustUserID("@alice:local"), "misbehaving")
 		if err != nil {
 			t.Fatalf("KickUser failed: %v", err)
 		}
@@ -694,7 +694,7 @@ func TestKickUser(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("failed to decode kick request: %v", err)
 			}
-			if body.UserID != "@bob:local" {
+			if body.UserID != mustUserID("@bob:local") {
 				t.Errorf("unexpected kick target: %s", body.UserID)
 			}
 			if body.Reason != "" {
@@ -703,7 +703,7 @@ func TestKickUser(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.KickUser(context.Background(), "!room1:local", "@bob:local", "")
+		err := session.KickUser(context.Background(), mustRoomID("!room1:local"), mustUserID("@bob:local"), "")
 		if err != nil {
 			t.Fatalf("KickUser failed: %v", err)
 		}
@@ -723,7 +723,7 @@ func TestGetDisplayName(t *testing.T) {
 			writeJSON(writer, DisplayNameResponse{DisplayName: "Alice Wonderland"})
 		}))
 
-		displayName, err := session.GetDisplayName(context.Background(), "@alice:local")
+		displayName, err := session.GetDisplayName(context.Background(), mustUserID("@alice:local"))
 		if err != nil {
 			t.Fatalf("GetDisplayName failed: %v", err)
 		}
@@ -737,7 +737,7 @@ func TestGetDisplayName(t *testing.T) {
 			writeJSON(writer, DisplayNameResponse{})
 		}))
 
-		displayName, err := session.GetDisplayName(context.Background(), "@bob:local")
+		displayName, err := session.GetDisplayName(context.Background(), mustUserID("@bob:local"))
 		if err != nil {
 			t.Fatalf("GetDisplayName failed: %v", err)
 		}
@@ -753,7 +753,7 @@ func TestGetDisplayName(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeNotFound, Message: "User not found"})
 		}))
 
-		_, err := session.GetDisplayName(context.Background(), "@nonexistent:local")
+		_, err := session.GetDisplayName(context.Background(), mustUserID("@nonexistent:local"))
 		if err == nil {
 			t.Fatal("expected error for unknown user")
 		}
@@ -959,7 +959,7 @@ func TestDeactivateUser(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		err := session.DeactivateUser(context.Background(), mustUserID("@target:local"), false)
 		if err != nil {
 			t.Fatalf("DeactivateUser failed: %v", err)
 		}
@@ -977,7 +977,7 @@ func TestDeactivateUser(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.DeactivateUser(context.Background(), "@target:local", true)
+		err := session.DeactivateUser(context.Background(), mustUserID("@target:local"), true)
 		if err != nil {
 			t.Fatalf("DeactivateUser with erase failed: %v", err)
 		}
@@ -990,7 +990,7 @@ func TestDeactivateUser(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Not an admin"})
 		}))
 
-		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		err := session.DeactivateUser(context.Background(), mustUserID("@target:local"), false)
 		if err == nil {
 			t.Fatal("expected error for non-admin session")
 		}
@@ -1006,7 +1006,7 @@ func TestDeactivateUser(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeUnrecognized, Message: "Unrecognized request"})
 		}))
 
-		err := session.DeactivateUser(context.Background(), "@target:local", false)
+		err := session.DeactivateUser(context.Background(), mustUserID("@target:local"), false)
 		if err == nil {
 			t.Fatal("expected error for unrecognized endpoint")
 		}
@@ -1044,7 +1044,7 @@ func TestResetUserPassword(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.ResetUserPassword(context.Background(), "@target:local", "new-random-password", true)
+		err := session.ResetUserPassword(context.Background(), mustUserID("@target:local"), "new-random-password", true)
 		if err != nil {
 			t.Fatalf("ResetUserPassword failed: %v", err)
 		}
@@ -1062,7 +1062,7 @@ func TestResetUserPassword(t *testing.T) {
 			writeJSON(writer, map[string]any{})
 		}))
 
-		err := session.ResetUserPassword(context.Background(), "@target:local", "new-password", false)
+		err := session.ResetUserPassword(context.Background(), mustUserID("@target:local"), "new-password", false)
 		if err != nil {
 			t.Fatalf("ResetUserPassword failed: %v", err)
 		}
@@ -1075,7 +1075,7 @@ func TestResetUserPassword(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Not an admin"})
 		}))
 
-		err := session.ResetUserPassword(context.Background(), "@target:local", "new-password", true)
+		err := session.ResetUserPassword(context.Background(), mustUserID("@target:local"), "new-password", true)
 		if err == nil {
 			t.Fatal("expected error for non-admin session")
 		}

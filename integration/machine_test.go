@@ -27,7 +27,7 @@ import (
 type testMachine struct {
 	Ref      ref.Machine // typed reference (carries Name, UserID, Fleet, Server)
 	Name     string
-	UserID   string
+	UserID   ref.UserID
 	StateDir string
 	RunDir   string // short /tmp path passed as --run-dir to launcher+daemon
 
@@ -101,7 +101,7 @@ type machineOptions struct {
 // account. Created by registerPrincipal.
 type principalAccount struct {
 	Localpart string
-	UserID    string
+	UserID    ref.UserID
 	Token     string
 }
 
@@ -596,7 +596,7 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 		MachineRoomID: machine.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
-			"MATRIX_USER_ID":        account.UserID,
+			"MATRIX_USER_ID":        account.UserID.String(),
 			"MATRIX_HOMESERVER_URL": testHomeserverURL,
 		},
 	})
@@ -866,7 +866,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
-		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID)
+		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID.String())
 	}
 
 	return agentDeployment{
@@ -888,7 +888,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) ref.RoomID {
 	t.Helper()
 
-	if machine.UserID == "" {
+	if machine.UserID.IsZero() {
 		t.Fatal("machine.UserID is required")
 	}
 
@@ -945,7 +945,7 @@ func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID r
 	if configRoomID.IsZero() {
 		t.Fatal("configRoomID is required")
 	}
-	if agent.UserID == "" {
+	if agent.UserID.IsZero() {
 		t.Fatal("agent.UserID is required")
 	}
 	if agent.Localpart == "" {

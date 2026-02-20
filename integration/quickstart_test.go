@@ -83,7 +83,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// Wait for "quickstart-test-ready" from the test agent. This proves:
 	// identity injection, Matrix authentication, room alias resolution,
 	// and message sending all work from inside the sandbox.
-	readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID)
+	readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID.String())
 	t.Log("test agent sent ready signal")
 
 	// Send a message to the config room. The test agent will detect it
@@ -100,6 +100,6 @@ func TestQuickstartTestAgent(t *testing.T) {
 	// responses, all through the proxy's Matrix API.
 	ackWatch.WaitForMessage(t,
 		"quickstart-test-ok: received 'hello from test harness'",
-		agent.UserID)
+		agent.UserID.String())
 	t.Log("test agent acknowledged message — full stack verified")
 }

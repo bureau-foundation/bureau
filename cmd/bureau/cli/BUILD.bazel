@@ -29,6 +29,7 @@ go_library(
     deps = [
         "//lib/principal",
         "//lib/proxyclient",
+        "//lib/ref",
         "//lib/secret",
         "//lib/toolsearch",
         "//messaging",

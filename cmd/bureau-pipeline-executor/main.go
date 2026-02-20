@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/artifact"
 	"github.com/bureau-foundation/bureau/lib/pipeline"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -77,7 +78,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("proxy identity: %w", err)
 	}
-	session := proxyclient.NewProxySession(proxy, identity.UserID)
+	identityUserID, err := ref.ParseUserID(identity.UserID)
+	if err != nil {
+		return fmt.Errorf("parse identity user ID: %w", err)
+	}
+	session := proxyclient.NewProxySession(proxy, identityUserID)
 
 	// Resolve pipeline definition.
 	payloadPath := os.Getenv("BUREAU_PAYLOAD_PATH")

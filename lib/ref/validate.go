@@ -144,8 +144,8 @@ func ExtractEntityName(localpart string) (entityType, entityName string, err err
 // its parts. Use this for non-Bureau Matrix accounts (admin users,
 // raw usernames) that don't have fleet-scoped structure. For Bureau
 // entities, use Entity.UserID() instead.
-func MatrixUserID(localpart, server string) string {
-	return "@" + localpart + ":" + server
+func MatrixUserID(localpart, server string) UserID {
+	return UserID{id: "@" + localpart + ":" + server}
 }
 
 // ServerFromUserID extracts the Matrix server name from a user ID

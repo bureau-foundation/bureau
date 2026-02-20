@@ -96,6 +96,17 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 	return daemon, fakeClock
 }
 
+// mustParseUserID parses a raw user ID string, panicking on invalid input.
+// Test-only: provides concise user ID construction for SessionFromToken
+// calls and assertions without per-call error handling.
+func mustParseUserID(raw string) ref.UserID {
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test user ID %q: %v", raw, err))
+	}
+	return userID
+}
+
 // testMachineSetup constructs a valid ref.Machine and ref.Fleet for tests
 // that need a specific machine name and server. Uses namespace "bureau"
 // and fleet "test" for all test machines.

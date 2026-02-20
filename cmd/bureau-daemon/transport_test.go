@@ -193,7 +193,7 @@ func TestRelayHandler(t *testing.T) {
 
 	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", remoteMachine, "http")
 	daemon.services[sttLocalpart] = sttService
-	daemon.peerAddresses[remoteMachine.UserID()] = peerAddress
+	daemon.peerAddresses[remoteMachine.UserID().String()] = peerAddress
 	daemon.transportDialer = &testTCPDialer{}
 
 	sttProxyName := principal.ProxyServiceName(sttLocalpart)
@@ -477,7 +477,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	// The consumer sees the same service but hosted on the provider machine.
 	sttConsumerLocalpart, sttConsumerService := testServiceEntry(t, consumerDaemon.fleet, "stt/whisper", providerDaemon.machine, "http")
 	consumerDaemon.services[sttConsumerLocalpart] = sttConsumerService
-	consumerDaemon.peerAddresses[providerDaemon.machine.UserID()] = transportListener.Addr().String()
+	consumerDaemon.peerAddresses[providerDaemon.machine.UserID().String()] = transportListener.Addr().String()
 	consumerDaemon.transportDialer = &testTCPDialer{}
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")

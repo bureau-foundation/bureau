@@ -435,9 +435,13 @@ func adminSession(t *testing.T) *messaging.DirectSession {
 	if token == "" {
 		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
 	}
-	userID := credentials["MATRIX_ADMIN_USER"]
-	if userID == "" {
+	userIDRaw := credentials["MATRIX_ADMIN_USER"]
+	if userIDRaw == "" {
 		t.Fatal("MATRIX_ADMIN_USER missing from credential file")
+	}
+	userID, err := ref.ParseUserID(userIDRaw)
+	if err != nil {
+		t.Fatalf("parse admin user ID %q: %v", userIDRaw, err)
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{

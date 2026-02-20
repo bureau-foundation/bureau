@@ -125,7 +125,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 
 			// Build power levels. Admin-only by default, with optional
 			// member-settable Bureau event types.
-			powerLevels := adminOnlyPowerLevels(sess.UserID(), params.MemberStateEvents)
+			powerLevels := adminOnlyPowerLevels(sess.UserID().String(), params.MemberStateEvents)
 
 			// Create the room.
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -404,7 +404,7 @@ to clear the m.space.child event in the space.`,
 			if !ok {
 				return cli.Validation("room leave requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.LeaveRoom(ctx, roomID.String()); err != nil {
+			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
 				return cli.Internal("leave room: %w", err)
 			}
 

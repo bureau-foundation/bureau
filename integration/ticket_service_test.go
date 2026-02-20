@@ -63,7 +63,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		t.Fatalf("construct ticket service entity ref: %v", err)
 	}
 	projectRoomID := createTicketProjectRoom(t, admin, "ticket-agent-project",
-		ticketServiceEntity, machine.UserID)
+		ticketServiceEntity, machine.UserID.String())
 
 	// Start ticket service and wait for daemon discovery.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
@@ -89,7 +89,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	// daemon's directory update message uses the fleet-scoped name.
 	fleetScopedServiceName := ticketServiceEntity.Localpart()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedServiceName)
 		}, "service directory update adding "+fleetScopedServiceName)
@@ -211,9 +211,9 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		t.Fatalf("construct ticket service entity ref: %v", err)
 	}
 	roomAlphaID := createTicketProjectRoom(t, admin, "lifecycle-alpha",
-		ticketServiceEntity, machine.UserID)
+		ticketServiceEntity, machine.UserID.String())
 	roomBetaID := createTicketProjectRoom(t, admin, "lifecycle-beta",
-		ticketServiceEntity, machine.UserID)
+		ticketServiceEntity, machine.UserID.String())
 
 	// Start ticket service and wait for daemon discovery.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
@@ -237,7 +237,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 	fleetScopedServiceName := ticketServiceEntity.Localpart()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedServiceName)
 		}, "service directory update adding "+fleetScopedServiceName)
@@ -333,7 +333,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		proxySocket := machine.PrincipalSocketPath(t, account.Localpart)
 		waitForFile(t, proxySocket)
-		readyWatch.WaitForMessage(t, "agent-ready", account.UserID)
+		readyWatch.WaitForMessage(t, "agent-ready", account.UserID.String())
 
 		currentDeployedLocalpart = account.Localpart
 		currentAdminSocket = machine.PrincipalAdminSocketPath(t, account.Localpart)
@@ -426,7 +426,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		t.Logf("created %s", ticketID)
 
 		// Claim (open → in_progress).
-		pmUserID := pmAccount.UserID
+		pmUserID := pmAccount.UserID.String()
 		sendStep(t, adminSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -510,7 +510,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		ticketID, _ := waitForTicket(t, &projectWatch, "Permission test ticket")
 		t.Logf("worker created %s", ticketID)
 
-		workerUserID := workerAccount.UserID
+		workerUserID := workerAccount.UserID.String()
 		sendStep(t, workerSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -625,7 +625,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		ticketID, _ := waitForTicket(t, &projectWatch, "Contention target")
 
-		workerUserID := workerAccount.UserID
+		workerUserID := workerAccount.UserID.String()
 		sendStep(t, workerSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -646,7 +646,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Switch to PM — claim should fail (contention).
 		pmSocket := deployAgent(t, pmAccount, pmGrants)
 
-		pmUserID := pmAccount.UserID
+		pmUserID := pmAccount.UserID.String()
 		sendStep(t, pmSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -678,7 +678,7 @@ func writeServiceSession(t *testing.T, stateDir string, account principalAccount
 
 	sessionData := service.SessionData{
 		HomeserverURL: testHomeserverURL,
-		UserID:        account.UserID,
+		UserID:        account.UserID.String(),
 		AccessToken:   account.Token,
 	}
 	sessionJSON, err := json.Marshal(sessionData)
@@ -703,7 +703,7 @@ func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID 
 
 // inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN
 // (already joined).
-func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID string, roomIDs ...ref.RoomID) {
+func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID ref.UserID, roomIDs ...ref.RoomID) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -725,7 +725,7 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name 
 
 	ctx := t.Context()
 	adminUserID := "@bureau-admin:" + testServerName
-	ticketServiceUserID := ticketServiceEntity.UserID()
+	ticketServiceUserID := ticketServiceEntity.UserID().String()
 
 	invitees := append([]string{ticketServiceUserID}, additionalInvites...)
 	room, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{

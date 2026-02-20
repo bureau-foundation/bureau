@@ -162,7 +162,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 				return
 			}
 			json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-				UserID: testObserverUserID,
+				UserID: mustParseUserID(testObserverUserID),
 			})
 			return
 		}
@@ -306,7 +306,7 @@ func TestListWithRemoteServices(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
 	// Add the peer address so the remote service is reachable.
-	daemon.peerAddresses[remoteMachine.UserID()] = "192.168.1.100:9090"
+	daemon.peerAddresses[remoteMachine.UserID().String()] = "192.168.1.100:9090"
 	daemon.transportDialer = &testTCPDialer{}
 
 	response := connectList(t, daemon.observeSocketPath, false)

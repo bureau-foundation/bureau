@@ -113,14 +113,19 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 	if homeserverURL == "" {
 		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
 	}
-	adminUserID := credentials["MATRIX_ADMIN_USER"]
+	adminUserIDString := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserID == "" || adminToken == "" {
+	if adminUserIDString == "" || adminToken == "" {
 		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
+	adminUserID, err := ref.ParseUserID(adminUserIDString)
+	if err != nil {
+		return cli.Internal("parse admin user ID: %w", err)
+	}
+
 	// Derive server name from admin user ID.
-	server, err := ref.ServerFromUserID(adminUserID)
+	server, err := ref.ServerFromUserID(adminUserIDString)
 	if err != nil {
 		return cli.Internal("cannot determine server name from admin user ID: %w", err)
 	}
@@ -185,7 +190,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 			// memberships and cleared state events. Otherwise it could be
 			// an active machine or a partially decommissioned one.
 			fmt.Fprintf(os.Stderr, "  Account already exists — verifying decommission status...\n")
-			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machine, machineUsername, machineUserID); err != nil {
+			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machine, machineUsername, machineUserID.String()); err != nil {
 				return err
 			}
 			// Decommission verified. Reset the password to our one-time
@@ -274,7 +279,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 		Topic:      "Machine configuration and credentials for " + machineUsername,
 		Alias:      machine.Localpart(),
 		Preset:     "private_chat",
-		Invite:     []string{machineUserID},
+		Invite:     []string{machineUserID.String()},
 		Visibility: "private",
 	})
 	if createError != nil {
@@ -302,7 +307,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 		// MachineConfig, layouts, and invites but cannot modify
 		// credentials, power levels, or room metadata.
 		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
-			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
+			schema.ConfigRoomPowerLevels(adminUserID.String(), machineUserID.String()))
 		if err != nil {
 			return cli.Internal("set config room power levels: %w", err)
 		}
@@ -344,7 +349,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 // This is the security gate for re-provisioning. Without it, provision
 // could be used to take over an active machine's identity by resetting
 // its password and re-bootstrapping.
-func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID, adminToken string, machine ref.Machine, machineUsername, machineUserID string) error {
+func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID ref.UserID, adminToken string, machine ref.Machine, machineUsername, machineUserID string) error {
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
 		return cli.Internal("create admin session for decommission check: %w", err)

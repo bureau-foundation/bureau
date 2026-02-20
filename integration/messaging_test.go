@@ -48,11 +48,11 @@ func TestTwoAgentMessaging(t *testing.T) {
 	// --- Sub-test: verify proxy credential isolation ---
 	t.Run("ProxyIdentity", func(t *testing.T) {
 		aliceIdentity := proxyWhoami(t, aliceHTTP)
-		if aliceIdentity != alice.UserID {
+		if aliceIdentity != alice.UserID.String() {
 			t.Errorf("alice whoami = %q, want %q", aliceIdentity, alice.UserID)
 		}
 		bobIdentity := proxyWhoami(t, bobHTTP)
-		if bobIdentity != bob.UserID {
+		if bobIdentity != bob.UserID.String() {
 			t.Errorf("bob whoami = %q, want %q", bobIdentity, bob.UserID)
 		}
 	})
@@ -65,7 +65,7 @@ func TestTwoAgentMessaging(t *testing.T) {
 		chatRoom, err := admin.CreateRoom(t.Context(), messaging.CreateRoomRequest{
 			Name:   "Alice-Bob Test Chat",
 			Preset: "private_chat",
-			Invite: []string{alice.UserID, bob.UserID},
+			Invite: []string{alice.UserID.String(), bob.UserID.String()},
 		})
 		if err != nil {
 			t.Fatalf("create chat room: %v", err)
@@ -88,13 +88,13 @@ func TestTwoAgentMessaging(t *testing.T) {
 			// No sleep needed: proxySendMessage returned 200 OK with event_id,
 			// meaning the homeserver has persisted the events.
 			aliceEvents := proxySyncRoomTimeline(t, aliceHTTP, chatRoomID)
-			assertMessagePresent(t, aliceEvents, alice.UserID, "Hello from Alice")
-			assertMessagePresent(t, aliceEvents, bob.UserID, "Hello from Bob")
+			assertMessagePresent(t, aliceEvents, alice.UserID.String(), "Hello from Alice")
+			assertMessagePresent(t, aliceEvents, bob.UserID.String(), "Hello from Bob")
 
 			// Bob reads the conversation.
 			bobEvents := proxySyncRoomTimeline(t, bobHTTP, chatRoomID)
-			assertMessagePresent(t, bobEvents, alice.UserID, "Hello from Alice")
-			assertMessagePresent(t, bobEvents, bob.UserID, "Hello from Bob")
+			assertMessagePresent(t, bobEvents, alice.UserID.String(), "Hello from Alice")
+			assertMessagePresent(t, bobEvents, bob.UserID.String(), "Hello from Bob")
 		})
 	})
 }

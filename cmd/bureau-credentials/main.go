@@ -138,7 +138,11 @@ func createSession(config *matrixConfig) (*messaging.DirectSession, error) {
 		return nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(config.AdminUserID, config.AdminToken)
+	adminUserID, err := ref.ParseUserID(config.AdminUserID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid admin user ID %q: %w", config.AdminUserID, err)
+	}
+	return client.SessionFromToken(adminUserID, config.AdminToken)
 }
 
 // runProvision encrypts credentials and publishes them to Matrix.
@@ -260,7 +264,7 @@ func runProvision(args []string) error {
 
 	// Build the recipient list: machine key + optional escrow key.
 	recipientKeys := []string{machineKey.PublicKey}
-	encryptedFor := []string{machineRef.UserID()}
+	encryptedFor := []string{machineRef.UserID().String()}
 
 	if escrowKey != "" {
 		if err := sealed.ParsePublicKey(escrowKey); err != nil {
@@ -293,7 +297,7 @@ func runProvision(args []string) error {
 	principalUserID := principalEntity.UserID()
 	credEvent := schema.Credentials{
 		Version:       1,
-		Principal:     principalUserID,
+		Principal:     principalUserID.String(),
 		EncryptedFor:  encryptedFor,
 		Keys:          credentialKeys,
 		Ciphertext:    ciphertext,

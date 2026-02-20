@@ -190,7 +190,7 @@ func runEnable(params *enableParams) error {
 
 	if done, err := params.EmitJSON(enableResult{
 		ServicePrincipal: servicePrincipal,
-		ServiceUserID:    serviceUserID,
+		ServiceUserID:    serviceUserID.String(),
 		Machine:          host,
 		SpaceAlias:       spaceAlias,
 		SpaceRoomID:      spaceRoomID.String(),
@@ -391,7 +391,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID ref.Ro
 
 	// Configure power levels. Read-modify-write on the existing power levels
 	// to add the ticket service user and ticket event type requirements.
-	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID); err != nil {
+	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID.String()); err != nil {
 		return cli.Internal("configuring power levels: %w", err)
 	}
 

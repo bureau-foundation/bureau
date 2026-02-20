@@ -70,7 +70,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
 
 	// Publish initial workspace state (pending). This is the state the
 	// daemon sees when it first evaluates StartConditions. Setup (no
@@ -411,7 +411,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// token on HTTP requests.
 	agentProxyClient := proxyHTTPClient(agentSocket)
 	agentIdentity := proxyWhoami(t, agentProxyClient)
-	if agentIdentity != agentAccount.UserID {
+	if agentIdentity != agentAccount.UserID.String() {
 		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
 	}
 	t.Log("agent proxy identity verified: " + agentIdentity)

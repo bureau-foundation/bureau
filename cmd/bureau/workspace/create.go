@@ -186,7 +186,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 
 	// Ensure the workspace room exists (idempotent).
-	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID, machineUserID, spaceRoomID)
+	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID.String(), machineUserID.String(), spaceRoomID)
 	if err != nil {
 		return cli.Internal("ensuring workspace room: %w", err)
 	}

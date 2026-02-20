@@ -208,7 +208,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, principal ref.Entity, rea
 		}
 
 		content := observe.LayoutToSchema(current)
-		content.SourceMachine = d.machine.UserID()
+		content.SourceMachine = d.machine.UserID().String()
 
 		if _, err := d.session.SendStateEvent(ctx, d.configRoomID,
 			schema.EventTypeLayout, stateKey, content); err != nil {

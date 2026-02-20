@@ -57,7 +57,7 @@ type ProvisionResult struct {
 
 	// PrincipalID is the full Matrix user ID of the principal
 	// (e.g., "@iree/amdgpu/pm:bureau.local").
-	PrincipalID string
+	PrincipalID ref.UserID
 
 	// EncryptedFor lists the identities that can decrypt this bundle
 	// (machine user ID, plus escrow identifier if an escrow key was provided).
@@ -126,7 +126,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 
 	// Build the recipient list: machine key + optional escrow key.
 	recipientKeys := []string{machineKey.PublicKey}
-	encryptedFor := []string{params.Machine.UserID()}
+	encryptedFor := []string{params.Machine.UserID().String()}
 
 	if params.EscrowKey != "" {
 		if err := sealed.ParsePublicKey(params.EscrowKey); err != nil {
@@ -154,11 +154,11 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	principalUserID := params.Principal.UserID()
 	credentialEvent := schema.Credentials{
 		Version:       schema.CredentialsVersion,
-		Principal:     principalUserID,
+		Principal:     principalUserID.String(),
 		EncryptedFor:  encryptedFor,
 		Keys:          credentialKeys,
 		Ciphertext:    ciphertext,
-		ProvisionedBy: session.UserID(),
+		ProvisionedBy: session.UserID().String(),
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 

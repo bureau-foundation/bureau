@@ -14,6 +14,15 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// mustUserID parses a user ID string in test code, panicking on failure.
+func mustUserID(raw string) ref.UserID {
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		panic(err)
+	}
+	return userID
+}
+
 // mustRoomID parses a room ID string in test code, panicking on failure.
 func mustRoomID(raw string) ref.RoomID {
 	roomID, err := ref.ParseRoomID(raw)
@@ -29,14 +38,14 @@ func mustRoomID(raw string) ref.RoomID {
 func testProxySession(t *testing.T, handler http.Handler) *ProxySession {
 	t.Helper()
 	client := testServer(t, handler)
-	return NewProxySession(client, "@agent/test:test.local")
+	return NewProxySession(client, mustUserID("@agent/test:test.local"))
 }
 
 func TestProxySessionUserID(t *testing.T) {
 	t.Parallel()
 
-	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), "@agent/x:test.local")
-	if session.UserID() != "@agent/x:test.local" {
+	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), mustUserID("@agent/x:test.local"))
+	if session.UserID() != mustUserID("@agent/x:test.local") {
 		t.Errorf("UserID = %q, want @agent/x:test.local", session.UserID())
 	}
 }
@@ -44,7 +53,7 @@ func TestProxySessionUserID(t *testing.T) {
 func TestProxySessionClose(t *testing.T) {
 	t.Parallel()
 
-	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), "@agent/x:test.local")
+	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), mustUserID("@agent/x:test.local"))
 	// Close is a no-op — should not error.
 	if err := session.Close(); err != nil {
 		t.Errorf("Close: %v", err)
@@ -55,7 +64,7 @@ func TestProxySessionClient(t *testing.T) {
 	t.Parallel()
 
 	client := New("/tmp/nonexistent.sock", "test.local")
-	session := NewProxySession(client, "@agent/x:test.local")
+	session := NewProxySession(client, mustUserID("@agent/x:test.local"))
 	if session.Client() != client {
 		t.Error("Client() did not return the underlying client")
 	}
@@ -75,7 +84,7 @@ func TestProxySessionWhoAmI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WhoAmI: %v", err)
 	}
-	if userID != "@agent/test:test.local" {
+	if userID != mustUserID("@agent/test:test.local") {
 		t.Errorf("UserID = %q, want @agent/test:test.local", userID)
 	}
 }
@@ -227,7 +236,7 @@ func TestProxySessionInviteUser(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	err := session.InviteUser(context.Background(), mustRoomID("!room:test"), "@other:test.local")
+	err := session.InviteUser(context.Background(), mustRoomID("!room:test"), mustUserID("@other:test.local"))
 	if err != nil {
 		t.Fatalf("InviteUser: %v", err)
 	}
@@ -286,7 +295,7 @@ func TestProxySessionGetDisplayName(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	name, err := session.GetDisplayName(context.Background(), "@agent:test.local")
+	name, err := session.GetDisplayName(context.Background(), mustUserID("@agent:test.local"))
 	if err != nil {
 		t.Fatalf("GetDisplayName: %v", err)
 	}

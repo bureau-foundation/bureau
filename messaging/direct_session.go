@@ -28,7 +28,7 @@ import (
 type DirectSession struct {
 	client      *Client
 	accessToken *secret.Buffer
-	userID      string
+	userID      ref.UserID
 	deviceID    string
 
 	// transactionCounter generates unique transaction IDs for idempotent sends.
@@ -36,7 +36,7 @@ type DirectSession struct {
 }
 
 // UserID returns the fully-qualified Matrix user ID (e.g., "@alice:bureau.local").
-func (s *DirectSession) UserID() string {
+func (s *DirectSession) UserID() ref.UserID {
 	return s.userID
 }
 
@@ -71,15 +71,15 @@ func (s *DirectSession) Close() error {
 
 // WhoAmI validates the access token and returns the user ID.
 // Useful for checking whether a stored token is still valid.
-func (s *DirectSession) WhoAmI(ctx context.Context) (string, error) {
+func (s *DirectSession) WhoAmI(ctx context.Context) (ref.UserID, error) {
 	body, err := s.client.doRequest(ctx, http.MethodGet, "/_matrix/client/v3/account/whoami", s.accessToken, nil)
 	if err != nil {
-		return "", fmt.Errorf("messaging: whoami failed: %w", err)
+		return ref.UserID{}, fmt.Errorf("messaging: whoami failed: %w", err)
 	}
 
 	var response WhoAmIResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("messaging: failed to parse whoami response: %w", err)
+		return ref.UserID{}, fmt.Errorf("messaging: failed to parse whoami response: %w", err)
 	}
 	return response.UserID, nil
 }
@@ -122,7 +122,7 @@ func (s *DirectSession) JoinRoom(ctx context.Context, roomID ref.RoomID) (ref.Ro
 }
 
 // InviteUser invites a user to a room.
-func (s *DirectSession) InviteUser(ctx context.Context, roomID ref.RoomID, userID string) error {
+func (s *DirectSession) InviteUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID) error {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/invite", url.PathEscape(roomID.String()))
 	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, InviteRequest{UserID: userID})
 	if err != nil {
@@ -351,8 +351,8 @@ func (s *DirectSession) JoinedRooms(ctx context.Context) ([]ref.RoomID, error) {
 }
 
 // LeaveRoom leaves a room by ID.
-func (s *DirectSession) LeaveRoom(ctx context.Context, roomID string) error {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/leave", url.PathEscape(roomID))
+func (s *DirectSession) LeaveRoom(ctx context.Context, roomID ref.RoomID) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/leave", url.PathEscape(roomID.String()))
 	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, struct{}{})
 	if err != nil {
 		return fmt.Errorf("messaging: leave room %q failed: %w", roomID, err)
@@ -386,8 +386,8 @@ func (s *DirectSession) GetRoomMembers(ctx context.Context, roomID ref.RoomID) (
 }
 
 // KickUser removes a user from a room with an optional reason.
-func (s *DirectSession) KickUser(ctx context.Context, roomID, userID, reason string) error {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/kick", url.PathEscape(roomID))
+func (s *DirectSession) KickUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID, reason string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/kick", url.PathEscape(roomID.String()))
 	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, KickRequest{
 		UserID: userID,
 		Reason: reason,
@@ -400,8 +400,8 @@ func (s *DirectSession) KickUser(ctx context.Context, roomID, userID, reason str
 
 // GetDisplayName fetches the display name for a Matrix user from their profile.
 // Returns an empty string (not an error) if the user has no display name set.
-func (s *DirectSession) GetDisplayName(ctx context.Context, userID string) (string, error) {
-	path := "/_matrix/client/v3/profile/" + url.PathEscape(userID) + "/displayname"
+func (s *DirectSession) GetDisplayName(ctx context.Context, userID ref.UserID) (string, error) {
+	path := "/_matrix/client/v3/profile/" + url.PathEscape(userID.String()) + "/displayname"
 	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
 	if err != nil {
 		return "", fmt.Errorf("messaging: get display name for %q failed: %w", userID, err)
@@ -457,7 +457,7 @@ func (s *DirectSession) ChangePassword(ctx context.Context, currentPassword, new
 		"new_password": newPassword.String(),
 		"auth": map[string]any{
 			"type":     "m.login.password",
-			"user":     s.userID,
+			"user":     s.userID.String(),
 			"password": currentPassword.String(),
 		},
 	}
@@ -482,8 +482,8 @@ func (s *DirectSession) ChangePassword(ctx context.Context, currentPassword, new
 // Not all homeservers implement this endpoint — Continuwuity returns
 // M_UNRECOGNIZED. Callers should fall back to [DirectSession.ResetUserPassword]
 // with logoutDevices=true when this method fails.
-func (s *DirectSession) DeactivateUser(ctx context.Context, userID string, erase bool) error {
-	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID)
+func (s *DirectSession) DeactivateUser(ctx context.Context, userID ref.UserID, erase bool) error {
+	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID.String())
 	requestBody := map[string]any{
 		"erase": erase,
 	}
@@ -504,8 +504,8 @@ func (s *DirectSession) DeactivateUser(ctx context.Context, userID string, erase
 // the daemon's next /sync attempt receives M_UNKNOWN_TOKEN.
 //
 // Corresponds to POST /_synapse/admin/v1/reset_password/{user_id}.
-func (s *DirectSession) ResetUserPassword(ctx context.Context, userID, newPassword string, logoutDevices bool) error {
-	path := "/_synapse/admin/v1/reset_password/" + url.PathEscape(userID)
+func (s *DirectSession) ResetUserPassword(ctx context.Context, userID ref.UserID, newPassword string, logoutDevices bool) error {
+	path := "/_synapse/admin/v1/reset_password/" + url.PathEscape(userID.String())
 	requestBody := map[string]any{
 		"new_password":   newPassword,
 		"logout_devices": logoutDevices,

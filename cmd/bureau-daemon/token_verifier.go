@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -79,19 +80,21 @@ func (v *tokenVerifier) Verify(ctx context.Context, token string) (string, error
 	}
 
 	// Cache miss or expired — verify against the homeserver.
-	// Create a temporary session with the token. We pass an empty
-	// userID because we don't know it yet — WhoAmI will tell us.
-	session, err := v.client.SessionFromToken("", token)
+	// Create a temporary session with the token. We pass a zero-value
+	// UserID because we don't know it yet — WhoAmI will tell us.
+	session, err := v.client.SessionFromToken(ref.UserID{}, token)
 	if err != nil {
 		return "", fmt.Errorf("creating session for verification: %w", err)
 	}
 	defer session.Close()
 
-	userID, err := session.WhoAmI(ctx)
+	verifiedUserID, err := session.WhoAmI(ctx)
 	if err != nil {
 		v.logger.Warn("token verification failed", "error", err)
 		return "", fmt.Errorf("token verification failed: %w", err)
 	}
+
+	userID := verifiedUserID.String()
 
 	// Cache the successful result.
 	v.mu.Lock()

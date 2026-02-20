@@ -132,7 +132,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
-			"MATRIX_USER_ID":        account.UserID,
+			"MATRIX_USER_ID":        account.UserID.String(),
 			"MATRIX_HOMESERVER_URL": testHomeserverURL,
 		},
 	})
@@ -164,7 +164,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Verify the proxy works before daemon restart.
 	proxyClient := proxyHTTPClient(proxySocket)
 	initialWhoami := proxyWhoami(t, proxyClient)
-	if initialWhoami != account.UserID {
+	if initialWhoami != account.UserID.String() {
 		t.Fatalf("initial whoami = %q, want %q", initialWhoami, account.UserID)
 	}
 
@@ -195,7 +195,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Verify the proxy is still functional (not just the socket file).
 	midWhoami := proxyWhoami(t, proxyClient)
-	if midWhoami != account.UserID {
+	if midWhoami != account.UserID.String() {
 		t.Fatalf("proxy whoami after daemon kill = %q, want %q", midWhoami, account.UserID)
 	}
 
@@ -231,13 +231,13 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// running count. The sentinel has running=-1, so any valid heartbeat
 	// with running >= 0 is from the new daemon.
 	recoveryWatch.WaitForMachineStatus(t, machineName, func(status schema.MachineStatus) bool {
-		return status.Principal == machineUserID && status.Sandboxes.Running == 1
+		return status.Principal == machineUserID.String() && status.Sandboxes.Running == 1
 	}, "heartbeat from new daemon with Running=1")
 	t.Log("new daemon adopted sandbox and published correct heartbeat")
 
 	// Verify the proxy is still functional after daemon restart.
 	finalWhoami := proxyWhoami(t, proxyClient)
-	if finalWhoami != account.UserID {
+	if finalWhoami != account.UserID.String() {
 		t.Fatalf("proxy whoami after daemon restart = %q, want %q", finalWhoami, account.UserID)
 	}
 	t.Log("proxy survived daemon restart, identity preserved")
@@ -245,7 +245,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Verify the adoption was logged to the config room. The watch was set
 	// up before starting daemon2, so only messages from the new daemon match.
 	adoption := waitForNotification[schema.PrincipalAdoptedMessage](
-		t, &adoptionWatch, schema.MsgTypePrincipalAdopted, machineUserID,
+		t, &adoptionWatch, schema.MsgTypePrincipalAdopted, machineUserID.String(),
 		func(m schema.PrincipalAdoptedMessage) bool {
 			return m.Principal == principalLocalpart
 		}, "adoption of "+principalLocalpart)

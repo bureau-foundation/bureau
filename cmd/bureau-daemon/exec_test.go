@@ -499,7 +499,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}

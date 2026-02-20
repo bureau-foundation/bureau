@@ -92,7 +92,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// update message uses the fleet-scoped name.
 	fleetScopedServiceLocalpart := fleet.Prefix + "/" + agentServiceLocalpart
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedServiceLocalpart)
 		}, "service directory update adding "+fleetScopedServiceLocalpart)
@@ -123,7 +123,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// cleanup: EndSession (writes state events to config room via
 	// agent service) then "agent-complete" summary posting.
 	completeWatch := watchRoom(t, admin, machine.ConfigRoomID)
-	completeWatch.WaitForMessage(t, "agent-complete", agent.Account.UserID)
+	completeWatch.WaitForMessage(t, "agent-complete", agent.Account.UserID.String())
 	t.Log("agent posted completion summary")
 
 	// --- Verify agent service state events ---

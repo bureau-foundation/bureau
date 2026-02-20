@@ -93,14 +93,19 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 	if homeserverURL == "" {
 		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
 	}
-	adminUserID := credentials["MATRIX_ADMIN_USER"]
+	adminUserIDString := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserID == "" || adminToken == "" {
+	if adminUserIDString == "" || adminToken == "" {
 		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
 	}
 
+	adminUserID, err := ref.ParseUserID(adminUserIDString)
+	if err != nil {
+		return cli.Internal("parse admin user ID: %w", err)
+	}
+
 	// Derive server name from admin user ID.
-	server, err := ref.ServerFromUserID(adminUserID)
+	server, err := ref.ServerFromUserID(adminUserIDString)
 	if err != nil {
 		return cli.Internal("cannot determine server name from admin user ID: %w", err)
 	}
@@ -231,9 +236,7 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 			credentialKeys = cleared
 		}
 
-		// Kick from config room. KickUser is a DirectSession-only method
-		// that takes string room IDs.
-		err = adminSession.KickUser(ctx, configRoomID.String(), machineUserID, "machine credentials revoked")
+		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
 		} else {
@@ -241,10 +244,8 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 		}
 	}
 
-	// Kick from all global Bureau rooms. KickUser is a DirectSession-only
-	// method that takes string room IDs.
 	for _, room := range globalRooms {
-		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine credentials revoked")
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
@@ -262,7 +263,7 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 		{fleetRoomID, "fleet config room"},
 	}
 	for _, room := range fleetRooms {
-		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine credentials revoked")
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.name, err)
 		} else {
@@ -275,10 +276,10 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 	// invalidate cached tokens and revoke external API keys.
 	revocationContent := schema.CredentialRevocationContent{
 		Machine:            machineUsername,
-		MachineUserID:      machineUserID,
+		MachineUserID:      machineUserID.String(),
 		Principals:         principals,
 		CredentialKeys:     credentialKeys,
-		InitiatedBy:        adminUserID,
+		InitiatedBy:        adminUserID.String(),
 		InitiatedAt:        time.Now().UTC().Format(time.RFC3339),
 		Reason:             params.Reason,
 		AccountDeactivated: accountDeactivated,

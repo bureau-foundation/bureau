@@ -88,7 +88,7 @@ func TestMCPServer(t *testing.T) {
 	// Wait for the bureau_matrix_send tool to post its message. This
 	// proves the authorized tool executed through the proxy from inside
 	// the sandbox.
-	responseWatch.WaitForMessage(t, "mcp-auth-test", agent.Account.UserID)
+	responseWatch.WaitForMessage(t, "mcp-auth-test", agent.Account.UserID.String())
 	t.Log("authorized tool (bureau_matrix_send) posted message via proxy")
 
 	// Wait for the mock to confirm all three LLM requests completed.

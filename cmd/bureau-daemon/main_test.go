@@ -59,7 +59,7 @@ func TestRoomAliasLocalpart(t *testing.T) {
 func TestConfigRoomPowerLevels(t *testing.T) {
 	adminUserID := "@bureau-admin:bureau.local"
 	machine, _ := testMachineSetup(t, "workstation", "bureau.local")
-	machineUserID := machine.UserID()
+	machineUserID := machine.UserID().String()
 	levels := schema.ConfigRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.

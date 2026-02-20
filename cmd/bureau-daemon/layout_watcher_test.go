@@ -154,9 +154,9 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 		t.Fatalf("unmarshal published layout: %v", err)
 	}
 
-	if content.SourceMachine != daemon.machine.UserID() {
+	if content.SourceMachine != daemon.machine.UserID().String() {
 		t.Errorf("SourceMachine = %q, want %q",
-			content.SourceMachine, daemon.machine.UserID())
+			content.SourceMachine, daemon.machine.UserID().String())
 	}
 
 	if len(content.Windows) == 0 {

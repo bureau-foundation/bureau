@@ -99,7 +99,7 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 	defer session.Close()
 
 	// Derive server name from the connected session's identity.
-	server, err := ref.ServerFromUserID(session.UserID())
+	server, err := ref.ServerFromUserID(session.UserID().String())
 	if err != nil {
 		return cli.Internal("cannot determine server name from session: %w", err)
 	}
@@ -116,8 +116,12 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 		return err
 	}
 
-	for _, userID := range params.Invite {
-		if err := inviteToFleetRooms(ctx, session, rooms, userID); err != nil {
+	for _, userIDString := range params.Invite {
+		parsedUserID, err := ref.ParseUserID(userIDString)
+		if err != nil {
+			return cli.Validation("invalid invite user ID %q: %w", userIDString, err)
+		}
+		if err := inviteToFleetRooms(ctx, session, rooms, parsedUserID); err != nil {
 			return err
 		}
 	}
@@ -222,7 +226,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 
 // inviteToFleetRooms invites a user to all three fleet rooms. Silently
 // skips rooms the user has already joined.
-func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID string) error {
+func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID ref.UserID) error {
 	for _, roomID := range []ref.RoomID{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
 		if err := session.InviteUser(ctx, roomID, userID); err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {

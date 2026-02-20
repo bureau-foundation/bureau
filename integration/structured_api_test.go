@@ -86,7 +86,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 		Name:   "Structured API Test Room",
 		Alias:  roomAlias,
 		Preset: "private_chat",
-		Invite: []string{agent.Account.UserID},
+		Invite: []string{agent.Account.UserID.String()},
 		PowerLevelContentOverride: map[string]any{
 			"state_default": 0,
 		},
@@ -154,7 +154,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 
 	var foundMessage bool
 	for _, event := range response.Chunk {
-		if event.Type != schema.MatrixEventTypeMessage || event.Sender != agent.Account.UserID {
+		if event.Type != schema.MatrixEventTypeMessage || event.Sender != agent.Account.UserID.String() {
 			continue
 		}
 		body, _ := event.Content["body"].(string)

@@ -112,7 +112,7 @@ func runShow(localpart string, params agentShowParams) error {
 	sessionContent, metricsContent := readAgentServiceState(ctx, session, *location)
 
 	result := agentShowResult{
-		PrincipalUserID: agentRef.UserID(),
+		PrincipalUserID: agentRef.UserID().String(),
 		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,

@@ -15,6 +15,15 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// mustUserID parses a user ID string or panics. For test code only.
+func mustUserID(raw string) ref.UserID {
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test user ID %q: %v", raw, err))
+	}
+	return userID
+}
+
 // mustRoomID parses a room ID string or panics. For test code only.
 func mustRoomID(raw string) ref.RoomID {
 	roomID, err := ref.ParseRoomID(raw)
@@ -29,7 +38,7 @@ func mustRoomID(raw string) ref.RoomID {
 // up; every other method panics so that unexpected calls are caught
 // immediately.
 type mockSession struct {
-	userID string
+	userID ref.UserID
 
 	// getStateEvent is called by Provision to fetch the machine's public key.
 	getStateEvent func(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
@@ -44,8 +53,8 @@ type mockSession struct {
 	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
 }
 
-func (m *mockSession) UserID() string { return m.userID }
-func (m *mockSession) Close() error   { return nil }
+func (m *mockSession) UserID() ref.UserID { return m.userID }
+func (m *mockSession) Close() error       { return nil }
 
 func (m *mockSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
 	if m.getStateEvent == nil {
@@ -75,7 +84,7 @@ func (m *mockSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eve
 	return m.sendStateEvent(ctx, roomID, eventType, stateKey, content)
 }
 
-func (m *mockSession) WhoAmI(ctx context.Context) (string, error) {
+func (m *mockSession) WhoAmI(ctx context.Context) (ref.UserID, error) {
 	panic("WhoAmI not implemented")
 }
 
@@ -91,7 +100,7 @@ func (m *mockSession) CreateRoom(ctx context.Context, request messaging.CreateRo
 	panic("CreateRoom not implemented")
 }
 
-func (m *mockSession) InviteUser(ctx context.Context, roomID ref.RoomID, userID string) error {
+func (m *mockSession) InviteUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID) error {
 	panic("InviteUser not implemented")
 }
 
@@ -107,7 +116,7 @@ func (m *mockSession) GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]
 	panic("GetRoomMembers not implemented")
 }
 
-func (m *mockSession) GetDisplayName(ctx context.Context, userID string) (string, error) {
+func (m *mockSession) GetDisplayName(ctx context.Context, userID ref.UserID) (string, error) {
 	panic("GetDisplayName not implemented")
 }
 
@@ -187,7 +196,7 @@ func machineKeyJSON(algorithm, publicKey string) json.RawMessage {
 // --- Provision tests ---
 
 func TestProvision_MissingMachine(t *testing.T) {
-	session := &mockSession{userID: "@operator:bureau.local"}
+	session := &mockSession{userID: mustUserID("@operator:bureau.local")}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Principal:     testEntity(t),
 		MachineRoomID: mustRoomID("!room:bureau.local"),
@@ -203,7 +212,7 @@ func TestProvision_MissingMachine(t *testing.T) {
 
 func TestProvision_ZeroPrincipal(t *testing.T) {
 	machine := testMachine(t)
-	session := &mockSession{userID: "@operator:bureau.local"}
+	session := &mockSession{userID: mustUserID("@operator:bureau.local")}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
 		MachineRoomID: mustRoomID("!room:bureau.local"),
@@ -219,7 +228,7 @@ func TestProvision_ZeroPrincipal(t *testing.T) {
 
 func TestProvision_EmptyCredentials(t *testing.T) {
 	machine := testMachine(t)
-	session := &mockSession{userID: "@operator:bureau.local"}
+	session := &mockSession{userID: mustUserID("@operator:bureau.local")}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
 		Principal:     testEntity(t),
@@ -236,7 +245,7 @@ func TestProvision_EmptyCredentials(t *testing.T) {
 
 func TestProvision_MissingMachineRoomID(t *testing.T) {
 	machine := testMachine(t)
-	session := &mockSession{userID: "@operator:bureau.local"}
+	session := &mockSession{userID: mustUserID("@operator:bureau.local")}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:     machine,
 		Principal:   testEntity(t),
@@ -253,7 +262,7 @@ func TestProvision_MissingMachineRoomID(t *testing.T) {
 func TestProvision_MachineKeyFetchFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return nil, fmt.Errorf("homeserver unreachable")
 		},
@@ -277,7 +286,7 @@ func TestProvision_WrongKeyAlgorithm(t *testing.T) {
 	machine := testMachine(t)
 	keypair := testKeypair(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("rsa-4096", keypair.PublicKey), nil
 		},
@@ -300,7 +309,7 @@ func TestProvision_WrongKeyAlgorithm(t *testing.T) {
 func TestProvision_InvalidPublicKey(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", "not-a-real-age-key"), nil
 		},
@@ -320,7 +329,7 @@ func TestProvision_ConfigRoomResolveFails(t *testing.T) {
 	machine := testMachine(t)
 	keypair := testKeypair(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
@@ -347,7 +356,7 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 	machine := testMachine(t)
 	keypair := testKeypair(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
@@ -383,7 +392,7 @@ func TestProvision_HappyPath(t *testing.T) {
 	var capturedContent any
 
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
 			if roomID.String() != "!machine-room:bureau.local" {
 				t.Errorf("GetStateEvent roomID = %q, want %q", roomID, "!machine-room:bureau.local")
@@ -431,7 +440,7 @@ func TestProvision_HappyPath(t *testing.T) {
 	if result.PrincipalID != entity.UserID() {
 		t.Errorf("PrincipalID = %q, want %q", result.PrincipalID, entity.UserID())
 	}
-	if len(result.EncryptedFor) != 1 || result.EncryptedFor[0] != machine.UserID() {
+	if len(result.EncryptedFor) != 1 || result.EncryptedFor[0] != machine.UserID().String() {
 		t.Errorf("EncryptedFor = %v, want [%q]", result.EncryptedFor, machine.UserID())
 	}
 	// Keys should be sorted alphabetically.
@@ -458,7 +467,7 @@ func TestProvision_HappyPath(t *testing.T) {
 	if credentials.Version != schema.CredentialsVersion {
 		t.Errorf("Credentials.Version = %d, want %d", credentials.Version, schema.CredentialsVersion)
 	}
-	if credentials.Principal != entity.UserID() {
+	if credentials.Principal != entity.UserID().String() {
 		t.Errorf("Credentials.Principal = %q, want %q", credentials.Principal, entity.UserID())
 	}
 	if credentials.ProvisionedBy != "@operator:bureau.local" {
@@ -478,7 +487,7 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 	escrowKeypair := testKeypair(t)
 
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", machineKeypair.PublicKey), nil
 		},
@@ -504,7 +513,7 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 	if len(result.EncryptedFor) != 2 {
 		t.Fatalf("EncryptedFor length = %d, want 2", len(result.EncryptedFor))
 	}
-	if result.EncryptedFor[0] != machine.UserID() {
+	if result.EncryptedFor[0] != machine.UserID().String() {
 		t.Errorf("EncryptedFor[0] = %q, want %q", result.EncryptedFor[0], machine.UserID())
 	}
 	if result.EncryptedFor[1] != "escrow:operator" {
@@ -516,7 +525,7 @@ func TestProvision_InvalidEscrowKey(t *testing.T) {
 	machine := testMachine(t)
 	keypair := testKeypair(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
@@ -541,7 +550,7 @@ func TestProvision_InvalidEscrowKey(t *testing.T) {
 // --- List tests ---
 
 func TestList_MissingMachine(t *testing.T) {
-	session := &mockSession{userID: "@operator:bureau.local"}
+	session := &mockSession{userID: mustUserID("@operator:bureau.local")}
 	_, err := List(context.Background(), session, ref.Machine{})
 	if err == nil {
 		t.Fatal("expected error for missing machine, got nil")
@@ -554,7 +563,7 @@ func TestList_MissingMachine(t *testing.T) {
 func TestList_ConfigRoomResolveFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
 			return ref.RoomID{}, fmt.Errorf("server error")
 		},
@@ -572,7 +581,7 @@ func TestList_ConfigRoomResolveFails(t *testing.T) {
 func TestList_ConfigRoomNotFound(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
 			return ref.RoomID{}, &messaging.MatrixError{
 				Code:       messaging.ErrCodeNotFound,
@@ -596,7 +605,7 @@ func TestList_ConfigRoomNotFound(t *testing.T) {
 func TestList_RoomStateFetchFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
@@ -618,7 +627,7 @@ func TestList_NoCredentialEvents(t *testing.T) {
 	machine := testMachine(t)
 	memberStateKey := "@someone:bureau.local"
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
@@ -656,7 +665,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	credentialsAlpha := schema.Credentials{
 		Version:       1,
 		Principal:     "@iree/amdgpu/pm:bureau.local",
-		EncryptedFor:  []string{machine.UserID()},
+		EncryptedFor:  []string{machine.UserID().String()},
 		Keys:          []string{"MATRIX_TOKEN"},
 		Ciphertext:    "encrypted-alpha",
 		ProvisionedBy: "@operator:bureau.local",
@@ -665,7 +674,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	credentialsBeta := schema.Credentials{
 		Version:       1,
 		Principal:     "@sysadmin:bureau.local",
-		EncryptedFor:  []string{machine.UserID(), "escrow:operator"},
+		EncryptedFor:  []string{machine.UserID().String(), "escrow:operator"},
 		Keys:          []string{"API_KEY", "SECRET"},
 		Ciphertext:    "encrypted-beta",
 		ProvisionedBy: "@admin:bureau.local",
@@ -679,7 +688,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	betaContentMap := marshalToMap(t, credentialsBeta)
 
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		resolveAlias: func(_ context.Context, alias string) (ref.RoomID, error) {
 			if alias != machine.RoomAlias() {
 				t.Errorf("ResolveAlias alias = %q, want %q", alias, machine.RoomAlias())
@@ -742,7 +751,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	if bundleAlpha.Principal != "@iree/amdgpu/pm:bureau.local" {
 		t.Errorf("Bundles[0].Principal = %q, want %q", bundleAlpha.Principal, "@iree/amdgpu/pm:bureau.local")
 	}
-	if len(bundleAlpha.EncryptedFor) != 1 || bundleAlpha.EncryptedFor[0] != machine.UserID() {
+	if len(bundleAlpha.EncryptedFor) != 1 || bundleAlpha.EncryptedFor[0] != machine.UserID().String() {
 		t.Errorf("Bundles[0].EncryptedFor = %v, want [%q]", bundleAlpha.EncryptedFor, machine.UserID())
 	}
 	if len(bundleAlpha.Keys) != 1 || bundleAlpha.Keys[0] != "MATRIX_TOKEN" {
@@ -784,7 +793,7 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 	keypair := testKeypair(t)
 
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
@@ -816,7 +825,7 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 func TestAsProvisionFunc_PropagatesError(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
-		userID: "@operator:bureau.local",
+		userID: mustUserID("@operator:bureau.local"),
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return nil, fmt.Errorf("fetch failed")
 		},

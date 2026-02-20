@@ -624,7 +624,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		if !isLocal {
 			// Remote principal is observable if we have a transport
 			// dialer and the peer machine has a known address.
-			_, peerReachable := d.peerAddresses[service.Machine.UserID()]
+			_, peerReachable := d.peerAddresses[service.Machine.UserID().String()]
 			observable = d.transportDialer != nil && peerReachable
 		}
 
@@ -651,7 +651,7 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	var machines []observe.ListMachine
 	machines = append(machines, observe.ListMachine{
 		Name:      d.machine.Localpart(),
-		UserID:    d.machine.UserID(),
+		UserID:    d.machine.UserID().String(),
 		Self:      true,
 		Reachable: true,
 	})
@@ -1143,7 +1143,7 @@ func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok boo
 		if service.Machine == d.machine {
 			continue // Local, not remote.
 		}
-		address, exists := d.peerAddresses[service.Machine.UserID()]
+		address, exists := d.peerAddresses[service.Machine.UserID().String()]
 		if !exists || address == "" {
 			continue
 		}

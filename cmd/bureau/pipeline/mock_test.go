@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -304,7 +305,11 @@ func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.D
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken("@operator:test.local", "operator-token")
+	operatorUserID, err := ref.ParseUserID("@operator:test.local")
+	if err != nil {
+		t.Fatalf("ParseUserID: %v", err)
+	}
+	session, err := client.SessionFromToken(operatorUserID, "operator-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

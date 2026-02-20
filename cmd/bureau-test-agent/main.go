@@ -70,7 +70,11 @@ func run() error {
 
 	// Create a Matrix session for all subsequent operations. The proxy
 	// client is only needed for proxy-specific operations (Identity above).
-	session := proxyclient.NewProxySession(proxy, identity.UserID)
+	identityUserID, err := ref.ParseUserID(identity.UserID)
+	if err != nil {
+		return fmt.Errorf("parse identity user ID: %w", err)
+	}
+	session := proxyclient.NewProxySession(proxy, identityUserID)
 
 	// Step 2: Verify Matrix authentication.
 	log("checking Matrix whoami...")
@@ -110,7 +114,7 @@ func run() error {
 	// policy changes) to the config room that are not intended for the agent.
 	machineUserID := machine.UserID()
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
+	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID.String(), machineUserID.String())
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}

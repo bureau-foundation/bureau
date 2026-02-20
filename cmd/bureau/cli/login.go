@@ -102,7 +102,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			}
 
 			operatorSession := &OperatorSession{
-				UserID:      userID,
+				UserID:      userID.String(),
 				AccessToken: session.AccessToken(),
 				Homeserver:  params.HomeserverURL,
 			}

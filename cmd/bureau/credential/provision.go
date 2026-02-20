@@ -119,7 +119,7 @@ machine and an operator escrow key for recovery.`,
 			if done, err := params.EmitJSON(credentialProvisionResult{
 				EventID:      result.EventID,
 				ConfigRoomID: result.ConfigRoomID,
-				PrincipalID:  result.PrincipalID,
+				PrincipalID:  result.PrincipalID.String(),
 				EncryptedFor: result.EncryptedFor,
 				Keys:         result.Keys,
 			}); done {

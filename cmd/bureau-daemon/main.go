@@ -1006,7 +1006,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 	principals := d.collectPrincipalResources(runningPrincipals)
 
 	status := schema.MachineStatus{
-		Principal: d.machine.UserID(),
+		Principal: d.machine.UserID().String(),
 		Sandboxes: schema.SandboxCounts{
 			Running: runningCount,
 		},
@@ -1087,7 +1087,7 @@ func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[string]s
 func (d *Daemon) publishMachineInfo(ctx context.Context) {
 	amdProber := amdgpu.NewProber()
 	nvidiaProber := nvidia.NewProber()
-	info := hwinfo.Probe(d.machine.UserID(), amdProber, nvidiaProber)
+	info := hwinfo.Probe(d.machine.UserID().String(), amdProber, nvidiaProber)
 	info.DaemonVersion = version.Info()
 
 	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machine.Localpart(), info)

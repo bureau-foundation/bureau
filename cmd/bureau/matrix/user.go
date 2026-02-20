@@ -251,7 +251,7 @@ and proceeds directly to ensuring room membership.`,
 			}
 
 			result := userCreateResult{
-				UserID:        session.UserID(),
+				UserID:        session.UserID().String(),
 				AlreadyExists: alreadyExists,
 			}
 			if !alreadyExists {
@@ -271,11 +271,16 @@ and proceeds directly to ensuring room membership.`,
 // (from the credential file) handles invites; the user's own session
 // handles joins. Each step is idempotent: already-invited users skip
 // the invite, already-joined users skip the join.
-func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID string, userSession *messaging.DirectSession) error {
-	adminUserID := credentials["MATRIX_ADMIN_USER"]
+func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID ref.UserID, userSession *messaging.DirectSession) error {
+	adminUserIDString := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserID == "" || adminToken == "" {
+	if adminUserIDString == "" || adminToken == "" {
 		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	}
+
+	adminUserID, err := ref.ParseUserID(adminUserIDString)
+	if err != nil {
+		return cli.Internal("parse admin user ID: %w", err)
 	}
 
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
@@ -523,9 +528,12 @@ func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *
 	for _, member := range uniqueMembers {
 		displayName := member.DisplayName
 		if displayName == "" {
-			fetched, err := session.GetDisplayName(ctx, member.UserID)
-			if err == nil {
-				displayName = fetched
+			memberUserID, parseErr := ref.ParseUserID(member.UserID)
+			if parseErr == nil {
+				fetched, err := session.GetDisplayName(ctx, memberUserID)
+				if err == nil {
+					displayName = fetched
+				}
 			}
 		}
 		entries = append(entries, userListEntry{
@@ -544,13 +552,16 @@ func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *
 		if displayName == "" {
 			// The /members endpoint may not include display names. Fall
 			// back to the profile endpoint for users without one.
-			fetched, err := session.GetDisplayName(ctx, member.UserID)
-			if err != nil {
-				// Profile lookup failures are non-fatal for listing; the
-				// user might have left the server or restricted their profile.
-				displayName = ""
-			} else {
-				displayName = fetched
+			memberUserID, parseErr := ref.ParseUserID(member.UserID)
+			if parseErr == nil {
+				fetched, err := session.GetDisplayName(ctx, memberUserID)
+				if err != nil {
+					// Profile lookup failures are non-fatal for listing; the
+					// user might have left the server or restricted their profile.
+					displayName = ""
+				} else {
+					displayName = fetched
+				}
 			}
 		}
 		fmt.Fprintf(writer, "%s\t%s\n", member.UserID, displayName)
@@ -623,7 +634,12 @@ func userInviteCommand() *cli.Command {
 				return err
 			}
 
-			if err := sess.InviteUser(ctx, roomID, targetUserID); err != nil {
+			parsedTargetUserID, err := ref.ParseUserID(targetUserID)
+			if err != nil {
+				return cli.Validation("invalid user ID %q: %w", targetUserID, err)
+			}
+
+			if err := sess.InviteUser(ctx, roomID, parsedTargetUserID); err != nil {
 				return cli.Internal("invite user: %w", err)
 			}
 
@@ -714,7 +730,11 @@ alias or room ID. An optional --reason provides context for the kick.`,
 			if !ok {
 				return cli.Validation("user kick requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.KickUser(ctx, roomID.String(), targetUserID, params.Reason); err != nil {
+			parsedKickUserID, err := ref.ParseUserID(targetUserID)
+			if err != nil {
+				return cli.Validation("invalid user ID %q: %w", targetUserID, err)
+			}
+			if err := directSession.KickUser(ctx, roomID, parsedKickUserID, params.Reason); err != nil {
 				return cli.Internal("kick user: %w", err)
 			}
 
@@ -781,7 +801,7 @@ account is in use.`,
 				return cli.Internal("whoami: %w", err)
 			}
 
-			if done, err := params.EmitJSON(userWhoAmIResult{UserID: userID}); done {
+			if done, err := params.EmitJSON(userWhoAmIResult{UserID: userID.String()}); done {
 				return err
 			}
 

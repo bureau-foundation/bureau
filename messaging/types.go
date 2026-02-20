@@ -20,9 +20,9 @@ type RegisterRequest struct {
 
 // AuthResponse is returned by Register and Login.
 type AuthResponse struct {
-	UserID      string `json:"user_id"`
-	AccessToken string `json:"access_token"`
-	DeviceID    string `json:"device_id"`
+	UserID      ref.UserID `json:"user_id"`
+	AccessToken string     `json:"access_token"`
+	DeviceID    string     `json:"device_id"`
 }
 
 // CreateRoomRequest holds parameters for creating a Matrix room.
@@ -196,7 +196,7 @@ type StateSection struct {
 
 // InviteRequest holds the user ID to invite to a room.
 type InviteRequest struct {
-	UserID string `json:"user_id"`
+	UserID ref.UserID `json:"user_id"`
 }
 
 // SendEventResponse is returned by SendMessage, SendEvent, and SendStateEvent.
@@ -206,8 +206,8 @@ type SendEventResponse struct {
 
 // WhoAmIResponse is returned by WhoAmI.
 type WhoAmIResponse struct {
-	UserID   string `json:"user_id"`
-	DeviceID string `json:"device_id,omitempty"`
+	UserID   ref.UserID `json:"user_id"`
+	DeviceID string     `json:"device_id,omitempty"`
 }
 
 // ResolveAliasResponse is returned by ResolveAlias.
@@ -256,8 +256,8 @@ type RoomMemberContent struct {
 
 // KickRequest is the request body for kicking a user from a room.
 type KickRequest struct {
-	UserID string `json:"user_id"`
-	Reason string `json:"reason,omitempty"`
+	UserID ref.UserID `json:"user_id"`
+	Reason string     `json:"reason,omitempty"`
 }
 
 // DisplayNameResponse is returned by the /profile/{userId}/displayname endpoint.

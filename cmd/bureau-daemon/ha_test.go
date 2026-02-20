@@ -247,7 +247,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 			matrixState.setStateEvent(daemon.machineRoomID.String(),
 				schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 				schema.MachineInfo{
-					Principal: daemon.machine.UserID(),
+					Principal: daemon.machine.UserID().String(),
 					Labels:    test.labels,
 				})
 
@@ -511,7 +511,7 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 	matrixState.setStateEvent(daemon.machineRoomID.String(),
 		schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 		schema.MachineInfo{
-			Principal: daemon.machine.UserID(),
+			Principal: daemon.machine.UserID().String(),
 			Labels:    map[string]string{},
 		})
 

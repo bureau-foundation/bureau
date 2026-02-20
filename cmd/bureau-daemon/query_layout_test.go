@@ -47,7 +47,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 			authorization := r.Header.Get("Authorization")
 			if authorization == "Bearer "+testObserverToken {
 				json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-					UserID: testObserverUserID,
+					UserID: mustParseUserID(testObserverUserID),
 				})
 				return
 			}

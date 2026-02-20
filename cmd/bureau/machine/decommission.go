@@ -121,7 +121,12 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		return cli.Internal("create matrix client: %w", err)
 	}
 
-	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+	parsedAdminUserID, err := ref.ParseUserID(adminUserID)
+	if err != nil {
+		return cli.Internal("parse admin user ID: %w", err)
+	}
+
+	adminSession, err := client.SessionFromToken(parsedAdminUserID, adminToken)
 	if err != nil {
 		return cli.Internal("create admin session: %w", err)
 	}
@@ -179,9 +184,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
 		}
 
-		// Kick the machine from the config room. KickUser is a
-		// DirectSession-only method that takes string room IDs.
-		err = adminSession.KickUser(ctx, configRoomID.String(), machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
 		} else {
@@ -189,10 +192,8 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		}
 	}
 
-	// Kick from all global Bureau rooms. KickUser is a DirectSession-only
-	// method that takes string room IDs.
 	for _, room := range globalRooms {
-		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
@@ -207,7 +208,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		{machineRoom: machineRoom{displayName: "fleet config room"}, roomID: fleetRoomID},
 	}
 	for _, room := range fleetRooms {
-		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.displayName, err)
 		} else {
@@ -222,7 +223,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	allRooms := make([]resolvedRoom, 0, len(globalRooms)+len(fleetRooms))
 	allRooms = append(allRooms, globalRooms...)
 	allRooms = append(allRooms, fleetRooms...)
-	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, allRooms)
+	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID.String(), allRooms)
 
 	// Also check the config room if it exists.
 	if !configRoomID.IsZero() {
@@ -231,7 +232,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 			alias:       configAlias,
 			roomID:      configRoomID,
 		}
-		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
+		configActive := checkMachineMembership(ctx, adminSession, machineUserID.String(), []resolvedRoom{configResolved})
 		activeRooms = append(activeRooms, configActive...)
 	}
 

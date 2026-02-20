@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -66,7 +67,12 @@ func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messagin
 		return nil, nil, fmt.Errorf("creating matrix client: %w", err)
 	}
 
-	session, err := client.SessionFromToken(data.UserID, data.AccessToken)
+	userID, err := ref.ParseUserID(data.UserID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid user_id in %s: %w", sessionPath, err)
+	}
+
+	session, err := client.SessionFromToken(userID, data.AccessToken)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -82,7 +88,7 @@ func LoadSession(stateDir, homeserverURL string, logger *slog.Logger) (*messagin
 func SaveSession(stateDir, homeserverURL string, session *messaging.DirectSession) error {
 	data := SessionData{
 		HomeserverURL: homeserverURL,
-		UserID:        session.UserID(),
+		UserID:        session.UserID().String(),
 		AccessToken:   session.AccessToken(),
 	}
 
@@ -105,10 +111,10 @@ func SaveSession(stateDir, homeserverURL string, session *messaging.DirectSessio
 // ValidateSession calls WhoAmI to verify the session's access token
 // is still valid and returns the authenticated user ID. This should
 // be called once at startup after LoadSession.
-func ValidateSession(ctx context.Context, session *messaging.DirectSession) (string, error) {
+func ValidateSession(ctx context.Context, session *messaging.DirectSession) (ref.UserID, error) {
 	userID, err := session.WhoAmI(ctx)
 	if err != nil {
-		return "", fmt.Errorf("validating matrix session: %w", err)
+		return ref.UserID{}, fmt.Errorf("validating matrix session: %w", err)
 	}
 	return userID, nil
 }

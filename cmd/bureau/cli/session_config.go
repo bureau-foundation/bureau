@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -125,7 +126,12 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 		return nil, Internal("create matrix client: %w", err)
 	}
 
-	return client.SessionFromToken(userID, token)
+	parsedUserID, err := ref.ParseUserID(userID)
+	if err != nil {
+		return nil, Internal("parse user ID: %w", err)
+	}
+
+	return client.SessionFromToken(parsedUserID, token)
 }
 
 // connectViaProxy creates a Matrix session routed through the Bureau proxy
@@ -147,7 +153,12 @@ func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session,
 		return nil, Internal("proxy identity: %w", err)
 	}
 
-	return proxyclient.NewProxySession(proxy, identity.UserID), nil
+	proxyUserID, err := ref.ParseUserID(identity.UserID)
+	if err != nil {
+		return nil, Internal("parse proxy identity user ID: %w", err)
+	}
+
+	return proxyclient.NewProxySession(proxy, proxyUserID), nil
 }
 
 // ResolveHomeserverURL extracts the homeserver URL from flags or credential

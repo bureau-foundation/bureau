@@ -566,8 +566,8 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 	for localpart, service := range d.services {
 		entries = append(entries, adminDirectoryEntry{
 			Localpart:    localpart,
-			Principal:    service.Principal.UserID(),
-			Machine:      service.Machine.UserID(),
+			Principal:    service.Principal.UserID().String(),
+			Machine:      service.Machine.UserID().String(),
 			Protocol:     service.Protocol,
 			Description:  service.Description,
 			Capabilities: service.Capabilities,
@@ -735,7 +735,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 			return
 		}
 
-		peerAddress, ok := d.peerAddresses[cacheService.Machine.UserID()]
+		peerAddress, ok := d.peerAddresses[cacheService.Machine.UserID().String()]
 		if !ok || peerAddress == "" {
 			d.logger.Warn("discovered remote shared cache but no transport address for its machine",
 				"principal", binding.Principal,
@@ -882,7 +882,7 @@ func (d *Daemon) discoverPushTargets(ctx context.Context) {
 
 		machineLocalpart := service.Machine.Localpart()
 
-		peerAddress, ok := d.peerAddresses[service.Machine.UserID()]
+		peerAddress, ok := d.peerAddresses[service.Machine.UserID().String()]
 		if !ok || peerAddress == "" {
 			d.logger.Debug("skipping push target: no transport address",
 				"service", localpart,

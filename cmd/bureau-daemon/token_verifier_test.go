@@ -35,7 +35,7 @@ func TestTokenVerifierValidToken(t *testing.T) {
 			return
 		}
 		json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-			UserID: "@bureau-admin:bureau.local",
+			UserID: mustParseUserID("@bureau-admin:bureau.local"),
 		})
 	}))
 	defer server.Close()
@@ -104,7 +104,7 @@ func TestTokenVerifierCachesSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount.Add(1)
 		json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-			UserID: "@bureau-admin:bureau.local",
+			UserID: mustParseUserID("@bureau-admin:bureau.local"),
 		})
 	}))
 	defer server.Close()
@@ -196,7 +196,7 @@ func TestTokenVerifierCacheExpiry(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount.Add(1)
 		json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-			UserID: "@bureau-admin:bureau.local",
+			UserID: mustParseUserID("@bureau-admin:bureau.local"),
 		})
 	}))
 	defer server.Close()
@@ -239,7 +239,7 @@ func TestTokenVerifierEvictExpired(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(messaging.WhoAmIResponse{
-			UserID: "@bureau-admin:bureau.local",
+			UserID: mustParseUserID("@bureau-admin:bureau.local"),
 		})
 	}))
 	defer server.Close()

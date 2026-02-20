@@ -206,7 +206,7 @@ func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credential
 	matrixUserID := credentials["MATRIX_USER_ID"]
 	if matrixUserID == "" {
 		// Default to the principal's canonical Matrix user ID.
-		matrixUserID = principalEntity.UserID()
+		matrixUserID = principalEntity.UserID().String()
 	}
 
 	remaining := make(map[string]string, len(credentials))

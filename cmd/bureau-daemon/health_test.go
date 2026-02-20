@@ -333,7 +333,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1121,7 +1121,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1268,7 +1268,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1386,7 +1386,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken("@"+machineName+":"+serverName, "test-token")
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}

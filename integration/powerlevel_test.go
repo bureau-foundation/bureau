@@ -43,8 +43,8 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	configRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:                      "PL Test Config Room",
 		Preset:                    "private_chat",
-		Invite:                    []string{machineAccount.UserID, agentAccount.UserID},
-		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineAccount.UserID),
+		Invite:                    []string{machineAccount.UserID.String(), agentAccount.UserID.String()},
+		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineAccount.UserID.String()),
 	})
 	if err != nil {
 		t.Fatalf("create config room: %v", err)
@@ -53,8 +53,8 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	workspaceRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:                      "PL Test Workspace Room",
 		Preset:                    "private_chat",
-		Invite:                    []string{machineAccount.UserID, agentAccount.UserID},
-		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineAccount.UserID),
+		Invite:                    []string{machineAccount.UserID.String(), agentAccount.UserID.String()},
+		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineAccount.UserID.String()),
 	})
 	if err != nil {
 		t.Fatalf("create workspace room: %v", err)

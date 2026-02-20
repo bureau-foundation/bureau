@@ -339,7 +339,7 @@ func TestCommandSkipsSelfMessages(t *testing.T) {
 
 	const roomID = "!workspace:test"
 	// Event sender matches daemon's own user ID.
-	event := buildCommandEvent("$cmd5", harness.daemon.machine.UserID(), "workspace.list", "", "")
+	event := buildCommandEvent("$cmd5", harness.daemon.machine.UserID().String(), "workspace.list", "", "")
 
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})

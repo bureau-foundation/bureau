@@ -306,7 +306,7 @@ func TestMachineConstruction(t *testing.T) {
 			if m.Localpart() != tt.wantLp {
 				t.Errorf("Localpart() = %q, want %q", m.Localpart(), tt.wantLp)
 			}
-			if m.UserID() != tt.wantUID {
+			if m.UserID().String() != tt.wantUID {
 				t.Errorf("UserID() = %q, want %q", m.UserID(), tt.wantUID)
 			}
 			if m.RoomAlias() != tt.wantRA {
@@ -343,7 +343,7 @@ func TestServiceHierarchicalName(t *testing.T) {
 	if service.Name() != "stt/whisper" {
 		t.Errorf("Name() = %q", service.Name())
 	}
-	if service.UserID() != "@acme/fleet/staging/service/stt/whisper:"+testServer {
+	if service.UserID().String() != "@acme/fleet/staging/service/stt/whisper:"+testServer {
 		t.Errorf("UserID() = %q", service.UserID())
 	}
 }
@@ -360,7 +360,7 @@ func TestAgentConstruction(t *testing.T) {
 	if agent.Localpart() != "my_bureau/fleet/prod/agent/code-reviewer" {
 		t.Errorf("Localpart() = %q", agent.Localpart())
 	}
-	if agent.UserID() != "@my_bureau/fleet/prod/agent/code-reviewer:"+testServer {
+	if agent.UserID().String() != "@my_bureau/fleet/prod/agent/code-reviewer:"+testServer {
 		t.Errorf("UserID() = %q", agent.UserID())
 	}
 }
@@ -456,7 +456,7 @@ func TestParseMachineLocalpart(t *testing.T) {
 	if machine.Name() != "gpu-box" {
 		t.Errorf("Name() = %q", machine.Name())
 	}
-	if machine.UserID() != "@my_bureau/fleet/prod/machine/gpu-box:"+testServer {
+	if machine.UserID().String() != "@my_bureau/fleet/prod/machine/gpu-box:"+testServer {
 		t.Errorf("UserID() = %q", machine.UserID())
 	}
 }
@@ -492,8 +492,8 @@ func TestAtToHashRule(t *testing.T) {
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 
-	userID := machine.UserID()       // @localpart:server
-	roomAlias := machine.RoomAlias() // #localpart:server
+	userID := machine.UserID().String() // @localpart:server
+	roomAlias := machine.RoomAlias()    // #localpart:server
 
 	// The @ -> # rule: swap the sigil and you get the room.
 	if "#"+userID[1:] != roomAlias {
@@ -610,7 +610,7 @@ func TestParseEntityLocalpart(t *testing.T) {
 	if entity.Localpart() != "my_bureau/fleet/prod/machine/gpu-box" {
 		t.Errorf("Localpart() = %q, want %q", entity.Localpart(), "my_bureau/fleet/prod/machine/gpu-box")
 	}
-	if entity.UserID() != "@my_bureau/fleet/prod/machine/gpu-box:"+testServer {
+	if entity.UserID().String() != "@my_bureau/fleet/prod/machine/gpu-box:"+testServer {
 		t.Errorf("UserID() = %q, want %q", entity.UserID(), "@my_bureau/fleet/prod/machine/gpu-box:"+testServer)
 	}
 
@@ -851,7 +851,7 @@ func TestConstructionRoundTrip(t *testing.T) {
 	original, _ := ref.NewMachine(fleet, "gpu-box")
 
 	// Via user ID.
-	parsed, err := ref.ParseMachineUserID(original.UserID())
+	parsed, err := ref.ParseMachineUserID(original.UserID().String())
 	if err != nil {
 		t.Fatalf("ParseMachineUserID: %v", err)
 	}
@@ -889,7 +889,7 @@ func TestServerWithPort(t *testing.T) {
 
 	// The colon in the server name should not confuse parsing.
 	wantUID := "@acme/fleet/prod/machine/box:example.org:8448"
-	if machine.UserID() != wantUID {
+	if machine.UserID().String() != wantUID {
 		t.Errorf("UserID() = %q, want %q", machine.UserID(), wantUID)
 	}
 

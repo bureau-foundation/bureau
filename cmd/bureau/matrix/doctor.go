@@ -343,7 +343,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 			result.FixHint = fmt.Sprintf("create %s", room.name)
 			result.fix = func(ctx context.Context, session messaging.Session) error {
 				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-					spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
+					spaceRoomID, serverName, room.powerLevels(session.UserID().String()), logger)
 				if err != nil {
 					return err
 				}
@@ -438,18 +438,18 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 5: Power levels.
-	adminUserID := session.UserID()
+	adminUserIDString := session.UserID().String()
 	if !spaceRoomID.IsZero() {
-		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID,
-			nil, adminOnlyPowerLevels(adminUserID, nil))...)
+		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserIDString,
+			nil, adminOnlyPowerLevels(adminUserIDString, nil))...)
 	}
 	for _, room := range standardRooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
 		}
-		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserID,
-			room.memberSettableEventTypes, room.powerLevels(adminUserID))...)
+		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserIDString,
+			room.memberSettableEventTypes, room.powerLevels(adminUserIDString))...)
 	}
 
 	// Section 6: Join rules.
@@ -741,13 +741,13 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 		return []checkResult{fail("operator membership", fmt.Sprintf("cannot read space members: %v", err))}
 	}
 
-	adminUserID := session.UserID()
+	adminUserIDForOperators := session.UserID().String()
 	var operators []string
 	for _, member := range spaceMembers {
 		if member.Membership != "join" {
 			continue
 		}
-		if member.UserID == adminUserID {
+		if member.UserID == adminUserIDForOperators {
 			continue
 		}
 		// Machine accounts have localparts like "machine/worker-01".
@@ -795,7 +795,11 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 					fmt.Sprintf("operator %s not in %s", capturedUserID, room.name),
 					fmt.Sprintf("invite %s to %s", capturedUserID, room.name),
 					func(ctx context.Context, session messaging.Session) error {
-						return session.InviteUser(ctx, capturedRoomID, capturedUserID)
+						parsedUserID, err := ref.ParseUserID(capturedUserID)
+						if err != nil {
+							return fmt.Errorf("parse operator user ID %q: %w", capturedUserID, err)
+						}
+						return session.InviteUser(ctx, capturedRoomID, parsedUserID)
 					},
 				))
 			}

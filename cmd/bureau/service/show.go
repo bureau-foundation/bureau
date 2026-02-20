@@ -100,7 +100,7 @@ func runShow(localpart string, params serviceShowParams) error {
 	}
 
 	result := serviceShowResult{
-		PrincipalUserID: serviceRef.UserID(),
+		PrincipalUserID: serviceRef.UserID().String(),
 		MachineName:     location.Machine.Localpart(),
 		Template:        location.Assignment.Template,
 		AutoStart:       location.Assignment.AutoStart,

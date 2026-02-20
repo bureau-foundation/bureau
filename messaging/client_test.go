@@ -10,8 +10,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
+
+// mustUserID parses a Matrix user ID string, panicking on failure.
+// Test-only helper — avoids verbose ref.ParseUserID error handling in tests.
+func mustUserID(raw string) ref.UserID {
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		panic(err)
+	}
+	return userID
+}
 
 // testBuffer creates a secret.Buffer from a string for testing. The buffer
 // is automatically closed when the test completes.
@@ -100,7 +111,7 @@ func TestRegister(t *testing.T) {
 
 			writer.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(writer).Encode(AuthResponse{
-				UserID:      "@alice:test.local",
+				UserID:      mustUserID("@alice:test.local"),
 				AccessToken: "syt_alice_token",
 				DeviceID:    "DEVICE1",
 			})
@@ -122,7 +133,7 @@ func TestRegister(t *testing.T) {
 		}
 		defer session.Close()
 
-		if session.UserID() != "@alice:test.local" {
+		if session.UserID() != mustUserID("@alice:test.local") {
 			t.Errorf("unexpected user ID: %s", session.UserID())
 		}
 		if session.AccessToken() != "syt_alice_token" {
@@ -202,7 +213,7 @@ func TestLogin(t *testing.T) {
 
 			writer.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(writer).Encode(AuthResponse{
-				UserID:      "@bob:test.local",
+				UserID:      mustUserID("@bob:test.local"),
 				AccessToken: "syt_bob_token",
 				DeviceID:    "DEVICE2",
 			})
@@ -220,7 +231,7 @@ func TestLogin(t *testing.T) {
 		}
 		defer session.Close()
 
-		if session.UserID() != "@bob:test.local" {
+		if session.UserID() != mustUserID("@bob:test.local") {
 			t.Errorf("unexpected user ID: %s", session.UserID())
 		}
 		if session.AccessToken() != "syt_bob_token" {
@@ -274,13 +285,13 @@ func TestSessionFromToken(t *testing.T) {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	session, err := client.SessionFromToken("@alice:test.local", "syt_token")
+	session, err := client.SessionFromToken(mustUserID("@alice:test.local"), "syt_token")
 	if err != nil {
 		t.Fatalf("SessionFromToken failed: %v", err)
 	}
 	defer session.Close()
 
-	if session.UserID() != "@alice:test.local" {
+	if session.UserID() != mustUserID("@alice:test.local") {
 		t.Errorf("unexpected user ID: %s", session.UserID())
 	}
 	if session.AccessToken() != "syt_token" {

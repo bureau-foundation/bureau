@@ -105,7 +105,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	// Verify the proxy serves the correct identity.
 	proxyClient := proxyHTTPClient(proxySocket)
-	if whoami := proxyWhoami(t, proxyClient); whoami != serviceAccount.UserID {
+	if whoami := proxyWhoami(t, proxyClient); whoami != serviceAccount.UserID.String() {
 		t.Errorf("whoami = %q, want %q", whoami, serviceAccount.UserID)
 	}
 }
@@ -230,7 +230,7 @@ func TestHALeaseFailover(t *testing.T) {
 	waitForFile(t, winnerProxySocket)
 
 	proxyClient := proxyHTTPClient(winnerProxySocket)
-	if whoami := proxyWhoami(t, proxyClient); whoami != serviceAccount.UserID {
+	if whoami := proxyWhoami(t, proxyClient); whoami != serviceAccount.UserID.String() {
 		t.Fatalf("winner whoami = %q, want %q", whoami, serviceAccount.UserID)
 	}
 
@@ -272,7 +272,7 @@ func TestHALeaseFailover(t *testing.T) {
 	waitForFile(t, loserProxySocket)
 
 	loserProxyClient := proxyHTTPClient(loserProxySocket)
-	if whoami := proxyWhoami(t, loserProxyClient); whoami != serviceAccount.UserID {
+	if whoami := proxyWhoami(t, loserProxyClient); whoami != serviceAccount.UserID.String() {
 		t.Errorf("failover whoami = %q, want %q", whoami, serviceAccount.UserID)
 	}
 }

@@ -6,6 +6,8 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // Fleet management event type constants. These events live in the
@@ -678,7 +680,7 @@ type ProposedAction struct {
 // presence rooms (both fleet-scoped and global). Members at power level 0
 // can publish machine keys, hardware info, status heartbeats, and WebRTC
 // signaling. Administrative room events remain locked to admin (PL 100).
-func MachineRoomPowerLevels(adminUserID string) map[string]any {
+func MachineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	for _, eventType := range []string{
 		EventTypeMachineKey,
@@ -692,7 +694,7 @@ func MachineRoomPowerLevels(adminUserID string) map[string]any {
 
 	return map[string]any{
 		"users": map[string]any{
-			adminUserID: 100,
+			adminUserID.String(): 100,
 		},
 		"users_default":  0,
 		"events":         events,
@@ -710,13 +712,13 @@ func MachineRoomPowerLevels(adminUserID string) map[string]any {
 // directory rooms (both fleet-scoped and global). Members at power level
 // 0 can register and deregister services. Administrative room events
 // remain locked to admin (PL 100).
-func ServiceRoomPowerLevels(adminUserID string) map[string]any {
+func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypeService] = 0
 
 	return map[string]any{
 		"users": map[string]any{
-			adminUserID: 100,
+			adminUserID.String(): 100,
 		},
 		"users_default":  0,
 		"events":         events,
@@ -736,7 +738,7 @@ func ServiceRoomPowerLevels(adminUserID string) map[string]any {
 // machine definitions, HA leases, fleet config, service status, and
 // fleet alerts. Administrative room events (name, join rules, power
 // levels) remain locked to admin (PL 100).
-func FleetRoomPowerLevels(adminUserID string) map[string]any {
+func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	for _, eventType := range []string{
 		EventTypeFleetService,
@@ -751,7 +753,7 @@ func FleetRoomPowerLevels(adminUserID string) map[string]any {
 
 	return map[string]any{
 		"users": map[string]any{
-			adminUserID: 100,
+			adminUserID.String(): 100,
 		},
 		"users_default":  0,
 		"events":         events,

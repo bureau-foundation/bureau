@@ -175,7 +175,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	roomIDs := make(map[string]ref.RoomID, len(standardRooms))
 	for _, room := range standardRooms {
 		roomID, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-			spaceRoomID, config.serverName, room.powerLevels(session.UserID()), logger)
+			spaceRoomID, config.serverName, room.powerLevels(session.UserID().String()), logger)
 		if err != nil {
 			return cli.Internal("create %s: %w", room.name, err)
 		}
@@ -199,9 +199,13 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 4: Invite users to all Bureau rooms.
 	if len(config.inviteUsers) > 0 {
-		for _, userID := range config.inviteUsers {
+		for _, userIDString := range config.inviteUsers {
+			parsedUserID, err := ref.ParseUserID(userIDString)
+			if err != nil {
+				return cli.Internal("parse invite user ID %q: %w", userIDString, err)
+			}
 			// Invite to the space first.
-			if err := inviteIfNeeded(ctx, session, spaceRoomID, "bureau (space)", userID, logger); err != nil {
+			if err := inviteIfNeeded(ctx, session, spaceRoomID, "bureau (space)", parsedUserID, logger); err != nil {
 				return err
 			}
 			for _, room := range standardRooms {
@@ -209,7 +213,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 				if !ok {
 					continue
 				}
-				if err := inviteIfNeeded(ctx, session, roomID, room.alias, userID, logger); err != nil {
+				if err := inviteIfNeeded(ctx, session, roomID, room.alias, parsedUserID, logger); err != nil {
 					return err
 				}
 			}
@@ -276,7 +280,7 @@ func ensureSpace(ctx context.Context, session messaging.Session, serverName stri
 		CreationContent: map[string]any{
 			"type": "m.space",
 		},
-		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID(), nil),
+		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID().String(), nil),
 	})
 	if err != nil {
 		return ref.RoomID{}, cli.Internal("create bureau space: %w", err)
@@ -322,7 +326,7 @@ func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name
 }
 
 // inviteIfNeeded invites a user to a room, ignoring "already joined" errors.
-func inviteIfNeeded(ctx context.Context, session messaging.Session, roomID ref.RoomID, roomName, userID string, logger *slog.Logger) error {
+func inviteIfNeeded(ctx context.Context, session messaging.Session, roomID ref.RoomID, roomName string, userID ref.UserID, logger *slog.Logger) error {
 	if err := session.InviteUser(ctx, roomID, userID); err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 			logger.Info("user already in room or invite not needed",

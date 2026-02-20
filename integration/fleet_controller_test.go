@@ -133,7 +133,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	stateDir := t.TempDir()
 	sessionData := service.SessionData{
 		HomeserverURL: testHomeserverURL,
-		UserID:        account.UserID,
+		UserID:        account.UserID.String(),
 		AccessToken:   account.Token,
 	}
 	sessionJSON, err := json.Marshal(sessionData)
@@ -171,7 +171,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	// this explicitly: invite + PL 50.
 	grantFleetControllerConfigAccess(t, admin, &fleetController{
 		PrincipalName: controllerName,
-		UserID:        account.UserID,
+		UserID:        account.UserID.String(),
 	}, machine)
 
 	// Start the fleet controller binary.
@@ -195,7 +195,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 
 	return &fleetController{
 		PrincipalName: controllerName,
-		UserID:        account.UserID,
+		UserID:        account.UserID.String(),
 		SocketPath:    socketPath,
 		StateDir:      stateDir,
 	}
@@ -233,7 +233,11 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		t.Fatal("machine has no config room ID — was startMachine called?")
 	}
 
-	userID := fc.UserID
+	userIDString := fc.UserID
+	userID, err := ref.ParseUserID(userIDString)
+	if err != nil {
+		t.Fatalf("parse fleet controller user ID %q: %v", userIDString, err)
+	}
 
 	// Invite (idempotent — M_FORBIDDEN means already a member).
 	if err := admin.InviteUser(ctx, machine.ConfigRoomID, userID); err != nil {
@@ -259,7 +263,7 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		users = make(map[string]any)
 		powerLevels["users"] = users
 	}
-	users[userID] = 50
+	users[userIDString] = 50
 
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
@@ -855,7 +859,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		// Verify the proxy serves the correct identity.
 		proxyClient := proxyHTTPClient(proxySocket)
 		whoamiUserID := proxyWhoami(t, proxyClient)
-		if whoamiUserID != serviceAccount.UserID {
+		if whoamiUserID != serviceAccount.UserID.String() {
 			t.Errorf("proxy whoami = %q, want %q", whoamiUserID, serviceAccount.UserID)
 		}
 
@@ -1032,11 +1036,11 @@ func TestFleetReconciliation(t *testing.T) {
 
 	// Verify both proxies serve the correct identity.
 	proxyClientA := proxyHTTPClient(proxySocketA)
-	if whoami := proxyWhoami(t, proxyClientA); whoami != serviceAccount.UserID {
+	if whoami := proxyWhoami(t, proxyClientA); whoami != serviceAccount.UserID.String() {
 		t.Errorf("machine A proxy whoami = %q, want %q", whoami, serviceAccount.UserID)
 	}
 	proxyClientB := proxyHTTPClient(proxySocketB)
-	if whoami := proxyWhoami(t, proxyClientB); whoami != serviceAccount.UserID {
+	if whoami := proxyWhoami(t, proxyClientB); whoami != serviceAccount.UserID.String() {
 		t.Errorf("machine B proxy whoami = %q, want %q", whoami, serviceAccount.UserID)
 	}
 

@@ -144,7 +144,11 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// access (message pump, text messages). BuildContext above used
 	// the raw proxy client for proxy-specific operations (Identity,
 	// Grants, Services).
-	session := proxyclient.NewProxySession(proxy, agentContext.Identity.UserID)
+	identityUserID, err := ref.ParseUserID(agentContext.Identity.UserID)
+	if err != nil {
+		return fmt.Errorf("parse identity user ID: %w", err)
+	}
+	session := proxyclient.NewProxySession(proxy, identityUserID)
 
 	// Write system prompt to temp file.
 	systemPromptFile, err := agentContext.WriteSystemPromptFile()
@@ -287,7 +291,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	ownUserID := agentContext.Identity.UserID
 	machineUserID := machine.UserID()
 	pumpReady := make(chan struct{})
-	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
+	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID.String(), process.Stdin(), logger, pumpReady)
 
 	// Wait for the pump to complete its initial /sync before announcing
 	// readiness. This guarantees "agent-ready" means the pump is listening.

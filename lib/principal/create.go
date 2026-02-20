@@ -93,7 +93,7 @@ type CreateParams struct {
 type CreateResult struct {
 	// PrincipalUserID is the full Matrix user ID of the created principal
 	// (e.g., "@agent/code-review:bureau.local").
-	PrincipalUserID string
+	PrincipalUserID ref.UserID
 
 	// Machine is the machine the principal was assigned to.
 	Machine ref.Machine
@@ -192,7 +192,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	// Build the credential bundle: Matrix identity + homeserver URL + extras.
 	credentials := map[string]string{
 		"MATRIX_TOKEN":          principalToken,
-		"MATRIX_USER_ID":        principalUserID,
+		"MATRIX_USER_ID":        principalUserID.String(),
 		"MATRIX_HOMESERVER_URL": params.HomeserverURL,
 	}
 	for key, value := range params.ExtraCredentials {

@@ -31,7 +31,7 @@ func TestLoadSession(t *testing.T) {
 		if client == nil {
 			t.Error("LoadSession() returned nil client")
 		}
-		if session.UserID() != "@machine/test:bureau.local" {
+		if session.UserID().String() != "@machine/test:bureau.local" {
 			t.Errorf("UserID() = %q, want %q", session.UserID(), "@machine/test:bureau.local")
 		}
 	})
@@ -183,7 +183,7 @@ func TestSaveSession(t *testing.T) {
 		}
 		defer reloaded.Close()
 
-		if reloaded.UserID() != "@machine/test:bureau.local" {
+		if reloaded.UserID().String() != "@machine/test:bureau.local" {
 			t.Errorf("reloaded UserID() = %q, want %q", reloaded.UserID(), "@machine/test:bureau.local")
 		}
 		if reloaded.AccessToken() != "syt_reload_token" {

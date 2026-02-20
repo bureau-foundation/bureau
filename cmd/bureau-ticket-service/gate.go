@@ -222,7 +222,7 @@ func matchStateEventCondition(gate *schema.TicketGate, event messaging.Event) bo
 // *messaging.DirectSession implements this interface. Tests substitute a
 // fake implementation.
 type aliasResolver interface {
-	ResolveAlias(ctx context.Context, alias string) (string, error)
+	ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error)
 }
 
 // evaluateCrossRoomGates checks events from non-ticket rooms against
@@ -352,11 +352,12 @@ func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string
 		return roomID, nil
 	}
 
-	roomID, err := ts.resolver.ResolveAlias(ctx, alias)
+	resolved, err := ts.resolver.ResolveAlias(ctx, alias)
 	if err != nil {
 		return "", err
 	}
 
+	roomID := resolved.String()
 	ts.aliasCache[alias] = roomID
 	return roomID, nil
 }

@@ -328,7 +328,9 @@ func (client *Client) JoinedRooms(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("joined rooms: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
-	var result messaging.JoinedRoomsResponse
+	var result struct {
+		JoinedRooms []string `json:"joined_rooms"`
+	}
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
 		return nil, fmt.Errorf("joined rooms: %w", err)
 	}

@@ -46,10 +46,10 @@ func newHATestDaemon(t *testing.T) (*Daemon, *mockMatrixState) {
 	daemon.session = session
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = "!config:test"
-	daemon.machineRoomID = "!machine:test"
-	daemon.serviceRoomID = "!service:test"
-	daemon.fleetRoomID = "!fleet:test"
+	daemon.configRoomID = mustRoomID("!config:test")
+	daemon.machineRoomID = mustRoomID("!machine:test")
+	daemon.serviceRoomID = mustRoomID("!service:test")
+	daemon.fleetRoomID = mustRoomID("!fleet:test")
 	daemon.statusInterval = 60 * time.Second
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
@@ -71,7 +71,7 @@ func TestHASyncFleetState(t *testing.T) {
 	normalKey := "service/stt/whisper"
 	leaseKey := "service/fleet/prod"
 
-	matrixState.setRoomState(daemon.fleetRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
 			StateKey: &criticalKey,
@@ -243,7 +243,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 			daemon, matrixState := newHATestDaemon(t)
 
 			// Set up MachineInfo with the test labels.
-			matrixState.setStateEvent(daemon.machineRoomID,
+			matrixState.setStateEvent(daemon.machineRoomID.String(),
 				schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 				schema.MachineInfo{
 					Principal: daemon.machine.UserID(),
@@ -268,12 +268,12 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	serviceLocalpart := "service/fleet/prod"
 
 	// Set up existing machine config (empty).
-	matrixState.setStateEvent(daemon.configRoomID,
+	matrixState.setStateEvent(daemon.configRoomID.String(),
 		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Set up an expired lease from another machine.
-	matrixState.setStateEvent(daemon.fleetRoomID,
+	matrixState.setStateEvent(daemon.fleetRoomID.String(),
 		schema.EventTypeHALease, serviceLocalpart,
 		schema.HALeaseContent{
 			Holder:     "machine/dead",
@@ -403,12 +403,12 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 
 	serviceLocalpart := "service/fleet/prod"
 
-	matrixState.setStateEvent(daemon.configRoomID,
+	matrixState.setStateEvent(daemon.configRoomID.String(),
 		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Expired lease.
-	matrixState.setStateEvent(daemon.fleetRoomID,
+	matrixState.setStateEvent(daemon.fleetRoomID.String(),
 		schema.EventTypeHALease, serviceLocalpart,
 		schema.HALeaseContent{
 			Holder:     "machine/dead",
@@ -480,7 +480,7 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 	serviceLocalpart := "service/fleet/prod"
 
 	// Set up fleet room with a critical service that requires GPU.
-	matrixState.setRoomState(daemon.fleetRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
 			StateKey: &serviceLocalpart,
@@ -507,7 +507,7 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 	})
 
 	// This machine has no GPU label.
-	matrixState.setStateEvent(daemon.machineRoomID,
+	matrixState.setStateEvent(daemon.machineRoomID.String(),
 		schema.EventTypeMachineInfo, daemon.machine.Localpart(),
 		schema.MachineInfo{
 			Principal: daemon.machine.UserID(),
@@ -561,7 +561,7 @@ func TestHALeaseRenewal(t *testing.T) {
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
 	}
-	matrixState.setStateEvent(daemon.fleetRoomID,
+	matrixState.setStateEvent(daemon.fleetRoomID.String(),
 		schema.EventTypeHALease, serviceLocalpart, initialLease)
 
 	// Set up a stateEventWritten channel to track writes.
@@ -826,7 +826,7 @@ func TestHAEvaluate_HealthyLease(t *testing.T) {
 	now := daemon.clock.Now()
 
 	// Set up a healthy lease (expires in the future).
-	matrixState.setRoomState(daemon.fleetRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
 			StateKey: &serviceLocalpart,
@@ -881,13 +881,13 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 	now := daemon.clock.Now()
 
 	// Config room needs to be set up for reconcile.
-	matrixState.setStateEvent(daemon.configRoomID,
+	matrixState.setStateEvent(daemon.configRoomID.String(),
 		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
 		schema.MachineConfig{})
 
 	// Set up fleet room state with a healthy lease (so evaluate is
 	// a no-op but syncFleetState runs).
-	matrixState.setRoomState(daemon.fleetRoomID, []mockRoomStateEvent{
+	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
 			StateKey: &serviceLocalpart,
@@ -917,7 +917,7 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
 			Join: map[string]messaging.JoinedRoom{
-				daemon.fleetRoomID: {
+				daemon.fleetRoomID.String(): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{

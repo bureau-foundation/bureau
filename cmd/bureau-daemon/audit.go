@@ -99,7 +99,7 @@ func (d *Daemon) postAuditAllow(
 // Skips the Matrix post when there is no session (unit tests without a
 // homeserver) or no config room ID.
 func (d *Daemon) postAuditEventAsync(content schema.AuditEventContent) {
-	if d.session == nil || d.configRoomID == "" {
+	if d.session == nil || d.configRoomID.IsZero() {
 		return
 	}
 	go func() {

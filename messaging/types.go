@@ -3,7 +3,10 @@
 
 package messaging
 
-import "github.com/bureau-foundation/bureau/lib/secret"
+import (
+	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/secret"
+)
 
 // RegisterRequest holds parameters for registering a new Matrix account.
 // Password and RegistrationToken are stored in mmap-backed buffers (locked
@@ -38,7 +41,7 @@ type CreateRoomRequest struct {
 
 // CreateRoomResponse is returned by CreateRoom.
 type CreateRoomResponse struct {
-	RoomID string `json:"room_id"`
+	RoomID ref.RoomID `json:"room_id"`
 }
 
 // StateEvent represents a Matrix state event for room creation or state setting.
@@ -207,8 +210,8 @@ type WhoAmIResponse struct {
 
 // ResolveAliasResponse is returned by ResolveAlias.
 type ResolveAliasResponse struct {
-	RoomID  string   `json:"room_id"`
-	Servers []string `json:"servers"`
+	RoomID  ref.RoomID `json:"room_id"`
+	Servers []string   `json:"servers"`
 }
 
 // UploadResponse is returned by UploadMedia.
@@ -218,7 +221,7 @@ type UploadResponse struct {
 
 // JoinedRoomsResponse is returned by JoinedRooms.
 type JoinedRoomsResponse struct {
-	JoinedRooms []string `json:"joined_rooms"`
+	JoinedRooms []ref.RoomID `json:"joined_rooms"`
 }
 
 // RoomMember represents a member of a Matrix room.

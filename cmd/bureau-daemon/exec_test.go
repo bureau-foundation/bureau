@@ -35,7 +35,7 @@ func TestCheckDaemonWatchdog_NoWatchdog(t *testing.T) {
 	watchdogPath := filepath.Join(t.TempDir(), "daemon-watchdog.cbor")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	failedPath := checkDaemonWatchdog(watchdogPath, "/bin/daemon", nil, "", logger)
+	failedPath := checkDaemonWatchdog(watchdogPath, "/bin/daemon", nil, ref.RoomID{}, logger)
 	if failedPath != "" {
 		t.Errorf("failedPath = %q, want empty (no watchdog)", failedPath)
 	}
@@ -63,7 +63,7 @@ func TestCheckDaemonWatchdog_SuccessfulExec(t *testing.T) {
 	failedPath := checkDaemonWatchdog(
 		watchdogPath,
 		"/nix/store/new-daemon/bin/bureau-daemon",
-		nil, "", logger,
+		nil, ref.RoomID{}, logger,
 	)
 	if failedPath != "" {
 		t.Errorf("failedPath = %q, want empty (successful exec)", failedPath)
@@ -97,7 +97,7 @@ func TestCheckDaemonWatchdog_FailedExec(t *testing.T) {
 	failedPath := checkDaemonWatchdog(
 		watchdogPath,
 		"/nix/store/old-daemon/bin/bureau-daemon",
-		nil, "", logger,
+		nil, ref.RoomID{}, logger,
 	)
 	if failedPath != "/nix/store/new-daemon/bin/bureau-daemon" {
 		t.Errorf("failedPath = %q, want %q", failedPath, "/nix/store/new-daemon/bin/bureau-daemon")
@@ -131,7 +131,7 @@ func TestCheckDaemonWatchdog_StaleWatchdog(t *testing.T) {
 	failedPath := checkDaemonWatchdog(
 		watchdogPath,
 		"/nix/store/old-daemon/bin/bureau-daemon",
-		nil, "", logger,
+		nil, ref.RoomID{}, logger,
 	)
 	if failedPath != "" {
 		t.Errorf("failedPath = %q, want empty (stale watchdog)", failedPath)
@@ -159,7 +159,7 @@ func TestCheckDaemonWatchdog_NeitherMatch(t *testing.T) {
 	failedPath := checkDaemonWatchdog(
 		watchdogPath,
 		"/nix/store/third-daemon/bin/bureau-daemon",
-		nil, "", logger,
+		nil, ref.RoomID{}, logger,
 	)
 	if failedPath != "" {
 		t.Errorf("failedPath = %q, want empty (neither match)", failedPath)
@@ -226,7 +226,7 @@ func TestCheckDaemonWatchdog_ReportsToMatrix(t *testing.T) {
 		watchdogPath,
 		"/nix/store/new-daemon/bin/bureau-daemon",
 		session,
-		"!config:test.local",
+		mustRoomID("!config:test.local"),
 		logger,
 	)
 	if failedPath != "" {
@@ -261,7 +261,7 @@ func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
 	daemon.daemonBinaryHash = "abcd1234"
 	daemon.stateDir = stateDir
 	daemon.session = newNoopSession(t)
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.execFunc = func(binary string, argv []string, env []string) error {
 		execMu.Lock()
@@ -317,7 +317,7 @@ func TestExecDaemon_WatchdogWrittenBeforeExec(t *testing.T) {
 	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
 	daemon.stateDir = stateDir
 	daemon.session = newNoopSession(t)
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.execFunc = func(binary string, argv []string, env []string) error {
 		// Check if the watchdog was written before we got called.
@@ -376,7 +376,7 @@ func TestExecDaemon_ExecFailure(t *testing.T) {
 	daemon.daemonBinaryPath = "/nix/store/old-daemon/bin/bureau-daemon"
 	daemon.stateDir = stateDir
 	daemon.session = session
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.execFunc = func(binary string, argv []string, env []string) error {
 		return errors.New("permission denied")
@@ -414,7 +414,7 @@ func TestExecDaemon_RetryProtection(t *testing.T) {
 	daemon.stateDir = t.TempDir()
 	daemon.failedExecPaths["/nix/store/broken-daemon/bin/bureau-daemon"] = true
 	daemon.session = newNoopSession(t)
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.execFunc = func(binary string, argv []string, env []string) error {
 		execCalled = true
@@ -439,7 +439,7 @@ func TestExecDaemon_EmptyBinaryPath(t *testing.T) {
 	daemon.daemonBinaryPath = "" // unknown
 	daemon.stateDir = t.TempDir()
 	daemon.session = newNoopSession(t)
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.execFunc = func(binary string, argv []string, env []string) error {
 		t.Fatal("exec should not be called when binary path is unknown")
@@ -527,7 +527,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = binhash.FormatDigest(testHash)
 	daemon.daemonBinaryPath = testBinary

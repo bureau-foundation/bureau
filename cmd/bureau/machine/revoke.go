@@ -231,8 +231,9 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 			credentialKeys = cleared
 		}
 
-		// Kick from config room.
-		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine credentials revoked")
+		// Kick from config room. KickUser is a DirectSession-only method
+		// that takes string room IDs.
+		err = adminSession.KickUser(ctx, configRoomID.String(), machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
 		} else {
@@ -240,9 +241,10 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 		}
 	}
 
-	// Kick from all global Bureau rooms.
+	// Kick from all global Bureau rooms. KickUser is a DirectSession-only
+	// method that takes string room IDs.
 	for _, room := range globalRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
+		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
@@ -252,7 +254,7 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 
 	// Kick from all fleet-scoped rooms.
 	fleetRooms := []struct {
-		roomID string
+		roomID ref.RoomID
 		name   string
 	}{
 		{machineRoomID, "fleet machine room"},
@@ -260,7 +262,7 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 		{fleetRoomID, "fleet config room"},
 	}
 	for _, room := range fleetRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
+		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.name, err)
 		} else {

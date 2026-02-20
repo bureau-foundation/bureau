@@ -41,9 +41,9 @@ type testMachine struct {
 	CacheRoot      string
 
 	// Populated by startMachine:
-	PublicKey     string // age public key from the machine_key state event
-	ConfigRoomID  string // per-machine config room
-	MachineRoomID string // fleet-scoped machine room (daemon status heartbeats)
+	PublicKey     string     // age public key from the machine_key state event
+	ConfigRoomID  ref.RoomID // per-machine config room
+	MachineRoomID ref.RoomID // fleet-scoped machine room (daemon status heartbeats)
 }
 
 // PrincipalSocketPath returns the proxy socket path for a principal on
@@ -576,7 +576,7 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 	if machine.Name == "" {
 		t.Fatal("machine.Name is required")
 	}
-	if machine.MachineRoomID == "" {
+	if machine.MachineRoomID.IsZero() {
 		t.Fatal("machine.MachineRoomID is required")
 	}
 	if account.Localpart == "" {
@@ -612,7 +612,7 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) {
 	t.Helper()
 
-	if machine.ConfigRoomID == "" {
+	if machine.ConfigRoomID.IsZero() {
 		t.Fatal("machine.ConfigRoomID is required")
 	}
 	if machine.Name == "" {
@@ -659,10 +659,10 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 	if len(config.Principals) == 0 {
 		t.Fatal("config.Principals must not be empty")
 	}
-	if machine.ConfigRoomID == "" {
+	if machine.ConfigRoomID.IsZero() {
 		t.Fatal("machine.ConfigRoomID is required")
 	}
-	if machine.MachineRoomID == "" {
+	if machine.MachineRoomID.IsZero() {
 		t.Fatal("machine.MachineRoomID is required")
 	}
 
@@ -793,10 +793,10 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	if machine.Name == "" {
 		t.Fatal("machine.Name is required")
 	}
-	if machine.MachineRoomID == "" {
+	if machine.MachineRoomID.IsZero() {
 		t.Fatal("machine.MachineRoomID is required")
 	}
-	if machine.ConfigRoomID == "" {
+	if machine.ConfigRoomID.IsZero() {
 		t.Fatal("machine.ConfigRoomID is required")
 	}
 
@@ -885,7 +885,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 // machine so the daemon can read templates during config reconciliation.
 // Returns the template room ID for tests that need to publish custom
 // templates.
-func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) string {
+func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) ref.RoomID {
 	t.Helper()
 
 	if machine.UserID == "" {
@@ -939,10 +939,10 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, mach
 // joinConfigRoom invites an agent to the config room and joins via a
 // direct session. The agent needs config room membership so the lifecycle
 // manager can post messages (agent-ready, text responses) to the room.
-func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID string, agent principalAccount) {
+func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID ref.RoomID, agent principalAccount) {
 	t.Helper()
 
-	if configRoomID == "" {
+	if configRoomID.IsZero() {
 		t.Fatal("configRoomID is required")
 	}
 	if agent.UserID == "" {

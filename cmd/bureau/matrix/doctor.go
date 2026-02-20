@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/content"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -333,7 +334,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 	results = append(results, spaceResult)
 
-	roomIDs := make(map[string]string) // local alias → room ID
+	roomIDs := make(map[string]ref.RoomID) // local alias → room ID
 	for _, room := range standardRooms {
 		room := room // capture for closure
 		fullAlias := schema.FullRoomAlias(room.alias, serverName)
@@ -351,7 +352,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 			}
 		}
 		results = append(results, result)
-		if roomID != "" {
+		if !roomID.IsZero() {
 			roomIDs[room.alias] = roomID
 		}
 	}
@@ -364,12 +365,12 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		// The fix closure captures this, so all credential issues are
 		// repaired in a single file write (same pattern as power levels).
 		correctRoomIDs := make(map[string]string)
-		if spaceRoomID != "" {
-			correctRoomIDs["MATRIX_SPACE_ROOM"] = spaceRoomID
+		if !spaceRoomID.IsZero() {
+			correctRoomIDs["MATRIX_SPACE_ROOM"] = spaceRoomID.String()
 		}
 		for _, room := range standardRooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
-				correctRoomIDs[room.credentialKey] = roomID
+				correctRoomIDs[room.credentialKey] = roomID.String()
 			}
 		}
 
@@ -381,8 +382,8 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		}
 		fixAttached := false
 
-		if spaceRoomID != "" {
-			result := checkCredentialMatch("bureau space", "MATRIX_SPACE_ROOM", spaceRoomID, storedCredentials)
+		if !spaceRoomID.IsZero() {
+			result := checkCredentialMatch("bureau space", "MATRIX_SPACE_ROOM", spaceRoomID.String(), storedCredentials)
 			if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
 				result.Status = statusFail
 				if !fixAttached {
@@ -395,7 +396,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		}
 		for _, room := range standardRooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
-				result := checkCredentialMatch(room.name, room.credentialKey, roomID, storedCredentials)
+				result := checkCredentialMatch(room.name, room.credentialKey, roomID.String(), storedCredentials)
 				if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
 					result.Status = statusFail
 					if !fixAttached {
@@ -410,7 +411,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 4: Space hierarchy — rooms are children of the space.
-	if spaceRoomID != "" {
+	if !spaceRoomID.IsZero() {
 		spaceChildIDs, err := getSpaceChildIDs(ctx, session, spaceRoomID)
 		if err != nil {
 			results = append(results, fail("space hierarchy", fmt.Sprintf("cannot read space state: %v", err)))
@@ -420,13 +421,13 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 				if !ok {
 					continue
 				}
-				result := checkSpaceChild(room.name, roomID, spaceChildIDs)
+				result := checkSpaceChild(room.name, roomID.String(), spaceChildIDs)
 				if result.Status == statusFail {
 					capturedRoomID := roomID
 					capturedName := room.name
 					result.FixHint = fmt.Sprintf("add %s as child of Bureau space", capturedName)
 					result.fix = func(ctx context.Context, session messaging.Session) error {
-						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID,
+						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID.String(),
 							map[string]any{"via": []string{serverName}})
 						return err
 					}
@@ -438,7 +439,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 
 	// Section 5: Power levels.
 	adminUserID := session.UserID()
-	if spaceRoomID != "" {
+	if !spaceRoomID.IsZero() {
 		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID,
 			nil, adminOnlyPowerLevels(adminUserID, nil))...)
 	}
@@ -452,7 +453,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 6: Join rules.
-	if spaceRoomID != "" {
+	if !spaceRoomID.IsZero() {
 		results = append(results, checkJoinRules(ctx, session, "bureau space", spaceRoomID))
 	}
 	for _, room := range standardRooms {
@@ -466,7 +467,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	// Section 7: Operator membership — non-admin, non-machine members of
 	// the Bureau space should be in every standard room. The space is
 	// invite-only, so anyone who's joined it was deliberately onboarded.
-	if spaceRoomID != "" {
+	if !spaceRoomID.IsZero() {
 		results = append(results, checkOperatorMembership(ctx, session, spaceRoomID, serverName, roomIDs)...)
 	}
 
@@ -511,14 +512,14 @@ func checkAuth(ctx context.Context, session messaging.Session) checkResult {
 }
 
 // checkRoomExists resolves a room alias and returns the result plus the room ID
-// (empty string if resolution failed).
-func checkRoomExists(ctx context.Context, session messaging.Session, name, alias string) (checkResult, string) {
+// (zero value if resolution failed).
+func checkRoomExists(ctx context.Context, session messaging.Session, name, alias string) (checkResult, ref.RoomID) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return fail(name, fmt.Sprintf("alias %s not found", alias)), ""
+			return fail(name, fmt.Sprintf("alias %s not found", alias)), ref.RoomID{}
 		}
-		return fail(name, fmt.Sprintf("resolve %s: %v", alias, err)), ""
+		return fail(name, fmt.Sprintf("resolve %s: %v", alias, err)), ref.RoomID{}
 	}
 	return pass(name, fmt.Sprintf("%s → %s", alias, roomID)), roomID
 }
@@ -538,7 +539,7 @@ func checkCredentialMatch(name, credentialKey, resolvedRoomID string, credential
 
 // getSpaceChildIDs reads m.space.child state events from a space and returns
 // the set of child room IDs.
-func getSpaceChildIDs(ctx context.Context, session messaging.Session, spaceRoomID string) (map[string]bool, error) {
+func getSpaceChildIDs(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID) (map[string]bool, error) {
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
 		return nil, err
@@ -566,7 +567,7 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // event types at power level 0. The first failing sub-check gets a fix closure
 // that resets the entire power levels state to expectedPowerLevels; subsequent
 // sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session messaging.Session, name, roomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
+func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
 	var results []checkResult
 
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
@@ -682,7 +683,7 @@ func getNumericField(data map[string]any, key string) float64 {
 
 // checkJoinRules verifies that a room's join rules are set to "invite"
 // (the required configuration for Bureau rooms).
-func checkJoinRules(ctx context.Context, session messaging.Session, name, roomID string) checkResult {
+func checkJoinRules(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID) checkResult {
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.join_rules", "")
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -733,7 +734,7 @@ func checkJoinRules(ctx context.Context, session messaging.Session, name, roomID
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
 // they are only invited to global rooms during provisioning.
-func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID, serverName string, roomIDs map[string]string) []checkResult {
+func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName string, roomIDs map[string]ref.RoomID) []checkResult {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
 	if err != nil {
@@ -817,7 +818,7 @@ type stateEventItem struct {
 // checkPublishedStateEvents verifies that each item in the list is present
 // as a state event in the given room. Missing items produce a fixable failure
 // that re-publishes the expected content.
-func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID string, items []stateEventItem) []checkResult {
+func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID ref.RoomID, items []stateEventItem) []checkResult {
 	var results []checkResult
 
 	for _, item := range items {
@@ -851,7 +852,7 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and
 // "base-networked") are published as m.bureau.template state events in the
 // template room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID string) []checkResult {
+func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID) []checkResult {
 	var items []stateEventItem
 	for _, template := range baseTemplates() {
 		items = append(items, stateEventItem{
@@ -867,7 +868,7 @@ func checkBaseTemplates(ctx context.Context, session messaging.Session, template
 // checkBasePipelines verifies that the embedded pipeline definitions are
 // published as m.bureau.pipeline state events in the pipeline room. Missing
 // pipelines are fixable by re-publishing them.
-func checkBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID string) []checkResult {
+func checkBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID ref.RoomID) []checkResult {
 	pipelines, err := content.Pipelines()
 	if err != nil {
 		return []checkResult{fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err))}

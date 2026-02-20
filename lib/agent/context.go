@@ -38,7 +38,7 @@ type AgentContext struct {
 	ConfigRoomAlias string
 
 	// ConfigRoomID is the resolved Matrix room ID for the config room.
-	ConfigRoomID string
+	ConfigRoomID ref.RoomID
 }
 
 // BuildContext assembles the agent context from the proxy and filesystem.
@@ -63,9 +63,13 @@ func BuildContext(ctx context.Context, proxy *proxyclient.Client, machine ref.Ma
 	payload := readPayload()
 
 	configRoomAlias := machine.RoomAlias()
-	configRoomID, err := proxy.ResolveAlias(ctx, configRoomAlias)
+	configRoomIDString, err := proxy.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config room %q: %w", configRoomAlias, err)
+	}
+	configRoomID, err := ref.ParseRoomID(configRoomIDString)
+	if err != nil {
+		return nil, fmt.Errorf("proxy returned invalid room ID %q for alias %q: %w", configRoomIDString, configRoomAlias, err)
 	}
 
 	return &AgentContext{

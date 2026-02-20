@@ -110,11 +110,11 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
-		configRoomID:  "!config-a:local",
+		configRoomID:  mustRoomID("!config-a:local"),
 		lastHeartbeat: fakeClock.Now().Add(-120 * time.Second), // 4x interval: offline
 		healthState:   healthSuspect,
 	}
-	fc.configRooms["machine/a"] = "!config-a:local"
+	fc.configRooms["machine/a"] = mustRoomID("!config-a:local")
 
 	fc.services["service/web"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -285,9 +285,9 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
-		configRoomID: "!config-a:local",
+		configRoomID: mustRoomID("!config-a:local"),
 	}
-	fc.configRooms["machine/a"] = "!config-a:local"
+	fc.configRooms["machine/a"] = mustRoomID("!config-a:local")
 
 	fc.services["service/web"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -254,7 +255,7 @@ type mockAnthropicServer struct {
 //
 // The configRoomID parameter is injected into the tool_use input so the
 // tool sends its message to the correct Matrix room.
-func newMockAnthropicToolSequence(t *testing.T, configRoomID string) *mockAnthropicServer {
+func newMockAnthropicToolSequence(t *testing.T, configRoomID ref.RoomID) *mockAnthropicServer {
 	t.Helper()
 
 	var (
@@ -298,7 +299,7 @@ func newMockAnthropicToolSequence(t *testing.T, configRoomID string) *mockAnthro
 			// The input includes the actual config room ID so the tool
 			// sends the message to the right room through the proxy.
 			toolInput, _ := json.Marshal(map[string]string{
-				"room":    configRoomID,
+				"room":    configRoomID.String(),
 				"message": "echo result: hello",
 			})
 			writeSSE(writer, anthropicSSEResponse{

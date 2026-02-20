@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -43,10 +44,10 @@ func storeKey(roomID, stateKey string) string {
 	return roomID + "|" + stateKey
 }
 
-func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID, eventType, stateKey string) (json.RawMessage, error) {
+func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	raw, exists := f.configs[storeKey(roomID, stateKey)]
+	raw, exists := f.configs[storeKey(roomID.String(), stateKey)]
 	if !exists {
 		return nil, &messaging.MatrixError{
 			Code:       messaging.ErrCodeNotFound,
@@ -57,7 +58,7 @@ func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID, eventType, st
 	return raw, nil
 }
 
-func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -65,9 +66,9 @@ func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID, eventType, s
 	if err != nil {
 		return "", fmt.Errorf("marshaling content: %w", err)
 	}
-	f.configs[storeKey(roomID, stateKey)] = data
+	f.configs[storeKey(roomID.String(), stateKey)] = data
 	f.writes = append(f.writes, configWrite{
-		RoomID:    roomID,
+		RoomID:    roomID.String(),
 		EventType: eventType,
 		StateKey:  stateKey,
 		Content:   content,
@@ -120,7 +121,7 @@ func newExecuteTestController(t *testing.T) (*FleetController, *fakeConfigStore)
 func TestReadMachineConfigExisting(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "service/stt/whisper"), Template: "bureau/template:whisper-stt"},
@@ -142,7 +143,7 @@ func TestReadMachineConfigExisting(t *testing.T) {
 func TestReadMachineConfigNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 	// Don't seed any config — should return empty MachineConfig.
 
 	config, err := fc.readMachineConfig(context.Background(), "machine/workstation")
@@ -169,7 +170,7 @@ func TestReadMachineConfigNoConfigRoom(t *testing.T) {
 func TestWriteMachineConfig(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	config := &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -342,9 +343,9 @@ func TestPlaceHappyPath(t *testing.T) {
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
 		status:       &schema.MachineStatus{CPUPercent: 42},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -398,9 +399,9 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
 		status:       &schema.MachineStatus{CPUPercent: 42},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -450,7 +451,7 @@ func TestPlaceServiceNotFound(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
 	err := fc.place(context.Background(), "service/nonexistent", "machine/workstation")
@@ -465,7 +466,7 @@ func TestPlaceServiceNoDefinition(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
 	fc.services["service/pending"] = &fleetServiceState{
 		definition: nil,
@@ -496,9 +497,9 @@ func TestPlaceMachineNoConfigRoom(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	fc.machines["machine/workstation"] = &machineState{
-		info:         &schema.MachineInfo{},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "", // no config room
+		info:        &schema.MachineInfo{},
+		assignments: make(map[string]*schema.PrincipalAssignment),
+		// configRoomID left at zero value: no config room.
 	}
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{Template: "t"},
@@ -523,9 +524,9 @@ func TestPlaceAlreadyPlaced(t *testing.T) {
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": existingAssignment,
 		},
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
@@ -554,9 +555,9 @@ func TestUnplaceHappyPath(t *testing.T) {
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": existingAssignment,
 		},
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -621,7 +622,7 @@ func TestUnplaceNotPlaced(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		info:         &schema.MachineInfo{},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
 	err := fc.unplace(context.Background(), "service/stt/whisper", "machine/workstation")
@@ -642,7 +643,7 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 				Labels:    map[string]string{"fleet_managed": "service/fleet/staging"},
 			},
 		},
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
 	err := fc.unplace(context.Background(), "service/stt/whisper", "machine/workstation")
@@ -668,7 +669,7 @@ func TestReconcileUnderReplicated(t *testing.T) {
 	// Two machines eligible for placement.
 	for _, name := range []string{"machine/alpha", "machine/beta"} {
 		machine := standardMachine()
-		machine.configRoomID = "!config-" + name + ":local"
+		machine.configRoomID = mustRoomID("!config-" + name + ":local")
 		fc.machines[name] = machine
 		fc.configRooms[name] = machine.configRoomID
 	}
@@ -733,23 +734,23 @@ func TestReconcileOverReplicated(t *testing.T) {
 	machineAlpha := standardMachine()
 	machineAlpha.status.CPUPercent = 20
 	machineAlpha.status.MemoryUsedMB = 16000
-	machineAlpha.configRoomID = "!config-alpha:local"
+	machineAlpha.configRoomID = mustRoomID("!config-alpha:local")
 	machineAlpha.assignments = map[string]*schema.PrincipalAssignment{
 		"service/worker": fleetAssignment("alpha"),
 	}
 	fc.machines["machine/alpha"] = machineAlpha
-	fc.configRooms["machine/alpha"] = "!config-alpha:local"
+	fc.configRooms["machine/alpha"] = mustRoomID("!config-alpha:local")
 
 	// Machine beta: high utilization (low score — should be removed).
 	machineBeta := standardMachine()
 	machineBeta.status.CPUPercent = 80
 	machineBeta.status.MemoryUsedMB = 55000
-	machineBeta.configRoomID = "!config-beta:local"
+	machineBeta.configRoomID = mustRoomID("!config-beta:local")
 	machineBeta.assignments = map[string]*schema.PrincipalAssignment{
 		"service/worker": fleetAssignment("beta"),
 	}
 	fc.machines["machine/beta"] = machineBeta
-	fc.configRooms["machine/beta"] = "!config-beta:local"
+	fc.configRooms["machine/beta"] = mustRoomID("!config-beta:local")
 
 	fc.services["service/worker"] = &fleetServiceState{
 		definition: definition,
@@ -761,7 +762,7 @@ func TestReconcileOverReplicated(t *testing.T) {
 
 	// Seed configs so unplace can read them.
 	for _, name := range []string{"machine/alpha", "machine/beta"} {
-		store.seedConfig(fc.configRooms[name], name, &schema.MachineConfig{
+		store.seedConfig(fc.configRooms[name].String(), name, &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
 				*fleetAssignment(name),
 			},
@@ -795,7 +796,7 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
 	machine := standardMachine()
-	machine.configRoomID = "!config-ws:local"
+	machine.configRoomID = mustRoomID("!config-ws:local")
 	existingAssignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/worker"),
 		Template:  "bureau/template:worker",
@@ -806,7 +807,7 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 		"service/worker": existingAssignment,
 	}
 	fc.machines["machine/workstation"] = machine
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/worker"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -853,9 +854,9 @@ func TestReconcileInsufficientMachines(t *testing.T) {
 
 	// One eligible machine, but service wants min 3.
 	machine := standardMachine()
-	machine.configRoomID = "!config-ws:local"
+	machine.configRoomID = mustRoomID("!config-ws:local")
 	fc.machines["machine/workstation"] = machine
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/worker"] = &fleetServiceState{
 		definition: &schema.FleetServiceContent{
@@ -900,14 +901,14 @@ func TestRebuildServiceInstances(t *testing.T) {
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": assignment,
 		},
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
 	fc.machines["machine/server"] = &machineState{
 		info: &schema.MachineInfo{Hostname: "server"},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": assignment,
 		},
-		configRoomID: "!config-srv:local",
+		configRoomID: mustRoomID("!config-srv:local"),
 	}
 
 	// Service exists but instances are empty (simulating post-initial-sync

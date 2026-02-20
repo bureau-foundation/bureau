@@ -108,7 +108,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -316,7 +316,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -441,7 +441,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -624,7 +624,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -702,7 +702,7 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = tokenSigningPrivateKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))

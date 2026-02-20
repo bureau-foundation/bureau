@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -29,15 +30,15 @@ type commandResult struct {
 // resolveWorkspaceRoom validates the alias and resolves it to a Matrix
 // room ID. The alias is the Bureau localpart (e.g., "iree/amdgpu/inference")
 // without the leading # or trailing :server.
-func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string) (string, error) {
+func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string) (ref.RoomID, error) {
 	if err := principal.ValidateLocalpart(alias); err != nil {
-		return "", cli.Validation("invalid alias %q: %w", alias, err)
+		return ref.RoomID{}, cli.Validation("invalid alias %q: %w", alias, err)
 	}
 
 	fullAlias := schema.FullRoomAlias(alias, serverName)
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
-		return "", cli.NotFound("resolving room %s: %w", fullAlias, err)
+		return ref.RoomID{}, cli.NotFound("resolving room %s: %w", fullAlias, err)
 	}
 	return roomID, nil
 }
@@ -50,13 +51,13 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias,
 // Returns the parent workspace's room ID, its parsed workspace state,
 // and the alias localpart that matched. Returns an error if no parent
 // workspace is found.
-func findParentWorkspace(ctx context.Context, session messaging.Session, alias, serverName string) (string, *schema.WorkspaceState, string, error) {
+func findParentWorkspace(ctx context.Context, session messaging.Session, alias, serverName string) (ref.RoomID, *schema.WorkspaceState, string, error) {
 	// Walk up the alias path, dropping the last segment each time.
 	remaining := alias
 	for {
 		lastSlash := strings.LastIndex(remaining, "/")
 		if lastSlash < 0 {
-			return "", nil, "", cli.NotFound("no parent workspace found for %q (walked up to root)", alias)
+			return ref.RoomID{}, nil, "", cli.NotFound("no parent workspace found for %q (walked up to root)", alias)
 		}
 		candidate := remaining[:lastSlash]
 		remaining = candidate
@@ -68,7 +69,7 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias, 
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				continue
 			}
-			return "", nil, "", cli.Internal("resolving %s: %w", fullAlias, err)
+			return ref.RoomID{}, nil, "", cli.Internal("resolving %s: %w", fullAlias, err)
 		}
 
 		// Room exists — check for workspace state.
@@ -89,7 +90,7 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias, 
 func sendWorkspaceCommand(
 	ctx context.Context,
 	session messaging.Session,
-	roomID string,
+	roomID ref.RoomID,
 	commandName string,
 	workspace string,
 	parameters map[string]any,
@@ -126,7 +127,7 @@ func sendWorkspaceCommand(
 func waitForCommandResult(
 	ctx context.Context,
 	session messaging.Session,
-	roomID string,
+	roomID ref.RoomID,
 	commandEventID string,
 	requestID string,
 ) (*commandResult, error) {
@@ -218,7 +219,7 @@ func extractSubpath(alias, workspaceAlias string) (string, error) {
 // readWorkspaceState reads and parses the m.bureau.workspace state
 // event from a room. Returns an error if the event doesn't exist or
 // can't be parsed.
-func readWorkspaceState(ctx context.Context, session messaging.Session, roomID string) (*schema.WorkspaceState, error) {
+func readWorkspaceState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (*schema.WorkspaceState, error) {
 	raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return nil, cli.Internal("reading workspace state: %w", err)

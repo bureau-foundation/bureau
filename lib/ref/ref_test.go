@@ -1301,3 +1301,124 @@ func TestServiceEntity(t *testing.T) {
 		t.Errorf("Entity().EntityType() = %q, want %q", entity.EntityType(), "service")
 	}
 }
+
+func TestRoomIDMarshalText(t *testing.T) {
+	t.Parallel()
+	roomID, err := ref.ParseRoomID("!abc123:bureau.local")
+	if err != nil {
+		t.Fatalf("ParseRoomID: %v", err)
+	}
+
+	data, err := roomID.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText: %v", err)
+	}
+	if string(data) != "!abc123:bureau.local" {
+		t.Errorf("MarshalText = %q, want %q", data, "!abc123:bureau.local")
+	}
+
+	var roundtrip ref.RoomID
+	if err := roundtrip.UnmarshalText(data); err != nil {
+		t.Fatalf("UnmarshalText: %v", err)
+	}
+	if roundtrip != roomID {
+		t.Errorf("roundtrip = %v, want %v", roundtrip, roomID)
+	}
+}
+
+func TestRoomIDUnmarshalTextRejectsInvalid(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"no_exclamation", "abc123:bureau.local"},
+		{"alias_not_id", "#room:bureau.local"},
+		{"no_server", "!abc123"},
+		{"empty_local", "!:bureau.local"},
+		{"empty_server", "!abc123:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var roomID ref.RoomID
+			if err := roomID.UnmarshalText([]byte(test.input)); err == nil {
+				t.Errorf("UnmarshalText(%q) = nil, want error", test.input)
+			}
+		})
+	}
+}
+
+func TestRoomIDJSONRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		Room ref.RoomID `json:"room_id"`
+	}
+
+	original := testStruct{}
+	roomID, err := ref.ParseRoomID("!test456:example.org")
+	if err != nil {
+		t.Fatalf("ParseRoomID: %v", err)
+	}
+	original.Room = roomID
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	// Verify the JSON uses the string representation.
+	want := `{"room_id":"!test456:example.org"}`
+	if string(data) != want {
+		t.Errorf("json.Marshal = %s, want %s", data, want)
+	}
+
+	var decoded testStruct
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if decoded.Room != original.Room {
+		t.Errorf("roundtrip = %v, want %v", decoded.Room, original.Room)
+	}
+}
+
+func TestRoomIDJSONMapKey(t *testing.T) {
+	t.Parallel()
+
+	roomID, err := ref.ParseRoomID("!mapkey:bureau.local")
+	if err != nil {
+		t.Fatalf("ParseRoomID: %v", err)
+	}
+
+	original := map[ref.RoomID]string{roomID: "hello"}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	want := `{"!mapkey:bureau.local":"hello"}`
+	if string(data) != want {
+		t.Errorf("json.Marshal = %s, want %s", data, want)
+	}
+
+	var decoded map[ref.RoomID]string
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if decoded[roomID] != "hello" {
+		t.Errorf("decoded[%v] = %q, want %q", roomID, decoded[roomID], "hello")
+	}
+}
+
+func TestRoomIDZeroMarshalText(t *testing.T) {
+	t.Parallel()
+	var zero ref.RoomID
+	data, err := zero.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText on zero: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("MarshalText on zero = %q, want empty", data)
+	}
+}

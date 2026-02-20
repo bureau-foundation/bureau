@@ -6,7 +6,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/ticket"
@@ -148,7 +150,7 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 			)
 			continue
 		}
-		tickets := ts.processRoomState(ctx, roomID, events, nil)
+		tickets := ts.processRoomState(ctx, roomID.String(), events, nil)
 		totalTickets += tickets
 	}
 
@@ -446,7 +448,15 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID st
 // the sync response directly and doesn't need this. Returns the
 // number of tickets indexed.
 func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID string, state *roomState) int {
-	events, err := ts.session.GetRoomState(ctx, roomID)
+	parsedRoomID, err := ref.ParseRoomID(roomID)
+	if err != nil {
+		ts.logger.Error("invalid room ID for ticket backfill",
+			"room_id", roomID,
+			"error", err,
+		)
+		return 0
+	}
+	events, err := ts.session.GetRoomState(ctx, parsedRoomID)
 	if err != nil {
 		ts.logger.Error("failed to fetch room state for ticket backfill",
 			"room_id", roomID,
@@ -473,7 +483,11 @@ func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID string) st
 	if ts.session == nil {
 		return ""
 	}
-	raw, err := ts.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypeCanonicalAlias, "")
+	parsedRoomID, err := ref.ParseRoomID(roomID)
+	if err != nil {
+		return ""
+	}
+	raw, err := ts.session.GetStateEvent(ctx, parsedRoomID, schema.MatrixEventTypeCanonicalAlias, "")
 	if err != nil {
 		return ""
 	}
@@ -581,7 +595,11 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 // and index.Put directly. This includes socket handlers, gate
 // satisfaction, and any future write path.
 func (ts *TicketService) putWithEcho(ctx context.Context, roomID string, state *roomState, ticketID string, content schema.TicketContent) error {
-	eventID, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content)
+	parsedRoomID, err := ref.ParseRoomID(roomID)
+	if err != nil {
+		return fmt.Errorf("invalid room ID %q: %w", roomID, err)
+	}
+	eventID, err := ts.writer.SendStateEvent(ctx, parsedRoomID, schema.EventTypeTicket, ticketID, content)
 	if err != nil {
 		return err
 	}

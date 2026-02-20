@@ -484,13 +484,13 @@ type Daemon struct {
 	machine        ref.Machine
 	fleet          ref.Fleet
 	adminUser      string // admin account localpart (for fleet controller PL grants)
-	systemRoomID   string
-	configRoomID   string
-	machineRoomID  string
-	serviceRoomID  string
-	fleetRoomID    string // fleet room for HA leases, service definitions, and alerts
-	runDir         string // base runtime directory (e.g., /run/bureau)
-	fleetRunDir    string // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
+	systemRoomID   ref.RoomID
+	configRoomID   ref.RoomID
+	machineRoomID  ref.RoomID
+	serviceRoomID  ref.RoomID
+	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
+	runDir         string     // base runtime directory (e.g., /run/bureau)
+	fleetRunDir    string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
 	launcherSocket string
 	statusInterval time.Duration
 
@@ -1187,13 +1187,13 @@ func uptimeSeconds() int64 {
 // The config room must already exist (created by "bureau machine provision").
 // The daemon does not create config rooms — that is the admin's responsibility
 // during provisioning.
-func resolveConfigRoom(ctx context.Context, session *messaging.DirectSession, alias string, logger *slog.Logger) (string, error) {
+func resolveConfigRoom(ctx context.Context, session *messaging.DirectSession, alias string, logger *slog.Logger) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return "", fmt.Errorf("config room %q not found — run 'bureau machine provision' first", alias)
+			return ref.RoomID{}, fmt.Errorf("config room %q not found — run 'bureau machine provision' first", alias)
 		}
-		return "", fmt.Errorf("resolving config room alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("resolving config room alias %q: %w", alias, err)
 	}
 
 	if _, err := session.JoinRoom(ctx, roomID); err != nil {

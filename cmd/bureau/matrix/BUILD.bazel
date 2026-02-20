@@ -52,6 +52,7 @@ go_test(
     deps = [
         "//cmd/bureau/cli",
         "//lib/content",
+        "//lib/ref",
         "//lib/schema",
         "//messaging",
     ],

@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // newTestSession creates a Client and DirectSession pointing at a test server.
@@ -69,7 +72,7 @@ func TestCreateRoom(t *testing.T) {
 				t.Errorf("unexpected alias: %s", body.Alias)
 			}
 
-			writeJSON(writer, CreateRoomResponse{RoomID: "!room1:local"})
+			writeJSON(writer, CreateRoomResponse{RoomID: mustRoomID("!room1:local")})
 		}))
 
 		response, err := session.CreateRoom(context.Background(), CreateRoomRequest{
@@ -80,7 +83,7 @@ func TestCreateRoom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateRoom failed: %v", err)
 		}
-		if response.RoomID != "!room1:local" {
+		if response.RoomID.String() != "!room1:local" {
 			t.Errorf("unexpected room ID: %s", response.RoomID)
 		}
 	})
@@ -98,7 +101,7 @@ func TestCreateRoom(t *testing.T) {
 			if creationContent["type"] != "m.space" {
 				t.Errorf("unexpected creation_content type: %v", creationContent["type"])
 			}
-			writeJSON(writer, CreateRoomResponse{RoomID: "!space1:local"})
+			writeJSON(writer, CreateRoomResponse{RoomID: mustRoomID("!space1:local")})
 		}))
 
 		response, err := session.CreateRoom(context.Background(), CreateRoomRequest{
@@ -111,7 +114,7 @@ func TestCreateRoom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateRoom (space) failed: %v", err)
 		}
-		if response.RoomID != "!space1:local" {
+		if response.RoomID.String() != "!space1:local" {
 			t.Errorf("unexpected room ID: %s", response.RoomID)
 		}
 	})
@@ -127,11 +130,11 @@ func TestJoinRoom(t *testing.T) {
 		writeJSON(writer, map[string]string{"room_id": "!room1:local"})
 	}))
 
-	roomID, err := session.JoinRoom(context.Background(), "#test:local")
+	roomID, err := session.JoinRoom(context.Background(), mustRoomID("!join-target:local"))
 	if err != nil {
 		t.Fatalf("JoinRoom failed: %v", err)
 	}
-	if roomID != "!room1:local" {
+	if roomID.String() != "!room1:local" {
 		t.Errorf("unexpected room ID: %s", roomID)
 	}
 }
@@ -150,7 +153,7 @@ func TestInviteUser(t *testing.T) {
 		writeJSON(writer, map[string]any{})
 	}))
 
-	err := session.InviteUser(context.Background(), "!room1:local", "@alice:local")
+	err := session.InviteUser(context.Background(), mustRoomID("!room1:local"), "@alice:local")
 	if err != nil {
 		t.Fatalf("InviteUser failed: %v", err)
 	}
@@ -184,7 +187,7 @@ func TestSendMessage(t *testing.T) {
 			writeJSON(writer, SendEventResponse{EventID: "$event1"})
 		}))
 
-		eventID, err := session.SendMessage(context.Background(), "!room1:local", NewTextMessage("hello world"))
+		eventID, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewTextMessage("hello world"))
 		if err != nil {
 			t.Fatalf("SendMessage failed: %v", err)
 		}
@@ -218,7 +221,7 @@ func TestSendMessage(t *testing.T) {
 			writeJSON(writer, SendEventResponse{EventID: "$event2"})
 		}))
 
-		eventID, err := session.SendMessage(context.Background(), "!room1:local", NewThreadReply("$root1", "thread response"))
+		eventID, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewThreadReply("$root1", "thread response"))
 		if err != nil {
 			t.Fatalf("SendMessage (thread) failed: %v", err)
 		}
@@ -242,7 +245,7 @@ func TestSendStateEvent(t *testing.T) {
 		writeJSON(writer, SendEventResponse{EventID: "$state1"})
 	}))
 
-	eventID, err := session.SendStateEvent(context.Background(), "!space1:local", "m.space.child", "!room1:local",
+	eventID, err := session.SendStateEvent(context.Background(), mustRoomID("!space1:local"), "m.space.child", "!room1:local",
 		map[string]any{"via": []string{"local"}})
 	if err != nil {
 		t.Fatalf("SendStateEvent failed: %v", err)
@@ -272,7 +275,7 @@ func TestGetStateEvent(t *testing.T) {
 			})
 		}))
 
-		content, err := session.GetStateEvent(context.Background(), "!room1:local", "m.bureau.machine_key", "machine/workstation")
+		content, err := session.GetStateEvent(context.Background(), mustRoomID("!room1:local"), "m.bureau.machine_key", "machine/workstation")
 		if err != nil {
 			t.Fatalf("GetStateEvent failed: %v", err)
 		}
@@ -300,7 +303,7 @@ func TestGetStateEvent(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeNotFound, Message: "State event not found"})
 		}))
 
-		_, err := session.GetStateEvent(context.Background(), "!room1:local", "m.bureau.machine_key", "nonexistent")
+		_, err := session.GetStateEvent(context.Background(), mustRoomID("!room1:local"), "m.bureau.machine_key", "nonexistent")
 		if err == nil {
 			t.Fatal("expected error for missing state event")
 		}
@@ -341,7 +344,7 @@ func TestGetRoomState(t *testing.T) {
 		writeJSON(writer, events)
 	}))
 
-	events, err := session.GetRoomState(context.Background(), "!room1:local")
+	events, err := session.GetRoomState(context.Background(), mustRoomID("!room1:local"))
 	if err != nil {
 		t.Fatalf("GetRoomState failed: %v", err)
 	}
@@ -384,7 +387,7 @@ func TestRoomMessages(t *testing.T) {
 		})
 	}))
 
-	response, err := session.RoomMessages(context.Background(), "!room1:local", RoomMessagesOptions{
+	response, err := session.RoomMessages(context.Background(), mustRoomID("!room1:local"), RoomMessagesOptions{
 		Direction: "b",
 		Limit:     10,
 	})
@@ -417,7 +420,7 @@ func TestThreadMessages(t *testing.T) {
 		})
 	}))
 
-	response, err := session.ThreadMessages(context.Background(), "!room1:local", "$root1", ThreadMessagesOptions{
+	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room1:local"), "$root1", ThreadMessagesOptions{
 		Limit: 50,
 	})
 	if err != nil {
@@ -490,7 +493,7 @@ func TestResolveAlias(t *testing.T) {
 				t.Errorf("unexpected path: %s", request.URL.Path)
 			}
 			writeJSON(writer, ResolveAliasResponse{
-				RoomID:  "!room1:local",
+				RoomID:  mustRoomID("!room1:local"),
 				Servers: []string{"local"},
 			})
 		}))
@@ -499,7 +502,7 @@ func TestResolveAlias(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveAlias failed: %v", err)
 		}
-		if roomID != "!room1:local" {
+		if roomID.String() != "!room1:local" {
 			t.Errorf("unexpected room ID: %s", roomID)
 		}
 	})
@@ -561,7 +564,7 @@ func TestJoinedRooms(t *testing.T) {
 			t.Errorf("unexpected path: %s", request.URL.Path)
 		}
 		writeJSON(writer, JoinedRoomsResponse{
-			JoinedRooms: []string{"!room1:local", "!room2:local", "!space1:local"},
+			JoinedRooms: []ref.RoomID{mustRoomID("!room1:local"), mustRoomID("!room2:local"), mustRoomID("!space1:local")},
 		})
 	}))
 
@@ -572,10 +575,10 @@ func TestJoinedRooms(t *testing.T) {
 	if len(rooms) != 3 {
 		t.Fatalf("expected 3 rooms, got %d", len(rooms))
 	}
-	if rooms[0] != "!room1:local" {
+	if rooms[0].String() != "!room1:local" {
 		t.Errorf("unexpected first room: %s", rooms[0])
 	}
-	if rooms[2] != "!space1:local" {
+	if rooms[2].String() != "!space1:local" {
 		t.Errorf("unexpected third room: %s", rooms[2])
 	}
 }
@@ -631,7 +634,7 @@ func TestGetRoomMembers(t *testing.T) {
 		})
 	}))
 
-	members, err := session.GetRoomMembers(context.Background(), "!room1:local")
+	members, err := session.GetRoomMembers(context.Background(), mustRoomID("!room1:local"))
 	if err != nil {
 		t.Fatalf("GetRoomMembers failed: %v", err)
 	}
@@ -778,7 +781,7 @@ func TestTransactionIDUniqueness(t *testing.T) {
 	}))
 
 	for range 5 {
-		_, err := session.SendMessage(context.Background(), "!room1:local", NewTextMessage("msg"))
+		_, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewTextMessage("msg"))
 		if err != nil {
 			t.Fatalf("SendMessage failed: %v", err)
 		}
@@ -1121,6 +1124,15 @@ func TestLogoutAll(t *testing.T) {
 }
 
 // Test helpers.
+
+// mustRoomID parses a room ID string in test code, panicking on failure.
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test room ID %q: %v", raw, err))
+	}
+	return roomID
+}
 
 func assertAuth(t *testing.T, request *http.Request, expectedToken string) {
 	t.Helper()

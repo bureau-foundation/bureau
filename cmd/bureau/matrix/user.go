@@ -302,9 +302,14 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 	}
 
 	for _, room := range bureauRooms {
-		roomID := credentials[room.credentialKey]
-		if roomID == "" {
+		roomIDString := credentials[room.credentialKey]
+		if roomIDString == "" {
 			return cli.Validation("credential file missing %s", room.credentialKey)
+		}
+
+		roomID, parseErr := ref.ParseRoomID(roomIDString)
+		if parseErr != nil {
+			return cli.Validation("invalid room ID for %s: %w", room.credentialKey, parseErr)
 		}
 
 		// Step 1: Admin invites the user. Idempotent — M_FORBIDDEN
@@ -624,7 +629,7 @@ func userInviteCommand() *cli.Command {
 
 			if done, err := params.EmitJSON(userInviteResult{
 				UserID: targetUserID,
-				RoomID: roomID,
+				RoomID: roomID.String(),
 			}); done {
 				return err
 			}
@@ -709,13 +714,13 @@ alias or room ID. An optional --reason provides context for the kick.`,
 			if !ok {
 				return cli.Validation("user kick requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.KickUser(ctx, roomID, targetUserID, params.Reason); err != nil {
+			if err := directSession.KickUser(ctx, roomID.String(), targetUserID, params.Reason); err != nil {
 				return cli.Internal("kick user: %w", err)
 			}
 
 			if done, err := params.EmitJSON(userKickResult{
 				UserID: targetUserID,
-				RoomID: roomID,
+				RoomID: roomID.String(),
 			}); done {
 				return err
 			}

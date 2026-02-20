@@ -91,7 +91,7 @@ func (as *ArtifactService) initialSync(ctx context.Context) (string, error) {
 			)
 			continue
 		}
-		as.processRoomState(roomID, events, nil)
+		as.processRoomState(roomID.String(), events, nil)
 	}
 
 	as.logger.Info("artifact rooms discovered",

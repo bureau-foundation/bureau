@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -111,7 +112,7 @@ if not specified.`,
 			}
 
 			if done, err := params.EmitJSON(spaceCreateResult{
-				RoomID: response.RoomID,
+				RoomID: response.RoomID.String(),
 				Alias:  alias,
 			}); done {
 				return err
@@ -183,7 +184,7 @@ table of room ID, alias, and name.`,
 					continue
 				}
 				spaces = append(spaces, spaceEntry{
-					RoomID: roomID,
+					RoomID: roomID.String(),
 					Alias:  alias,
 					Name:   name,
 				})
@@ -266,11 +267,11 @@ reclaim the room.`,
 			if !ok {
 				return cli.Validation("space leave requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
+			if err := directSession.LeaveRoom(ctx, roomID.String()); err != nil {
 				return cli.Internal("leave space: %w", err)
 			}
 
-			if done, err := params.EmitJSON(spaceDeleteResult{RoomID: roomID}); done {
+			if done, err := params.EmitJSON(spaceDeleteResult{RoomID: roomID.String()}); done {
 				return err
 			}
 
@@ -351,7 +352,7 @@ Displays a table of user ID, display name, and membership state
 // inspectSpaceState fetches room state and determines whether the room is a
 // space. Returns (isSpace, name, canonicalAlias). If the room state cannot be
 // fetched, returns (false, "", "").
-func inspectSpaceState(ctx context.Context, session messaging.Session, roomID string) (bool, string, string) {
+func inspectSpaceState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (bool, string, string) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return false, "", ""

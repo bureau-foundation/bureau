@@ -58,7 +58,7 @@ func TestSpaceCreate_Success(t *testing.T) {
 				t.Errorf("unexpected alias: %v", body["room_alias_name"])
 			}
 			writer.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!space1:local"})
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: mustRoomID("!space1:local")})
 			return
 		}
 		t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -92,7 +92,7 @@ func TestSpaceCreate_NameDefaultsToAlias(t *testing.T) {
 				t.Errorf("unexpected alias: %v", body["room_alias_name"])
 			}
 			writer.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!space2:local"})
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: mustRoomID("!space2:local")})
 			return
 		}
 		t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -184,7 +184,7 @@ func TestInspectSpaceState(t *testing.T) {
 		}
 		defer session.Close()
 
-		isSpace, name, alias := inspectSpaceState(t.Context(), session, "!room1:local")
+		isSpace, name, alias := inspectSpaceState(t.Context(), session, mustRoomID("!room1:local"))
 		if !isSpace {
 			t.Error("expected isSpace to be true")
 		}
@@ -226,7 +226,7 @@ func TestInspectSpaceState(t *testing.T) {
 		}
 		defer session.Close()
 
-		isSpace, _, _ := inspectSpaceState(t.Context(), session, "!room1:local")
+		isSpace, _, _ := inspectSpaceState(t.Context(), session, mustRoomID("!room1:local"))
 		if isSpace {
 			t.Error("expected isSpace to be false for a regular room")
 		}

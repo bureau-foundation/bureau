@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -127,17 +128,21 @@ Bureau protocol events).`,
 
 // resolveRoom resolves a room target to a room ID. If the target looks like an
 // alias (starts with #), it is resolved via the homeserver. Otherwise it is
-// returned as-is (assumed to be a room ID starting with !).
-func resolveRoom(ctx context.Context, session messaging.Session, target string) (string, error) {
+// parsed as a room ID (must start with !).
+func resolveRoom(ctx context.Context, session messaging.Session, target string) (ref.RoomID, error) {
 	if strings.HasPrefix(target, "#") {
 		roomID, err := session.ResolveAlias(ctx, target)
 		if err != nil {
-			return "", cli.NotFound("resolve alias %q: %w", target, err)
+			return ref.RoomID{}, cli.NotFound("resolve alias %q: %w", target, err)
 		}
 		return roomID, nil
 	}
 	if !strings.HasPrefix(target, "!") {
-		return "", cli.Validation("room must be an alias (#...) or room ID (!...): got %q", target)
+		return ref.RoomID{}, cli.Validation("room must be an alias (#...) or room ID (!...): got %q", target)
 	}
-	return target, nil
+	roomID, err := ref.ParseRoomID(target)
+	if err != nil {
+		return ref.RoomID{}, cli.Validation("invalid room ID %q: %w", target, err)
+	}
+	return roomID, nil
 }

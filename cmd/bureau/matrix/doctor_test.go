@@ -136,7 +136,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				return
 			}
 			if roomID, ok := aliasMap[decodedAlias]; ok {
-				json.NewEncoder(writer).Encode(messaging.ResolveAliasResponse{RoomID: roomID})
+				json.NewEncoder(writer).Encode(messaging.ResolveAliasResponse{RoomID: mustRoomID(roomID)})
 				return
 			}
 			writer.WriteHeader(http.StatusNotFound)

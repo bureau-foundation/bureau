@@ -28,7 +28,7 @@ import (
 // credential.Provision under the hood. This function type breaks the import
 // cycle between lib/principal (which defines Create) and lib/credential
 // (which implements the encryption and publishing workflow).
-type ProvisionFunc func(ctx context.Context, session messaging.Session, machine ref.Machine, principal ref.Entity, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
+type ProvisionFunc func(ctx context.Context, session messaging.Session, machine ref.Machine, principal ref.Entity, machineRoomID ref.RoomID, credentials map[string]string) (configRoomID ref.RoomID, err error)
 
 // CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
@@ -83,7 +83,7 @@ type CreateParams struct {
 
 	// MachineRoomID is the fleet-scoped machine room where the machine's
 	// age public key is published. Required for credential provisioning.
-	MachineRoomID string
+	MachineRoomID ref.RoomID
 
 	// Labels are free-form key-value metadata for organizational purposes.
 	Labels map[string]string
@@ -102,7 +102,7 @@ type CreateResult struct {
 	TemplateRef schema.TemplateRef
 
 	// ConfigRoomID is the Matrix room ID of the machine's config room.
-	ConfigRoomID string
+	ConfigRoomID ref.RoomID
 
 	// ConfigEventID is the event ID of the published MachineConfig state
 	// event that includes this principal's assignment.
@@ -146,7 +146,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	if params.HomeserverURL == "" {
 		return nil, fmt.Errorf("homeserver URL is required")
 	}
-	if params.MachineRoomID == "" {
+	if params.MachineRoomID.IsZero() {
 		return nil, fmt.Errorf("machine room ID is required for credential provisioning")
 	}
 
@@ -245,7 +245,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 // assignPrincipal reads the current MachineConfig, merges the new
 // PrincipalAssignment, and publishes the updated config. If the principal
 // is already assigned, its entry is updated in place.
-func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID string, params CreateParams) (string, error) {
+func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params CreateParams) (string, error) {
 	machineLocalpart := params.Machine.Localpart()
 
 	var config schema.MachineConfig

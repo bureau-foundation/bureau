@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -134,7 +135,7 @@ func (m *mockMCPAuthServer) AuthorizationError() string {
 //     bureau_template_list (unauthorized — agent lacks grant).
 //   - Request 2: validate tool_result for request 1 contains "not authorized",
 //     return text "done", signal AllRequestsHandled.
-func newMockMCPAuthSequence(t *testing.T, configRoomID string) *mockMCPAuthServer {
+func newMockMCPAuthSequence(t *testing.T, configRoomID ref.RoomID) *mockMCPAuthServer {
 	t.Helper()
 
 	var (
@@ -173,7 +174,7 @@ func newMockMCPAuthSequence(t *testing.T, configRoomID string) *mockMCPAuthServe
 		case 0:
 			// Return tool_use for bureau_matrix_send (authorized).
 			toolInput, _ := json.Marshal(map[string]string{
-				"room":    configRoomID,
+				"room":    configRoomID.String(),
 				"message": "mcp-auth-test",
 			})
 			writeSSE(writer, anthropicSSEResponse{

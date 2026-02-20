@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -30,7 +31,7 @@ var _ Signaler = (*MatrixSignaler)(nil)
 // m.bureau.webrtc_answer respectively.
 type MatrixSignaler struct {
 	session       *messaging.DirectSession
-	machineRoomID string
+	machineRoomID ref.RoomID
 	logger        *slog.Logger
 
 	// lastSeen tracks the most recent timestamp we've processed for each
@@ -41,7 +42,7 @@ type MatrixSignaler struct {
 
 // NewMatrixSignaler creates a Matrix-backed signaler. machineRoomID is the
 // room ID for #bureau/machine where signaling state events are published.
-func NewMatrixSignaler(session *messaging.DirectSession, machineRoomID string, logger *slog.Logger) *MatrixSignaler {
+func NewMatrixSignaler(session *messaging.DirectSession, machineRoomID ref.RoomID, logger *slog.Logger) *MatrixSignaler {
 	return &MatrixSignaler{
 		session:       session,
 		machineRoomID: machineRoomID,

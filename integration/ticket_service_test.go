@@ -691,7 +691,7 @@ func writeServiceSession(t *testing.T, stateDir string, account principalAccount
 }
 
 // resolveSystemRoom resolves the #bureau/system room ID.
-func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) string {
+func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
 	t.Helper()
 
 	systemRoomID, err := admin.ResolveAlias(t.Context(), testNamespace.SystemRoomAlias())
@@ -703,7 +703,7 @@ func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) string {
 
 // inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN
 // (already joined).
-func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID string, roomIDs ...string) {
+func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID string, roomIDs ...ref.RoomID) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -720,7 +720,7 @@ func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID string, 
 // room service binding, and appropriate power levels. Invites the ticket
 // service account and any additional users (machine accounts, etc.)
 // so they can participate.
-func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name string, ticketServiceEntity ref.Entity, additionalInvites ...string) string {
+func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name string, ticketServiceEntity ref.Entity, additionalInvites ...string) ref.RoomID {
 	t.Helper()
 
 	ctx := t.Context()
@@ -815,7 +815,7 @@ func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string
 // readTicketState reads the current m.bureau.ticket state event for a
 // known ticket ID. Used after operations (update, close, reopen) where
 // the ticket ID is already known from a previous waitForTicket call.
-func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID, ticketID string) schema.TicketContent {
+func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketID string) schema.TicketContent {
 	t.Helper()
 
 	raw, err := admin.GetStateEvent(t.Context(), roomID, schema.EventTypeTicket, ticketID)

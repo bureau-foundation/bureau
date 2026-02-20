@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -152,9 +153,17 @@ func RunSyncLoop(ctx context.Context, session *messaging.DirectSession, config S
 // Returns the room IDs that were successfully joined. Services should
 // call this during initial sync processing and on each incremental
 // sync that contains invites.
-func AcceptInvites(ctx context.Context, session *messaging.DirectSession, invites map[string]messaging.InvitedRoom, logger *slog.Logger) []string {
-	var accepted []string
-	for roomID := range invites {
+func AcceptInvites(ctx context.Context, session *messaging.DirectSession, invites map[string]messaging.InvitedRoom, logger *slog.Logger) []ref.RoomID {
+	var accepted []ref.RoomID
+	for roomIDStr := range invites {
+		roomID, err := ref.ParseRoomID(roomIDStr)
+		if err != nil {
+			logger.Error("invalid room ID in invite",
+				"room_id", roomIDStr,
+				"error", err,
+			)
+			continue
+		}
 		logger.Info("accepting room invite", "room_id", roomID)
 		if _, err := session.JoinRoom(ctx, roomID); err != nil {
 			logger.Error("failed to accept room invite",

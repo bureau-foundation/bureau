@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -259,7 +260,7 @@ func (ts *TicketService) matchRoomAlias(localpart, serverName string) string {
 // matrixWriter is the subset of *messaging.DirectSession needed for writing
 // ticket state events to Matrix. Tests substitute a fake implementation.
 type matrixWriter interface {
-	SendStateEvent(ctx context.Context, roomID, eventType, stateKey string, content any) (string, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
 }
 
 // findGate returns the index of a gate with the given ID in the gates

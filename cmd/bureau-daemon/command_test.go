@@ -101,9 +101,9 @@ func newCommandTestHarness(t *testing.T) *commandTestHarness {
 	t.Cleanup(func() { session.Close() })
 
 	daemon.session = session
-	daemon.configRoomID = "!config:test"
-	daemon.machineRoomID = "!machine:test"
-	daemon.serviceRoomID = "!service:test"
+	daemon.configRoomID = mustRoomID("!config:test")
+	daemon.machineRoomID = mustRoomID("!machine:test")
+	daemon.serviceRoomID = mustRoomID("!service:test")
 	daemon.workspaceRoot = workspaceRoot
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -189,7 +189,7 @@ func TestCommandDispatch(t *testing.T) {
 	event := buildCommandEvent("$cmd1", "@operator:bureau.local", "workspace.list", "", "req-001")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	// Verify a result was posted.
 	messages := harness.getSentMessages()
@@ -246,7 +246,7 @@ func TestCommandAuthorizationDenied(t *testing.T) {
 	event := buildCommandEvent("$cmd2", "@lowperm:bureau.local", "workspace.fetch", workspace, "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -286,7 +286,7 @@ func TestCommandAuthorizationAllowed(t *testing.T) {
 	event := buildCommandEvent("$cmd3", "@operator:bureau.local", "workspace.fetch", workspace, "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -316,7 +316,7 @@ func TestCommandUnknownCommand(t *testing.T) {
 	event := buildCommandEvent("$cmd4", "@user:bureau.local", "workspace.nonexistent", "", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -342,7 +342,7 @@ func TestCommandSkipsSelfMessages(t *testing.T) {
 	event := buildCommandEvent("$cmd5", harness.daemon.machine.UserID(), "workspace.list", "", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 0 {
@@ -364,7 +364,7 @@ func TestCommandMissingWorkspace(t *testing.T) {
 	event := buildCommandEvent("$cmd6", "@user:bureau.local", "workspace.status", "", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -402,7 +402,7 @@ func TestCommandPathTraversal(t *testing.T) {
 		event := buildCommandEvent("$trav", "@user:bureau.local", "workspace.status", workspace, "")
 
 		ctx := context.Background()
-		harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+		harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 	}
 
 	messages := harness.getSentMessages()
@@ -443,7 +443,7 @@ func TestCommandWorkspaceList(t *testing.T) {
 	event := buildCommandEvent("$list", "@user:bureau.local", "workspace.list", "", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -499,7 +499,7 @@ func TestCommandWorkspaceDu(t *testing.T) {
 	event := buildCommandEvent("$du", "@user:bureau.local", "workspace.du", workspace, "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -536,7 +536,7 @@ func TestCommandThreadedReply(t *testing.T) {
 	event := buildCommandEvent(commandEventID, "@user:bureau.local", "workspace.list", "", "req-thread")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -599,7 +599,7 @@ func TestCommandWorkspaceStatus(t *testing.T) {
 	event := buildCommandEvent("$status", "@user:bureau.local", "workspace.status", workspace, "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -640,7 +640,7 @@ func TestCommandWorkspaceStatusNonExistent(t *testing.T) {
 	event := buildCommandEvent("$status2", "@user:bureau.local", "workspace.status", "nonexistent", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -691,7 +691,7 @@ func TestCommandNonMessageEventsIgnored(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{stateEvent, textEvent})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{stateEvent, textEvent})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 0 {
@@ -712,7 +712,7 @@ func TestCommandWorkspaceListEmpty(t *testing.T) {
 	event := buildCommandEvent("$empty", "@user:bureau.local", "workspace.list", "", "")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {

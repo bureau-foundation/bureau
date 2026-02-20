@@ -244,7 +244,10 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 	if err != nil {
 		return cli.NotFound("resolve fleet rooms: %w", err)
 	}
-	for _, fleetRoom := range []struct{ id, name string }{
+	for _, fleetRoom := range []struct {
+		id   ref.RoomID
+		name string
+	}{
 		{machineRoomID, "fleet machine room"},
 		{serviceRoomID, "fleet service room"},
 		{fleetRoomID, "fleet config room"},

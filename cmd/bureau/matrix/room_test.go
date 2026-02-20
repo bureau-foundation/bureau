@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -91,7 +92,7 @@ func TestRoomCreate_Success(t *testing.T) {
 			if powerLevels, ok := body["power_level_content_override"].(map[string]any); ok {
 				capturedPowerLvl = powerLevels
 			}
-			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!newroom:local"})
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: mustRoomID("!newroom:local")})
 
 		case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/state/m.space.child/"):
 			gotSpaceChild = true
@@ -162,7 +163,7 @@ func TestRoomCreate_DefaultNameFromAlias(t *testing.T) {
 			var body map[string]any
 			json.NewDecoder(request.Body).Decode(&body)
 			capturedName, _ = body["name"].(string)
-			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!room:local"})
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: mustRoomID("!room:local")})
 			return
 		}
 		if strings.Contains(request.URL.Path, "/state/m.space.child/") {
@@ -198,12 +199,12 @@ func TestRoomCreate_SpaceResolvedByAlias(t *testing.T) {
 		if strings.HasPrefix(request.URL.Path, "/_matrix/client/v3/directory/room/") {
 			gotResolve = true
 			json.NewEncoder(writer).Encode(messaging.ResolveAliasResponse{
-				RoomID: "!resolved-space:local",
+				RoomID: mustRoomID("!resolved-space:local"),
 			})
 			return
 		}
 		if request.URL.Path == "/_matrix/client/v3/createRoom" {
-			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: "!room:local"})
+			json.NewEncoder(writer).Encode(messaging.CreateRoomResponse{RoomID: mustRoomID("!room:local")})
 			return
 		}
 		if strings.Contains(request.URL.Path, "/state/m.space.child/") {
@@ -308,7 +309,7 @@ func TestRoomList_AllRooms(t *testing.T) {
 		switch {
 		case request.URL.Path == "/_matrix/client/v3/joined_rooms":
 			json.NewEncoder(writer).Encode(messaging.JoinedRoomsResponse{
-				JoinedRooms: []string{"!space1:local", "!room1:local", "!room2:local"},
+				JoinedRooms: []ref.RoomID{mustRoomID("!space1:local"), mustRoomID("!room1:local"), mustRoomID("!room2:local")},
 			})
 
 		// space1 is a space — should be excluded.
@@ -500,7 +501,7 @@ func TestInspectRoomState(t *testing.T) {
 		}
 		defer session.Close()
 
-		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
+		name, alias, topic := inspectRoomState(t.Context(), session, mustRoomID("!room:local"))
 		if name != "Test Room" {
 			t.Errorf("expected name 'Test Room', got %q", name)
 		}
@@ -529,7 +530,7 @@ func TestInspectRoomState(t *testing.T) {
 		}
 		defer session.Close()
 
-		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
+		name, alias, topic := inspectRoomState(t.Context(), session, mustRoomID("!room:local"))
 		if name != "" {
 			t.Errorf("expected empty name, got %q", name)
 		}
@@ -557,7 +558,7 @@ func TestInspectRoomState(t *testing.T) {
 		}
 		defer session.Close()
 
-		name, alias, topic := inspectRoomState(t.Context(), session, "!room:local")
+		name, alias, topic := inspectRoomState(t.Context(), session, mustRoomID("!room:local"))
 		if name != "" || alias != "" || topic != "" {
 			t.Errorf("expected all empty on error, got name=%q alias=%q topic=%q", name, alias, topic)
 		}

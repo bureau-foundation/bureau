@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -430,15 +431,20 @@ func acceptPendingInvites(credentials proxy.CredentialSource, logger *slog.Logge
 		return
 	}
 
-	for roomID := range response.Rooms.Invite {
-		if _, err := session.JoinRoom(ctx, roomID); err != nil {
+	for roomIDString := range response.Rooms.Invite {
+		parsedRoomID, parseError := ref.ParseRoomID(roomIDString)
+		if parseError != nil {
+			logger.Warn("invalid room ID in invite", "room_id", roomIDString, "error", parseError)
+			continue
+		}
+		if _, err := session.JoinRoom(ctx, parsedRoomID); err != nil {
 			logger.Warn("failed to accept room invite",
-				"room_id", roomID,
+				"room_id", parsedRoomID,
 				"error", err,
 			)
 			continue
 		}
-		logger.Info("accepted room invite", "room_id", roomID)
+		logger.Info("accepted room invite", "room_id", parsedRoomID)
 	}
 }
 

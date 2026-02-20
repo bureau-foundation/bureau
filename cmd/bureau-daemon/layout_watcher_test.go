@@ -51,7 +51,7 @@ func newTestDaemonWithLayout(t *testing.T) (*Daemon, *mockMatrixState, *tmux.Ser
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = "!config:test"
+	daemon.configRoomID = mustRoomID("!config:test")
 	daemon.tmuxServer = tmuxServer
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)

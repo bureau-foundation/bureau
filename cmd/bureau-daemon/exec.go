@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -47,7 +48,7 @@ func checkDaemonWatchdog(
 	watchdogPath string,
 	daemonBinaryPath string,
 	session *messaging.DirectSession,
-	configRoomID string,
+	configRoomID ref.RoomID,
 	logger *slog.Logger,
 ) (failedPath string) {
 	state, found, err := watchdog.Check(watchdogPath, watchdogMaxAge)
@@ -69,7 +70,7 @@ func checkDaemonWatchdog(
 			"previous", state.PreviousBinary,
 			"new", state.NewBinary,
 		)
-		if session != nil && configRoomID != "" {
+		if session != nil && !configRoomID.IsZero() {
 			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
 				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "succeeded", ""))
 		}
@@ -82,7 +83,7 @@ func checkDaemonWatchdog(
 			"attempted", state.NewBinary,
 			"current", state.PreviousBinary,
 		)
-		if session != nil && configRoomID != "" {
+		if session != nil && !configRoomID.IsZero() {
 			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
 				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "failed",
 					fmt.Sprintf("%s crashed or failed to start", state.NewBinary)))

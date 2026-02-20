@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // anthropicSSEResponse describes a single Anthropic Messages API streaming
@@ -374,7 +376,7 @@ func (server *mockMultiTurnServer) MessageCounts() []int {
 // messages (turn 2-3). The proportional scaling avoids ratio
 // volatility that would occur with constant input_tokens when
 // message counts vary across requests.
-func newMockMultiTurnToolSequence(t *testing.T, configRoomID string, turnCount int) *mockMultiTurnServer {
+func newMockMultiTurnToolSequence(t *testing.T, configRoomID ref.RoomID, turnCount int) *mockMultiTurnServer {
 	t.Helper()
 
 	var (
@@ -466,7 +468,7 @@ func newMockMultiTurnToolSequence(t *testing.T, configRoomID string, turnCount i
 		} else {
 			// Even request: return bureau_matrix_send tool_use.
 			toolInput, _ := json.Marshal(map[string]string{
-				"room":    configRoomID,
+				"room":    configRoomID.String(),
 				"message": fmt.Sprintf("response from turn %d", turnIndex),
 			})
 			toolCallID := fmt.Sprintf("tc_mock_%02d", turnIndex)

@@ -51,7 +51,7 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 		Metadata:     reg.Metadata,
 	}
 
-	if _, err := session.SendStateEvent(ctx, serviceRoomID.String(), schema.EventTypeService, stateKey, entry); err != nil {
+	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, stateKey, entry); err != nil {
 		return fmt.Errorf("registering service %s in %s: %w", stateKey, serviceRoomID, err)
 	}
 	return nil
@@ -64,7 +64,7 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service) error {
 	stateKey := svc.Localpart()
 	empty := schema.Service{}
-	if _, err := session.SendStateEvent(ctx, serviceRoomID.String(), schema.EventTypeService, stateKey, empty); err != nil {
+	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, stateKey, empty); err != nil {
 		return fmt.Errorf("deregistering service %s from %s: %w", stateKey, serviceRoomID, err)
 	}
 	return nil
@@ -76,17 +76,12 @@ func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRo
 // parameter is typically produced by a ref method (e.g.,
 // fleet.ServiceRoomAlias(), namespace.SystemRoomAlias()).
 func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias string) (ref.RoomID, error) {
-	rawID, err := session.ResolveAlias(ctx, alias)
+	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		return ref.RoomID{}, fmt.Errorf("resolving room alias %q: %w", alias, err)
 	}
 
-	roomID, err := ref.ParseRoomID(rawID)
-	if err != nil {
-		return ref.RoomID{}, fmt.Errorf("invalid room ID from alias %q: %w", alias, err)
-	}
-
-	if _, err := session.JoinRoom(ctx, roomID.String()); err != nil {
+	if _, err := session.JoinRoom(ctx, roomID); err != nil {
 		return ref.RoomID{}, fmt.Errorf("joining room %s: %w", roomID, err)
 	}
 

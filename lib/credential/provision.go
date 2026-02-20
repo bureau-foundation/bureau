@@ -31,7 +31,7 @@ type ProvisionParams struct {
 	// where the machine's public key is published. This is the
 	// fleet-scoped machine room (e.g., the room behind
 	// #bureau/fleet/prod/machine:server).
-	MachineRoomID string
+	MachineRoomID ref.RoomID
 
 	// EscrowKey is an optional operator escrow age public key. When set,
 	// the credential bundle is encrypted to both the machine key and the
@@ -53,7 +53,7 @@ type ProvisionResult struct {
 
 	// ConfigRoomID is the Matrix room ID of the machine's config room
 	// where the credentials were published.
-	ConfigRoomID string
+	ConfigRoomID ref.RoomID
 
 	// PrincipalID is the full Matrix user ID of the principal
 	// (e.g., "@iree/amdgpu/pm:bureau.local").
@@ -87,7 +87,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	if len(params.Credentials) == 0 {
 		return nil, fmt.Errorf("credentials map is empty")
 	}
-	if params.MachineRoomID == "" {
+	if params.MachineRoomID.IsZero() {
 		return nil, fmt.Errorf("machine room ID is required")
 	}
 

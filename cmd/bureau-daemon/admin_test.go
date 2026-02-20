@@ -54,7 +54,7 @@ func newCredentialTestDaemon(t *testing.T) (
 
 	// Set up daemon identity fields.
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	daemon.configRoomID = "!config:test.local"
+	daemon.configRoomID = mustRoomID("!config:test.local")
 
 	// Set up launcher mock.
 	socketDir := testutil.SocketDir(t)
@@ -240,7 +240,7 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 	// fleet.Localpart() + "/" + request.Principal for the lookup.
 	fleetScopedPrincipal := daemon.fleet.Localpart() + "/agent/builder"
 	state := newMockMatrixState()
-	state.setStateEvent(daemon.configRoomID, schema.EventTypeCredentials, fleetScopedPrincipal, schema.Credentials{
+	state.setStateEvent(daemon.configRoomID.String(), schema.EventTypeCredentials, fleetScopedPrincipal, schema.Credentials{
 		Version:    1,
 		Principal:  "agent/builder",
 		Keys:       []string{"OPENAI_API_KEY"},

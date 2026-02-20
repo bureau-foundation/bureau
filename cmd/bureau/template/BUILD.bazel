@@ -19,6 +19,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/ref",
         "//lib/schema",
         "//lib/template",
         "//messaging",

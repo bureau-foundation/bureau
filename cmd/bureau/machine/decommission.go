@@ -179,8 +179,9 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
 		}
 
-		// Kick the machine from the config room.
-		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
+		// Kick the machine from the config room. KickUser is a
+		// DirectSession-only method that takes string room IDs.
+		err = adminSession.KickUser(ctx, configRoomID.String(), machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
 		} else {
@@ -188,9 +189,10 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		}
 	}
 
-	// Kick from all global Bureau rooms.
+	// Kick from all global Bureau rooms. KickUser is a DirectSession-only
+	// method that takes string room IDs.
 	for _, room := range globalRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
@@ -205,7 +207,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		{machineRoom: machineRoom{displayName: "fleet config room"}, roomID: fleetRoomID},
 	}
 	for _, room := range fleetRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
+		err = adminSession.KickUser(ctx, room.roomID.String(), machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.displayName, err)
 		} else {
@@ -223,7 +225,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, allRooms)
 
 	// Also check the config room if it exists.
-	if configRoomID != "" {
+	if !configRoomID.IsZero() {
 		configResolved := resolvedRoom{
 			machineRoom: machineRoom{displayName: "config room"},
 			alias:       configAlias,
@@ -252,7 +254,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 // in the config room and clears them by sending empty content. Returns the
 // state keys (principal localparts) of credentials that were successfully
 // cleared, plus any errors encountered reading room state.
-func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID string) ([]string, error) {
+func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID ref.RoomID) ([]string, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, cli.Internal("read config room state: %w", err)

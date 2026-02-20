@@ -84,7 +84,7 @@ func newTestDaemonWithQuery(t *testing.T) (*Daemon, *mockMatrixState) {
 	daemon.client = matrixClient
 	daemon.tokenVerifier = newTokenVerifier(matrixClient, 5*time.Minute, clock.Real(), logger)
 	daemon.lastConfig = &schema.MachineConfig{}
-	daemon.configRoomID = "!config:test"
+	daemon.configRoomID = mustRoomID("!config:test")
 	daemon.observeSocketPath = observeSocketPath
 	daemon.logger = logger
 	t.Cleanup(daemon.stopAllLayoutWatchers)

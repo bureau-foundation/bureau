@@ -391,7 +391,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[ipcEntity] = true
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
@@ -565,7 +565,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[ipcEntity] = true
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
@@ -699,7 +699,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -784,7 +784,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -856,7 +856,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[fleetEntity] = true
 	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
@@ -1154,7 +1154,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	ipcEntity := testEntity(t, daemon.fleet, localpart)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[ipcEntity] = true
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
@@ -1293,7 +1293,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[ipcEntity] = true
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
@@ -1407,7 +1407,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[fleetEntity] = true
 	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v2"}}

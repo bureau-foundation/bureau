@@ -17,8 +17,8 @@ import (
 // configStore is the subset of *messaging.DirectSession needed for reading
 // and writing machine config state events. Tests substitute a fake.
 type configStore interface {
-	GetStateEvent(ctx context.Context, roomID, eventType, stateKey string) (json.RawMessage, error)
-	SendStateEvent(ctx context.Context, roomID, eventType, stateKey string, content any) (string, error)
+	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
 }
 
 // readMachineConfig reads the current MachineConfig from a machine's
@@ -128,7 +128,7 @@ func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineL
 	if !exists {
 		return fmt.Errorf("machine %s not found", machineLocalpart)
 	}
-	if machine.configRoomID == "" {
+	if machine.configRoomID.IsZero() {
 		return fmt.Errorf("machine %s has no config room", machineLocalpart)
 	}
 
@@ -179,7 +179,7 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 	if !exists {
 		return fmt.Errorf("machine %s not found", machineLocalpart)
 	}
-	if machine.configRoomID == "" {
+	if machine.configRoomID.IsZero() {
 		return fmt.Errorf("machine %s has no config room", machineLocalpart)
 	}
 

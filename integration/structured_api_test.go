@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -187,7 +188,7 @@ type mockStructuredAPIServer struct {
 // Each odd request returns another tool_use (not end_turn text), keeping
 // the agent in the same conversation turn. Only the final request returns
 // end_turn text, which completes the turn.
-func newMockStructuredAPISequence(t *testing.T, testRoomID, fullAlias, stateContent, messageBody string) *mockStructuredAPIServer {
+func newMockStructuredAPISequence(t *testing.T, testRoomID ref.RoomID, fullAlias, stateContent, messageBody string) *mockStructuredAPIServer {
 	t.Helper()
 
 	var (
@@ -224,7 +225,7 @@ func newMockStructuredAPISequence(t *testing.T, testRoomID, fullAlias, stateCont
 		case 0:
 			// Initial prompt — return tool_use for bureau_matrix_state_set.
 			toolInput, _ := json.Marshal(map[string]any{
-				"room":       testRoomID,
+				"room":       testRoomID.String(),
 				"event_type": "m.bureau.test",
 				"state_key":  "integration",
 				"body":       stateContent,

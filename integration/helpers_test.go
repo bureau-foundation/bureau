@@ -488,11 +488,11 @@ func loadCredentials(t *testing.T) map[string]string {
 // that uses a daemon or fleet controller gets its own fleet to prevent
 // cross-contamination through shared rooms.
 type testFleet struct {
-	Ref           ref.Fleet // typed reference (carries namespace, fleet name, server)
-	Prefix        string    // e.g., "bureau/fleet/TestSomeTest"
-	FleetRoomID   string    // fleet config room
-	MachineRoomID string    // fleet machine presence room
-	ServiceRoomID string    // fleet service directory room
+	Ref           ref.Fleet  // typed reference (carries namespace, fleet name, server)
+	Prefix        string     // e.g., "bureau/fleet/TestSomeTest"
+	FleetRoomID   ref.RoomID // fleet config room
+	MachineRoomID ref.RoomID // fleet machine presence room
+	ServiceRoomID ref.RoomID // fleet service directory room
 }
 
 // createTestFleet creates the three fleet-scoped rooms (config, machine,
@@ -832,16 +832,16 @@ func initTestGitRepo(t *testing.T, ctx context.Context, directory string) {
 // (test timeout).
 type roomWatch struct {
 	session   *messaging.DirectSession
-	roomID    string
+	roomID    ref.RoomID
 	nextBatch string            // sync token capturing the stream position at watch creation
 	pending   []messaging.Event // events received from sync but not yet consumed by a Wait call
 }
 
 // watchRoom captures the current position in the Matrix sync stream. The
 // returned roomWatch only sees events arriving after this call returns.
-func watchRoom(t *testing.T, session *messaging.DirectSession, roomID string) roomWatch {
+func watchRoom(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID) roomWatch {
 	t.Helper()
-	if roomID == "" {
+	if roomID.IsZero() {
 		t.Fatal("roomID is required")
 	}
 	response, err := session.Sync(t.Context(), messaging.SyncOptions{
@@ -916,7 +916,7 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 		syncRetries = 0
 		w.nextBatch = response.NextBatch
 
-		if joined, ok := response.Rooms.Join[w.roomID]; ok {
+		if joined, ok := response.Rooms.Join[w.roomID.String()]; ok {
 			w.pending = append(w.pending, joined.State.Events...)
 			w.pending = append(w.pending, joined.Timeline.Events...)
 		}
@@ -1105,12 +1105,12 @@ func proxyWhoami(t *testing.T, client *http.Client) string {
 // proxyJoinRoom joins a room through a proxy by posting to the structured
 // join endpoint. The proxy injects the principal's access token and checks
 // authorization grants (a matrix/join grant must be present).
-func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
+func proxyJoinRoom(t *testing.T, client *http.Client, roomID ref.RoomID) {
 	t.Helper()
-	if roomID == "" {
+	if roomID.IsZero() {
 		t.Fatal("roomID is required")
 	}
-	body, _ := json.Marshal(map[string]string{"room": roomID})
+	body, _ := json.Marshal(map[string]string{"room": roomID.String()})
 	request, err := http.NewRequest("POST",
 		"http://proxy/v1/matrix/join",
 		bytes.NewReader(body))
@@ -1133,12 +1133,12 @@ func proxyJoinRoom(t *testing.T, client *http.Client, roomID string) {
 // HTTP status code and response body. Unlike proxyJoinRoom, this does not
 // fatal on non-200 responses — callers can assert on expected failures
 // (e.g., grants blocking the join with 403 Forbidden).
-func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, string) {
+func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID ref.RoomID) (int, string) {
 	t.Helper()
-	if roomID == "" {
+	if roomID.IsZero() {
 		t.Fatal("roomID is required")
 	}
-	body, _ := json.Marshal(map[string]string{"room": roomID})
+	body, _ := json.Marshal(map[string]string{"room": roomID.String()})
 	request, err := http.NewRequest("POST",
 		"http://proxy/v1/matrix/join",
 		bytes.NewReader(body))
@@ -1157,13 +1157,13 @@ func proxyTryJoinRoom(t *testing.T, client *http.Client, roomID string) (int, st
 
 // proxySendMessage sends a text message to a room through a proxy. Returns the
 // event ID assigned by the homeserver.
-func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) string {
+func proxySendMessage(t *testing.T, client *http.Client, roomID ref.RoomID, body string) string {
 	t.Helper()
-	if roomID == "" {
+	if roomID.IsZero() {
 		t.Fatal("roomID is required")
 	}
 	requestBody, _ := json.Marshal(map[string]any{
-		"room":       roomID,
+		"room":       roomID.String(),
 		"event_type": schema.MatrixEventTypeMessage,
 		"content":    messaging.NewTextMessage(body),
 	})
@@ -1193,9 +1193,9 @@ func proxySendMessage(t *testing.T, client *http.Client, roomID, body string) st
 // proxySyncRoomTimeline performs an initial /sync through a proxy and returns
 // the timeline events for the specified room. Uses timeout=0 for an immediate
 // response with all current state.
-func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID string) []messaging.Event {
+func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID ref.RoomID) []messaging.Event {
 	t.Helper()
-	if roomID == "" {
+	if roomID.IsZero() {
 		t.Fatal("roomID is required")
 	}
 	response, err := client.Get("http://proxy/v1/matrix/sync?timeout=0")
@@ -1211,7 +1211,7 @@ func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID string) []m
 	if err := json.NewDecoder(response.Body).Decode(&syncResponse); err != nil {
 		t.Fatalf("decode sync response: %v", err)
 	}
-	joined, ok := syncResponse.Rooms.Join[roomID]
+	joined, ok := syncResponse.Rooms.Join[roomID.String()]
 	if !ok {
 		t.Fatalf("room %s not in sync response (have %d joined rooms)", roomID, len(syncResponse.Rooms.Join))
 	}

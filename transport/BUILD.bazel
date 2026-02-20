@@ -19,6 +19,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/transport",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//messaging",
         "@com_github_pion_webrtc_v4//:webrtc",
@@ -36,6 +37,7 @@ go_test(
     ],
     embed = [":transport"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//lib/testutil",
         "//messaging",

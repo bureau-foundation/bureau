@@ -287,7 +287,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	ownUserID := agentContext.Identity.UserID
 	machineUserID := machine.UserID()
 	pumpReady := make(chan struct{})
-	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
+	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID.String(), ownUserID, machineUserID, process.Stdin(), logger, pumpReady)
 
 	// Wait for the pump to complete its initial /sync before announcing
 	// readiness. This guarantees "agent-ready" means the pump is listening.

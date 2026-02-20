@@ -36,6 +36,7 @@ go_test(
     embed = [":agent"],
     deps = [
         "//lib/proxyclient",
+        "//lib/ref",
         "//lib/schema",
     ],
 )

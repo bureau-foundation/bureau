@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -288,7 +289,7 @@ func runList(args []string, jsonOutput *cli.JSONOutput) error {
 // extractWorkspaceInfo reads a room's state and returns workspace info if
 // the room contains an m.bureau.project event. Returns nil (not an error)
 // for non-workspace rooms.
-func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID string) (*workspaceInfo, error) {
+func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID ref.RoomID) (*workspaceInfo, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -90,7 +91,7 @@ type machineState struct {
 
 	// configRoomID is the machine's config room ID, used for writing
 	// PrincipalAssignment events.
-	configRoomID string
+	configRoomID ref.RoomID
 
 	// pendingEchoEventID, when non-empty, holds the Matrix event ID
 	// returned by the most recent writeMachineConfig call for this
@@ -139,7 +140,12 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 	acceptedRooms := service.AcceptInvites(ctx, fc.session, response.Rooms.Invite, fc.logger)
 
 	// Build the fleet model from all joined rooms' state.
-	for roomID, room := range response.Rooms.Join {
+	for roomIDStr, room := range response.Rooms.Join {
+		roomID, err := ref.ParseRoomID(roomIDStr)
+		if err != nil {
+			fc.logger.Error("invalid room ID in sync response", "room_id", roomIDStr, "error", err)
+			continue
+		}
 		fc.processRoomState(roomID, room.State.Events, room.Timeline.Events)
 	}
 
@@ -193,7 +199,7 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 //     #bureau/machine.
 //   - Config room events (MachineConfig) indicate a per-machine
 //     config room.
-func (fc *FleetController) processRoomState(roomID string, stateEvents, timelineEvents []messaging.Event) {
+func (fc *FleetController) processRoomState(roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) {
 	for _, event := range stateEvents {
 		if event.StateKey != nil {
 			fc.processStateEvent(roomID, event)
@@ -208,7 +214,7 @@ func (fc *FleetController) processRoomState(roomID string, stateEvents, timeline
 
 // processStateEvent routes a single state event to the appropriate
 // model update based on its type.
-func (fc *FleetController) processStateEvent(roomID string, event messaging.Event) {
+func (fc *FleetController) processStateEvent(roomID ref.RoomID, event messaging.Event) {
 	switch event.Type {
 	case schema.EventTypeFleetService:
 		fc.processFleetServiceEvent(event)
@@ -389,7 +395,7 @@ func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 // processMachineConfigEvent parses a machine config event from a
 // per-machine config room and extracts fleet-managed
 // PrincipalAssignment entries.
-func (fc *FleetController) processMachineConfigEvent(roomID string, event messaging.Event) {
+func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event messaging.Event) {
 	stateKey := *event.StateKey
 	if len(event.Content) == 0 {
 		return
@@ -523,18 +529,23 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Clean up state for rooms the fleet controller has been removed
 	// from. Process leaves before joins so that a leave+rejoin in the
 	// same sync batch processes cleanly.
-	for roomID := range response.Rooms.Leave {
-		fc.processLeave(roomID)
+	for roomIDStr := range response.Rooms.Leave {
+		fc.processLeave(roomIDStr)
 	}
 
 	// Process state changes in joined rooms.
-	for roomID, room := range response.Rooms.Join {
+	for roomIDStr, room := range response.Rooms.Join {
+		roomID, err := ref.ParseRoomID(roomIDStr)
+		if err != nil {
+			fc.logger.Error("invalid room ID in sync response", "room_id", roomIDStr, "error", err)
+			continue
+		}
 		fc.processRoomSync(roomID, room)
 	}
 
 	// Process state for rooms accepted in this sync cycle.
-	for _, accepted := range acceptedRoomStates {
-		fc.processRoomState(accepted.roomID, accepted.events, nil)
+	for index := range acceptedRoomStates {
+		fc.processRoomState(acceptedRoomStates[index].roomID, acceptedRoomStates[index].events, nil)
 	}
 
 	// Emit notifications for newly discovered config rooms and services.
@@ -552,15 +563,15 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 // processLeave handles a room leave event. If the room was a known
 // config room, the associated machine state is cleaned up. If it was
 // the fleet or machine room, the event is logged as a warning.
-func (fc *FleetController) processLeave(roomID string) {
+func (fc *FleetController) processLeave(roomIDStr string) {
 	// Check if this is a config room and clean up the associated
 	// machine state.
 	for machineLocalpart, configRoom := range fc.configRooms {
-		if configRoom != roomID {
+		if configRoom.String() != roomIDStr {
 			continue
 		}
 		fc.logger.Info("config room left, removing machine assignments",
-			"room_id", roomID,
+			"room_id", roomIDStr,
 			"machine", machineLocalpart,
 		)
 		if machine, exists := fc.machines[machineLocalpart]; exists {
@@ -570,15 +581,15 @@ func (fc *FleetController) processLeave(roomID string) {
 				}
 			}
 			machine.assignments = make(map[string]*schema.PrincipalAssignment)
-			machine.configRoomID = ""
+			machine.configRoomID = ref.RoomID{}
 		}
 		delete(fc.configRooms, machineLocalpart)
 		return
 	}
 
 	// Check if this is the machine room.
-	if roomID == fc.machineRoomID.String() {
-		fc.logger.Warn("left machine room", "room_id", roomID)
+	if roomIDStr == fc.machineRoomID.String() {
+		fc.logger.Warn("left machine room", "room_id", roomIDStr)
 		// Clean up all machine state since we can no longer
 		// receive heartbeats. Replace with a fresh map rather
 		// than deleting during iteration. Also clear all service
@@ -591,15 +602,15 @@ func (fc *FleetController) processLeave(roomID string) {
 	}
 
 	// Check if this is the fleet room.
-	if roomID == fc.fleetRoomID.String() {
-		fc.logger.Warn("left fleet room", "room_id", roomID)
+	if roomIDStr == fc.fleetRoomID.String() {
+		fc.logger.Warn("left fleet room", "room_id", roomIDStr)
 		return
 	}
 }
 
 // processRoomSync handles state changes in a single room during
 // incremental sync.
-func (fc *FleetController) processRoomSync(roomID string, room messaging.JoinedRoom) {
+func (fc *FleetController) processRoomSync(roomID ref.RoomID, room messaging.JoinedRoom) {
 	stateEvents := collectStateEvents(room)
 	if len(stateEvents) == 0 {
 		return
@@ -650,7 +661,7 @@ func (fc *FleetController) rebuildServiceInstances() {
 // accepting an invite. Used by handleSync to process newly joined rooms
 // in the same sync cycle as the invite acceptance.
 type acceptedRoom struct {
-	roomID string
+	roomID ref.RoomID
 	events []messaging.Event
 }
 
@@ -680,7 +691,7 @@ func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previ
 			continue
 		}
 		fc.sendFleetNotification(ctx,
-			schema.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID))
+			schema.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID.String()))
 	}
 
 	for serviceLocalpart := range fc.services {
@@ -699,7 +710,7 @@ func (fc *FleetController) sendFleetNotification(ctx context.Context, content an
 	if fc.session == nil {
 		return
 	}
-	eventID, err := fc.session.SendEvent(ctx, fc.fleetRoomID.String(), schema.MatrixEventTypeMessage, content)
+	eventID, err := fc.session.SendEvent(ctx, fc.fleetRoomID, schema.MatrixEventTypeMessage, content)
 	if err != nil {
 		fc.logger.Error("failed to send fleet notification",
 			"error", err,

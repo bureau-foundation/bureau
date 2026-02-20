@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -34,7 +35,7 @@ const sendEventMaxAttempts = 3
 //
 // The context bounds the total retry time — if the daemon is shutting
 // down, the context cancels and retries stop.
-func (d *Daemon) sendEventRetry(ctx context.Context, roomID, eventType string, content any) (string, error) {
+func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
 	var lastError error
 	for attempt := 0; attempt < sendEventMaxAttempts; attempt++ {
 		if attempt > 0 {

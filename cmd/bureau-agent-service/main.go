@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -147,7 +148,7 @@ type AgentService struct {
 	principalName    string
 	machineName      string
 	serverName       string
-	configRoomID     string
+	configRoomID     ref.RoomID
 	configRoomJoined bool
 	startedAt        time.Time
 

@@ -338,7 +338,7 @@ func publishPipelineResult(
 	errorMessage string,
 ) {
 	roomID := logger.logRoomID()
-	if roomID == "" {
+	if roomID.IsZero() {
 		return
 	}
 

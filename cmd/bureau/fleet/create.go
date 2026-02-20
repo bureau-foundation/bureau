@@ -24,10 +24,10 @@ type createParams struct {
 
 // createResult is the JSON output of the fleet create command.
 type createResult struct {
-	Fleet         string `json:"fleet"           desc:"fleet localpart"`
-	FleetRoomID   string `json:"fleet_room_id"   desc:"fleet config room ID"`
-	MachineRoomID string `json:"machine_room_id" desc:"machine presence room ID"`
-	ServiceRoomID string `json:"service_room_id" desc:"service directory room ID"`
+	Fleet         string     `json:"fleet"           desc:"fleet localpart"`
+	FleetRoomID   ref.RoomID `json:"fleet_room_id"   desc:"fleet config room ID"`
+	MachineRoomID ref.RoomID `json:"machine_room_id" desc:"machine presence room ID"`
+	ServiceRoomID ref.RoomID `json:"service_room_id" desc:"service directory room ID"`
 }
 
 func createCommand() *cli.Command {
@@ -146,9 +146,9 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 
 // fleetRooms holds the Matrix room IDs for the three rooms that define a fleet.
 type fleetRooms struct {
-	ConfigRoomID  string
-	MachineRoomID string
-	ServiceRoomID string
+	ConfigRoomID  ref.RoomID
+	MachineRoomID ref.RoomID
+	ServiceRoomID ref.RoomID
 }
 
 // ensureFleetRooms creates the three fleet rooms (config, machine, service)
@@ -223,7 +223,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 // inviteToFleetRooms invites a user to all three fleet rooms. Silently
 // skips rooms the user has already joined.
 func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID string) error {
-	for _, roomID := range []string{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
+	for _, roomID := range []ref.RoomID{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
 		if err := session.InviteUser(ctx, roomID, userID); err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 				continue
@@ -240,25 +240,26 @@ func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fl
 // space. The alias parameter is the full "#localpart:server" form used for
 // the resolve check; the CreateRoomRequest.Alias field is the localpart
 // used by the Matrix create-room API.
-func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias, spaceRoomID, server string, request messaging.CreateRoomRequest) (string, error) {
+func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias string, spaceRoomID ref.RoomID, server string, request messaging.CreateRoomRequest) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {
 		fmt.Fprintf(os.Stderr, "Room %s already exists (%s)\n", alias, roomID)
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", cli.Internal("resolving %s: %w", alias, err)
+		return ref.RoomID{}, cli.Internal("resolving %s: %w", alias, err)
 	}
 
 	response, err := session.CreateRoom(ctx, request)
 	if err != nil {
-		return "", cli.Internal("creating room %s: %w", alias, err)
+		return ref.RoomID{}, cli.Internal("creating room %s: %w", alias, err)
 	}
 
-	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
+	// State key for m.space.child is the room ID string per Matrix spec.
+	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID.String(),
 		map[string]any{"via": []string{server}})
 	if err != nil {
-		return "", cli.Internal("adding %s as child of namespace space: %w", alias, err)
+		return ref.RoomID{}, cli.Internal("adding %s as child of namespace space: %w", alias, err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Created room %s (%s)\n", alias, response.RoomID)

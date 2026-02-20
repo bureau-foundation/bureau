@@ -4,13 +4,23 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
+
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test room ID %q: %v", raw, err))
+	}
+	return roomID
+}
 
 func TestSystemPrompt(t *testing.T) {
 	t.Parallel()
@@ -36,7 +46,7 @@ func TestSystemPrompt(t *testing.T) {
 			"project": "bureau",
 		},
 		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:bureau.local",
-		ConfigRoomID:    "!config:bureau.local",
+		ConfigRoomID:    mustRoomID("!config:bureau.local"),
 	}
 
 	prompt := agentContext.SystemPrompt()

@@ -151,7 +151,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	}
 
 	for _, invite := range []struct {
-		roomID string
+		roomID ref.RoomID
 		name   string
 	}{
 		{systemRoomID, "system"},
@@ -212,7 +212,7 @@ func fleetClient(t *testing.T, fc *fleetController, token []byte) *service.Servi
 
 // publishFleetService publishes a FleetServiceContent state event to
 // the fleet room. The state key is the service localpart.
-func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
+func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
 	t.Helper()
 
 	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
@@ -229,7 +229,7 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 	t.Helper()
 	ctx := t.Context()
 
-	if machine.ConfigRoomID == "" {
+	if machine.ConfigRoomID.IsZero() {
 		t.Fatal("machine has no config room ID — was startMachine called?")
 	}
 

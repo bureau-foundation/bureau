@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -164,7 +165,7 @@ or prefix (e.g., --type 'm.bureau.*').`,
 
 // buildInspectResult fetches room state and members, then organizes them into
 // a structured inspectResult.
-func buildInspectResult(ctx context.Context, session messaging.Session, roomID, typeFilter string) (*inspectResult, error) {
+func buildInspectResult(ctx context.Context, session messaging.Session, roomID ref.RoomID, typeFilter string) (*inspectResult, error) {
 	stateEvents, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, cli.Internal("get room state: %w", err)
@@ -175,7 +176,7 @@ func buildInspectResult(ctx context.Context, session messaging.Session, roomID, 
 		return nil, cli.Internal("get room members: %w", err)
 	}
 
-	result := &inspectResult{RoomID: roomID}
+	result := &inspectResult{RoomID: roomID.String()}
 
 	// Collect state events into groups. We handle well-known types specially
 	// (extracting identity fields, power levels, space relationships) and
@@ -294,7 +295,11 @@ func buildInspectResult(ctx context.Context, session messaging.Session, roomID, 
 
 	// Resolve space child aliases/names.
 	for i := range result.SpaceChildren {
-		childName, childAlias, _ := inspectRoomState(ctx, session, result.SpaceChildren[i].RoomID)
+		childID, parseErr := ref.ParseRoomID(result.SpaceChildren[i].RoomID)
+		if parseErr != nil {
+			continue
+		}
+		childName, childAlias, _ := inspectRoomState(ctx, session, childID)
 		result.SpaceChildren[i].Alias = childAlias
 		result.SpaceChildren[i].Name = childName
 	}

@@ -6,7 +6,19 @@ package matrix
 import (
 	"context"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
+
+// mustRoomID parses a room ID string, panicking if it's invalid.
+// Test-only helper for constructing ref.RoomID literals.
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(err)
+	}
+	return roomID
+}
 
 func TestSendCommand_MissingArgs(t *testing.T) {
 	command := SendCommand()
@@ -51,7 +63,7 @@ func TestResolveRoom_RoomID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if roomID != "!abc:local" {
+	if roomID != mustRoomID("!abc:local") {
 		t.Errorf("expected !abc:local, got %s", roomID)
 	}
 }

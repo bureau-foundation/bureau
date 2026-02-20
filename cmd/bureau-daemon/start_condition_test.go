@@ -1093,7 +1093,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	daemon.session = session
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -1208,7 +1208,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	daemon.session = session
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -1326,7 +1326,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	daemon.session = session
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -1839,7 +1839,7 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	daemon.session = session
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")

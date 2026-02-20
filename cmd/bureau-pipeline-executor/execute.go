@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -146,7 +147,15 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 			}
 		}
 	} else if step.Publish != nil {
-		_, err := session.SendStateEvent(stepContext, step.Publish.Room, step.Publish.EventType, step.Publish.StateKey, step.Publish.Content)
+		publishRoomID, err := ref.ParseRoomID(step.Publish.Room)
+		if err != nil {
+			return stepResult{
+				status:   "failed",
+				duration: time.Since(startTime),
+				err:      fmt.Errorf("publish: invalid room ID %q: %w", step.Publish.Room, err),
+			}
+		}
+		_, err = session.SendStateEvent(stepContext, publishRoomID, step.Publish.EventType, step.Publish.StateKey, step.Publish.Content)
 		if err != nil {
 			return stepResult{
 				status:   "failed",
@@ -207,8 +216,17 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 // The "fail" status (default) means the assertion is a hard requirement that
 // was not met, and the pipeline should report failure.
 func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, session messaging.Session) stepResult {
+	// Parse the room ID from the pipeline step definition.
+	assertRoomID, err := ref.ParseRoomID(assertion.Room)
+	if err != nil {
+		return stepResult{
+			status: "failed",
+			err:    fmt.Errorf("assert_state: invalid room ID %q: %w", assertion.Room, err),
+		}
+	}
+
 	// Read the state event.
-	rawContent, err := session.GetStateEvent(ctx, assertion.Room, assertion.EventType, assertion.StateKey)
+	rawContent, err := session.GetStateEvent(ctx, assertRoomID, assertion.EventType, assertion.StateKey)
 	if err != nil {
 		return stepResult{
 			status: "failed",

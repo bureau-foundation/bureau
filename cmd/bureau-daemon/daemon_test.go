@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,17 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
+
+// mustRoomID parses a raw room ID string, panicking on invalid input.
+// Test-only: provides concise room ID construction for struct literals
+// and function arguments without per-call error handling.
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test room ID %q: %v", raw, err))
+	}
+	return roomID
+}
 
 // testDaemonEpoch is the fixed starting time for the fake clock in
 // newTestDaemon. Using a constant avoids tests depending on wall-clock

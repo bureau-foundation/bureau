@@ -117,9 +117,9 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -206,9 +206,9 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -295,9 +295,9 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -380,7 +380,7 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 	daemon.machine = machine
 	daemon.fleet = fleet
 	daemon.session = session
-	daemon.machineRoomID = machineRoomID
+	daemon.machineRoomID = mustRoomID(machineRoomID)
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
 	daemon.peerAddresses["@machine/peer-b:bureau.local"] = "10.0.0.2:9090"
 	daemon.peerTransports["10.0.0.1:9090"] = &http.Transport{}
@@ -460,7 +460,7 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	daemon.machine = machine
 	daemon.fleet = fleet
 	daemon.session = session
-	daemon.machineRoomID = machineRoomID
+	daemon.machineRoomID = mustRoomID(machineRoomID)
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = "10.0.0.1:9090"
 	daemon.peerTransports["10.0.0.1:9090"] = &http.Transport{}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -533,7 +533,7 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	daemon.machine = machine
 	daemon.fleet = fleet
 	daemon.session = session
-	daemon.machineRoomID = machineRoomID
+	daemon.machineRoomID = mustRoomID(machineRoomID)
 	daemon.peerAddresses["@machine/peer-a:bureau.local"] = sharedAddress
 	daemon.peerAddresses["@machine/peer-b:bureau.local"] = sharedAddress
 	daemon.peerTransports[sharedAddress] = &http.Transport{}
@@ -584,9 +584,9 @@ func TestProcessSyncResponse_NoChanges(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = "!config:test"
-	daemon.machineRoomID = "!machine:test"
-	daemon.serviceRoomID = "!service:test"
+	daemon.configRoomID = mustRoomID("!config:test")
+	daemon.machineRoomID = mustRoomID("!machine:test")
+	daemon.serviceRoomID = mustRoomID("!service:test")
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -678,9 +678,9 @@ func TestInitialSync(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.statusInterval = time.Hour
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -774,9 +774,9 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -851,9 +851,9 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -929,9 +929,9 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine = machine
 	daemon.fleet = fleet
-	daemon.configRoomID = configRoomID
-	daemon.machineRoomID = machineRoomID
-	daemon.serviceRoomID = serviceRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.statusInterval = time.Hour
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))

@@ -25,11 +25,11 @@ type serviceDestroyParams struct {
 }
 
 type serviceDestroyResult struct {
-	Localpart     string `json:"localpart"`
-	MachineName   string `json:"machine"`
-	ConfigRoomID  string `json:"config_room_id"`
-	ConfigEventID string `json:"config_event_id"`
-	Purged        bool   `json:"purged"`
+	Localpart     string     `json:"localpart"`
+	MachineName   string     `json:"machine"`
+	ConfigRoomID  ref.RoomID `json:"config_room_id"`
+	ConfigEventID string     `json:"config_event_id"`
+	Purged        bool       `json:"purged"`
 }
 
 func destroyCommand() *cli.Command {

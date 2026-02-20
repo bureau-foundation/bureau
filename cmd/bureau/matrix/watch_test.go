@@ -44,7 +44,7 @@ func TestWatchCommand_TooManyArgs(t *testing.T) {
 
 func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 	var syncCount atomic.Int32
-	roomID := "!testroom:local"
+	roomID := mustRoomID("!testroom:local")
 
 	// cancel is called by the mock server after it delivers events,
 	// signaling the watch loop to exit deterministically.
@@ -73,7 +73,7 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 				NextBatch: "batch_2",
 				Rooms: messaging.RoomsSection{
 					Join: map[string]messaging.JoinedRoom{
-						roomID: {
+						roomID.String(): {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{
@@ -121,7 +121,7 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 
 func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 	var syncCount atomic.Int32
-	roomID := "!testroom:local"
+	roomID := mustRoomID("!testroom:local")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,7 +145,7 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 				NextBatch: "batch_2",
 				Rooms: messaging.RoomsSection{
 					Join: map[string]messaging.JoinedRoom{
-						roomID: {
+						roomID.String(): {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{
@@ -200,7 +200,7 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 func TestRunWatchLoop_HistoryFetch(t *testing.T) {
 	var gotMessagesRequest atomic.Bool
 	var syncCount atomic.Int32
-	roomID := "!testroom:local"
+	roomID := mustRoomID("!testroom:local")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

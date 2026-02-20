@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -25,13 +26,13 @@ type pipelinePushParams struct {
 
 // pushResult is the JSON output for pipeline push.
 type pushResult struct {
-	Ref          string `json:"ref"                    desc:"pipeline reference (state key)"`
-	File         string `json:"file"                   desc:"source pipeline file path"`
-	RoomAlias    string `json:"room_alias"             desc:"target room alias"`
-	RoomID       string `json:"room_id,omitempty"      desc:"target room Matrix ID"`
-	PipelineName string `json:"pipeline_name"          desc:"pipeline name"`
-	EventID      string `json:"event_id,omitempty"     desc:"created state event ID"`
-	DryRun       bool   `json:"dry_run"                desc:"true if push was simulated"`
+	Ref          string     `json:"ref"                    desc:"pipeline reference (state key)"`
+	File         string     `json:"file"                   desc:"source pipeline file path"`
+	RoomAlias    string     `json:"room_alias"             desc:"target room alias"`
+	RoomID       ref.RoomID `json:"room_id,omitempty"      desc:"target room Matrix ID"`
+	PipelineName string     `json:"pipeline_name"          desc:"pipeline name"`
+	EventID      string     `json:"event_id,omitempty"     desc:"created state event ID"`
+	DryRun       bool       `json:"dry_run"                desc:"true if push was simulated"`
 }
 
 // pushCommand returns the "push" subcommand for publishing a pipeline to Matrix.

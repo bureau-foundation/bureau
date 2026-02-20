@@ -74,7 +74,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// stop, and a teardown principal gated on "teardown" starts.
 	desired := make(map[ref.Entity]schema.PrincipalAssignment, len(config.Principals))
 	triggerContents := make(map[ref.Entity][]byte)
-	conditionRoomIDs := make(map[ref.Entity]string) // principal → resolved workspace room ID
+	conditionRoomIDs := make(map[ref.Entity]ref.RoomID) // principal → resolved workspace room ID
 	for _, assignment := range config.Principals {
 		if !assignment.AutoStart {
 			continue
@@ -88,7 +88,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if triggerContent != nil {
 			triggerContents[principal] = triggerContent
 		}
-		if conditionRoomID != "" {
+		if !conditionRoomID.IsZero() {
 			conditionRoomIDs[principal] = conditionRoomID
 		}
 	}
@@ -363,12 +363,20 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// config from workspace create). Best-effort: if the invite
 		// fails, the sandbox is still created.
 		workspaceRoomID := conditionRoomIDs[principal]
-		if workspaceRoomID == "" && sandboxSpec != nil {
+		if workspaceRoomID.IsZero() && sandboxSpec != nil {
 			if value, ok := sandboxSpec.Payload["WORKSPACE_ROOM_ID"].(string); ok {
-				workspaceRoomID = value
+				if parsed, parseErr := ref.ParseRoomID(value); parseErr == nil {
+					workspaceRoomID = parsed
+				} else {
+					d.logger.Warn("invalid WORKSPACE_ROOM_ID in payload",
+						"principal", principal,
+						"value", value,
+						"error", parseErr,
+					)
+				}
 			}
 		}
-		if workspaceRoomID != "" {
+		if !workspaceRoomID.IsZero() {
 			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, workspaceRoomID)
 		}
 
@@ -807,15 +815,15 @@ func structurallyChanged(old, new *schema.SandboxSpec) bool {
 // set, the daemon resolves it to a room ID. When empty, the daemon checks the
 // principal's own config room (where MachineConfig lives). If the state event
 // exists, the condition is met. If it's M_NOT_FOUND, the principal is deferred.
-func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entity, condition *schema.StartCondition) (bool, json.RawMessage, string) {
+func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entity, condition *schema.StartCondition) (bool, json.RawMessage, ref.RoomID) {
 	if condition == nil {
-		return true, nil, ""
+		return true, nil, ref.RoomID{}
 	}
 
 	// Determine which room to check. When RoomAlias is empty, check the
 	// principal's config room (the room where the MachineConfig lives).
 	roomID := d.configRoomID
-	conditionRoomID := "" // Only set when RoomAlias is used (workspace rooms).
+	conditionRoomID := ref.RoomID{} // Only set when RoomAlias is used (workspace rooms).
 	if condition.RoomAlias != "" {
 		resolved, err := d.session.ResolveAlias(ctx, condition.RoomAlias)
 		if err != nil {
@@ -824,14 +832,14 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 					"principal", principal,
 					"room_alias", condition.RoomAlias,
 				)
-				return false, nil, ""
+				return false, nil, ref.RoomID{}
 			}
 			d.logger.Error("resolving start condition room alias",
 				"principal", principal,
 				"room_alias", condition.RoomAlias,
 				"error", err,
 			)
-			return false, nil, ""
+			return false, nil, ref.RoomID{}
 		}
 		roomID = resolved
 		conditionRoomID = resolved
@@ -846,7 +854,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 				"state_key", condition.StateKey,
 				"room_id", roomID,
 			)
-			return false, nil, ""
+			return false, nil, ref.RoomID{}
 		}
 		d.logger.Error("checking start condition",
 			"principal", principal,
@@ -855,7 +863,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 			"room_id", roomID,
 			"error", err,
 		)
-		return false, nil, ""
+		return false, nil, ref.RoomID{}
 	}
 
 	// Event exists. If ContentMatch is specified, verify all criteria
@@ -869,7 +877,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 				"room_id", roomID,
 				"error", err,
 			)
-			return false, nil, ""
+			return false, nil, ref.RoomID{}
 		}
 		matched, failedKey, err := condition.ContentMatch.Evaluate(contentMap)
 		if err != nil {
@@ -880,7 +888,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 				"key", failedKey,
 				"error", err,
 			)
-			return false, nil, ""
+			return false, nil, ref.RoomID{}
 		}
 		if !matched {
 			d.logger.Info("start condition content_match not satisfied, deferring principal",
@@ -889,7 +897,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 				"room_id", roomID,
 				"key", failedKey,
 			)
-			return false, nil, ""
+			return false, nil, ref.RoomID{}
 		}
 	}
 
@@ -1100,7 +1108,7 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 //
 // The invite is best-effort: failures are logged but do not block sandbox
 // creation. M_FORBIDDEN typically means the user is already a member.
-func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity ref.Entity, roomID string) {
+func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity ref.Entity, roomID ref.RoomID) {
 	if err := d.session.InviteUser(ctx, roomID, principalEntity.UserID()); err != nil {
 		// M_FORBIDDEN typically means the user is already a member.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
@@ -1121,11 +1129,11 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 // Returns an error if any required service cannot be resolved — callers should
 // treat this as a fatal condition that blocks sandbox creation (no silent
 // fallbacks, no degraded mode).
-func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []string, workspaceRoomID string) ([]launcherServiceMount, error) {
+func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []string, workspaceRoomID ref.RoomID) ([]launcherServiceMount, error) {
 	// Collect rooms to search, ordered by specificity (most specific first).
 	// Workspace room bindings override machine config room bindings.
-	var rooms []string
-	if workspaceRoomID != "" {
+	var rooms []ref.RoomID
+	if !workspaceRoomID.IsZero() {
 		rooms = append(rooms, workspaceRoomID)
 	}
 	rooms = append(rooms, d.configRoomID)
@@ -1148,7 +1156,7 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 // For each room, it fetches the m.bureau.room_service state event with the
 // role as the state key. If found, derives the host-side socket path from
 // the binding's principal localpart.
-func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []string) (string, error) {
+func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []ref.RoomID) (string, error) {
 	for _, roomID := range rooms {
 		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeRoomService, role)
 		if err != nil {

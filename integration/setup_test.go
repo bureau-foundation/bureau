@@ -53,7 +53,7 @@ func TestRoomsExistViaAPI(t *testing.T) {
 			t.Errorf("alias %s: %v", alias, err)
 			continue
 		}
-		if roomID == "" {
+		if roomID.IsZero() {
 			t.Errorf("alias %s resolved to empty room ID", alias)
 		}
 	}
@@ -93,7 +93,7 @@ func TestSpaceHierarchy(t *testing.T) {
 			t.Errorf("resolve %s: %v", alias, err)
 			continue
 		}
-		if !children[roomID] {
+		if !children[roomID.String()] {
 			t.Errorf("room %s (%s) is not a child of the Bureau space", alias, roomID)
 		}
 	}

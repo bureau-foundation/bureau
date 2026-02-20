@@ -18,6 +18,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -1153,10 +1154,10 @@ type writtenEvent struct {
 	Content   any
 }
 
-func (f *fakeWriter) SendStateEvent(_ context.Context, roomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
 	f.mu.Lock()
 	f.events = append(f.events, writtenEvent{
-		RoomID:    roomID,
+		RoomID:    roomID.String(),
 		EventType: eventType,
 		StateKey:  stateKey,
 		Content:   content,

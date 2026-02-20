@@ -88,7 +88,7 @@ func run() error {
 		definitions:   make(map[string]*schema.MachineDefinitionContent),
 		config:        make(map[string]*schema.FleetConfigContent),
 		leases:        make(map[string]*schema.HALeaseContent),
-		configRooms:   make(map[string]string),
+		configRooms:   make(map[string]ref.RoomID),
 		fleetRoomID:   fleetRoomID,
 		machineRoomID: machineRoomID,
 		logger:        boot.Logger,
@@ -159,7 +159,7 @@ type FleetController struct {
 
 	// configRooms maps machine localparts to their config room IDs.
 	// Populated from room aliases during initial sync.
-	configRooms map[string]string
+	configRooms map[string]ref.RoomID
 
 	// fleetRoomID is the fleet config room, resolved from the fleet prefix.
 	fleetRoomID ref.RoomID

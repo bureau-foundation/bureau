@@ -848,13 +848,13 @@ func (d *Daemon) stopAllTunnels() {
 type peerAuthenticator struct {
 	privateKey   ed25519.PrivateKey
 	session      peerAuthSession
-	systemRoomID string
+	systemRoomID ref.RoomID
 }
 
 // peerAuthSession is the subset of messaging.Session needed by
 // peerAuthenticator, extracted for testability.
 type peerAuthSession interface {
-	GetStateEvent(ctx context.Context, roomID, eventType, stateKey string) (json.RawMessage, error)
+	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
 }
 
 func (a *peerAuthenticator) Sign(message []byte) []byte {

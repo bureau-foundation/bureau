@@ -672,7 +672,7 @@ func TestCreateRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
 	}
-	if response.RoomID != "!created:test.local" {
+	if response.RoomID.String() != "!created:test.local" {
 		t.Errorf("RoomID = %q, want !created:test.local", response.RoomID)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -19,7 +20,7 @@ import (
 // whether thread logging is configured.
 type threadLogger struct {
 	session     messaging.Session
-	roomID      string
+	roomID      ref.RoomID
 	rootEventID string
 }
 
@@ -33,13 +34,19 @@ type threadLogger struct {
 // treat this as fatal when observation is configured — running a pipeline
 // with no record of what happened is worse than not running at all.
 func newThreadLogger(ctx context.Context, session messaging.Session, room string, pipelineName string, stepCount int) (*threadLogger, error) {
-	roomID := room
+	var roomID ref.RoomID
 	if len(room) > 0 && room[0] == '#' {
 		resolved, err := session.ResolveAlias(ctx, room)
 		if err != nil {
 			return nil, fmt.Errorf("resolving log room %q: %w", room, err)
 		}
 		roomID = resolved
+	} else {
+		parsed, err := ref.ParseRoomID(room)
+		if err != nil {
+			return nil, fmt.Errorf("invalid log room ID %q: %w", room, err)
+		}
+		roomID = parsed
 	}
 
 	body := fmt.Sprintf("Pipeline %s started (%d steps)", pipelineName, stepCount)
@@ -68,9 +75,9 @@ func (l *threadLogger) logEventID() string {
 // logRoomID returns the resolved Matrix room ID where this logger posts
 // thread messages, or empty string if thread logging is not configured.
 // Used by the result event publisher to publish to the same room.
-func (l *threadLogger) logRoomID() string {
+func (l *threadLogger) logRoomID() ref.RoomID {
 	if l == nil {
-		return ""
+		return ref.RoomID{}
 	}
 	return l.roomID
 }

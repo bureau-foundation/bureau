@@ -13,10 +13,10 @@ import (
 
 // resolveFleetRooms resolves a fleet's three scoped rooms (machine, service,
 // fleet config) from the fleet ref. Returns the resolved room IDs.
-func resolveFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet) (machineRoomID, serviceRoomID, fleetRoomID string, err error) {
+func resolveFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet) (machineRoomID, serviceRoomID, fleetRoomID ref.RoomID, err error) {
 	aliases := []struct {
 		alias  string
-		target *string
+		target *ref.RoomID
 		name   string
 	}{
 		{fleet.MachineRoomAlias(), &machineRoomID, "fleet machine room"},
@@ -24,12 +24,12 @@ func resolveFleetRooms(ctx context.Context, session messaging.Session, fleet ref
 		{fleet.RoomAlias(), &fleetRoomID, "fleet config room"},
 	}
 
-	for _, alias := range aliases {
-		roomID, resolveErr := session.ResolveAlias(ctx, alias.alias)
+	for _, entry := range aliases {
+		roomID, resolveErr := session.ResolveAlias(ctx, entry.alias)
 		if resolveErr != nil {
-			return "", "", "", fmt.Errorf("resolve %s (%s): %w", alias.name, alias.alias, resolveErr)
+			return ref.RoomID{}, ref.RoomID{}, ref.RoomID{}, fmt.Errorf("resolve %s (%s): %w", entry.name, entry.alias, resolveErr)
 		}
-		*alias.target = roomID
+		*entry.target = roomID
 	}
 
 	return machineRoomID, serviceRoomID, fleetRoomID, nil
@@ -45,7 +45,7 @@ type machineRoom struct {
 type resolvedRoom struct {
 	machineRoom
 	alias  string // full alias for log messages (e.g., "#bureau/template:bureau.local")
-	roomID string
+	roomID ref.RoomID
 }
 
 // resolveGlobalRooms resolves all namespace-scoped global rooms (template,

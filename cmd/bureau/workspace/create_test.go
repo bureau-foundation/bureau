@@ -4,11 +4,22 @@
 package workspace
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
+
+// mustRoomID parses a room ID string, panicking on invalid input.
+// Test-only helper for constructing ref.RoomID from string literals.
+func mustRoomID(raw string) ref.RoomID {
+	id, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("mustRoomID(%q): %v", raw, err))
+	}
+	return id
+}
 
 // testMachine constructs a ref.Machine for use in tests. The machine
 // localpart will be "bureau/fleet/default/machine/<name>" with server
@@ -34,7 +45,7 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	t.Parallel()
 
 	machine := testMachine(t, "workstation")
-	const testRoomID = "!workspace123:bureau.local"
+	testRoomID := mustRoomID("!workspace123:bureau.local")
 	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
@@ -83,7 +94,7 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	if setup.Payload["PROJECT"] != "iree" {
 		t.Errorf("setup PROJECT = %v, want %q", setup.Payload["PROJECT"], "iree")
 	}
-	if setup.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
+	if setup.Payload["WORKSPACE_ROOM_ID"] != testRoomID.String() {
 		t.Errorf("setup WORKSPACE_ROOM_ID = %v, want %q", setup.Payload["WORKSPACE_ROOM_ID"], testRoomID)
 	}
 	if setup.Payload["MACHINE"] != machine.Localpart() {
@@ -99,7 +110,7 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 	t.Parallel()
 
 	machine := testMachine(t, "workstation")
-	const testRoomID = "!workspace456:bureau.local"
+	testRoomID := mustRoomID("!workspace456:bureau.local")
 	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
@@ -149,7 +160,7 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 	if teardown.Payload["PROJECT"] != "iree" {
 		t.Errorf("teardown PROJECT = %v, want %q", teardown.Payload["PROJECT"], "iree")
 	}
-	if teardown.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
+	if teardown.Payload["WORKSPACE_ROOM_ID"] != testRoomID.String() {
 		t.Errorf("teardown WORKSPACE_ROOM_ID = %v, want %q", teardown.Payload["WORKSPACE_ROOM_ID"], testRoomID)
 	}
 	if teardown.Payload["MACHINE"] != machine.Localpart() {
@@ -171,7 +182,7 @@ func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
 		1,
 		"bureau.local",
 		machine,
-		"!room:bureau.local",
+		mustRoomID("!room:bureau.local"),
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
@@ -211,7 +222,7 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 		1,
 		"bureau.local",
 		machine,
-		"!room:bureau.local",
+		mustRoomID("!room:bureau.local"),
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
@@ -251,7 +262,7 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 		2,
 		"bureau.local",
 		machine,
-		"!room:bureau.local",
+		mustRoomID("!room:bureau.local"),
 		map[string]string{"branch": "main"},
 	)
 	if err != nil {
@@ -306,7 +317,7 @@ func TestBuildPrincipalAssignments_ZeroAgents(t *testing.T) {
 		0,
 		"bureau.local",
 		machine,
-		"!room:bureau.local",
+		mustRoomID("!room:bureau.local"),
 		map[string]string{"branch": "main"},
 	)
 	if err != nil {

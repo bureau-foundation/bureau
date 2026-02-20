@@ -176,7 +176,7 @@ func runEnable(params *enableParams) error {
 			fmt.Fprintf(os.Stderr, "  WARNING: failed to configure room %s: %v\n", roomID, err)
 			continue
 		}
-		configuredRooms = append(configuredRooms, roomID)
+		configuredRooms = append(configuredRooms, roomID.String())
 		fmt.Fprintf(os.Stderr, "  Configured room %s\n", roomID)
 	}
 
@@ -193,7 +193,7 @@ func runEnable(params *enableParams) error {
 		ServiceUserID:    serviceUserID,
 		Machine:          host,
 		SpaceAlias:       spaceAlias,
-		SpaceRoomID:      spaceRoomID,
+		SpaceRoomID:      spaceRoomID.String(),
 		RoomsConfigured:  configuredRooms,
 	}); done {
 		return err
@@ -273,16 +273,20 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 }
 
 // getSpaceChildren returns the room IDs of all child rooms in a space.
-func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomID string) ([]string, error) {
+func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID) ([]ref.RoomID, error) {
 	events, err := session.GetRoomState(ctx, spaceRoomID)
 	if err != nil {
 		return nil, cli.Internal("fetching space state: %w", err)
 	}
 
-	var children []string
+	var children []ref.RoomID
 	for _, event := range events {
 		if event.Type == "m.space.child" && event.StateKey != nil && *event.StateKey != "" {
-			children = append(children, *event.StateKey)
+			childID, parseErr := ref.ParseRoomID(*event.StateKey)
+			if parseErr != nil {
+				continue
+			}
+			children = append(children, childID)
 		}
 	}
 	return children, nil
@@ -357,7 +361,7 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
-func configureRoom(ctx context.Context, session messaging.Session, roomID string, serviceEntity ref.Entity, prefix string) error {
+func configureRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, prefix string) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := schema.TicketConfigContent{
 		Version: schema.TicketConfigVersion,
@@ -400,7 +404,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID string
 //   - m.bureau.ticket event type requires PL 10
 //   - m.bureau.ticket_config requires PL 100 (admin-only)
 //   - m.bureau.room_service requires PL 100 (admin-only)
-func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID, serviceUserID string) error {
+func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID string) error {
 	// Read current power levels.
 	content, err := session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {

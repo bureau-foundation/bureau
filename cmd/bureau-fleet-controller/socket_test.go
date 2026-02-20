@@ -209,9 +209,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
-		configRoomID: "!config-ws:local",
+		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = "!config-ws:local"
+	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	// Machine 2: server with no GPU, no assignments.
 	fc.machines["machine/server"] = &machineState{
@@ -227,9 +227,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 			MemoryUsedMB: 16000,
 		},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
-		configRoomID: "!config-srv:local",
+		configRoomID: mustRoomID("!config-srv:local"),
 	}
-	fc.configRooms["machine/server"] = "!config-srv:local"
+	fc.configRooms["machine/server"] = mustRoomID("!config-srv:local")
 
 	// Fleet service 1: whisper STT.
 	fc.services["service/stt/whisper"] = &fleetServiceState{

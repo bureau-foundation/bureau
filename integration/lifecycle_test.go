@@ -208,7 +208,7 @@ func TestMachineLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("config room not created: %v", err)
 		}
-		if configRoomID == "" {
+		if configRoomID.IsZero() {
 			t.Fatal("config room resolved to empty room ID")
 		}
 

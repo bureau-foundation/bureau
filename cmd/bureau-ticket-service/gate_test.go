@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -2723,11 +2724,15 @@ type fakeAliasResolver struct {
 	callCount int
 }
 
-func (f *fakeAliasResolver) ResolveAlias(_ context.Context, alias string) (string, error) {
+func (f *fakeAliasResolver) ResolveAlias(_ context.Context, alias string) (ref.RoomID, error) {
 	f.callCount++
-	roomID, exists := f.aliases[alias]
+	raw, exists := f.aliases[alias]
 	if !exists {
-		return "", fmt.Errorf("alias not found: %s", alias)
+		return ref.RoomID{}, fmt.Errorf("alias not found: %s", alias)
+	}
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		return ref.RoomID{}, fmt.Errorf("fakeAliasResolver: bad room ID %q: %w", raw, err)
 	}
 	return roomID, nil
 }
@@ -2749,9 +2754,9 @@ type writtenEventForGates struct {
 	Content   any
 }
 
-func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
 	f.events = append(f.events, writtenEventForGates{
-		RoomID:    roomID,
+		RoomID:    roomID.String(),
 		EventType: eventType,
 		StateKey:  stateKey,
 		Content:   content,

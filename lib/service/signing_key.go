@@ -32,7 +32,7 @@ func ResolveSystemRoom(ctx context.Context, session *messaging.DirectSession, na
 // the hex decoding produces a key of the wrong length.
 func LoadTokenSigningKey(ctx context.Context, session *messaging.DirectSession, systemRoomID ref.RoomID, machine ref.Machine) (ed25519.PublicKey, error) {
 	stateKey := machine.Localpart()
-	raw, err := session.GetStateEvent(ctx, systemRoomID.String(), schema.EventTypeTokenSigningKey, stateKey)
+	raw, err := session.GetStateEvent(ctx, systemRoomID, schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
 		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", stateKey, systemRoomID, err)
 	}

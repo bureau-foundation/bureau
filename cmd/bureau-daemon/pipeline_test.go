@@ -389,7 +389,7 @@ func TestHandlePipelineExecute_NoBinary(t *testing.T) {
 		"bureau/pipeline:test", "req-1")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -439,7 +439,7 @@ func TestHandlePipelineExecute_MissingPipeline(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -487,7 +487,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 		"bureau/pipeline:dev-init", "req-accepted")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	// The synchronous result should be "accepted".
 	messages := harness.getSentMessages()
@@ -537,7 +537,7 @@ func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
 		"bureau/pipeline:test", "req-denied")
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -594,7 +594,7 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	harness.daemon.processCommandMessages(ctx, roomID, []messaging.Event{event})
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
@@ -652,7 +652,7 @@ func TestPostPipelineResult(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd1",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd1",
 			command, fixedTestTime, 0, "", "", entries)
 
 		messages := harness.getSentMessages()
@@ -694,7 +694,7 @@ func TestPostPipelineResult(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd2",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd2",
 			schema.CommandMessage{Command: "pipeline.execute"},
 			fixedTestTime, 1, "exit status 1", "", entries)
 
@@ -719,7 +719,7 @@ func TestPostPipelineResult(t *testing.T) {
 		harness.sentMessagesMu.Unlock()
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, "!room:test", "$cmd3",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd3",
 			schema.CommandMessage{Command: "pipeline.execute"},
 			fixedTestTime, 137, "killed by signal 9", "", nil)
 

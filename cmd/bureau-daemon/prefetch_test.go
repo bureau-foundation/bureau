@@ -313,7 +313,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	prefetchError := fmt.Errorf("connection to attic refused")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -428,7 +428,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	prefetchCalled := false
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")

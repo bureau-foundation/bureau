@@ -55,3 +55,23 @@ func (r RoomID) String() string { return r.id }
 
 // IsZero reports whether the RoomID is the zero value (uninitialized).
 func (r RoomID) IsZero() bool { return r.id == "" }
+
+// MarshalText implements encoding.TextMarshaler for JSON and other
+// text-based serialization formats.
+func (r RoomID) MarshalText() ([]byte, error) {
+	if r.id == "" {
+		return []byte{}, nil
+	}
+	return []byte(r.id), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for JSON and other
+// text-based serialization formats. Validates the room ID format.
+func (r *RoomID) UnmarshalText(data []byte) error {
+	parsed, err := ParseRoomID(string(data))
+	if err != nil {
+		return err
+	}
+	*r = parsed
+	return nil
+}

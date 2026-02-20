@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -140,7 +141,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			}
 
 			// Add as child of the parent space.
-			_, err = sess.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
+			_, err = sess.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID.String(),
 				map[string]any{
 					"via": []string{params.ServerName},
 				})
@@ -149,9 +150,9 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			}
 
 			if done, err := params.EmitJSON(roomCreateResult{
-				RoomID:  response.RoomID,
+				RoomID:  response.RoomID.String(),
 				Alias:   alias,
-				SpaceID: spaceRoomID,
+				SpaceID: spaceRoomID.String(),
 			}); done {
 				return err
 			}
@@ -238,10 +239,14 @@ func listSpaceChildren(ctx context.Context, session messaging.Session, spaceTarg
 
 	// Extract child room IDs from m.space.child state events.
 	// The state key of each m.space.child event is the child room ID.
-	var childRoomIDs []string
+	var childRoomIDs []ref.RoomID
 	for _, event := range events {
 		if event.Type == "m.space.child" && event.StateKey != nil && *event.StateKey != "" {
-			childRoomIDs = append(childRoomIDs, *event.StateKey)
+			childID, parseErr := ref.ParseRoomID(*event.StateKey)
+			if parseErr != nil {
+				continue
+			}
+			childRoomIDs = append(childRoomIDs, childID)
 		}
 	}
 
@@ -249,7 +254,7 @@ func listSpaceChildren(ctx context.Context, session messaging.Session, spaceTarg
 	for _, childRoomID := range childRoomIDs {
 		roomName, roomAlias, roomTopic := inspectRoomState(ctx, session, childRoomID)
 		rooms = append(rooms, roomEntry{
-			RoomID: childRoomID,
+			RoomID: childRoomID.String(),
 			Alias:  roomAlias,
 			Name:   roomName,
 			Topic:  roomTopic,
@@ -283,7 +288,7 @@ func listAllRooms(ctx context.Context, session messaging.Session, jsonOutput *cl
 		}
 		roomName, roomAlias, roomTopic := inspectRoomState(ctx, session, roomID)
 		rooms = append(rooms, roomEntry{
-			RoomID: roomID,
+			RoomID: roomID.String(),
 			Alias:  roomAlias,
 			Name:   roomName,
 			Topic:  roomTopic,
@@ -305,7 +310,7 @@ func listAllRooms(ctx context.Context, session messaging.Session, jsonOutput *cl
 // inspectRoomState fetches room state and extracts name, canonical alias,
 // and topic. Returns empty strings for fields that aren't set or if the
 // room state can't be fetched.
-func inspectRoomState(ctx context.Context, session messaging.Session, roomID string) (name, alias, topic string) {
+func inspectRoomState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (name, alias, topic string) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return "", "", ""
@@ -399,11 +404,11 @@ to clear the m.space.child event in the space.`,
 			if !ok {
 				return cli.Validation("room leave requires operator credentials (not available inside sandboxes)")
 			}
-			if err := directSession.LeaveRoom(ctx, roomID); err != nil {
+			if err := directSession.LeaveRoom(ctx, roomID.String()); err != nil {
 				return cli.Internal("leave room: %w", err)
 			}
 
-			if done, err := params.EmitJSON(roomDeleteResult{RoomID: roomID}); done {
+			if done, err := params.EmitJSON(roomDeleteResult{RoomID: roomID.String()}); done {
 				return err
 			}
 

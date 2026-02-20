@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -18,7 +19,7 @@ type PushResult struct {
 	EventID string
 
 	// RoomID is the Matrix room ID where the template was published.
-	RoomID string
+	RoomID ref.RoomID
 
 	// RoomAlias is the full room alias of the target room.
 	RoomAlias string

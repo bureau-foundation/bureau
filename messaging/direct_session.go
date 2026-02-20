@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
@@ -103,26 +104,26 @@ func (s *DirectSession) CreateRoom(ctx context.Context, request CreateRoomReques
 	return &response, nil
 }
 
-// JoinRoom joins a room by ID or alias. Returns the room ID.
-func (s *DirectSession) JoinRoom(ctx context.Context, roomIDOrAlias string) (string, error) {
-	path := "/_matrix/client/v3/join/" + url.PathEscape(roomIDOrAlias)
+// JoinRoom joins a room by ID. Returns the room ID.
+func (s *DirectSession) JoinRoom(ctx context.Context, roomID ref.RoomID) (ref.RoomID, error) {
+	path := "/_matrix/client/v3/join/" + url.PathEscape(roomID.String())
 	body, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, struct{}{})
 	if err != nil {
-		return "", fmt.Errorf("messaging: join room %q failed: %w", roomIDOrAlias, err)
+		return ref.RoomID{}, fmt.Errorf("messaging: join room %s failed: %w", roomID, err)
 	}
 
 	var response struct {
-		RoomID string `json:"room_id"`
+		RoomID ref.RoomID `json:"room_id"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("messaging: failed to parse join response: %w", err)
+		return ref.RoomID{}, fmt.Errorf("messaging: failed to parse join response: %w", err)
 	}
 	return response.RoomID, nil
 }
 
 // InviteUser invites a user to a room.
-func (s *DirectSession) InviteUser(ctx context.Context, roomID, userID string) error {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/invite", url.PathEscape(roomID))
+func (s *DirectSession) InviteUser(ctx context.Context, roomID ref.RoomID, userID string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/invite", url.PathEscape(roomID.String()))
 	_, err := s.client.doRequest(ctx, http.MethodPost, path, s.accessToken, InviteRequest{UserID: userID})
 	if err != nil {
 		return fmt.Errorf("messaging: invite %q to %q failed: %w", userID, roomID, err)
@@ -133,17 +134,17 @@ func (s *DirectSession) InviteUser(ctx context.Context, roomID, userID string) e
 // SendMessage sends a message to a room. The content includes thread context
 // if this is a thread reply (see NewTextMessage and NewThreadReply).
 // Returns the event ID of the sent message.
-func (s *DirectSession) SendMessage(ctx context.Context, roomID string, content MessageContent) (string, error) {
+func (s *DirectSession) SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (string, error) {
 	return s.SendEvent(ctx, roomID, "m.room.message", content)
 }
 
 // SendEvent sends an event of any type to a room.
 // Uses Matrix's idempotent PUT with a transaction ID.
 // Returns the event ID.
-func (s *DirectSession) SendEvent(ctx context.Context, roomID, eventType string, content any) (string, error) {
+func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
 	transactionID := s.nextTransactionID()
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/%s/%s",
-		url.PathEscape(roomID),
+		url.PathEscape(roomID.String()),
 		url.PathEscape(eventType),
 		url.PathEscape(transactionID),
 	)
@@ -163,9 +164,9 @@ func (s *DirectSession) SendEvent(ctx context.Context, roomID, eventType string,
 // SendStateEvent sends a state event to a room.
 // State events use PUT with the event type and state key in the path.
 // Returns the event ID.
-func (s *DirectSession) SendStateEvent(ctx context.Context, roomID, eventType, stateKey string, content any) (string, error) {
+func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
-		url.PathEscape(roomID),
+		url.PathEscape(roomID.String()),
 		url.PathEscape(eventType),
 		url.PathEscape(stateKey),
 	)
@@ -187,9 +188,9 @@ func (s *DirectSession) SendStateEvent(ctx context.Context, roomID, eventType, s
 // into the appropriate type (e.g., schema.MachineConfig).
 //
 // If the state event does not exist, returns a *MatrixError with code M_NOT_FOUND.
-func (s *DirectSession) GetStateEvent(ctx context.Context, roomID, eventType, stateKey string) (json.RawMessage, error) {
+func (s *DirectSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
-		url.PathEscape(roomID),
+		url.PathEscape(roomID.String()),
 		url.PathEscape(eventType),
 		url.PathEscape(stateKey),
 	)
@@ -203,8 +204,8 @@ func (s *DirectSession) GetStateEvent(ctx context.Context, roomID, eventType, st
 
 // GetRoomState fetches all current state events from a room.
 // Returns the full event objects including type, state_key, sender, etc.
-func (s *DirectSession) GetRoomState(ctx context.Context, roomID string) ([]Event, error) {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state", url.PathEscape(roomID))
+func (s *DirectSession) GetRoomState(ctx context.Context, roomID ref.RoomID) ([]Event, error) {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state", url.PathEscape(roomID.String()))
 
 	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
 	if err != nil {
@@ -219,8 +220,8 @@ func (s *DirectSession) GetRoomState(ctx context.Context, roomID string) ([]Even
 }
 
 // RoomMessages fetches messages from a room with pagination.
-func (s *DirectSession) RoomMessages(ctx context.Context, roomID string, options RoomMessagesOptions) (*RoomMessagesResponse, error) {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/messages", url.PathEscape(roomID))
+func (s *DirectSession) RoomMessages(ctx context.Context, roomID ref.RoomID, options RoomMessagesOptions) (*RoomMessagesResponse, error) {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/messages", url.PathEscape(roomID.String()))
 
 	query := url.Values{}
 	if options.From != "" {
@@ -250,9 +251,9 @@ func (s *DirectSession) RoomMessages(ctx context.Context, roomID string, options
 // ThreadMessages fetches all messages in a thread.
 // threadRootID is the event ID of the thread's root message.
 // Uses the /relations endpoint to get events related to the root via m.thread.
-func (s *DirectSession) ThreadMessages(ctx context.Context, roomID, threadRootID string, options ThreadMessagesOptions) (*ThreadMessagesResponse, error) {
+func (s *DirectSession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options ThreadMessagesOptions) (*ThreadMessagesResponse, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/relations/%s/m.thread",
-		url.PathEscape(roomID),
+		url.PathEscape(roomID.String()),
 		url.PathEscape(threadRootID),
 	)
 
@@ -305,16 +306,16 @@ func (s *DirectSession) Sync(ctx context.Context, options SyncOptions) (*SyncRes
 }
 
 // ResolveAlias resolves a room alias (e.g., "#agents:bureau.local") to a room ID.
-func (s *DirectSession) ResolveAlias(ctx context.Context, alias string) (string, error) {
+func (s *DirectSession) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
 	path := "/_matrix/client/v3/directory/room/" + url.PathEscape(alias)
 	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
 	if err != nil {
-		return "", fmt.Errorf("messaging: resolve alias %q failed: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("messaging: resolve alias %q failed: %w", alias, err)
 	}
 
 	var response ResolveAliasResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("messaging: failed to parse resolve alias response: %w", err)
+		return ref.RoomID{}, fmt.Errorf("messaging: failed to parse resolve alias response: %w", err)
 	}
 	return response.RoomID, nil
 }
@@ -336,7 +337,7 @@ func (s *DirectSession) UploadMedia(ctx context.Context, contentType string, bod
 }
 
 // JoinedRooms returns the list of room IDs the user has joined.
-func (s *DirectSession) JoinedRooms(ctx context.Context) ([]string, error) {
+func (s *DirectSession) JoinedRooms(ctx context.Context) ([]ref.RoomID, error) {
 	body, err := s.client.doRequest(ctx, http.MethodGet, "/_matrix/client/v3/joined_rooms", s.accessToken, nil)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: joined rooms failed: %w", err)
@@ -360,8 +361,8 @@ func (s *DirectSession) LeaveRoom(ctx context.Context, roomID string) error {
 }
 
 // GetRoomMembers returns the members of a room.
-func (s *DirectSession) GetRoomMembers(ctx context.Context, roomID string) ([]RoomMember, error) {
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", url.PathEscape(roomID))
+func (s *DirectSession) GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]RoomMember, error) {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", url.PathEscape(roomID.String()))
 	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: get room members for %q failed: %w", roomID, err)

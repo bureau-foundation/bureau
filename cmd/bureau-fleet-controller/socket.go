@@ -135,7 +135,7 @@ func (fc *FleetController) handleListMachines(ctx context.Context, token *servic
 		summary := machineSummary{
 			Localpart:    localpart,
 			Assignments:  len(machine.assignments),
-			ConfigRoomID: machine.configRoomID,
+			ConfigRoomID: machine.configRoomID.String(),
 		}
 
 		if machine.info != nil {
@@ -266,7 +266,7 @@ func (fc *FleetController) handleShowMachine(ctx context.Context, token *service
 		Info:         machine.info,
 		Status:       machine.status,
 		Assignments:  assignments,
-		ConfigRoomID: machine.configRoomID,
+		ConfigRoomID: machine.configRoomID.String(),
 	}, nil
 }
 

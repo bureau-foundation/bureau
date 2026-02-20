@@ -17,6 +17,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/netutil",
+        "//lib/ref",
         "//lib/secret",
     ],
 )
@@ -28,5 +29,8 @@ go_test(
         "direct_session_test.go",
     ],
     embed = [":messaging"],
-    deps = ["//lib/secret"],
+    deps = [
+        "//lib/ref",
+        "//lib/secret",
+    ],
 )

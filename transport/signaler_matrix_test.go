@@ -6,15 +6,25 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test room ID %q: %v", raw, err))
+	}
+	return roomID
+}
 
 // mockSignalingServer implements a minimal Matrix server for signaler tests.
 // It stores state events keyed by (event_type, state_key) and serves them
@@ -130,7 +140,7 @@ func newTestMatrixSignaler(t *testing.T, mock *mockSignalingServer) *MatrixSigna
 	}
 	t.Cleanup(func() { session.Close() })
 
-	return NewMatrixSignaler(session, "!machines:bureau.local", nil)
+	return NewMatrixSignaler(session, mustRoomID("!machines:bureau.local"), nil)
 }
 
 func TestMatrixSignaler_PublishAndPollOffer(t *testing.T) {

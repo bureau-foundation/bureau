@@ -35,14 +35,14 @@ type createParams struct {
 
 // createResult is the JSON output for workspace create.
 type createResult struct {
-	Alias      string   `json:"alias"                desc:"workspace alias"`
-	RoomAlias  string   `json:"room_alias"           desc:"full Matrix room alias"`
-	RoomID     string   `json:"room_id"              desc:"Matrix room ID"`
-	Project    string   `json:"project"              desc:"project name"`
-	Repository string   `json:"repository,omitempty" desc:"git repository URL"`
-	Branch     string   `json:"branch,omitempty"     desc:"git branch checked out"`
-	Machine    string   `json:"machine"              desc:"hosting machine name"`
-	Principals []string `json:"principals"           desc:"created principal localparts"`
+	Alias      string     `json:"alias"                desc:"workspace alias"`
+	RoomAlias  string     `json:"room_alias"           desc:"full Matrix room alias"`
+	RoomID     ref.RoomID `json:"room_id"              desc:"Matrix room ID"`
+	Project    string     `json:"project"              desc:"project name"`
+	Repository string     `json:"repository,omitempty" desc:"git repository URL"`
+	Branch     string     `json:"branch,omitempty"     desc:"git branch checked out"`
+	Machine    string     `json:"machine"              desc:"hosting machine name"`
+	Principals []string   `json:"principals"           desc:"created principal localparts"`
 }
 
 func createCommand() *cli.Command {
@@ -297,7 +297,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // the Bureau space. Handles the M_ROOM_IN_USE race condition (resolve alias →
 // create → retry resolve if someone else created it between our check and
 // create).
-func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName, adminUserID, machineUserID, spaceRoomID string) (string, error) {
+func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName, adminUserID, machineUserID string, spaceRoomID ref.RoomID) (ref.RoomID, error) {
 	fullAlias := schema.FullRoomAlias(alias, serverName)
 
 	// Check if the room already exists.
@@ -306,7 +306,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", cli.Internal("resolving workspace alias %q: %w", fullAlias, err)
+		return ref.RoomID{}, cli.Internal("resolving workspace alias %q: %w", fullAlias, err)
 	}
 
 	// Room doesn't exist — create it.
@@ -324,20 +324,21 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 			// Race: room created between our resolve and creation attempt.
 			roomID, err = session.ResolveAlias(ctx, fullAlias)
 			if err != nil {
-				return "", cli.Internal("room exists but cannot resolve alias %q: %w", fullAlias, err)
+				return ref.RoomID{}, cli.Internal("room exists but cannot resolve alias %q: %w", fullAlias, err)
 			}
 			return roomID, nil
 		}
-		return "", cli.Internal("creating workspace room: %w", err)
+		return ref.RoomID{}, cli.Internal("creating workspace room: %w", err)
 	}
 
-	// Add as a child of the Bureau space.
-	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID,
+	// Add as a child of the Bureau space. The state key is the room ID
+	// string per the Matrix m.space.child spec.
+	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID.String(),
 		map[string]any{
 			"via": []string{serverName},
 		})
 	if err != nil {
-		return "", cli.Internal("adding workspace room as child of Bureau space: %w", err)
+		return ref.RoomID{}, cli.Internal("adding workspace room as child of Bureau space: %w", err)
 	}
 
 	return response.RoomID, nil
@@ -353,7 +354,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 // every reconcile cycle, so when status changes from "active" to "teardown",
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
-func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, machineRef ref.Machine, workspaceRoomID string, params map[string]string) ([]schema.PrincipalAssignment, error) {
+func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, machineRef ref.Machine, workspaceRoomID ref.RoomID, params map[string]string) ([]schema.PrincipalAssignment, error) {
 	workspaceRoomAlias := schema.FullRoomAlias(alias, serverName)
 	fleet := machineRef.Fleet()
 
@@ -392,7 +393,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 				"pipeline_ref":      "bureau/pipeline:dev-workspace-init",
 				"REPOSITORY":        params["repository"],
 				"PROJECT":           project,
-				"WORKSPACE_ROOM_ID": workspaceRoomID,
+				"WORKSPACE_ROOM_ID": workspaceRoomID.String(),
 				"MACHINE":           machineRef.Localpart(),
 			},
 			StartCondition: &schema.StartCondition{
@@ -460,7 +461,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		Payload: map[string]any{
 			"pipeline_ref":      "bureau/pipeline:dev-workspace-deinit",
 			"PROJECT":           project,
-			"WORKSPACE_ROOM_ID": workspaceRoomID,
+			"WORKSPACE_ROOM_ID": workspaceRoomID.String(),
 			"MACHINE":           machineRef.Localpart(),
 		},
 		StartCondition: &schema.StartCondition{

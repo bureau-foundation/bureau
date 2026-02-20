@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -726,6 +727,6 @@ type fakeWriterForEchoTest struct {
 	nextEventID string
 }
 
-func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _, _, _ string, _ any) (string, error) {
+func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
 	return f.nextEventID, nil
 }

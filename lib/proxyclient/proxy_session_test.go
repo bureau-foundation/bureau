@@ -10,8 +10,18 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+// mustRoomID parses a room ID string in test code, panicking on failure.
+func mustRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("invalid test room ID %q: %v", raw, err))
+	}
+	return roomID
+}
 
 // testProxySession creates a ProxySession backed by a testServer that handles
 // the routes needed for a given test. The session's user ID is set to
@@ -84,7 +94,7 @@ func TestProxySessionResolveAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAlias: %v", err)
 	}
-	if roomID != "!resolved:test.local" {
+	if roomID.String() != "!resolved:test.local" {
 		t.Errorf("RoomID = %q, want !resolved:test.local", roomID)
 	}
 }
@@ -99,7 +109,7 @@ func TestProxySessionGetStateEvent(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	content, err := session.GetStateEvent(context.Background(), "!room:test", "m.bureau.test", "key")
+	content, err := session.GetStateEvent(context.Background(), mustRoomID("!room:test"), "m.bureau.test", "key")
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
@@ -122,7 +132,7 @@ func TestProxySessionSendStateEvent(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	eventID, err := session.SendStateEvent(context.Background(), "!room:test", "m.bureau.test", "key", map[string]string{"value": "test"})
+	eventID, err := session.SendStateEvent(context.Background(), mustRoomID("!room:test"), "m.bureau.test", "key", map[string]string{"value": "test"})
 	if err != nil {
 		t.Fatalf("SendStateEvent: %v", err)
 	}
@@ -141,7 +151,7 @@ func TestProxySessionSendMessage(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	eventID, err := session.SendMessage(context.Background(), "!room:test", messaging.NewTextMessage("hello"))
+	eventID, err := session.SendMessage(context.Background(), mustRoomID("!room:test"), messaging.NewTextMessage("hello"))
 	if err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
@@ -160,7 +170,7 @@ func TestProxySessionSendEvent(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	eventID, err := session.SendEvent(context.Background(), "!room:test", "m.bureau.test", map[string]string{"key": "value"})
+	eventID, err := session.SendEvent(context.Background(), mustRoomID("!room:test"), "m.bureau.test", map[string]string{"key": "value"})
 	if err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}
@@ -183,7 +193,7 @@ func TestProxySessionCreateRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
 	}
-	if response.RoomID != "!new:test.local" {
+	if response.RoomID.String() != "!new:test.local" {
 		t.Errorf("RoomID = %q, want !new:test.local", response.RoomID)
 	}
 }
@@ -198,11 +208,11 @@ func TestProxySessionJoinRoom(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	roomID, err := session.JoinRoom(context.Background(), "!joined:test.local")
+	roomID, err := session.JoinRoom(context.Background(), mustRoomID("!joined:test.local"))
 	if err != nil {
 		t.Fatalf("JoinRoom: %v", err)
 	}
-	if roomID != "!joined:test.local" {
+	if roomID.String() != "!joined:test.local" {
 		t.Errorf("RoomID = %q, want !joined:test.local", roomID)
 	}
 }
@@ -217,7 +227,7 @@ func TestProxySessionInviteUser(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	err := session.InviteUser(context.Background(), "!room:test", "@other:test.local")
+	err := session.InviteUser(context.Background(), mustRoomID("!room:test"), "@other:test.local")
 	if err != nil {
 		t.Fatalf("InviteUser: %v", err)
 	}
@@ -254,7 +264,7 @@ func TestProxySessionGetRoomMembers(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	members, err := session.GetRoomMembers(context.Background(), "!room:test")
+	members, err := session.GetRoomMembers(context.Background(), mustRoomID("!room:test"))
 	if err != nil {
 		t.Fatalf("GetRoomMembers: %v", err)
 	}
@@ -295,7 +305,7 @@ func TestProxySessionGetRoomState(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	events, err := session.GetRoomState(context.Background(), "!room:test")
+	events, err := session.GetRoomState(context.Background(), mustRoomID("!room:test"))
 	if err != nil {
 		t.Fatalf("GetRoomState: %v", err)
 	}
@@ -317,7 +327,7 @@ func TestProxySessionRoomMessages(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	response, err := session.RoomMessages(context.Background(), "!room:test", messaging.RoomMessagesOptions{Direction: "b"})
+	response, err := session.RoomMessages(context.Background(), mustRoomID("!room:test"), messaging.RoomMessagesOptions{Direction: "b"})
 	if err != nil {
 		t.Fatalf("RoomMessages: %v", err)
 	}
@@ -336,7 +346,7 @@ func TestProxySessionThreadMessages(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	response, err := session.ThreadMessages(context.Background(), "!room:test", "$root", messaging.ThreadMessagesOptions{})
+	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room:test"), "$root", messaging.ThreadMessagesOptions{})
 	if err != nil {
 		t.Fatalf("ThreadMessages: %v", err)
 	}

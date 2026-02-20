@@ -19,7 +19,7 @@ type Location struct {
 	Machine ref.Machine
 
 	// ConfigRoomID is the Matrix room ID of the machine's config room.
-	ConfigRoomID string
+	ConfigRoomID ref.RoomID
 
 	// Assignment is the full PrincipalAssignment from the MachineConfig.
 	Assignment schema.PrincipalAssignment
@@ -142,10 +142,10 @@ func listOnMachine(ctx context.Context, session messaging.Session, machine ref.M
 
 // readMachineConfig resolves a machine's config room and reads its
 // MachineConfig state event.
-func readMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine) (string, *schema.MachineConfig, error) {
+func readMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine) (ref.RoomID, *schema.MachineConfig, error) {
 	configRoomID, err := session.ResolveAlias(ctx, machine.RoomAlias())
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve config room for %s: %w", machine.Localpart(), err)
+		return ref.RoomID{}, nil, fmt.Errorf("resolve config room for %s: %w", machine.Localpart(), err)
 	}
 
 	configRaw, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
@@ -153,12 +153,12 @@ func readMachineConfig(ctx context.Context, session messaging.Session, machine r
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return configRoomID, &schema.MachineConfig{}, nil
 		}
-		return "", nil, fmt.Errorf("read machine config for %s: %w", machine.Localpart(), err)
+		return ref.RoomID{}, nil, fmt.Errorf("read machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	var config schema.MachineConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
-		return "", nil, fmt.Errorf("parse machine config for %s: %w", machine.Localpart(), err)
+		return ref.RoomID{}, nil, fmt.Errorf("parse machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	return configRoomID, &config, nil
@@ -167,7 +167,7 @@ func readMachineConfig(ctx context.Context, session messaging.Session, machine r
 // enumerateMachines reads a fleet's machine room state to find all
 // machines. Machines publish m.bureau.machine_status state events keyed
 // by their fleet-scoped localpart.
-func enumerateMachines(ctx context.Context, session messaging.Session, machineRoomID string, fleet ref.Fleet) ([]ref.Machine, error) {
+func enumerateMachines(ctx context.Context, session messaging.Session, machineRoomID ref.RoomID, fleet ref.Fleet) ([]ref.Machine, error) {
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("read machine room state: %w", err)

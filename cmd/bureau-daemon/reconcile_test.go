@@ -474,7 +474,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -595,7 +595,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = daemonHash
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
@@ -719,7 +719,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.running[agentTestEntity] = true
@@ -858,7 +858,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[agentTestEntity] = true
 	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
@@ -957,7 +957,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[agentTestEntity] = true
 	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
@@ -1793,7 +1793,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.running[agentTestEntity] = true
 	daemon.lastCredentials[agentTestEntity] = "encrypted-test-credentials"
@@ -2090,9 +2090,9 @@ func TestReconcileNoConfig(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = "!config:test"
-	daemon.machineRoomID = "!machine:test"
-	daemon.serviceRoomID = "!service:test"
+	daemon.configRoomID = mustRoomID("!config:test")
+	daemon.machineRoomID = mustRoomID("!machine:test")
+	daemon.serviceRoomID = mustRoomID("!service:test")
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
@@ -2373,7 +2373,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
-	daemon.configRoomID = configRoomID
+	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")

@@ -110,7 +110,7 @@ func run() error {
 	// policy changes) to the config room that are not intended for the agent.
 	machineUserID := machine.UserID()
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
+	message, err := waitForMessage(ctx, session, configRoomID.String(), whoamiUserID, machineUserID)
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}

@@ -18,6 +18,7 @@ go_library(
         "//lib/artifact",
         "//lib/pipeline",
         "//lib/proxyclient",
+        "//lib/ref",
         "//lib/schema",
         "//lib/version",
         "//messaging",

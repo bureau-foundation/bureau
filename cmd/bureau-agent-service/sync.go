@@ -89,7 +89,7 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 
 	// Process state from the config room if it appeared in the
 	// initial sync response.
-	if joined, ok := response.Rooms.Join[agentService.configRoomID]; ok {
+	if joined, ok := response.Rooms.Join[agentService.configRoomID.String()]; ok {
 		agentService.processStateEvents(joined.State.Events)
 	}
 
@@ -124,7 +124,7 @@ func (agentService *AgentService) handleSync(ctx context.Context, response *mess
 	defer agentService.mutex.Unlock()
 
 	// Process events from the config room.
-	if joined, ok := response.Rooms.Join[agentService.configRoomID]; ok {
+	if joined, ok := response.Rooms.Join[agentService.configRoomID.String()]; ok {
 		agentService.processStateEvents(joined.State.Events)
 		agentService.processStateEvents(joined.Timeline.Events)
 	}

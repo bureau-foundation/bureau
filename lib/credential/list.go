@@ -42,7 +42,7 @@ type ListResult struct {
 	Machine ref.Machine
 
 	// ConfigRoomID is the machine's config room.
-	ConfigRoomID string
+	ConfigRoomID ref.RoomID
 
 	// Bundles contains one entry per provisioned credential bundle.
 	Bundles []Bundle

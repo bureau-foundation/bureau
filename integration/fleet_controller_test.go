@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/template"
@@ -127,8 +127,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 
 	ctx := t.Context()
 
-	// Register the fleet controller's Matrix account.
-	account := registerPrincipal(t, controllerName, "fleet-controller-password")
+	account := registerFleetPrincipal(t, fleet, controllerName, "fleet-controller-password")
 
 	// Write session.json for the fleet controller.
 	stateDir := t.TempDir()
@@ -176,7 +175,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	}, machine)
 
 	// Start the fleet controller binary.
-	socketPath := principal.RunDirSocketPath(machine.RunDir, controllerName)
+	socketPath := machine.PrincipalSocketPath(t, controllerName)
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
 		t.Fatalf("create fleet controller socket directory: %v", err)
 	}
@@ -234,7 +233,7 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		t.Fatal("machine has no config room ID — was startMachine called?")
 	}
 
-	userID := principal.MatrixUserID(fc.PrincipalName, testServerName)
+	userID := fc.UserID
 
 	// Invite (idempotent — M_FORBIDDEN means already a member).
 	if err := admin.InviteUser(ctx, machine.ConfigRoomID, userID); err != nil {
@@ -388,10 +387,10 @@ func publishFleetOperatorTemplate(t *testing.T, admin *messaging.DirectSession, 
 // token. The principal uses the fleet operator template which has
 // RequiredServices: ["fleet"], so the daemon mints a fleet token with
 // the filtered grants.
-func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, machine *testMachine, localpart, templateRef string, grants []string) []byte {
+func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, localpart, templateRef string, grants []string) []byte {
 	t.Helper()
 
-	account := registerPrincipal(t, localpart, localpart+"-password")
+	account := registerFleetPrincipal(t, fleet, localpart, localpart+"-password")
 	pushCredentials(t, admin, machine, account)
 	joinConfigRoom(t, admin, machine.ConfigRoomID, account)
 
@@ -405,7 +404,7 @@ func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, machine *
 		}},
 	})
 
-	waitForFile(t, machine.PrincipalSocketPath(localpart))
+	waitForFile(t, machine.PrincipalSocketPath(t, localpart))
 	return readDaemonMintedToken(t, machine, localpart, "fleet")
 }
 
@@ -417,9 +416,13 @@ func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, machine *
 func publishFleetServiceBinding(t *testing.T, admin *messaging.DirectSession, machine *testMachine, fc *fleetController) {
 	t.Helper()
 
-	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+	controllerEntity, err := ref.ParseEntityUserID(fc.UserID)
+	if err != nil {
+		t.Fatalf("parse fleet controller entity: %v", err)
+	}
+	_, err = admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
 		schema.EventTypeRoomService, "fleet",
-		schema.RoomServiceContent{Principal: fc.UserID})
+		schema.RoomServiceContent{Principal: controllerEntity})
 	if err != nil {
 		t.Fatalf("publish fleet service binding in config room: %v", err)
 	}
@@ -473,7 +476,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// The daemon resolves the fleet service binding (published above),
 	// mounts the fleet controller socket, and mints a fleet token
 	// with the operator's grants.
-	operatorToken := deployFleetOperator(t, admin, machine,
+	operatorToken := deployFleetOperator(t, admin, fleet, machine,
 		"agent/fleet-lifecycle-operator", operatorTemplateRef, []string{"fleet/**"})
 
 	ctx := t.Context()
@@ -764,7 +767,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// controller will reference this localpart when it creates a
 	// PrincipalAssignment.
 	serviceLocalpart := "service/stt/place-test"
-	serviceAccount := registerPrincipal(t, serviceLocalpart, "fleet-place-test-password")
+	serviceAccount := registerFleetPrincipal(t, fleet, serviceLocalpart, "fleet-place-test-password")
 
 	// Push encrypted credentials for the service principal. The daemon
 	// needs these to start the proxy — without credentials, the daemon
@@ -799,7 +802,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// The operator template has RequiredServices: ["fleet"], so the
 	// daemon resolves the fleet service binding, mounts the fleet
 	// controller socket, and mints a fleet token.
-	operatorToken := deployFleetOperator(t, admin, machine,
+	operatorToken := deployFleetOperator(t, admin, fleet, machine,
 		"agent/fleet-place-operator", operatorTemplateRef, []string{"fleet/**"})
 
 	authClient := fleetClient(t, fc, operatorToken)
@@ -846,7 +849,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		// Wait for the daemon to create the proxy. The daemon detects
 		// the MachineConfig change (written by the fleet controller),
 		// reads credentials, and creates a proxy sandbox.
-		proxySocket := machine.PrincipalSocketPath(serviceLocalpart)
+		proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
 		waitForFile(t, proxySocket)
 
 		// Verify the proxy serves the correct identity.
@@ -878,7 +881,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		}
 		var foundAssignment bool
 		for _, assignment := range showMachine.Assignments {
-			if assignment.Localpart == serviceLocalpart {
+			if assignment.Principal.AccountLocalpart() == serviceLocalpart {
 				foundAssignment = true
 				if assignment.Labels["fleet_managed"] != controllerName {
 					t.Errorf("assignment fleet_managed label = %q, want %q",
@@ -894,7 +897,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 
 	// --- Unplace the service ---
 	t.Run("Unplace", func(t *testing.T) {
-		proxySocket := machine.PrincipalSocketPath(serviceLocalpart)
+		proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
 
 		var unplaceResponse fleetUnplaceResponse
 		if err := authClient.Call(ctx, "unplace", map[string]any{
@@ -971,7 +974,7 @@ func TestFleetReconciliation(t *testing.T) {
 	// Register the service principal and push credentials to both
 	// machines so either can create a sandbox after reconciliation.
 	serviceLocalpart := "service/stt/reconcile-test"
-	serviceAccount := registerPrincipal(t, serviceLocalpart, "fleet-recon-password")
+	serviceAccount := registerFleetPrincipal(t, fleet, serviceLocalpart, "fleet-recon-password")
 	pushCredentials(t, admin, machineA, serviceAccount)
 	pushCredentials(t, admin, machineB, serviceAccount)
 
@@ -998,7 +1001,7 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish the fleet service binding and deploy a fleet operator on
 	// machineA to obtain a daemon-minted fleet token.
 	publishFleetServiceBinding(t, admin, machineA, fc)
-	operatorToken := deployFleetOperator(t, admin, machineA,
+	operatorToken := deployFleetOperator(t, admin, fleet, machineA,
 		"agent/fleet-recon-operator", operatorTemplateRef, []string{"fleet/**"})
 
 	// Wait for the fleet controller to discover both config rooms.
@@ -1022,8 +1025,8 @@ func TestFleetReconciliation(t *testing.T) {
 	// Wait for proxy sockets on both machines. Proxy socket existence
 	// proves the full chain: fleet controller reconcile → place() writes
 	// MachineConfig → daemon /sync → launcher sandbox creation.
-	proxySocketA := machineA.PrincipalSocketPath(serviceLocalpart)
-	proxySocketB := machineB.PrincipalSocketPath(serviceLocalpart)
+	proxySocketA := machineA.PrincipalSocketPath(t, serviceLocalpart)
+	proxySocketB := machineB.PrincipalSocketPath(t, serviceLocalpart)
 	waitForFile(t, proxySocketA)
 	waitForFile(t, proxySocketB)
 
@@ -1071,7 +1074,7 @@ func TestFleetReconciliation(t *testing.T) {
 		}
 		var foundAssignment bool
 		for _, assignment := range showMachine.Assignments {
-			if assignment.Localpart == serviceLocalpart {
+			if assignment.Principal.AccountLocalpart() == serviceLocalpart {
 				foundAssignment = true
 				if assignment.Template != templateRef {
 					t.Errorf("machine %s assignment template = %q, want %q",
@@ -1136,9 +1139,9 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	//   - narrowWildcard: "fleet/list-*" → token has one wildcard fleet grant
 	//   - noFleetGrants: "command/**" → no fleet-relevant grants, so the
 	//     token is valid but has zero grants (default-deny)
-	narrowExact := registerPrincipal(t, "agent/fleet-auth-exact", "fleet-auth-exact-password")
-	narrowWildcard := registerPrincipal(t, "agent/fleet-auth-wild", "fleet-auth-wild-password")
-	noFleetGrants := registerPrincipal(t, "agent/fleet-auth-denied", "fleet-auth-denied-password")
+	narrowExact := registerFleetPrincipal(t, fleet, "agent/fleet-auth-exact", "fleet-auth-exact-password")
+	narrowWildcard := registerFleetPrincipal(t, fleet, "agent/fleet-auth-wild", "fleet-auth-wild-password")
+	noFleetGrants := registerFleetPrincipal(t, fleet, "agent/fleet-auth-denied", "fleet-auth-denied-password")
 
 	pushCredentials(t, admin, machine, narrowExact)
 	pushCredentials(t, admin, machine, narrowWildcard)
@@ -1174,9 +1177,9 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 		},
 	})
 
-	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-exact"))
-	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-wild"))
-	waitForFile(t, machine.PrincipalSocketPath("agent/fleet-auth-denied"))
+	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-exact"))
+	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-wild"))
+	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-denied"))
 
 	narrowExactToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-exact", "fleet")
 	narrowWildcardToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-wild", "fleet")

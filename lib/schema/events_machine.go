@@ -3,6 +3,8 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // MachineKey is the content of an EventTypeMachineKey state event.
 // Published by the launcher at first boot after generating the machine's
 // age keypair.
@@ -372,13 +374,14 @@ type Credentials struct {
 // Published to #bureau/service when a principal provides a service
 // that other principals can consume.
 type Service struct {
-	// Principal is the full Matrix user ID of the service provider
-	// (e.g., "@service/stt/whisper:bureau.local").
-	Principal string `json:"principal"`
+	// Principal is the service provider entity (e.g., the ref for
+	// "@bureau/fleet/prod/service/stt/whisper:bureau.local").
+	// Serialized as the Matrix user ID string via MarshalText.
+	Principal ref.Entity `json:"principal"`
 
-	// Machine is the full Matrix user ID of the machine running this
-	// service instance (e.g., "@machine/cloud-gpu-1:bureau.local").
-	Machine string `json:"machine"`
+	// Machine is the machine running this service instance (e.g.,
+	// the ref for "@bureau/fleet/prod/machine/gpu-box:bureau.local").
+	Machine ref.Machine `json:"machine"`
 
 	// Capabilities lists what this service instance supports. The
 	// daemon uses these for service selection when a sandbox requests
@@ -405,11 +408,10 @@ type Service struct {
 //
 // State key: the service role name (e.g., "ticket", "rag", "ci")
 type RoomServiceContent struct {
-	// XXX: should be ref.Service once service identity is fleet-scoped.
-	// Principal is the full Matrix user ID of the service instance
-	// that handles this role in this room (e.g.,
+	// Principal is the service instance that handles this role in this
+	// room (e.g., the ref for
 	// "@bureau/fleet/prod/service/ticket:bureau.local").
-	Principal string `json:"principal"`
+	Principal ref.Entity `json:"principal"`
 }
 
 // WebRTCSignal is the content of both EventTypeWebRTCOffer and

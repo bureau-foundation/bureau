@@ -20,7 +20,6 @@ go_library(
         "//lib/clock",
         "//lib/codec",
         "//lib/cron",
-        "//lib/principal",
         "//lib/ref",
         "//lib/schema",
         "//lib/service",

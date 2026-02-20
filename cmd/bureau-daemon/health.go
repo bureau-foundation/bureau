@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -36,11 +37,11 @@ type healthMonitor struct {
 // call multiple times for the same principal (subsequent calls are
 // no-ops). The monitor runs until stopped or the parent context is
 // cancelled.
-func (d *Daemon) startHealthMonitor(ctx context.Context, localpart string, healthCheck *schema.HealthCheck) {
+func (d *Daemon) startHealthMonitor(ctx context.Context, principal ref.Entity, healthCheck *schema.HealthCheck) {
 	d.healthMonitorsMu.Lock()
 	defer d.healthMonitorsMu.Unlock()
 
-	if _, exists := d.healthMonitors[localpart]; exists {
+	if _, exists := d.healthMonitors[principal]; exists {
 		return
 	}
 
@@ -49,21 +50,21 @@ func (d *Daemon) startHealthMonitor(ctx context.Context, localpart string, healt
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
-	d.healthMonitors[localpart] = monitor
+	d.healthMonitors[principal] = monitor
 
-	go d.runHealthMonitor(monitorContext, localpart, healthCheck, monitor.done)
+	go d.runHealthMonitor(monitorContext, principal, healthCheck, monitor.done)
 }
 
 // stopHealthMonitor cancels the health monitor for a principal and
 // waits for the goroutine to exit. No-op if no monitor is running.
-func (d *Daemon) stopHealthMonitor(localpart string) {
+func (d *Daemon) stopHealthMonitor(principal ref.Entity) {
 	d.healthMonitorsMu.Lock()
-	monitor, exists := d.healthMonitors[localpart]
+	monitor, exists := d.healthMonitors[principal]
 	if !exists {
 		d.healthMonitorsMu.Unlock()
 		return
 	}
-	delete(d.healthMonitors, localpart)
+	delete(d.healthMonitors, principal)
 	d.healthMonitorsMu.Unlock()
 
 	monitor.cancel()
@@ -74,11 +75,11 @@ func (d *Daemon) stopHealthMonitor(localpart string) {
 // for all goroutines to exit. Called during daemon shutdown.
 func (d *Daemon) stopAllHealthMonitors() {
 	d.healthMonitorsMu.Lock()
-	monitors := make(map[string]*healthMonitor, len(d.healthMonitors))
-	for localpart, monitor := range d.healthMonitors {
-		monitors[localpart] = monitor
+	monitors := make(map[ref.Entity]*healthMonitor, len(d.healthMonitors))
+	for principal, monitor := range d.healthMonitors {
+		monitors[principal] = monitor
 	}
-	d.healthMonitors = make(map[string]*healthMonitor)
+	d.healthMonitors = make(map[ref.Entity]*healthMonitor)
 	d.healthMonitorsMu.Unlock()
 
 	// Cancel all monitors first, then wait. Parallel shutdown.
@@ -111,13 +112,13 @@ func healthCheckDefaults(config *schema.HealthCheck) schema.HealthCheck {
 // health monitoring. It waits the grace period, then polls the proxy
 // admin socket at the configured interval. On sustained failure, it
 // triggers a rollback.
-func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthCheck *schema.HealthCheck, done chan struct{}) {
+func (d *Daemon) runHealthMonitor(ctx context.Context, principal ref.Entity, healthCheck *schema.HealthCheck, done chan struct{}) {
 	defer close(done)
 
 	config := healthCheckDefaults(healthCheck)
 
 	d.logger.Info("health monitor started",
-		"principal", localpart,
+		"principal", principal,
 		"endpoint", config.Endpoint,
 		"interval_seconds", config.IntervalSeconds,
 		"timeout_seconds", config.TimeoutSeconds,
@@ -143,11 +144,11 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthC
 		case <-ticker.C:
 		}
 
-		healthy := d.checkHealth(ctx, localpart, config.Endpoint, config.TimeoutSeconds)
+		healthy := d.checkHealth(ctx, principal, config.Endpoint, config.TimeoutSeconds)
 		if healthy {
 			if consecutiveFailures > 0 {
 				d.logger.Info("health check recovered",
-					"principal", localpart,
+					"principal", principal,
 					"previous_failures", consecutiveFailures,
 				)
 			}
@@ -157,7 +158,7 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthC
 
 		consecutiveFailures++
 		d.logger.Warn("health check failed",
-			"principal", localpart,
+			"principal", principal,
 			"endpoint", config.Endpoint,
 			"consecutive_failures", consecutiveFailures,
 			"threshold", config.FailureThreshold,
@@ -165,10 +166,10 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthC
 
 		if consecutiveFailures >= config.FailureThreshold {
 			d.logger.Error("health check threshold reached, triggering rollback",
-				"principal", localpart,
+				"principal", principal,
 				"consecutive_failures", consecutiveFailures,
 			)
-			d.rollbackPrincipal(ctx, localpart)
+			d.rollbackPrincipal(ctx, principal)
 			return
 		}
 	}
@@ -177,8 +178,8 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, localpart string, healthC
 // checkHealth sends a single HTTP GET to the principal's proxy admin
 // socket at the configured health endpoint. Returns true if the
 // response is HTTP 200.
-func (d *Daemon) checkHealth(ctx context.Context, localpart string, endpoint string, timeoutSeconds int) bool {
-	adminSocket := d.adminSocketPathFunc(localpart)
+func (d *Daemon) checkHealth(ctx context.Context, principal ref.Entity, endpoint string, timeoutSeconds int) bool {
+	adminSocket := d.adminSocketPathFunc(principal)
 	client := proxyAdminClient(adminSocket)
 
 	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
@@ -188,7 +189,7 @@ func (d *Daemon) checkHealth(ctx context.Context, localpart string, endpoint str
 		"http://localhost"+endpoint, nil)
 	if err != nil {
 		d.logger.Error("health check: creating request",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		return false
 	}
 
@@ -209,39 +210,39 @@ func (d *Daemon) checkHealth(ctx context.Context, localpart string, endpoint str
 // Acquires reconcileMu to serialize with the reconcile loop. The health
 // monitor goroutine does NOT hold this mutex during normal operation —
 // only during the rollback action itself.
-func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
+func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	d.reconcileMu.Lock()
 	defer d.reconcileMu.Unlock()
 
 	// Guard: the principal may have been destroyed by a concurrent
 	// reconcile while we were waiting for the mutex.
-	if !d.running[localpart] {
+	if !d.running[principal] {
 		d.logger.Info("health rollback skipped: principal already stopped",
-			"principal", localpart)
+			"principal", principal)
 		return
 	}
 
 	// Save state needed for recreation. destroyPrincipal clears all tracking
 	// maps, so these must be captured before the call.
-	previousSpec := d.previousSpecs[localpart]
-	template := d.lastTemplates[localpart]
+	previousSpec := d.previousSpecs[principal]
+	template := d.lastTemplates[principal]
 
 	// Remove this monitor from the health monitors map before calling
 	// destroyPrincipal. destroyPrincipal calls stopHealthMonitor, which
 	// waits on the monitor's done channel — but this goroutine IS the
 	// monitor, so waiting would deadlock. Removing the map entry first
-	// makes stopHealthMonitor a no-op for this localpart.
+	// makes stopHealthMonitor a no-op for this principal.
 	d.healthMonitorsMu.Lock()
-	delete(d.healthMonitors, localpart)
+	delete(d.healthMonitors, principal)
 	d.healthMonitorsMu.Unlock()
 
-	if err := d.destroyPrincipal(ctx, localpart); err != nil {
+	if err := d.destroyPrincipal(ctx, principal); err != nil {
 		d.logger.Error("health rollback: failed to destroy sandbox, sandbox may be orphaned",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		return
 	}
 
-	d.logger.Info("health rollback: sandbox destroyed", "principal", localpart)
+	d.logger.Info("health rollback: sandbox destroyed", "principal", principal)
 
 	// If no previous spec exists, the principal was on its first-ever
 	// spec or the daemon restarted (previousSpecs is in-memory only).
@@ -249,24 +250,24 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	// if the admin fixes the template.
 	if previousSpec == nil {
 		d.logger.Error("health rollback: no previous spec to roll back to",
-			"principal", localpart)
+			"principal", principal)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(localpart, "destroyed", "")); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "destroyed", "")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 		return
 	}
 
 	// Read fresh credentials (they may have been rotated).
-	credentials, err := d.readCredentials(ctx, localpart)
+	credentials, err := d.readCredentials(ctx, principal)
 	if err != nil {
 		d.logger.Error("health rollback: cannot read credentials",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(localpart, "rollback_failed", fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 		return
 	}
@@ -275,95 +276,95 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, localpart string) {
 	config, err := d.readMachineConfig(ctx)
 	if err != nil {
 		d.logger.Error("health rollback: cannot read machine config",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		return
 	}
 
 	var assignment *schema.PrincipalAssignment
 	for i := range config.Principals {
-		if config.Principals[i].Localpart == localpart {
+		if config.Principals[i].Principal == principal {
 			assignment = &config.Principals[i]
 			break
 		}
 	}
 	if assignment == nil {
 		d.logger.Info("health rollback: principal no longer in config, not recreating",
-			"principal", localpart)
+			"principal", principal)
 		return
 	}
 
 	// Resolve authorization grants so the proxy starts with enforcement.
-	grants := d.resolveGrantsForProxy(localpart, *assignment, config)
+	grants := d.resolveGrantsForProxy(principal.AccountLocalpart(), *assignment, config)
 
 	// Recreate with the previous working spec.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:               "create-sandbox",
-		Principal:            localpart,
+		Principal:            principal.AccountLocalpart(),
 		EncryptedCredentials: credentials.Ciphertext,
 		Grants:               grants,
 		SandboxSpec:          previousSpec,
 	})
 	if err != nil {
 		d.logger.Error("health rollback: create-sandbox IPC failed",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(localpart, "rollback_failed", "create-sandbox IPC failed")); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", "create-sandbox IPC failed")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 		return
 	}
 	if !response.OK {
 		d.logger.Error("health rollback: create-sandbox rejected",
-			"principal", localpart, "error", response.Error)
+			"principal", principal, "error", response.Error)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(localpart, "rollback_failed", response.Error)); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", response.Error)); err != nil {
 			d.logger.Error("failed to post health rollback notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 		return
 	}
 
-	d.running[localpart] = true
-	d.lastSpecs[localpart] = previousSpec
-	d.lastGrants[localpart] = grants
+	d.running[principal] = true
+	d.lastSpecs[principal] = previousSpec
+	d.lastGrants[principal] = grants
 	d.lastActivityAt = d.clock.Now()
 
 	d.logger.Info("health rollback: sandbox recreated with previous spec",
-		"principal", localpart)
+		"principal", principal)
 
-	d.startLayoutWatcher(ctx, localpart)
-	d.configureConsumerProxy(ctx, localpart)
+	d.startLayoutWatcher(ctx, principal)
+	d.configureConsumerProxy(ctx, principal)
 
 	directory := d.buildServiceDirectory()
-	if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
+	if err := d.pushDirectoryToProxy(ctx, principal, directory); err != nil {
 		d.logger.Error("health rollback: failed to push service directory",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 
 	// Start a new health monitor with a fresh grace period for the
 	// rolled-back sandbox. Restore the template so the daemon's tracking
 	// state is consistent for future reconciles.
 	if template != nil && template.HealthCheck != nil {
-		d.lastTemplates[localpart] = template
-		d.startHealthMonitor(ctx, localpart, template.HealthCheck)
+		d.lastTemplates[principal] = template
+		d.startHealthMonitor(ctx, principal, template.HealthCheck)
 	}
 
 	// Start new exit watchers for the recreated sandbox.
 	if d.shutdownCtx != nil {
 		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
-		d.exitWatchers[localpart] = watcherCancel
-		go d.watchSandboxExit(watcherCtx, localpart)
+		d.exitWatchers[principal] = watcherCancel
+		go d.watchSandboxExit(watcherCtx, principal)
 
 		proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
-		d.proxyExitWatchers[localpart] = proxyCancel
-		go d.watchProxyExit(proxyCtx, localpart)
+		d.proxyExitWatchers[principal] = proxyCancel
+		go d.watchProxyExit(proxyCtx, principal)
 	}
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewHealthCheckMessage(localpart, "rolled_back", "")); err != nil {
+		schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rolled_back", "")); err != nil {
 		d.logger.Error("failed to post health rollback notification",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 
 	d.notifyReconcile()

@@ -55,7 +55,8 @@ type Launcher struct {
 	keypair       *sealed.Keypair
 	machine       ref.Machine
 	homeserverURL string
-	runDir        string       // runtime directory for sockets (e.g., /run/bureau)
+	runDir        string       // base runtime directory (e.g., /run/bureau)
+	fleetRunDir   string       // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod), computed from machine.Fleet().RunDir(runDir)
 	stateDir      string       // persistent state directory (e.g., /var/lib/bureau)
 	workspaceRoot string       // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
 	cacheRoot     string       // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
@@ -722,10 +723,14 @@ func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 
 	// Remove socket files (the proxy may have already removed them during
 	// graceful shutdown, so ignore errors).
-	socketPath := principal.RunDirSocketPath(l.runDir, principalLocalpart)
-	adminSocketPath := principal.RunDirAdminSocketPath(l.runDir, principalLocalpart)
-	os.Remove(socketPath)
-	os.Remove(adminSocketPath)
+	principalRef, parseErr := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), principalLocalpart)
+	if parseErr != nil {
+		l.logger.Error("cannot parse principal for socket cleanup",
+			"principal", principalLocalpart, "error", parseErr)
+	} else {
+		os.Remove(principalRef.SocketPath(l.fleetRunDir))
+		os.Remove(principalRef.AdminSocketPath(l.fleetRunDir))
+	}
 
 	// Kill the principal's tmux session if it still exists. This is
 	// belt-and-suspenders — the session should already be gone (either

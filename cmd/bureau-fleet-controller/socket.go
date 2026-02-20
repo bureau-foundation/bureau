@@ -258,7 +258,7 @@ func (fc *FleetController) handleShowMachine(ctx context.Context, token *service
 		assignments = append(assignments, *assignment)
 	}
 	sort.Slice(assignments, func(i, j int) bool {
-		return assignments[i].Localpart < assignments[j].Localpart
+		return assignments[i].Principal.Localpart() < assignments[j].Principal.Localpart()
 	})
 
 	return showMachineResponse{

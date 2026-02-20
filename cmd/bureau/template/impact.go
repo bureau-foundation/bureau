@@ -229,7 +229,7 @@ func (a *impactAnalyzer) findAffected(targetRef string, configs []machineConfig)
 
 			result := &impactResult{
 				Machine:   mc.machine,
-				Principal: assignment.Localpart,
+				Principal: assignment.Principal.Localpart(),
 				Template:  assignment.Template,
 				Depth:     depth,
 			}

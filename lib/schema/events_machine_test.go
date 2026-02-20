@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestMachineKeyRoundTrip(t *testing.T) {
@@ -300,20 +302,20 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	original := MachineConfig{
 		Principals: []PrincipalAssignment{
 			{
-				Localpart:         "iree/amdgpu/pm",
+				Principal:         testEntity(t, "@bureau/fleet/test/agent/pm:bureau.local"),
 				Template:          "llm-agent",
 				AutoStart:         true,
 				Labels:            map[string]string{"role": "agent", "team": "iree"},
 				ServiceVisibility: []string{"service/stt/*", "service/embedding/**"},
 			},
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "@bureau/fleet/test/service/stt/whisper:bureau.local"),
 				Template:  "whisper-stt",
 				AutoStart: true,
 				Labels:    map[string]string{"role": "service"},
 			},
 			{
-				Localpart: "iree/amdgpu/codegen",
+				Principal: testEntity(t, "@bureau/fleet/test/agent/codegen:bureau.local"),
 				Template:  "llm-agent",
 				AutoStart: false,
 			},
@@ -338,7 +340,7 @@ func TestMachineConfigRoundTrip(t *testing.T) {
 	}
 
 	first := principals[0].(map[string]any)
-	assertField(t, first, "localpart", "iree/amdgpu/pm")
+	assertField(t, first, "principal", "@bureau/fleet/test/agent/pm:bureau.local")
 	assertField(t, first, "template", "llm-agent")
 	assertField(t, first, "auto_start", true)
 
@@ -392,7 +394,7 @@ func TestBureauVersionOnMachineConfig(t *testing.T) {
 	config := MachineConfig{
 		Principals: []PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "@bureau/fleet/test/service/stt/whisper:bureau.local"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 			},
@@ -447,7 +449,7 @@ func TestBureauVersionOmittedWhenNil(t *testing.T) {
 	config := MachineConfig{
 		Principals: []PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "@bureau/fleet/test/service/stt/whisper:bureau.local"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 			},
@@ -544,9 +546,15 @@ func TestCredentialsOmitsEmptyExpiry(t *testing.T) {
 }
 
 func TestServiceRoundTrip(t *testing.T) {
+	principalUserID := "@bureau/fleet/prod/service/stt/whisper:bureau.local"
+	machineUserID := "@bureau/fleet/prod/machine/cloud-gpu-1:bureau.local"
+
+	principal := mustParseEntity(t, principalUserID)
+	machine := mustParseMachine(t, machineUserID)
+
 	original := Service{
-		Principal:    "@service/stt/whisper:bureau.local",
-		Machine:      "@machine/cloud-gpu-1:bureau.local",
+		Principal:    principal,
+		Machine:      machine,
 		Capabilities: []string{"streaming", "speaker-diarization"},
 		Protocol:     "http",
 		Description:  "Whisper Large V3 streaming STT",
@@ -565,8 +573,8 @@ func TestServiceRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "principal", "@service/stt/whisper:bureau.local")
-	assertField(t, raw, "machine", "@machine/cloud-gpu-1:bureau.local")
+	assertField(t, raw, "principal", principalUserID)
+	assertField(t, raw, "machine", machineUserID)
 	assertField(t, raw, "protocol", "http")
 	assertField(t, raw, "description", "Whisper Large V3 streaming STT")
 
@@ -575,10 +583,10 @@ func TestServiceRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if decoded.Principal != original.Principal {
-		t.Errorf("Principal: got %q, want %q", decoded.Principal, original.Principal)
+		t.Errorf("Principal: got %v, want %v", decoded.Principal, original.Principal)
 	}
 	if decoded.Machine != original.Machine {
-		t.Errorf("Machine: got %q, want %q", decoded.Machine, original.Machine)
+		t.Errorf("Machine: got %v, want %v", decoded.Machine, original.Machine)
 	}
 	if decoded.Protocol != original.Protocol {
 		t.Errorf("Protocol: got %q, want %q", decoded.Protocol, original.Protocol)
@@ -593,8 +601,8 @@ func TestServiceRoundTrip(t *testing.T) {
 
 func TestServiceOmitsOptionalFields(t *testing.T) {
 	service := Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/workstation:bureau.local",
+		Principal: mustParseEntity(t, "@bureau/fleet/prod/service/tts/piper:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local"),
 		Protocol:  "http",
 		// Capabilities, Description, Metadata deliberately empty.
 	}
@@ -616,8 +624,9 @@ func TestServiceOmitsOptionalFields(t *testing.T) {
 }
 
 func TestRoomServiceContentRoundTrip(t *testing.T) {
+	principalUserID := "@bureau/fleet/prod/service/ticket/iree:bureau.local"
 	original := RoomServiceContent{
-		Principal: "@service/ticket/iree:bureau.local",
+		Principal: mustParseEntity(t, principalUserID),
 	}
 
 	data, err := json.Marshal(original)
@@ -629,15 +638,33 @@ func TestRoomServiceContentRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "principal", "@service/ticket/iree:bureau.local")
+	assertField(t, raw, "principal", principalUserID)
 
 	var decoded RoomServiceContent
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if decoded.Principal != original.Principal {
-		t.Errorf("Principal: got %q, want %q", decoded.Principal, original.Principal)
+		t.Errorf("Principal: got %v, want %v", decoded.Principal, original.Principal)
 	}
+}
+
+func mustParseEntity(t *testing.T, userID string) ref.Entity {
+	t.Helper()
+	entity, err := ref.ParseEntityUserID(userID)
+	if err != nil {
+		t.Fatalf("parse entity %q: %v", userID, err)
+	}
+	return entity
+}
+
+func mustParseMachine(t *testing.T, userID string) ref.Machine {
+	t.Helper()
+	machine, err := ref.ParseMachineUserID(userID)
+	if err != nil {
+		t.Fatalf("parse machine %q: %v", userID, err)
+	}
+	return machine
 }
 
 func TestAdminProtectedEvents(t *testing.T) {

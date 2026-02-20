@@ -226,7 +226,10 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 
 	// Build principal assignments (setup + agents + teardown).
-	assignments := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machine, workspaceRoomID, paramMap)
+	assignments, err := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machineRef, workspaceRoomID, paramMap)
+	if err != nil {
+		return cli.Internal("building principal assignments: %w", err)
+	}
 
 	// Update the machine's MachineConfig with the new principals.
 	err = updateMachineConfig(ctx, sess, machineRef, assignments)
@@ -248,7 +251,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 
 	var principalNames []string
 	for _, assignment := range assignments {
-		principalNames = append(principalNames, assignment.Localpart)
+		principalNames = append(principalNames, assignment.Principal.Localpart())
 	}
 	if done, err := jsonOutput.EmitJSON(createResult{
 		Alias:      alias,
@@ -280,7 +283,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 				suffix = " (conditional)"
 			}
 		}
-		fmt.Fprintf(os.Stderr, "    %s (template=%s)%s\n", assignment.Localpart, assignment.Template, suffix)
+		fmt.Fprintf(os.Stderr, "    %s (template=%s)%s\n", assignment.Principal.Localpart(), assignment.Template, suffix)
 	}
 	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
 	fmt.Fprintf(os.Stderr, "  1. Provision credentials: bureau-credentials provision --principal <localpart> --machine %s ...\n", machine)
@@ -350,14 +353,22 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 // every reconcile cycle, so when status changes from "active" to "teardown",
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
-func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName, machine, workspaceRoomID string, params map[string]string) []schema.PrincipalAssignment {
+func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, machineRef ref.Machine, workspaceRoomID string, params map[string]string) ([]schema.PrincipalAssignment, error) {
 	workspaceRoomAlias := schema.FullRoomAlias(alias, serverName)
+	fleet := machineRef.Fleet()
 
 	// Derive workspace path components from the alias. The first segment
 	// is the project name; everything after is the worktree path (if any).
 	// These flow into PrincipalAssignment.Payload so the launcher can
 	// expand ${PROJECT} and ${WORKTREE_PATH} in template mount paths.
 	project, worktreePath, _ := strings.Cut(alias, "/")
+
+	// Helper to construct an Entity from an account localpart. Workspace
+	// principals use the "agent" entity type with the workspace alias as
+	// the hierarchical name (e.g., "agent/iree/amdgpu/inference/setup").
+	makeEntity := func(accountLocalpart string) (ref.Entity, error) {
+		return ref.NewEntityFromAccountLocalpart(fleet, accountLocalpart)
+	}
 
 	// Setup principal: clones repo, creates worktrees, publishes workspace active status.
 	// Gated on status "pending" so the daemon stops it after the pipeline
@@ -367,10 +378,13 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// Payload keys are UPPERCASE to match the pipeline variable declarations
 	// in dev-workspace-init.jsonc. The pipeline_ref tells the executor which
 	// pipeline to run; all other keys become pipeline variables.
-	setupLocalpart := alias + "/setup"
+	setupEntity, err := makeEntity("agent/" + alias + "/setup")
+	if err != nil {
+		return nil, fmt.Errorf("constructing setup principal: %w", err)
+	}
 	assignments := []schema.PrincipalAssignment{
 		{
-			Localpart: setupLocalpart,
+			Principal: setupEntity,
 			Template:  "bureau/template:base",
 			AutoStart: true,
 			Labels:    map[string]string{"role": "setup"},
@@ -379,7 +393,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 				"REPOSITORY":        params["repository"],
 				"PROJECT":           project,
 				"WORKSPACE_ROOM_ID": workspaceRoomID,
-				"MACHINE":           machine,
+				"MACHINE":           machineRef.Localpart(),
 			},
 			StartCondition: &schema.StartCondition{
 				EventType:    schema.EventTypeWorkspace,
@@ -395,7 +409,10 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// worktree component) so the launcher can expand these variables in the
 	// agent's template mount paths (e.g., ${WORKSPACE_ROOT}/${PROJECT}).
 	for index := 0; index < agentCount; index++ {
-		agentLocalpart := alias + "/agent/" + strconv.Itoa(index)
+		agentEntity, err := makeEntity("agent/" + alias + "/" + strconv.Itoa(index))
+		if err != nil {
+			return nil, fmt.Errorf("constructing agent principal %d: %w", index, err)
+		}
 		agentPayload := map[string]any{
 			"PROJECT": project,
 		}
@@ -403,7 +420,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 			agentPayload["WORKTREE_PATH"] = worktreePath
 		}
 		assignments = append(assignments, schema.PrincipalAssignment{
-			Localpart: agentLocalpart,
+			Principal: agentEntity,
 			Template:  agentTemplate,
 			AutoStart: true,
 			Labels:    map[string]string{"role": "agent"},
@@ -431,9 +448,12 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// event content when the StartCondition matches and delivers it as
 	// /run/bureau/trigger.json. The pipeline reads the mode via the
 	// EVENT_teardown_mode variable.
-	teardownLocalpart := alias + "/teardown"
+	teardownEntity, err := makeEntity("agent/" + alias + "/teardown")
+	if err != nil {
+		return nil, fmt.Errorf("constructing teardown principal: %w", err)
+	}
 	assignments = append(assignments, schema.PrincipalAssignment{
-		Localpart: teardownLocalpart,
+		Principal: teardownEntity,
 		Template:  "bureau/template:base",
 		AutoStart: true,
 		Labels:    map[string]string{"role": "teardown"},
@@ -441,7 +461,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 			"pipeline_ref":      "bureau/pipeline:dev-workspace-deinit",
 			"PROJECT":           project,
 			"WORKSPACE_ROOM_ID": workspaceRoomID,
-			"MACHINE":           machine,
+			"MACHINE":           machineRef.Localpart(),
 		},
 		StartCondition: &schema.StartCondition{
 			EventType:    schema.EventTypeWorkspace,
@@ -451,7 +471,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		},
 	})
 
-	return assignments
+	return assignments, nil
 }
 
 // updateMachineConfig performs a read-modify-write on the machine's
@@ -476,17 +496,17 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 		return cli.Internal("reading machine config: %w", err)
 	}
 
-	// Build a set of existing localparts for deduplication.
+	// Build a set of existing principal localparts for deduplication.
 	existingLocalparts := make(map[string]bool)
 	for _, assignment := range config.Principals {
-		existingLocalparts[assignment.Localpart] = true
+		existingLocalparts[assignment.Principal.Localpart()] = true
 	}
 
 	// Append new assignments, skipping any that already exist.
 	addedCount := 0
 	for _, assignment := range newAssignments {
-		if existingLocalparts[assignment.Localpart] {
-			fmt.Fprintf(os.Stderr, "  (skipping %s — already assigned)\n", assignment.Localpart)
+		if existingLocalparts[assignment.Principal.Localpart()] {
+			fmt.Fprintf(os.Stderr, "  (skipping %s — already assigned)\n", assignment.Principal.Localpart())
 			continue
 		}
 		config.Principals = append(config.Principals, assignment)

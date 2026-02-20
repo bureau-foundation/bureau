@@ -32,8 +32,8 @@ func TestTwoAgentMessaging(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	alice := registerPrincipal(t, "test/alice", "alice-test-password")
-	bob := registerPrincipal(t, "test/bob", "bob-test-password")
+	alice := registerFleetPrincipal(t, fleet, "test/alice", "alice-test-password")
+	bob := registerFleetPrincipal(t, fleet, "test/bob", "bob-test-password")
 
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{

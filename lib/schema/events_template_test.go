@@ -6,7 +6,19 @@ package schema
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
+
+// testEntity constructs a ref.Entity for test use. Panics on failure.
+func testEntity(t *testing.T, userID string) ref.Entity {
+	t.Helper()
+	entity, err := ref.ParseEntityUserID(userID)
+	if err != nil {
+		t.Fatalf("testEntity(%q): %v", userID, err)
+	}
+	return entity
+}
 
 func TestTemplateContentRoundTrip(t *testing.T) {
 	original := TemplateContent{
@@ -418,7 +430,7 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 	// A PrincipalAssignment with all override fields set should
 	// round-trip correctly through JSON.
 	original := PrincipalAssignment{
-		Localpart:           "iree/amdgpu/pm",
+		Principal:           testEntity(t, "@bureau/fleet/test/agent/pm:bureau.local"),
 		Template:            "iree/template:amdgpu-developer",
 		AutoStart:           true,
 		CommandOverride:     []string{"/usr/local/bin/custom-agent", "--mode=gpu"},
@@ -492,7 +504,7 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 	// A PrincipalAssignment without override fields should not include
 	// them in the wire format (backward compatibility).
 	assignment := PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "@bureau/fleet/test/service/stt/whisper:bureau.local"),
 		Template:  "bureau/template:whisper-stt",
 		AutoStart: true,
 	}
@@ -517,15 +529,16 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 		}
 	}
 
-	// Existing fields should still be present.
-	assertField(t, raw, "localpart", "service/stt/whisper")
+	// Existing fields should still be present. The principal is serialized
+	// as the full Matrix user ID via Entity.MarshalText.
+	assertField(t, raw, "principal", "@bureau/fleet/test/service/stt/whisper:bureau.local")
 	assertField(t, raw, "template", "bureau/template:whisper-stt")
 	assertField(t, raw, "auto_start", true)
 }
 
 func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	original := PrincipalAssignment{
-		Localpart: "iree/amdgpu/pm",
+		Principal: testEntity(t, "@bureau/fleet/test/agent/pm:bureau.local"),
 		Template:  "iree/template:llm-agent",
 		AutoStart: true,
 		StartCondition: &StartCondition{
@@ -590,7 +603,7 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 
 func TestStartConditionOmittedWhenNil(t *testing.T) {
 	assignment := PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "@bureau/fleet/test/service/stt/whisper:bureau.local"),
 		Template:  "bureau/template:whisper-stt",
 		AutoStart: true,
 	}

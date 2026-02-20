@@ -99,12 +99,13 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 	fc.principalName = "service/fleet/prod"
 
 	// Seed a machine with a fleet-managed service.
+	webEntity := testEntity(t, "service/web")
 	fc.machines["machine/a"] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "a"},
 		status: &schema.MachineStatus{},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/web": {
-				Localpart: "service/web",
+				Principal: webEntity,
 				Template:  "bureau/template:web",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
@@ -129,7 +130,7 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 	store.seedConfig("!config-a:local", "machine/a", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/web",
+				Principal: webEntity,
 				Template:  "bureau/template:web",
 				AutoStart: true,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -267,17 +268,19 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 	fc.configStore = store
 	fc.principalName = "service/fleet/prod"
 
+	webEntity := testEntity(t, "service/web")
+	apiEntity := testEntity(t, "service/api")
 	fc.machines["machine/a"] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "a"},
 		status: &schema.MachineStatus{},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/web": {
-				Localpart: "service/web",
+				Principal: webEntity,
 				Template:  "bureau/template:web",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 			"service/api": {
-				Localpart: "service/api",
+				Principal: apiEntity,
 				Template:  "bureau/template:api",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
@@ -307,8 +310,8 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 
 	store.seedConfig("!config-a:local", "machine/a", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "service/web", Template: "bureau/template:web", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
-			{Localpart: "service/api", Template: "bureau/template:api", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
+			{Principal: webEntity, Template: "bureau/template:web", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
+			{Principal: apiEntity, Template: "bureau/template:api", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
 		},
 	})
 

@@ -42,7 +42,7 @@ func Destroy(ctx context.Context, session messaging.Session, configRoomID string
 	found := false
 	filtered := make([]schema.PrincipalAssignment, 0, len(config.Principals))
 	for _, assignment := range config.Principals {
-		if assignment.Localpart == localpart {
+		if assignment.Principal.Localpart() == localpart {
 			found = true
 			continue
 		}

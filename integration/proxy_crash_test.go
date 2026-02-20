@@ -33,7 +33,6 @@ import (
 func TestProxyCrashRecovery(t *testing.T) {
 	t.Parallel()
 	const principalLocalpart = "agent/proxy-crash"
-	principalUserID := "@agent/proxy-crash:" + testServerName
 
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
@@ -129,11 +128,16 @@ func TestProxyCrashRecovery(t *testing.T) {
 	}
 
 	// Register the principal, provision credentials, and deploy.
-	account := registerPrincipal(t, principalLocalpart, "pass-proxy-crash-agent")
+	account := registerFleetPrincipal(t, fleet, principalLocalpart, "pass-proxy-crash-agent")
+
+	principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(machineRef.Fleet(), principalLocalpart)
+	if entityErr != nil {
+		t.Fatalf("build principal entity: %v", entityErr)
+	}
 
 	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
 		Machine:       machineRef,
-		Principal:     principalLocalpart,
+		Principal:     principalEntity,
 		MachineRoomID: fleet.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
@@ -149,7 +153,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 		machineName, schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
 				{
-					Localpart: principalLocalpart,
+					Principal: principalEntity,
 					AutoStart: true,
 					MatrixPolicy: &schema.MatrixPolicy{
 						AllowJoin: true,
@@ -162,15 +166,15 @@ func TestProxyCrashRecovery(t *testing.T) {
 	}
 
 	// Wait for the proxy socket — proves the sandbox was created.
-	proxySocket := principal.RunDirSocketPath(runDir, principalLocalpart)
+	proxySocket := principalSocketPath(t, machineRef, runDir, principalLocalpart)
 	waitForFile(t, proxySocket)
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before the crash.
 	proxyClient := proxyHTTPClient(proxySocket)
 	initialWhoami := proxyWhoami(t, proxyClient)
-	if initialWhoami != principalUserID {
-		t.Fatalf("initial whoami = %q, want %q", initialWhoami, principalUserID)
+	if initialWhoami != account.UserID {
+		t.Fatalf("initial whoami = %q, want %q", initialWhoami, account.UserID)
 	}
 	t.Log("proxy serving correctly")
 
@@ -206,8 +210,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// because the old transport has a broken connection to the dead proxy.
 	newProxyClient := proxyHTTPClient(proxySocket)
 	recoveredWhoami := proxyWhoami(t, newProxyClient)
-	if recoveredWhoami != principalUserID {
-		t.Fatalf("recovered whoami = %q, want %q", recoveredWhoami, principalUserID)
+	if recoveredWhoami != account.UserID {
+		t.Fatalf("recovered whoami = %q, want %q", recoveredWhoami, account.UserID)
 	}
 	t.Log("new proxy serves correct identity")
 

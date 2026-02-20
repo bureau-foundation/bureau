@@ -33,6 +33,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -49,7 +50,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -61,7 +62,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -78,7 +79,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should be running after start condition is met")
 	}
 }
@@ -96,6 +97,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -105,7 +107,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -117,7 +119,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -134,7 +136,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("expected no create-sandbox calls (condition not met), got %v", tracker.created)
 	}
-	if daemon.running["iree/amdgpu/pm"] {
+	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should not be running when start condition is not met")
 	}
 }
@@ -153,6 +155,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -160,7 +163,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -172,7 +175,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -209,7 +212,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should be running after start condition becomes satisfied")
 	}
 }
@@ -226,6 +229,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -233,13 +237,13 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -270,6 +274,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -277,7 +282,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/gated",
+				Principal: testEntity(t, fleet, "agent/gated"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -288,7 +293,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/gated", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/gated", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -324,6 +329,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -331,7 +337,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/orphan",
+				Principal: testEntity(t, fleet, "agent/orphan"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -342,7 +348,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/orphan", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/orphan", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -359,7 +365,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("expected no create-sandbox calls (alias unresolvable), got %v", tracker.created)
 	}
-	if daemon.running["agent/orphan"] {
+	if daemon.running[testEntity(t, fleet, "agent/orphan")] {
 		t.Error("principal should not be running when room alias is unresolvable")
 	}
 }
@@ -380,6 +386,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -395,7 +402,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -407,7 +414,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -444,7 +451,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should be running after content matches")
 	}
 }
@@ -463,6 +470,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -477,7 +485,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/bugfix",
+				Principal: testEntity(t, fleet, "agent/bugfix"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -489,7 +497,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/bugfix", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/bugfix", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -522,6 +530,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -536,7 +545,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/security",
+				Principal: testEntity(t, fleet, "agent/security"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -548,7 +557,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/security", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/security", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -581,6 +590,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -595,7 +605,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/numeric",
+				Principal: testEntity(t, fleet, "agent/numeric"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -607,7 +617,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/numeric", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/numeric", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -640,6 +650,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -654,7 +665,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/secbug",
+				Principal: testEntity(t, fleet, "agent/secbug"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -666,7 +677,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/secbug", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/secbug", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -698,6 +709,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -712,7 +724,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/seconly",
+				Principal: testEntity(t, fleet, "agent/seconly"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -724,7 +736,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/seconly", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/seconly", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -756,6 +768,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -769,7 +782,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/empty",
+				Principal: testEntity(t, fleet, "agent/empty"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -781,7 +794,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/empty", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/empty", schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -817,6 +830,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -832,7 +846,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -844,7 +858,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -860,7 +874,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Fatalf("first reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Fatal("first reconcile: principal should be running")
 	}
 	tracker.mu.Unlock()
@@ -884,7 +898,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm, got %v", tracker.destroyed)
 	}
-	if daemon.running["iree/amdgpu/pm"] {
+	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("second reconcile: principal should no longer be running")
 	}
 }
@@ -904,6 +918,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -920,7 +935,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -931,17 +946,17 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 				},
 			},
 			{
-				Localpart: "sysadmin/test",
+				Principal: testEntity(t, fleet, "sysadmin/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				// No StartCondition — always runs.
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "sysadmin/test", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"sysadmin/test", schema.Credentials{
 		Ciphertext: "encrypted-sysadmin-credentials",
 	})
 
@@ -957,7 +972,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	if len(tracker.created) != 2 {
 		t.Fatalf("first reconcile: expected 2 create-sandbox calls, got %v", tracker.created)
 	}
-	if !daemon.running["iree/amdgpu/pm"] || !daemon.running["sysadmin/test"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] || !daemon.running[testEntity(t, fleet, "sysadmin/test")] {
 		t.Fatalf("first reconcile: both principals should be running, got %v", daemon.running)
 	}
 	tracker.mu.Unlock()
@@ -981,10 +996,10 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm only, got %v", tracker.destroyed)
 	}
-	if daemon.running["iree/amdgpu/pm"] {
+	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
 		t.Error("conditioned principal should have been stopped")
 	}
-	if !daemon.running["sysadmin/test"] {
+	if !daemon.running[testEntity(t, fleet, "sysadmin/test")] {
 		t.Error("unconditioned principal should still be running")
 	}
 }
@@ -1006,6 +1021,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1024,7 +1040,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/inference/teardown",
+				Principal: testEntity(t, fleet, "iree/amdgpu/inference/teardown"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1036,7 +1052,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/inference/teardown", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/inference/teardown", schema.Credentials{
 		Ciphertext: "encrypted-teardown-credentials",
 	})
 
@@ -1079,7 +1095,9 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
@@ -1093,7 +1111,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["iree/amdgpu/inference/teardown"] {
+	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/inference/teardown")] {
 		t.Fatal("teardown principal should be running")
 	}
 
@@ -1137,19 +1155,20 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/always",
+				Principal: testEntity(t, fleet, "agent/always"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/always", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/always", schema.Credentials{
 		Ciphertext: "encrypted-always-credentials",
 	})
 
@@ -1191,7 +1210,9 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
@@ -1205,7 +1226,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["agent/always"] {
+	if !daemon.running[testEntity(t, fleet, "agent/always")] {
 		t.Fatal("principal should be running")
 	}
 
@@ -1235,6 +1256,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1251,7 +1273,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/oncall",
+				Principal: testEntity(t, fleet, "agent/oncall"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1263,7 +1285,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/oncall", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/oncall", schema.Credentials{
 		Ciphertext: "encrypted-oncall-credentials",
 	})
 
@@ -1306,7 +1328,9 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
@@ -1320,7 +1344,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["agent/oncall"] {
+	if !daemon.running[testEntity(t, fleet, "agent/oncall")] {
 		t.Fatal("agent/oncall should be running after array containment match")
 	}
 
@@ -1383,6 +1407,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1397,7 +1422,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/deployer",
+				Principal: testEntity(t, fleet, "agent/deployer"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1409,7 +1434,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/deployer", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/deployer", schema.Credentials{
 		Ciphertext: "encrypted-deployer-credentials",
 	})
 
@@ -1425,7 +1450,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("first reconcile: expected no create-sandbox calls, got %v", tracker.created)
 	}
-	if daemon.running["agent/deployer"] {
+	if daemon.running[testEntity(t, fleet, "agent/deployer")] {
 		t.Error("first reconcile: agent/deployer should not be running")
 	}
 	tracker.mu.Unlock()
@@ -1448,7 +1473,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/deployer" {
 		t.Errorf("second reconcile: expected create-sandbox for agent/deployer, got %v", tracker.created)
 	}
-	if !daemon.running["agent/deployer"] {
+	if !daemon.running[testEntity(t, fleet, "agent/deployer")] {
 		t.Error("second reconcile: agent/deployer should be running after array now contains value")
 	}
 }
@@ -1470,6 +1495,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1483,7 +1509,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/worker",
+				Principal: testEntity(t, fleet, "agent/worker"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1495,7 +1521,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/worker", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/worker", schema.Credentials{
 		Ciphertext: "encrypted-worker-credentials",
 	})
 
@@ -1511,7 +1537,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/worker" {
 		t.Fatalf("first reconcile: expected create-sandbox for agent/worker, got %v", tracker.created)
 	}
-	if !daemon.running["agent/worker"] {
+	if !daemon.running[testEntity(t, fleet, "agent/worker")] {
 		t.Fatal("first reconcile: agent/worker should be running")
 	}
 	tracker.mu.Unlock()
@@ -1533,7 +1559,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "agent/worker" {
 		t.Errorf("second reconcile: expected destroy-sandbox for agent/worker, got %v", tracker.destroyed)
 	}
-	if daemon.running["agent/worker"] {
+	if daemon.running[testEntity(t, fleet, "agent/worker")] {
 		t.Error("second reconcile: agent/worker should not be running after array no longer contains value")
 	}
 }
@@ -1555,6 +1581,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1569,7 +1596,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/bugfixer",
+				Principal: testEntity(t, fleet, "agent/bugfixer"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1580,7 +1607,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				},
 			},
 			{
-				Localpart: "agent/frontend",
+				Principal: testEntity(t, fleet, "agent/frontend"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1591,7 +1618,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				},
 			},
 			{
-				Localpart: "agent/backend",
+				Principal: testEntity(t, fleet, "agent/backend"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1603,13 +1630,13 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/bugfixer", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/bugfixer", schema.Credentials{
 		Ciphertext: "encrypted-bugfixer-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/frontend", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/frontend", schema.Credentials{
 		Ciphertext: "encrypted-frontend-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/backend", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/backend", schema.Credentials{
 		Ciphertext: "encrypted-backend-credentials",
 	})
 
@@ -1644,13 +1671,13 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 		t.Error("agent/backend should NOT have been created (labels does not contain 'backend')")
 	}
 
-	if !daemon.running["agent/bugfixer"] {
+	if !daemon.running[testEntity(t, fleet, "agent/bugfixer")] {
 		t.Error("agent/bugfixer should be running")
 	}
-	if !daemon.running["agent/frontend"] {
+	if !daemon.running[testEntity(t, fleet, "agent/frontend")] {
 		t.Error("agent/frontend should be running")
 	}
-	if daemon.running["agent/backend"] {
+	if daemon.running[testEntity(t, fleet, "agent/backend")] {
 		t.Error("agent/backend should NOT be running")
 	}
 }
@@ -1673,6 +1700,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
 	machineName := machine.Localpart()
+	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
 
@@ -1686,7 +1714,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/infra",
+				Principal: testEntity(t, fleet, "agent/infra"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -1698,7 +1726,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/infra", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/infra", schema.Credentials{
 		Ciphertext: "encrypted-infra-credentials",
 	})
 
@@ -1714,7 +1742,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/infra" {
 		t.Fatalf("first reconcile: expected create-sandbox for agent/infra, got %v", tracker.created)
 	}
-	if !daemon.running["agent/infra"] {
+	if !daemon.running[testEntity(t, fleet, "agent/infra")] {
 		t.Fatal("first reconcile: agent/infra should be running")
 	}
 	tracker.mu.Unlock()
@@ -1738,7 +1766,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	if len(tracker.destroyed) != 0 {
 		t.Errorf("second reconcile: should not destroy (condition still met via array), destroyed %v", tracker.destroyed)
 	}
-	if !daemon.running["agent/infra"] {
+	if !daemon.running[testEntity(t, fleet, "agent/infra")] {
 		t.Error("second reconcile: agent/infra should still be running after field became array containing the value")
 	}
 }
@@ -1813,7 +1841,9 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	daemon.fleet = fleet
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil

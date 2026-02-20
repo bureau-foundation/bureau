@@ -18,6 +18,35 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// testFleet constructs the ref.Fleet used by all fleet controller tests.
+// Namespace "bureau", fleet "prod", server "bureau.local" —
+// localpart "bureau/fleet/prod".
+func testFleet(t *testing.T) ref.Fleet {
+	t.Helper()
+	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	if err != nil {
+		t.Fatalf("creating test namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(ns, "prod")
+	if err != nil {
+		t.Fatalf("creating test fleet: %v", err)
+	}
+	return fleet
+}
+
+// testEntity constructs a ref.Entity from a bare account localpart
+// (e.g., "service/stt/whisper") using the standard test fleet
+// (bureau/fleet/prod on bureau.local). The resulting user ID is
+// "@bureau/fleet/prod/service/stt/whisper:bureau.local".
+func testEntity(t *testing.T, accountLocalpart string) ref.Entity {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(testFleet(t), accountLocalpart)
+	if err != nil {
+		t.Fatalf("creating test entity %q: %v", accountLocalpart, err)
+	}
+	return entity
+}
+
 // newTestFleetController creates a FleetController suitable for unit
 // testing sync logic. The session is nil, which is safe for code paths
 // that don't make network calls.
@@ -34,6 +63,7 @@ func newTestFleetController(t *testing.T) *FleetController {
 	return &FleetController{
 		clock:         clock.Real(),
 		startedAt:     time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		fleet:         testFleet(t),
 		machines:      make(map[string]*machineState),
 		services:      make(map[string]*fleetServiceState),
 		definitions:   make(map[string]*schema.MachineDefinitionContent),
@@ -252,7 +282,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 				Labels: map[string]string{
@@ -260,7 +290,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 				},
 			},
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, "agent/iree/amdgpu-pm"),
 				Template:  "bureau/template:llm-agent",
 				AutoStart: true,
 			},
@@ -309,7 +339,7 @@ func TestProcessConfigRoomIgnoresNonFleetAssignments(t *testing.T) {
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, "agent/iree/amdgpu-pm"),
 				Template:  "bureau/template:llm-agent",
 				AutoStart: true,
 				// No fleet_managed label.
@@ -351,7 +381,7 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 		},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": {
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 			},
 		},
@@ -391,7 +421,7 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 	fc := newTestFleetController(t)
 
 	assignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
@@ -437,7 +467,7 @@ func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 	fc := newTestFleetController(t)
 
 	assignment := &schema.PrincipalAssignment{
-		Localpart: "service/worker",
+		Principal: testEntity(t, "service/worker"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 
@@ -496,7 +526,7 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -528,7 +558,7 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 	fc := newTestFleetController(t)
 
 	oldAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
@@ -555,7 +585,7 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			// No fleet-managed assignments left.
 			{
-				Localpart: "agent/coding/main",
+				Principal: testEntity(t, "agent/coding/main"),
 				Template:  "bureau/template:coding-agent",
 			},
 		},
@@ -658,7 +688,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 
 	// Set up a machine with a placed service and a pending echo.
 	placedAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
@@ -721,7 +751,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	fc := newTestFleetController(t)
 
 	placedAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
@@ -746,7 +776,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	echoContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -782,7 +812,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": {
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
@@ -800,7 +830,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	echoContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
@@ -902,7 +932,7 @@ func TestNoPendingEchoPassesThrough(t *testing.T) {
 	configContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},

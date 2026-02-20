@@ -79,6 +79,7 @@ func run() error {
 		principalName: boot.PrincipalName,
 		machineName:   boot.MachineName,
 		serverName:    boot.ServerName,
+		fleet:         boot.Fleet,
 		runDir:        boot.RunDir,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
@@ -144,6 +145,7 @@ type FleetController struct {
 	principalName string
 	machineName   string
 	serverName    string
+	fleet         ref.Fleet
 	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time

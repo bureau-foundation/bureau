@@ -10,7 +10,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -23,8 +22,10 @@ type ProvisionParams struct {
 	// Machine identifies the target machine.
 	Machine ref.Machine
 
-	// Principal is the principal's localpart (e.g., "iree/amdgpu/pm").
-	Principal string
+	// Principal identifies the target principal as a fleet-scoped entity
+	// reference. The Entity's UserID() is used as the MATRIX_USER_ID in the
+	// credential bundle, and Localpart() is used as the state event key.
+	Principal ref.Entity
 
 	// MachineRoomID is the Matrix room ID of the fleet's machine room
 	// where the machine's public key is published. This is the
@@ -80,8 +81,8 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	if params.Machine.IsZero() {
 		return nil, fmt.Errorf("machine is required")
 	}
-	if err := principal.ValidateLocalpart(params.Principal); err != nil {
-		return nil, fmt.Errorf("invalid principal name: %w", err)
+	if params.Principal.IsZero() {
+		return nil, fmt.Errorf("principal is required")
 	}
 	if len(params.Credentials) == 0 {
 		return nil, fmt.Errorf("credentials map is empty")
@@ -91,7 +92,6 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 
 	machineLocalpart := params.Machine.Localpart()
-	serverName := params.Machine.Server()
 
 	// Collect and sort credential key names for deterministic output.
 	credentialKeys := make([]string, 0, len(params.Credentials))
@@ -149,8 +149,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 		return nil, fmt.Errorf("resolving config room %q: %w", params.Machine.RoomAlias(), err)
 	}
 
-	// Publish the credentials state event.
-	principalUserID := principal.MatrixUserID(params.Principal, serverName)
+	// Publish the credentials state event. The state key is the
+	// fleet-scoped localpart, matching how the daemon reads credentials.
+	principalUserID := params.Principal.UserID()
 	credentialEvent := schema.Credentials{
 		Version:       schema.CredentialsVersion,
 		Principal:     principalUserID,
@@ -161,9 +162,10 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, params.Principal, credentialEvent)
+	stateKey := params.Principal.Localpart()
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, stateKey, credentialEvent)
 	if err != nil {
-		return nil, fmt.Errorf("publishing credentials for %q: %w", params.Principal, err)
+		return nil, fmt.Errorf("publishing credentials for %q: %w", principalUserID, err)
 	}
 
 	return &ProvisionResult{

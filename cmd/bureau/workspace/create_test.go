@@ -6,29 +6,54 @@ package workspace
 import (
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
+
+// testMachine constructs a ref.Machine for use in tests. The machine
+// localpart will be "bureau/fleet/default/machine/<name>" with server
+// "bureau.local".
+func testMachine(t *testing.T, name string) ref.Machine {
+	t.Helper()
+	namespace, err := ref.NewNamespace("bureau.local", "bureau")
+	if err != nil {
+		t.Fatalf("NewNamespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(namespace, "default")
+	if err != nil {
+		t.Fatalf("NewFleet: %v", err)
+	}
+	machine, err := ref.NewMachine(fleet, name)
+	if err != nil {
+		t.Fatalf("NewMachine: %v", err)
+	}
+	return machine
+}
 
 func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	t.Parallel()
 
+	machine := testMachine(t, "workstation")
 	const testRoomID = "!workspace123:bureau.local"
-	assignments := buildPrincipalAssignments(
+	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
 		"bureau.local",
-		"machine/workstation",
+		machine,
 		testRoomID,
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
 		},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	setup := assignments[0]
-	if setup.Localpart != "iree/amdgpu/inference/setup" {
-		t.Errorf("setup localpart = %q, want %q", setup.Localpart, "iree/amdgpu/inference/setup")
+	if setup.Principal.Name() != "iree/amdgpu/inference/setup" {
+		t.Errorf("setup principal name = %q, want %q", setup.Principal.Name(), "iree/amdgpu/inference/setup")
 	}
 	if setup.Labels["role"] != "setup" {
 		t.Errorf("setup role label = %q, want %q", setup.Labels["role"], "setup")
@@ -61,8 +86,8 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 	if setup.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
 		t.Errorf("setup WORKSPACE_ROOM_ID = %v, want %q", setup.Payload["WORKSPACE_ROOM_ID"], testRoomID)
 	}
-	if setup.Payload["MACHINE"] != "machine/workstation" {
-		t.Errorf("setup MACHINE = %v, want %q", setup.Payload["MACHINE"], "machine/workstation")
+	if setup.Payload["MACHINE"] != machine.Localpart() {
+		t.Errorf("setup MACHINE = %v, want %q", setup.Payload["MACHINE"], machine.Localpart())
 	}
 	if len(setup.Payload) != 5 {
 		t.Errorf("setup payload should have exactly 5 keys (pipeline_ref, REPOSITORY, PROJECT, WORKSPACE_ROOM_ID, MACHINE), got %d: %v",
@@ -73,19 +98,23 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 	t.Parallel()
 
+	machine := testMachine(t, "workstation")
 	const testRoomID = "!workspace456:bureau.local"
-	assignments := buildPrincipalAssignments(
+	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
 		"bureau.local",
-		"machine/workstation",
+		machine,
 		testRoomID,
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
 		},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	// Expect: setup + 1 agent + teardown = 3 principals.
 	if len(assignments) != 3 {
@@ -95,8 +124,8 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 
 	// Verify the teardown principal is the last one.
 	teardown := assignments[len(assignments)-1]
-	if teardown.Localpart != "iree/amdgpu/inference/teardown" {
-		t.Errorf("teardown localpart = %q, want %q", teardown.Localpart, "iree/amdgpu/inference/teardown")
+	if teardown.Principal.Name() != "iree/amdgpu/inference/teardown" {
+		t.Errorf("teardown principal name = %q, want %q", teardown.Principal.Name(), "iree/amdgpu/inference/teardown")
 	}
 	if teardown.Template != "bureau/template:base" {
 		t.Errorf("teardown template = %q, want %q", teardown.Template, "bureau/template:base")
@@ -123,8 +152,8 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 	if teardown.Payload["WORKSPACE_ROOM_ID"] != testRoomID {
 		t.Errorf("teardown WORKSPACE_ROOM_ID = %v, want %q", teardown.Payload["WORKSPACE_ROOM_ID"], testRoomID)
 	}
-	if teardown.Payload["MACHINE"] != "machine/workstation" {
-		t.Errorf("teardown MACHINE = %v, want %q", teardown.Payload["MACHINE"], "machine/workstation")
+	if teardown.Payload["MACHINE"] != machine.Localpart() {
+		t.Errorf("teardown MACHINE = %v, want %q", teardown.Payload["MACHINE"], machine.Localpart())
 	}
 	if len(teardown.Payload) != 4 {
 		t.Errorf("teardown payload should have exactly 4 keys (pipeline_ref, PROJECT, WORKSPACE_ROOM_ID, MACHINE), got %d: %v",
@@ -135,18 +164,22 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
 	t.Parallel()
 
-	assignments := buildPrincipalAssignments(
+	machine := testMachine(t, "workstation")
+	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
 		"bureau.local",
-		"machine/workstation",
+		machine,
 		"!room:bureau.local",
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
 		},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	setup := assignments[0]
 	if setup.StartCondition == nil {
@@ -171,18 +204,22 @@ func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
 func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 	t.Parallel()
 
-	assignments := buildPrincipalAssignments(
+	machine := testMachine(t, "workstation")
+	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
 		"bureau.local",
-		"machine/workstation",
+		machine,
 		"!room:bureau.local",
 		map[string]string{
 			"repository": "https://github.com/iree-org/iree.git",
 			"branch":     "main",
 		},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	teardown := assignments[len(assignments)-1]
 	if teardown.StartCondition == nil {
@@ -207,15 +244,19 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 	t.Parallel()
 
-	assignments := buildPrincipalAssignments(
+	machine := testMachine(t, "workstation")
+	assignments, err := buildPrincipalAssignments(
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		2,
 		"bureau.local",
-		"machine/workstation",
+		machine,
 		"!room:bureau.local",
 		map[string]string{"branch": "main"},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	// setup (index 0) + 2 agents (1, 2) + teardown (3)
 	if len(assignments) != 4 {
@@ -258,15 +299,19 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 func TestBuildPrincipalAssignments_ZeroAgents(t *testing.T) {
 	t.Parallel()
 
-	assignments := buildPrincipalAssignments(
+	machine := testMachine(t, "laptop")
+	assignments, err := buildPrincipalAssignments(
 		"docs/writing",
 		"bureau/template:base",
 		0,
 		"bureau.local",
-		"machine/laptop",
+		machine,
 		"!room:bureau.local",
 		map[string]string{"branch": "main"},
 	)
+	if err != nil {
+		t.Fatalf("buildPrincipalAssignments: %v", err)
+	}
 
 	// setup + teardown, no agents
 	if len(assignments) != 2 {
@@ -281,11 +326,11 @@ func TestBuildPrincipalAssignments_ZeroAgents(t *testing.T) {
 	}
 }
 
-// localparts extracts the Localpart field from each assignment for error messages.
+// localparts extracts the Principal name from each assignment for error messages.
 func localparts(assignments []schema.PrincipalAssignment) []string {
 	result := make([]string, len(assignments))
 	for index, assignment := range assignments {
-		result[index] = assignment.Localpart
+		result[index] = assignment.Principal.Name()
 	}
 	return result
 }

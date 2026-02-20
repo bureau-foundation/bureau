@@ -42,8 +42,18 @@ func ParseService(localpart, server string) (Service, error) {
 	return Service{entity: ent}, nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler.
+// Entity converts this Service to a generic Entity reference. This is a
+// zero-cost type conversion — Machine, Service, and Entity all embed the
+// same unexported entity struct.
+func (s Service) Entity() Entity { return Entity{s.entity} }
+
+// UnmarshalText implements encoding.TextUnmarshaler. Empty input
+// produces a zero value.
 func (s *Service) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*s = Service{}
+		return nil
+	}
 	parsed, err := ParseServiceUserID(string(data))
 	if err != nil {
 		return fmt.Errorf("unmarshal Service: %w", err)

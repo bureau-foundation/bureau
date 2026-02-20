@@ -15,7 +15,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/sandbox"
@@ -37,9 +37,13 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
 	}
 
-	// Determine socket paths for this principal.
-	socketPath := principal.RunDirSocketPath(l.runDir, principalLocalpart)
-	adminSocketPath := principal.RunDirAdminSocketPath(l.runDir, principalLocalpart)
+	// Construct a typed ref from the account localpart for socket path derivation.
+	principalRef, err := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), principalLocalpart)
+	if err != nil {
+		return 0, fmt.Errorf("parsing principal %q: %w", principalLocalpart, err)
+	}
+	socketPath := principalRef.SocketPath(l.fleetRunDir)
+	adminSocketPath := principalRef.AdminSocketPath(l.fleetRunDir)
 
 	// Create a temp directory for the proxy config.
 	sanitizedName := strings.ReplaceAll(principalLocalpart, "/", "-")
@@ -93,7 +97,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Write credential payload to the proxy's stdin and close.
 	if credentials != nil {
-		payload, err := l.buildCredentialPayload(principalLocalpart, credentials, grants)
+		payload, err := l.buildCredentialPayload(principalRef, credentials, grants)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -186,7 +190,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 // structure expected by the proxy's PipeCredentialSource. The Matrix-specific
 // keys (MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_USER_ID) are extracted
 // into top-level fields; everything else goes under "credentials".
-func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials map[string]string, grants []schema.Grant) (*ipc.ProxyCredentialPayload, error) {
+func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credentials map[string]string, grants []schema.Grant) (*ipc.ProxyCredentialPayload, error) {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		// Fall back to the launcher's homeserver URL (the principal is
@@ -196,14 +200,13 @@ func (l *Launcher) buildCredentialPayload(principalLocalpart string, credentials
 
 	matrixToken := credentials["MATRIX_TOKEN"]
 	if matrixToken == "" {
-		return nil, fmt.Errorf("credential bundle missing MATRIX_TOKEN for principal %q", principalLocalpart)
+		return nil, fmt.Errorf("credential bundle missing MATRIX_TOKEN for principal %q", principalEntity.Localpart())
 	}
 
 	matrixUserID := credentials["MATRIX_USER_ID"]
 	if matrixUserID == "" {
 		// Default to the principal's canonical Matrix user ID.
-		// XXX: should use a ref type once IPC carries entity type information.
-		matrixUserID = principal.MatrixUserID(principalLocalpart, l.machine.Server())
+		matrixUserID = principalEntity.UserID()
 	}
 
 	remaining := make(map[string]string, len(credentials))
@@ -270,7 +273,11 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	}
 
 	// Determine the proxy socket path (same as spawnProxy uses).
-	proxySocketPath := principal.RunDirSocketPath(l.runDir, principalLocalpart)
+	principalRef, err := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), principalLocalpart)
+	if err != nil {
+		return nil, fmt.Errorf("parsing principal %q: %w", principalLocalpart, err)
+	}
+	proxySocketPath := principalRef.SocketPath(l.fleetRunDir)
 
 	// Convert the SandboxSpec to a sandbox.Profile.
 	profile := specToProfile(spec, proxySocketPath)

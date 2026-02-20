@@ -22,7 +22,14 @@ var decMode cbor.DecMode
 
 func init() {
 	var err error
-	encMode, err = cbor.CoreDetEncOptions().EncMode()
+
+	encOptions := cbor.CoreDetEncOptions()
+	// Types implementing encoding.TextMarshaler (ref.Entity, ref.Fleet,
+	// ref.RoomID, etc.) serialize as CBOR text strings via MarshalText.
+	// Without this, struct fields with unexported data (like ref.Entity)
+	// would serialize as empty CBOR maps, losing their identity.
+	encOptions.TextMarshaler = cbor.TextMarshalerTextString
+	encMode, err = encOptions.EncMode()
 	if err != nil {
 		panic("codec: CBOR encoder initialization failed: " + err.Error())
 	}
@@ -37,6 +44,11 @@ func init() {
 		// affects any-typed targets — struct field decoding is
 		// unaffected.
 		DefaultMapType: reflect.TypeOf(map[string]any(nil)),
+		// Types implementing encoding.TextUnmarshaler (ref.Entity,
+		// ref.Fleet, ref.RoomID, etc.) deserialize from CBOR text
+		// strings via UnmarshalText. Mirrors the TextMarshaler setting
+		// above for round-trip correctness.
+		TextUnmarshaler: cbor.TextUnmarshalerTextString,
 	}.DecMode()
 	if err != nil {
 		panic("codec: CBOR decoder initialization failed: " + err.Error())

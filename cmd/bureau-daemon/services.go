@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -70,7 +71,7 @@ func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, upda
 
 		// Skip entries with empty principal — this means the service has
 		// been deregistered (the state event was redacted or cleared).
-		if service.Principal == "" {
+		if service.Principal.IsZero() {
 			continue
 		}
 
@@ -143,7 +144,7 @@ func stringSlicesEqual(a, b []string) bool {
 func (d *Daemon) localServices() map[string]*schema.Service {
 	local := make(map[string]*schema.Service)
 	for localpart, service := range d.services {
-		if service.Machine == d.machine.UserID() {
+		if service.Machine == d.machine {
 			local[localpart] = service
 		}
 	}
@@ -155,7 +156,7 @@ func (d *Daemon) localServices() map[string]*schema.Service {
 func (d *Daemon) remoteServices() map[string]*schema.Service {
 	remote := make(map[string]*schema.Service)
 	for localpart, service := range d.services {
-		if service.Machine != d.machine.UserID() {
+		if service.Machine != d.machine {
 			remote[localpart] = service
 		}
 	}
@@ -169,12 +170,12 @@ func (d *Daemon) remoteServices() map[string]*schema.Service {
 // a snapshot avoids concurrent map iteration with background goroutines
 // (watchSandboxExit, rollbackPrincipal) that modify d.running under
 // reconcileMu.Lock.
-func (d *Daemon) runningConsumers() []string {
+func (d *Daemon) runningConsumers() []ref.Entity {
 	d.reconcileMu.RLock()
 	defer d.reconcileMu.RUnlock()
-	consumers := make([]string, 0, len(d.running))
-	for localpart := range d.running {
-		consumers = append(consumers, localpart)
+	consumers := make([]ref.Entity, 0, len(d.running))
+	for principal := range d.running {
+		consumers = append(consumers, principal)
 	}
 	return consumers
 }
@@ -197,7 +198,7 @@ func (d *Daemon) runningConsumers() []string {
 // For remote services (provider on another machine): routes through the
 // relay socket when transport is configured. Consumer proxies send requests
 // to the relay, which forwards them to the correct peer daemon.
-func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, removed, updated []string) {
+func (d *Daemon) reconcileServices(ctx context.Context, consumers []ref.Entity, added, removed, updated []string) {
 	if len(added) == 0 && len(removed) == 0 && len(updated) == 0 {
 		return
 	}
@@ -208,17 +209,8 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, remove
 		service := d.services[localpart]
 		serviceName := principal.ProxyServiceName(localpart)
 
-		if service.Machine == d.machine.UserID() {
-			providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
-			if err != nil {
-				d.logger.Error("cannot derive provider socket from service principal",
-					"service", localpart,
-					"principal", service.Principal,
-					"error", err,
-				)
-				continue
-			}
-			providerSocket := principal.RunDirSocketPath(d.runDir, providerLocalpart)
+		if service.Machine == d.machine {
+			providerSocket := service.Principal.SocketPath(d.fleetRunDir)
 
 			d.logger.Info("local service registered, configuring proxy routes",
 				"service", localpart,
@@ -273,17 +265,8 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, remove
 		service := d.services[localpart]
 		serviceName := principal.ProxyServiceName(localpart)
 
-		if service.Machine == d.machine.UserID() {
-			providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
-			if err != nil {
-				d.logger.Error("cannot derive provider socket from service principal",
-					"service", localpart,
-					"principal", service.Principal,
-					"error", err,
-				)
-				continue
-			}
-			providerSocket := principal.RunDirSocketPath(d.runDir, providerLocalpart)
+		if service.Machine == d.machine {
+			providerSocket := service.Principal.SocketPath(d.fleetRunDir)
 
 			d.logger.Info("local service updated, reconfiguring proxy routes",
 				"service", localpart,
@@ -330,12 +313,12 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers, added, remove
 // call pointing at the provider's Unix socket. The consumers slice is a
 // snapshot of d.running taken under reconcileMu.RLock, so this function
 // does not need to hold the lock during the HTTP calls.
-func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []string, serviceName, providerSocket string) {
-	for _, consumerLocalpart := range consumers {
-		if err := d.registerProxyRoute(ctx, consumerLocalpart, serviceName, providerSocket); err != nil {
+func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []ref.Entity, serviceName, providerSocket string) {
+	for _, consumer := range consumers {
+		if err := d.registerProxyRoute(ctx, consumer, serviceName, providerSocket); err != nil {
 			d.logger.Error("failed to register service on consumer proxy",
 				"service", serviceName,
-				"consumer", consumerLocalpart,
+				"consumer", consumer,
 				"error", err,
 			)
 		}
@@ -345,12 +328,12 @@ func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []string, se
 // removeProxyRoute unregisters a service from each consumer proxy in the
 // snapshot. The consumers slice is a snapshot of d.running taken under
 // reconcileMu.RLock.
-func (d *Daemon) removeProxyRoute(ctx context.Context, consumers []string, serviceName string) {
-	for _, consumerLocalpart := range consumers {
-		if err := d.unregisterProxyRoute(ctx, consumerLocalpart, serviceName); err != nil {
+func (d *Daemon) removeProxyRoute(ctx context.Context, consumers []ref.Entity, serviceName string) {
+	for _, consumer := range consumers {
+		if err := d.unregisterProxyRoute(ctx, consumer, serviceName); err != nil {
 			d.logger.Error("failed to unregister service from consumer proxy",
 				"service", serviceName,
-				"consumer", consumerLocalpart,
+				"consumer", consumer,
 				"error", err,
 			)
 		}
@@ -360,12 +343,12 @@ func (d *Daemon) removeProxyRoute(ctx context.Context, consumers []string, servi
 // configureConsumerProxy registers all known service routes on a single
 // consumer's proxy. Called after a new sandbox starts to ensure it can reach
 // all services that were discovered before it started.
-func (d *Daemon) configureConsumerProxy(ctx context.Context, consumerLocalpart string) {
+func (d *Daemon) configureConsumerProxy(ctx context.Context, consumer ref.Entity) {
 	for serviceName, providerSocket := range d.proxyRoutes {
-		if err := d.registerProxyRoute(ctx, consumerLocalpart, serviceName, providerSocket); err != nil {
+		if err := d.registerProxyRoute(ctx, consumer, serviceName, providerSocket); err != nil {
 			d.logger.Error("failed to register service on new consumer proxy",
 				"service", serviceName,
-				"consumer", consumerLocalpart,
+				"consumer", consumer,
 				"error", err,
 			)
 		}
@@ -377,12 +360,12 @@ func (d *Daemon) configureConsumerProxy(ctx context.Context, consumerLocalpart s
 // field — external APIs (like Anthropic, OpenAI) that the proxy should forward
 // to with credential injection. Called after a new sandbox starts or when an
 // adopted principal's proxy is configured.
-func (d *Daemon) configureExternalProxyServices(ctx context.Context, consumerLocalpart string, proxyServices map[string]schema.TemplateProxyService) {
+func (d *Daemon) configureExternalProxyServices(ctx context.Context, consumer ref.Entity, proxyServices map[string]schema.TemplateProxyService) {
 	for name, service := range proxyServices {
-		if err := d.registerExternalProxyService(ctx, consumerLocalpart, name, service); err != nil {
+		if err := d.registerExternalProxyService(ctx, consumer, name, service); err != nil {
 			d.logger.Error("failed to register external proxy service",
 				"service", name,
-				"consumer", consumerLocalpart,
+				"consumer", consumer,
 				"upstream", service.Upstream,
 				"error", err,
 			)
@@ -394,8 +377,8 @@ func (d *Daemon) configureExternalProxyServices(ctx context.Context, consumerLoc
 // on a consumer's proxy via the admin API (PUT /v1/admin/services/{name}).
 // Unlike registerProxyRoute (which routes to another principal's proxy socket),
 // this registers an internet-facing upstream with credential injection headers.
-func (d *Daemon) registerExternalProxyService(ctx context.Context, consumerLocalpart, serviceName string, service schema.TemplateProxyService) error {
-	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+func (d *Daemon) registerExternalProxyService(ctx context.Context, consumer ref.Entity, serviceName string, service schema.TemplateProxyService) error {
+	adminSocket := d.adminSocketPathFunc(consumer)
 	client := proxyAdminClient(adminSocket)
 
 	body, err := json.Marshal(adminServiceRegistration{
@@ -428,7 +411,7 @@ func (d *Daemon) registerExternalProxyService(ctx context.Context, consumerLocal
 
 	d.logger.Info("registered external proxy service",
 		"service", serviceName,
-		"consumer", consumerLocalpart,
+		"consumer", consumer,
 		"upstream", service.Upstream,
 	)
 	return nil
@@ -474,8 +457,8 @@ type adminServiceRegistration struct {
 
 // registerProxyRoute registers a single service on a single consumer's proxy
 // via the admin API (PUT /v1/admin/services/{name}).
-func (d *Daemon) registerProxyRoute(ctx context.Context, consumerLocalpart, serviceName, providerSocket string) error {
-	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+func (d *Daemon) registerProxyRoute(ctx context.Context, consumer ref.Entity, serviceName, providerSocket string) error {
+	adminSocket := d.adminSocketPathFunc(consumer)
 	client := proxyAdminClient(adminSocket)
 
 	// The upstream URL includes the path prefix so requests are forwarded
@@ -518,17 +501,17 @@ func (d *Daemon) registerProxyRoute(ctx context.Context, consumerLocalpart, serv
 // so this function does not need to hold the lock during the HTTP calls.
 // Called after syncServiceDirectory detects changes and after new consumers
 // start.
-func (d *Daemon) pushServiceDirectory(ctx context.Context, consumers []string) {
+func (d *Daemon) pushServiceDirectory(ctx context.Context, consumers []ref.Entity) {
 	if len(consumers) == 0 {
 		return
 	}
 
 	directory := d.buildServiceDirectory()
 
-	for _, consumerLocalpart := range consumers {
-		if err := d.pushDirectoryToProxy(ctx, consumerLocalpart, directory); err != nil {
+	for _, consumer := range consumers {
+		if err := d.pushDirectoryToProxy(ctx, consumer, directory); err != nil {
 			d.logger.Error("failed to push service directory to consumer proxy",
-				"consumer", consumerLocalpart,
+				"consumer", consumer,
 				"error", err,
 			)
 		}
@@ -538,8 +521,8 @@ func (d *Daemon) pushServiceDirectory(ctx context.Context, consumers []string) {
 // putProxyAdmin sends a JSON PUT request to a principal's proxy admin API.
 // Used by push-to-proxy functions (directory, authorization) which differ
 // only in the endpoint path and payload type.
-func (d *Daemon) putProxyAdmin(ctx context.Context, localpart, path string, payload any) error {
-	adminSocket := d.adminSocketPathFunc(localpart)
+func (d *Daemon) putProxyAdmin(ctx context.Context, principal ref.Entity, path string, payload any) error {
+	adminSocket := d.adminSocketPathFunc(principal)
 	client := proxyAdminClient(adminSocket)
 
 	body, err := json.Marshal(payload)
@@ -572,8 +555,8 @@ func (d *Daemon) putProxyAdmin(ctx context.Context, localpart, path string, payl
 // pushDirectoryToProxy pushes the service directory to a single consumer's
 // proxy via the admin API (PUT /v1/admin/directory). Called when a new
 // sandbox starts and after the directory changes.
-func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumerLocalpart string, directory []adminDirectoryEntry) error {
-	return d.putProxyAdmin(ctx, consumerLocalpart, "/v1/admin/directory", directory)
+func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumer ref.Entity, directory []adminDirectoryEntry) error {
+	return d.putProxyAdmin(ctx, consumer, "/v1/admin/directory", directory)
 }
 
 // buildServiceDirectory converts the daemon's service map into a wire-format
@@ -583,8 +566,8 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 	for localpart, service := range d.services {
 		entries = append(entries, adminDirectoryEntry{
 			Localpart:    localpart,
-			Principal:    service.Principal,
-			Machine:      service.Machine,
+			Principal:    service.Principal.UserID(),
+			Machine:      service.Machine.UserID(),
 			Protocol:     service.Protocol,
 			Description:  service.Description,
 			Capabilities: service.Capabilities,
@@ -612,8 +595,8 @@ type adminDirectoryEntry struct {
 // single principal's proxy via the admin API (PUT /v1/admin/authorization).
 // Called when a new sandbox starts and when the principal's grants change at
 // runtime (config change, temporal grant arrival/expiry).
-func (d *Daemon) pushAuthorizationToProxy(ctx context.Context, localpart string, grants []schema.Grant) error {
-	return d.putProxyAdmin(ctx, localpart, "/v1/admin/authorization", grants)
+func (d *Daemon) pushAuthorizationToProxy(ctx context.Context, principal ref.Entity, grants []schema.Grant) error {
+	return d.putProxyAdmin(ctx, principal, "/v1/admin/authorization", grants)
 }
 
 // synthesizeGrants converts the shorthand MatrixPolicy and ServiceVisibility
@@ -659,8 +642,8 @@ func (d *Daemon) resolveGrantsForProxy(localpart string, assignment schema.Princ
 
 // unregisterProxyRoute removes a single service from a single consumer's proxy
 // via the admin API (DELETE /v1/admin/services/{name}).
-func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumerLocalpart, serviceName string) error {
-	adminSocket := d.adminSocketPathFunc(consumerLocalpart)
+func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumer ref.Entity, serviceName string) error {
+	adminSocket := d.adminSocketPathFunc(consumer)
 	client := proxyAdminClient(adminSocket)
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodDelete,
@@ -714,38 +697,28 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		return
 	}
 
-	if binding.Principal == "" {
+	if binding.Principal.IsZero() {
 		d.logger.Debug("artifact-cache binding has empty principal, clearing upstream")
 		d.stopTunnel("upstream")
 		d.pushUpstreamConfig(ctx, "")
 		return
 	}
 
-	// Look up the service in the directory to find which machine
-	// runs it.
-	cacheLocalpart, err := principal.LocalpartFromMatrixID(binding.Principal)
-	if err != nil {
-		d.logger.Error("invalid shared cache principal",
-			"principal", binding.Principal,
-			"error", err,
-		)
-		return
-	}
-
-	cacheService, exists := d.services[cacheLocalpart]
+	// Look up the service in the directory to find which machine runs it.
+	cacheService, exists := d.services[binding.Principal.Localpart()]
 	if !exists {
 		d.logger.Warn("artifact-cache binding references unknown service",
 			"principal", binding.Principal,
-			"localpart", cacheLocalpart,
+			"localpart", binding.Principal.Localpart(),
 		)
 		return
 	}
 
-	if cacheService.Machine == d.machine.UserID() {
+	if cacheService.Machine == d.machine {
 		// Local shared cache: derive socket path directly. Stop any
 		// existing tunnel from a previous remote cache.
 		d.stopTunnel("upstream")
-		socketPath := principal.RunDirSocketPath(d.runDir, cacheLocalpart)
+		socketPath := binding.Principal.SocketPath(d.fleetRunDir)
 		d.logger.Info("discovered local shared cache",
 			"principal", binding.Principal,
 			"socket", socketPath,
@@ -762,7 +735,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 			return
 		}
 
-		peerAddress, ok := d.peerAddresses[cacheService.Machine]
+		peerAddress, ok := d.peerAddresses[cacheService.Machine.UserID()]
 		if !ok || peerAddress == "" {
 			d.logger.Warn("discovered remote shared cache but no transport address for its machine",
 				"principal", binding.Principal,
@@ -772,7 +745,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		}
 
 		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "artifact-cache.sock")
-		if err := d.startTunnel("upstream", cacheLocalpart, peerAddress, tunnelSocketPath); err != nil {
+		if err := d.startTunnel("upstream", binding.Principal.Localpart(), peerAddress, tunnelSocketPath); err != nil {
 			d.logger.Error("failed to start tunnel socket for shared cache",
 				"principal", binding.Principal,
 				"peer_address", peerAddress,
@@ -800,21 +773,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 	// Find the local artifact service socket. Search the service
 	// directory for a local service with the "artifact" capability.
-	var artifactSocketPath string
-	for localpart, svc := range d.services {
-		if svc.Machine != d.machine.UserID() {
-			continue
-		}
-		for _, cap := range svc.Capabilities {
-			if cap == "content-addressed-store" {
-				artifactSocketPath = principal.RunDirSocketPath(d.runDir, localpart)
-				break
-			}
-		}
-		if artifactSocketPath != "" {
-			break
-		}
-	}
+	artifactSocketPath := d.findLocalArtifactSocket()
 	if artifactSocketPath == "" {
 		d.logger.Debug("no local artifact service found to push upstream config to")
 		return
@@ -917,23 +876,13 @@ func (d *Daemon) discoverPushTargets(ctx context.Context) {
 
 		// Skip our own local artifact service — no point pushing
 		// to ourselves.
-		if service.Machine == d.machine.UserID() {
+		if service.Machine == d.machine {
 			continue
 		}
 
-		// Extract the machine localpart from the machine user ID
-		// for use as the push target key.
-		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
-		if err != nil {
-			d.logger.Error("invalid machine in service entry",
-				"service", localpart,
-				"machine", service.Machine,
-				"error", err,
-			)
-			continue
-		}
+		machineLocalpart := service.Machine.Localpart()
 
-		peerAddress, ok := d.peerAddresses[service.Machine]
+		peerAddress, ok := d.peerAddresses[service.Machine.UserID()]
 		if !ok || peerAddress == "" {
 			d.logger.Debug("skipping push target: no transport address",
 				"service", localpart,
@@ -996,22 +945,7 @@ func (d *Daemon) discoverPushTargets(ctx context.Context) {
 // pushPushTargetsConfig signs a push targets configuration and pushes
 // it to the local artifact service via the set-push-targets action.
 func (d *Daemon) pushPushTargetsConfig(ctx context.Context, targets map[string]servicetoken.PushTarget) {
-	// Find the local artifact service socket.
-	var artifactSocketPath string
-	for localpart, service := range d.services {
-		if service.Machine != d.machine.UserID() {
-			continue
-		}
-		for _, cap := range service.Capabilities {
-			if cap == "content-addressed-store" {
-				artifactSocketPath = principal.RunDirSocketPath(d.runDir, localpart)
-				break
-			}
-		}
-		if artifactSocketPath != "" {
-			break
-		}
-	}
+	artifactSocketPath := d.findLocalArtifactSocket()
 	if artifactSocketPath == "" {
 		d.logger.Debug("no local artifact service found to push push-targets config to")
 		return

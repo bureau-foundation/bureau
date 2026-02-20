@@ -44,7 +44,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	templateRef := publishTestAgentTemplate(t, admin, machine, "payload-test-agent")
 
 	// Register the principal and push credentials.
-	agent := registerPrincipal(t, "agent/payload-test", "payload-test-password")
+	agent := registerFleetPrincipal(t, fleet, "agent/payload-test", "payload-test-password")
 	pushCredentials(t, admin, machine, agent)
 	joinConfigRoom(t, admin, machine.ConfigRoomID, agent)
 
@@ -66,7 +66,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	})
 
 	// Wait for proxy socket (proves sandbox creation).
-	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
+	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
@@ -179,7 +179,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	templateRef := publishTestAgentTemplate(t, admin, machine, "payload-empty-agent")
 
 	// Register the principal and push credentials.
-	agent := registerPrincipal(t, "agent/payload-empty", "payload-empty-password")
+	agent := registerFleetPrincipal(t, fleet, "agent/payload-empty", "payload-empty-password")
 	pushCredentials(t, admin, machine, agent)
 	joinConfigRoom(t, admin, machine.ConfigRoomID, agent)
 
@@ -196,7 +196,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	})
 
 	// Wait for proxy socket (proves sandbox creation).
-	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
+	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 

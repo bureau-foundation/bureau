@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -57,7 +56,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID, eventID 
 	}
 
 	// Build the pipeline localpart for the ephemeral executor sandbox.
-	localpart := worktreeLocalpart("add", worktreePath)
+	localpart := d.worktreeLocalpart()
 	pipelineRef := "bureau/pipeline:dev-worktree-init"
 
 	// Build a synthetic command with pipeline variables as parameters.
@@ -141,7 +140,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID, event
 	}
 
 	// Build the pipeline localpart for the ephemeral executor sandbox.
-	localpart := worktreeLocalpart("remove", worktreePath)
+	localpart := d.worktreeLocalpart()
 	pipelineRef := "bureau/pipeline:dev-worktree-deinit"
 
 	pipelineCommand := schema.CommandMessage{
@@ -195,13 +194,13 @@ func validateWorktreePath(path string) error {
 	return principal.ValidateRelativePath(path, "worktree path")
 }
 
-// worktreeLocalpart generates a unique principal localpart for a worktree
-// pipeline execution. Follows the same pattern as pipelineLocalpart but
-// uses a "worktree/<operation>/" prefix for readability.
-func worktreeLocalpart(operation, path string) string {
-	timestamp := time.Now().UnixMilli()
-	label := sanitizeLabel(path)
-	return fmt.Sprintf("worktree/%s/%s/%d", operation, label, timestamp)
+// worktreeLocalpart generates a unique principal localpart for a
+// worktree pipeline execution. Uses the daemon's shared ephemeral
+// counter for short, unique IDs. The operation and worktree path
+// are logged separately — the localpart just needs uniqueness.
+func (d *Daemon) worktreeLocalpart() string {
+	id := d.ephemeralCounter.Add(1)
+	return fmt.Sprintf("worktree/%d", id)
 }
 
 // requireDirectory checks that a path exists and is a directory. Returns

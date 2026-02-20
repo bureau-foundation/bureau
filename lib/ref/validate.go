@@ -140,6 +140,14 @@ func ExtractEntityName(localpart string) (entityType, entityName string, err err
 	return "", "", fmt.Errorf("cannot extract entity from localpart %q: expected entityType/entityName or namespace/fleet/name/entityType/entityName", localpart)
 }
 
+// MatrixUserID constructs a Matrix user ID (@localpart:server) from
+// its parts. Use this for non-Bureau Matrix accounts (admin users,
+// raw usernames) that don't have fleet-scoped structure. For Bureau
+// entities, use Entity.UserID() instead.
+func MatrixUserID(localpart, server string) string {
+	return "@" + localpart + ":" + server
+}
+
 // ServerFromUserID extracts the Matrix server name from a user ID
 // (@localpart:server). This is the standard way for CLI commands to
 // determine the server name from a connected session.

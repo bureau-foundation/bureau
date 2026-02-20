@@ -266,11 +266,11 @@ func Bootstrap(ctx context.Context, config BootstrapConfig) (*BootstrapResult, f
 		Clock:     clk,
 	}
 
-	socketPath := principal.RunDirSocketPath(flags.RunDir, flags.PrincipalName)
+	socketPath := serviceRef.SocketPath(fleet.RunDir(flags.RunDir))
 
 	// Register in the fleet service room so daemons can discover us.
 	if err := Register(ctx, session, serviceRoomID, serviceRef, Registration{
-		Machine:      machineRef.UserID(),
+		Machine:      machineRef,
 		Protocol:     "cbor",
 		Description:  config.Description,
 		Capabilities: config.Capabilities,

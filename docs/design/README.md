@@ -61,6 +61,9 @@ a Matrix account and a unix socket API.
   placement, machine lifecycle, HA, batch scheduling.
 - **[authorization.md](authorization.md)** — Access control: grants,
   denials, allowances, temporal scoping, credential provisioning.
+- **[telemetry.md](telemetry.md)** — Fleet-wide observability: trace
+  collection, metric aggregation, log correlation, Prometheus
+  integration.
 
 - **[agent-context.md](agent-context.md)** — Agent understanding as a
   first-class artifact: context commits, delta chains, forking,

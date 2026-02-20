@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -421,8 +422,15 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 		return
 	}
 
+	entity, err := ref.NewEntityFromAccountLocalpart(w.daemon.fleet, serviceLocalpart)
+	if err != nil {
+		w.logger.Error("cannot parse service localpart for HA assignment",
+			"service", serviceLocalpart, "error", err)
+		return
+	}
+
 	assignment := schema.PrincipalAssignment{
-		Localpart:         serviceLocalpart,
+		Principal:         entity,
 		Template:          definition.Template,
 		AutoStart:         true,
 		Payload:           payload,
@@ -471,7 +479,7 @@ func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalp
 	// Check if the assignment already exists.
 	found := false
 	for index := range config.Principals {
-		if config.Principals[index].Localpart == serviceLocalpart {
+		if config.Principals[index].Principal.AccountLocalpart() == serviceLocalpart {
 			config.Principals[index] = assignment
 			found = true
 			break

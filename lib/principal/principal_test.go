@@ -140,76 +140,6 @@ func TestValidateRelativePath(t *testing.T) {
 	}
 }
 
-func TestMatrixUserID(t *testing.T) {
-	tests := []struct {
-		name       string
-		localpart  string
-		serverName string
-		want       string
-	}{
-		{
-			name:       "simple",
-			localpart:  "alice",
-			serverName: "bureau.local",
-			want:       "@alice:bureau.local",
-		},
-		{
-			name:       "hierarchical",
-			localpart:  "iree/amdgpu/pm",
-			serverName: "bureau.local",
-			want:       "@iree/amdgpu/pm:bureau.local",
-		},
-		{
-			name:       "machine",
-			localpart:  "machine/workstation",
-			serverName: "example.org",
-			want:       "@machine/workstation:example.org",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := MatrixUserID(test.localpart, test.serverName)
-			if got != test.want {
-				t.Errorf("MatrixUserID(%q, %q) = %q, want %q", test.localpart, test.serverName, got, test.want)
-			}
-		})
-	}
-}
-
-func TestSocketPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		localpart string
-		want      string
-	}{
-		{
-			name:      "simple",
-			localpart: "alice",
-			want:      "/run/bureau/alice.sock",
-		},
-		{
-			name:      "hierarchical",
-			localpart: "iree/amdgpu/pm",
-			want:      "/run/bureau/iree/amdgpu/pm.sock",
-		},
-		{
-			name:      "machine",
-			localpart: "machine/workstation",
-			want:      "/run/bureau/machine/workstation.sock",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := SocketPath(test.localpart)
-			if got != test.want {
-				t.Errorf("SocketPath(%q) = %q, want %q", test.localpart, got, test.want)
-			}
-		})
-	}
-}
-
 func TestLocalpartFromMatrixID(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -281,15 +211,6 @@ func TestLocalpartFromMatrixID(t *testing.T) {
 	}
 }
 
-func TestSocketPathLength(t *testing.T) {
-	// Verify that the max localpart length keeps socket paths within the
-	// 108-byte sun_path limit for unix domain sockets.
-	maxPath := SocketPath(strings.Repeat("a", MaxLocalpartLength))
-	if length := len(maxPath); length > 108 {
-		t.Errorf("max socket path is %d bytes (%q), exceeds 108-byte sun_path limit", length, maxPath)
-	}
-}
-
 func TestRoomAliasLocalpart(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -346,7 +267,7 @@ func TestRoomAliasLocalpart(t *testing.T) {
 func TestAdminSocketPathLength(t *testing.T) {
 	// Verify that the max localpart length keeps admin socket paths within
 	// the 108-byte sun_path limit for unix domain sockets.
-	maxPath := RunDirAdminSocketPath(DefaultRunDir, strings.Repeat("a", MaxLocalpartLength))
+	maxPath := DefaultRunDir + "/" + strings.Repeat("a", MaxLocalpartLength) + AdminSocketSuffix
 	if length := len(maxPath); length > 108 {
 		t.Errorf("max admin socket path is %d bytes (%q), exceeds 108-byte sun_path limit", length, maxPath)
 	}
@@ -400,83 +321,6 @@ func TestSpaceNotAllowed(t *testing.T) {
 	err := ValidateLocalpart("alice bob")
 	if err == nil {
 		t.Error("ValidateLocalpart(\"alice bob\") = nil, want error (space should not be allowed)")
-	}
-}
-
-func TestRunDirSocketPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		runDir    string
-		localpart string
-		want      string
-	}{
-		{
-			name:      "default run dir",
-			runDir:    DefaultRunDir,
-			localpart: "iree/amdgpu/pm",
-			want:      "/run/bureau/iree/amdgpu/pm.sock",
-		},
-		{
-			name:      "custom run dir",
-			runDir:    "/tmp/test",
-			localpart: "alice",
-			want:      "/tmp/test/alice.sock",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := RunDirSocketPath(test.runDir, test.localpart)
-			if got != test.want {
-				t.Errorf("RunDirSocketPath(%q, %q) = %q, want %q", test.runDir, test.localpart, got, test.want)
-			}
-		})
-	}
-}
-
-func TestRunDirAdminSocketPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		runDir    string
-		localpart string
-		want      string
-	}{
-		{
-			name:      "default run dir",
-			runDir:    DefaultRunDir,
-			localpart: "iree/amdgpu/pm",
-			want:      "/run/bureau/iree/amdgpu/pm.admin.sock",
-		},
-		{
-			name:      "custom run dir",
-			runDir:    "/tmp/test",
-			localpart: "alice",
-			want:      "/tmp/test/alice.admin.sock",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := RunDirAdminSocketPath(test.runDir, test.localpart)
-			if got != test.want {
-				t.Errorf("RunDirAdminSocketPath(%q, %q) = %q, want %q", test.runDir, test.localpart, got, test.want)
-			}
-		})
-	}
-}
-
-func TestRunDirConsistentWithDefaults(t *testing.T) {
-	// RunDirSocketPath with DefaultRunDir must produce the same result as
-	// SocketPath, and similarly for admin paths.
-	localpart := "iree/amdgpu/pm"
-
-	if got, want := RunDirSocketPath(DefaultRunDir, localpart), SocketPath(localpart); got != want {
-		t.Errorf("RunDirSocketPath(DefaultRunDir, %q) = %q, want %q (SocketPath)", localpart, got, want)
-	}
-
-	expectedAdminPath := DefaultRunDir + "/" + localpart + AdminSocketSuffix
-	if got := RunDirAdminSocketPath(DefaultRunDir, localpart); got != expectedAdminPath {
-		t.Errorf("RunDirAdminSocketPath(DefaultRunDir, %q) = %q, want %q", localpart, got, expectedAdminPath)
 	}
 }
 

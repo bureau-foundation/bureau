@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
@@ -59,7 +59,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// --- Agent service setup ---
 
 	agentServiceLocalpart := "service/agent/session-test"
-	agentServiceAccount := registerPrincipal(t, agentServiceLocalpart, "agent-svc-password")
+	agentServiceAccount := registerFleetPrincipal(t, fleet, agentServiceLocalpart, "agent-svc-password")
 
 	agentServiceStateDir := t.TempDir()
 	writeServiceSession(t, agentServiceStateDir, agentServiceAccount)
@@ -70,7 +70,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// Start agent service and wait for daemon discovery.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	agentServiceSocketPath := principal.RunDirSocketPath(machine.RunDir, agentServiceLocalpart)
+	agentServiceSocketPath := machine.PrincipalSocketPath(t, agentServiceLocalpart)
 	if err := os.MkdirAll(filepath.Dir(agentServiceSocketPath), 0755); err != nil {
 		t.Fatalf("create socket parent directory: %v", err)
 	}
@@ -100,10 +100,13 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// Publish room service binding so the daemon maps "agent" role to
 	// this service. Must be published before deploying any principal
 	// with RequiredServices: ["agent"].
-	agentServiceUserID := principal.MatrixUserID(agentServiceLocalpart, testServerName)
+	agentServiceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, agentServiceLocalpart)
+	if err != nil {
+		t.Fatalf("construct agent service entity ref: %v", err)
+	}
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.EventTypeRoomService, "agent",
-		schema.RoomServiceContent{Principal: agentServiceUserID}); err != nil {
+		schema.RoomServiceContent{Principal: agentServiceEntity}); err != nil {
 		t.Fatalf("publish agent service binding in config room: %v", err)
 	}
 

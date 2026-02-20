@@ -439,7 +439,7 @@ func (fc *FleetController) processMachineConfigEvent(roomID string, event messag
 	for index := range content.Principals {
 		assignment := &content.Principals[index]
 		if isFleetManaged(assignment) {
-			fleetAssignments[assignment.Localpart] = assignment
+			fleetAssignments[assignment.Principal.AccountLocalpart()] = assignment
 		}
 	}
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -91,13 +92,13 @@ func createTestTmuxSession(t *testing.T, server *tmux.Server, sessionName string
 
 // waitForWatcherReady waits for the layout watcher's ControlClient to
 // attach and any layout restore to complete.
-func waitForWatcherReady(t *testing.T, daemon *Daemon, localpart string) {
+func waitForWatcherReady(t *testing.T, daemon *Daemon, principal ref.Entity) {
 	t.Helper()
-	ready := daemon.layoutWatcherReady(localpart)
+	ready := daemon.layoutWatcherReady(principal)
 	if ready == nil {
-		t.Fatalf("no layout watcher found for %q", localpart)
+		t.Fatalf("no layout watcher found for %v", principal)
 	}
-	testutil.RequireClosed(t, ready, 5*time.Second, "layout watcher ready for %q", localpart)
+	testutil.RequireClosed(t, ready, 5*time.Second, "layout watcher ready for %v", principal)
 }
 
 // TestLayoutWatcherPublishOnChange verifies that splitting a pane triggers the
@@ -109,8 +110,8 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 
 	daemon, matrixState, tmuxServer := newTestDaemonWithLayout(t)
 
-	localpart := "test/layout"
-	sessionName := "bureau/" + localpart
+	entity := testEntity(t, daemon.fleet, "test/layout")
+	sessionName := "bureau/" + entity.AccountLocalpart()
 	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,11 +124,11 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 	matrixState.stateEventWritten = layoutPublished
 	matrixState.mu.Unlock()
 
-	daemon.startLayoutWatcher(ctx, localpart)
-	defer daemon.stopLayoutWatcher(localpart)
+	daemon.startLayoutWatcher(ctx, entity)
+	defer daemon.stopLayoutWatcher(entity)
 
 	// Wait for the ControlClient to attach.
-	waitForWatcherReady(t, daemon, localpart)
+	waitForWatcherReady(t, daemon, entity)
 
 	// Split a pane to trigger a layout change.
 	if _, err := tmuxServer.Run("split-window", "-t", sessionName, "-h", "cat"); err != nil {
@@ -137,8 +138,9 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 	// Wait for the layout to be published (debounce + Matrix PUT).
 	testutil.RequireReceive(t, layoutPublished, 10*time.Second, "waiting for layout publish")
 
-	// Verify the layout was published to the mock Matrix.
-	key := "!config:test\x00" + schema.EventTypeLayout + "\x00" + localpart
+	// Verify the layout was published to the mock Matrix. The state key
+	// is the account localpart (entityType/entityName).
+	key := "!config:test\x00" + schema.EventTypeLayout + "\x00" + entity.AccountLocalpart()
 	matrixState.mu.Lock()
 	raw, ok := matrixState.stateEvents[key]
 	matrixState.mu.Unlock()
@@ -179,11 +181,12 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 
 	daemon, matrixState, tmuxServer := newTestDaemonWithLayout(t)
 
-	localpart := "test/restore"
-	sessionName := "bureau/" + localpart
+	entity := testEntity(t, daemon.fleet, "test/restore")
+	sessionName := "bureau/" + entity.AccountLocalpart()
 
-	// Pre-populate Matrix with a 2-window layout.
-	matrixState.setStateEvent("!config:test", schema.EventTypeLayout, localpart, schema.LayoutContent{
+	// Pre-populate Matrix with a 2-window layout. The state key is
+	// the account localpart.
+	matrixState.setStateEvent("!config:test", schema.EventTypeLayout, entity.AccountLocalpart(), schema.LayoutContent{
 		Windows: []schema.LayoutWindow{
 			{
 				Name:  "main",
@@ -203,11 +206,11 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	daemon.startLayoutWatcher(ctx, localpart)
-	defer daemon.stopLayoutWatcher(localpart)
+	daemon.startLayoutWatcher(ctx, entity)
+	defer daemon.stopLayoutWatcher(entity)
 
 	// Wait for the restore to complete (signaled by the ready channel).
-	waitForWatcherReady(t, daemon, localpart)
+	waitForWatcherReady(t, daemon, entity)
 
 	// Verify the tmux session now has 2 windows.
 	output, err := tmuxServer.Run("list-windows",
@@ -232,27 +235,27 @@ func TestLayoutWatcherStopCleanup(t *testing.T) {
 
 	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
-	localpart := "test/stop"
-	sessionName := "bureau/" + localpart
+	entity := testEntity(t, daemon.fleet, "test/stop")
+	sessionName := "bureau/" + entity.AccountLocalpart()
 	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	daemon.startLayoutWatcher(ctx, localpart)
-	waitForWatcherReady(t, daemon, localpart)
+	daemon.startLayoutWatcher(ctx, entity)
+	waitForWatcherReady(t, daemon, entity)
 
 	// Stop should return promptly and remove from map.
 	done := make(chan struct{})
 	go func() {
-		daemon.stopLayoutWatcher(localpart)
+		daemon.stopLayoutWatcher(entity)
 		close(done)
 	}()
 
 	testutil.RequireClosed(t, done, 5*time.Second, "stopLayoutWatcher hung")
 
 	daemon.layoutWatchersMu.Lock()
-	_, exists := daemon.layoutWatchers[localpart]
+	_, exists := daemon.layoutWatchers[entity]
 	daemon.layoutWatchersMu.Unlock()
 
 	if exists {
@@ -269,19 +272,19 @@ func TestLayoutWatcherIdempotentStart(t *testing.T) {
 
 	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
-	localpart := "test/idempotent"
-	sessionName := "bureau/" + localpart
+	entity := testEntity(t, daemon.fleet, "test/idempotent")
+	sessionName := "bureau/" + entity.AccountLocalpart()
 	createTestTmuxSession(t, tmuxServer, sessionName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	daemon.startLayoutWatcher(ctx, localpart)
-	defer daemon.stopLayoutWatcher(localpart)
-	waitForWatcherReady(t, daemon, localpart)
+	daemon.startLayoutWatcher(ctx, entity)
+	defer daemon.stopLayoutWatcher(entity)
+	waitForWatcherReady(t, daemon, entity)
 
 	// Second start should be a no-op.
-	daemon.startLayoutWatcher(ctx, localpart)
+	daemon.startLayoutWatcher(ctx, entity)
 
 	daemon.layoutWatchersMu.Lock()
 	count := len(daemon.layoutWatchers)
@@ -301,19 +304,22 @@ func TestLayoutWatcherStopAll(t *testing.T) {
 
 	daemon, _, tmuxServer := newTestDaemonWithLayout(t)
 
-	principals := []string{"a/one", "a/two", "a/three"}
-	for _, name := range principals {
-		createTestTmuxSession(t, tmuxServer, "bureau/"+name)
+	accountLocalparts := []string{"a/one", "a/two", "a/three"}
+	var entities []ref.Entity
+	for _, accountLocalpart := range accountLocalparts {
+		entity := testEntity(t, daemon.fleet, accountLocalpart)
+		entities = append(entities, entity)
+		createTestTmuxSession(t, tmuxServer, "bureau/"+entity.AccountLocalpart())
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for _, name := range principals {
-		daemon.startLayoutWatcher(ctx, name)
+	for _, entity := range entities {
+		daemon.startLayoutWatcher(ctx, entity)
 	}
-	for _, name := range principals {
-		waitForWatcherReady(t, daemon, name)
+	for _, entity := range entities {
+		waitForWatcherReady(t, daemon, entity)
 	}
 
 	// Stop all should complete promptly.
@@ -348,12 +354,13 @@ func TestLayoutWatcherNoTmuxSession(t *testing.T) {
 
 	// Start a watcher for a session that doesn't exist. The ControlClient
 	// will fail to attach, and the goroutine should exit.
-	daemon.startLayoutWatcher(ctx, "test/nonexistent")
+	entity := testEntity(t, daemon.fleet, "test/nonexistent")
+	daemon.startLayoutWatcher(ctx, entity)
 
 	// Wait for the watcher goroutine to exit (it should exit quickly
 	// since the tmux session doesn't exist and ControlClient creation
 	// fails). The done channel closes when the goroutine returns.
-	watcherDone := daemon.layoutWatcherDone("test/nonexistent")
+	watcherDone := daemon.layoutWatcherDone(entity)
 	if watcherDone == nil {
 		t.Fatal("no layout watcher found for test/nonexistent")
 	}
@@ -362,7 +369,7 @@ func TestLayoutWatcherNoTmuxSession(t *testing.T) {
 	// stopLayoutWatcher should not hang since the goroutine already exited.
 	done := make(chan struct{})
 	go func() {
-		daemon.stopLayoutWatcher("test/nonexistent")
+		daemon.stopLayoutWatcher(entity)
 		close(done)
 	}()
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -34,7 +35,6 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -46,21 +46,22 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	})
 
 	// Bind "ticket" service to a provider principal in the config room.
+	ticketEntity := testEntity(t, daemon.fleet, "service/ticket")
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "@service/ticket:" + serverName,
+		Principal: ticketEntity,
 	})
 
 	// Principal assignment.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:service-consumer",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -104,13 +105,16 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	}
 
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}
@@ -123,7 +127,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Fatal("principal should be running")
 	}
 
@@ -136,7 +140,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	if capturedMounts[0].Role != "ticket" {
 		t.Errorf("mount role = %q, want %q", capturedMounts[0].Role, "ticket")
 	}
-	expectedSocket := principal.RunDirSocketPath(principal.DefaultRunDir, "service/ticket")
+	expectedSocket := ticketEntity.SocketPath(daemon.fleetRunDir)
 	if capturedMounts[0].SocketPath != expectedSocket {
 		t.Errorf("mount socket = %q, want %q", capturedMounts[0].SocketPath, expectedSocket)
 	}
@@ -178,13 +182,13 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:needs-ticket",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -196,7 +200,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	}
 
 	// Principal should NOT be running — the required service could not be resolved.
-	if daemon.running["iree/amdgpu/pm"] {
+	if daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should not be running when a required service is unresolvable")
 	}
 
@@ -222,7 +226,6 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -234,13 +237,15 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	})
 
 	// Bind "ticket" in config room to one principal.
+	globalTicketEntity := testEntity(t, daemon.fleet, "service/ticket/global")
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "@service/ticket/global:" + serverName,
+		Principal: globalTicketEntity,
 	})
 
 	// Bind "ticket" in workspace room to a different principal. This should win.
+	wsTicketEntity := testEntity(t, daemon.fleet, "service/ticket/workspace")
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "@service/ticket/workspace:" + serverName,
+		Principal: wsTicketEntity,
 	})
 
 	// Workspace event so the StartCondition resolves and gives us the workspace room ID.
@@ -254,7 +259,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:ws-consumer",
 				AutoStart: true,
 				StartCondition: &schema.StartCondition{
@@ -266,7 +271,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -308,13 +313,16 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	}
 
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}
@@ -327,7 +335,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Fatal("principal should be running")
 	}
 
@@ -339,7 +347,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	}
 
 	// Workspace room binding should win over config room binding.
-	expectedSocket := principal.RunDirSocketPath(principal.DefaultRunDir, "service/ticket/workspace")
+	expectedSocket := wsTicketEntity.SocketPath(daemon.fleetRunDir)
 	if capturedMounts[0].SocketPath != expectedSocket {
 		t.Errorf("mount socket = %q, want %q (workspace binding should win)",
 			capturedMounts[0].SocketPath, expectedSocket)
@@ -359,7 +367,6 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -371,23 +378,25 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	})
 
 	// Bind both services in the config room.
+	ticketEntity := testEntity(t, daemon.fleet, "service/ticket")
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "@service/ticket:" + serverName,
+		Principal: ticketEntity,
 	})
+	ragEntity := testEntity(t, daemon.fleet, "service/rag")
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "rag", schema.RoomServiceContent{
-		Principal: "@service/rag:" + serverName,
+		Principal: ragEntity,
 	})
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:multi-service",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -429,13 +438,16 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	}
 
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}
@@ -448,7 +460,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Fatal("principal should be running")
 	}
 
@@ -465,12 +477,12 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		mountsByRole[mount.Role] = mount.SocketPath
 	}
 
-	ticketSocket := principal.RunDirSocketPath(principal.DefaultRunDir, "service/ticket")
+	ticketSocket := ticketEntity.SocketPath(daemon.fleetRunDir)
 	if mountsByRole["ticket"] != ticketSocket {
 		t.Errorf("ticket socket = %q, want %q", mountsByRole["ticket"], ticketSocket)
 	}
 
-	ragSocket := principal.RunDirSocketPath(principal.DefaultRunDir, "service/rag")
+	ragSocket := ragEntity.SocketPath(daemon.fleetRunDir)
 	if mountsByRole["rag"] != ragSocket {
 		t.Errorf("rag socket = %q, want %q", mountsByRole["rag"], ragSocket)
 	}
@@ -490,7 +502,6 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -502,20 +513,20 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 	})
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
-		Principal: "@service/ticket:" + serverName,
+		Principal: testEntity(t, daemon.fleet, "service/ticket"),
 	})
 	// "rag" is intentionally NOT bound.
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:partial-services",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -526,7 +537,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if daemon.running["iree/amdgpu/pm"] {
+	if daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Error("principal should not be running when any required service is unresolvable")
 	}
 
@@ -562,13 +573,13 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Template:  "bureau/template:plain-template",
 				AutoStart: true,
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, "iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -610,13 +621,16 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	}
 
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = signingKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}
@@ -629,7 +643,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["iree/amdgpu/pm"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
 		t.Fatal("principal should be running (no required services)")
 	}
 
@@ -685,13 +699,16 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 	}
 
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.stateDir = t.TempDir()
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.tokenSigningPrivateKey = tokenSigningPrivateKey
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil
 	}

@@ -123,7 +123,7 @@ func TestReadMachineConfigExisting(t *testing.T) {
 	fc.configRooms["machine/workstation"] = "!config-ws:local"
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "service/stt/whisper", Template: "bureau/template:whisper-stt"},
+			{Principal: testEntity(t, "service/stt/whisper"), Template: "bureau/template:whisper-stt"},
 		},
 	})
 
@@ -134,8 +134,8 @@ func TestReadMachineConfigExisting(t *testing.T) {
 	if len(config.Principals) != 1 {
 		t.Fatalf("expected 1 principal, got %d", len(config.Principals))
 	}
-	if config.Principals[0].Localpart != "service/stt/whisper" {
-		t.Errorf("principal localpart = %q, want service/stt/whisper", config.Principals[0].Localpart)
+	if config.Principals[0].Principal.AccountLocalpart() != "service/stt/whisper" {
+		t.Errorf("principal localpart = %q, want service/stt/whisper", config.Principals[0].Principal.AccountLocalpart())
 	}
 }
 
@@ -173,7 +173,7 @@ func TestWriteMachineConfig(t *testing.T) {
 
 	config := &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "service/stt/whisper", Template: "bureau/template:whisper-stt"},
+			{Principal: testEntity(t, "service/stt/whisper"), Template: "bureau/template:whisper-stt"},
 		},
 	}
 	eventID, err := fc.writeMachineConfig(context.Background(), "machine/workstation", config)
@@ -223,8 +223,8 @@ func TestBuildAssignment(t *testing.T) {
 		t.Fatalf("buildAssignment: %v", err)
 	}
 
-	if assignment.Localpart != "service/stt/whisper" {
-		t.Errorf("localpart = %q, want service/stt/whisper", assignment.Localpart)
+	if assignment.Principal.AccountLocalpart() != "service/stt/whisper" {
+		t.Errorf("localpart = %q, want service/stt/whisper", assignment.Principal.AccountLocalpart())
 	}
 	if assignment.Template != "bureau/template:whisper-stt" {
 		t.Errorf("template = %q, want bureau/template:whisper-stt", assignment.Template)
@@ -368,8 +368,8 @@ func TestPlaceHappyPath(t *testing.T) {
 	if len(written.Principals) != 1 {
 		t.Fatalf("expected 1 principal in written config, got %d", len(written.Principals))
 	}
-	if written.Principals[0].Localpart != "service/stt/whisper" {
-		t.Errorf("written principal = %q, want service/stt/whisper", written.Principals[0].Localpart)
+	if written.Principals[0].Principal.AccountLocalpart() != "service/stt/whisper" {
+		t.Errorf("written principal = %q, want service/stt/whisper", written.Principals[0].Principal.AccountLocalpart())
 	}
 	if written.Principals[0].Labels["fleet_managed"] != "service/fleet/prod" {
 		t.Errorf("written fleet_managed = %q, want service/fleet/prod", written.Principals[0].Labels["fleet_managed"])
@@ -414,7 +414,7 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/coding/main",
+				Principal: testEntity(t, "agent/coding/main"),
 				Template:  "bureau/template:coding-agent",
 				AutoStart: true,
 			},
@@ -434,7 +434,7 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 	// Verify the existing principal is preserved.
 	found := false
 	for _, principal := range written.Principals {
-		if principal.Localpart == "agent/coding/main" {
+		if principal.Principal.AccountLocalpart() == "agent/coding/main" {
 			found = true
 			break
 		}
@@ -515,7 +515,7 @@ func TestPlaceAlreadyPlaced(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	existingAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 	fc.machines["machine/workstation"] = &machineState{
@@ -543,7 +543,7 @@ func TestUnplaceHappyPath(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
 	existingAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		AutoStart: true,
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -572,13 +572,13 @@ func TestUnplaceHappyPath(t *testing.T) {
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 			{
-				Localpart: "agent/coding/main",
+				Principal: testEntity(t, "agent/coding/main"),
 				Template:  "bureau/template:coding-agent",
 				AutoStart: true,
 			},
@@ -595,8 +595,8 @@ func TestUnplaceHappyPath(t *testing.T) {
 	if len(written.Principals) != 1 {
 		t.Fatalf("expected 1 principal after unplace, got %d", len(written.Principals))
 	}
-	if written.Principals[0].Localpart != "agent/coding/main" {
-		t.Errorf("remaining principal = %q, want agent/coding/main", written.Principals[0].Localpart)
+	if written.Principals[0].Principal.AccountLocalpart() != "agent/coding/main" {
+		t.Errorf("remaining principal = %q, want agent/coding/main", written.Principals[0].Principal.AccountLocalpart())
 	}
 
 	// Verify in-memory model was updated.
@@ -638,7 +638,7 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 		info: &schema.MachineInfo{},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": {
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/staging"},
 			},
 		},
@@ -719,9 +719,10 @@ func TestReconcileOverReplicated(t *testing.T) {
 		},
 	}
 
+	workerEntity := testEntity(t, "service/worker")
 	fleetAssignment := func(name string) *schema.PrincipalAssignment {
 		return &schema.PrincipalAssignment{
-			Localpart: "service/worker",
+			Principal: workerEntity,
 			Template:  "bureau/template:worker",
 			AutoStart: true,
 			Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -796,7 +797,7 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 	machine := standardMachine()
 	machine.configRoomID = "!config-ws:local"
 	existingAssignment := &schema.PrincipalAssignment{
-		Localpart: "service/worker",
+		Principal: testEntity(t, "service/worker"),
 		Template:  "bureau/template:worker",
 		AutoStart: true,
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -889,7 +890,7 @@ func TestRebuildServiceInstances(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	assignment := &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
@@ -940,7 +941,7 @@ func TestRebuildServiceInstancesIgnoresUnknownServices(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/unknown": {
-				Localpart: "service/unknown",
+				Principal: testEntity(t, "service/unknown"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
@@ -962,6 +963,9 @@ func TestRebuildServiceInstancesIgnoresUnknownServices(t *testing.T) {
 // --- isFleetManaged tests ---
 
 func TestIsFleetManaged(t *testing.T) {
+	whisperEntity := testEntity(t, "service/stt/whisper")
+	agentEntity := testEntity(t, "agent/coding/main")
+
 	tests := []struct {
 		name       string
 		assignment *schema.PrincipalAssignment
@@ -970,7 +974,7 @@ func TestIsFleetManaged(t *testing.T) {
 		{
 			name: "fleet-managed assignment",
 			assignment: &schema.PrincipalAssignment{
-				Localpart: "service/stt/whisper",
+				Principal: whisperEntity,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 			want: true,
@@ -978,7 +982,7 @@ func TestIsFleetManaged(t *testing.T) {
 		{
 			name: "non-fleet assignment with labels",
 			assignment: &schema.PrincipalAssignment{
-				Localpart: "agent/coding/main",
+				Principal: agentEntity,
 				Labels:    map[string]string{"purpose": "coding"},
 			},
 			want: false,
@@ -986,7 +990,7 @@ func TestIsFleetManaged(t *testing.T) {
 		{
 			name: "assignment with nil labels",
 			assignment: &schema.PrincipalAssignment{
-				Localpart: "agent/coding/main",
+				Principal: agentEntity,
 				Labels:    nil,
 			},
 			want: false,
@@ -994,7 +998,7 @@ func TestIsFleetManaged(t *testing.T) {
 		{
 			name: "assignment with empty labels",
 			assignment: &schema.PrincipalAssignment{
-				Localpart: "agent/coding/main",
+				Principal: agentEntity,
 				Labels:    map[string]string{},
 			},
 			want: false,

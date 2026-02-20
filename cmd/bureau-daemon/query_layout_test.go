@@ -379,21 +379,23 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	daemon.lastConfig = &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Labels:    map[string]string{"role": "agent", "team": "iree"},
 			},
 			{
-				Localpart: "iree/amdgpu/compiler",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/compiler"),
 				Labels:    map[string]string{"role": "agent", "team": "iree"},
 			},
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, daemon.fleet, "service/stt/whisper"),
 				Labels:    map[string]string{"role": "service"},
 			},
 		},
 	}
-	for _, localpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/compiler", "service/stt/whisper"} {
-		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
+	// Authorization index uses bare account localparts, matching the
+	// production rebuildAuthorizationIndex (reconcile.go).
+	for _, accountLocalpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/compiler", "service/stt/whisper"} {
+		daemon.authorizationIndex.SetPrincipal(accountLocalpart, permissiveObserveAllowances)
 	}
 
 	channelAlias := "#iree/amdgpu/general:bureau.local"
@@ -415,11 +417,14 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 		},
 	})
 
-	// All three principals are room members.
+	// All three principals are room members. User IDs are fleet-scoped
+	// (matching production). handleQueryLayout extracts account localparts
+	// via ExtractEntityName for label matching and pane Observe fields.
+	fleetPrefix := daemon.fleet.Localpart()
 	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
-		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
-		{UserID: "@iree/amdgpu/compiler:bureau.local", Membership: "join"},
-		{UserID: "@service/stt/whisper:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/iree/amdgpu/compiler:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/service/stt/whisper:bureau.local", Membership: "join"},
 	})
 
 	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
@@ -436,6 +441,8 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	if len(panes) != 2 {
 		t.Fatalf("expected 2 panes (agents only), got %d", len(panes))
 	}
+	// Observe pane values use bare account localparts (what
+	// handleObserveSession's NewEntityFromAccountLocalpart expects).
 	if panes[0].Observe != "iree/amdgpu/pm" {
 		t.Errorf("pane 0 observe = %q, want %q", panes[0].Observe, "iree/amdgpu/pm")
 	}
@@ -451,21 +458,23 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 	daemon.lastConfig = &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Labels:    map[string]string{"role": "agent", "team": "iree"},
 			},
 			{
-				Localpart: "infra/ci/runner",
+				Principal: testEntity(t, daemon.fleet, "infra/ci/runner"),
 				Labels:    map[string]string{"role": "agent", "team": "infra"},
 			},
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, daemon.fleet, "service/stt/whisper"),
 				Labels:    map[string]string{"role": "service", "team": "iree"},
 			},
 		},
 	}
-	for _, localpart := range []string{"iree/amdgpu/pm", "infra/ci/runner", "service/stt/whisper"} {
-		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
+	// Authorization index uses bare account localparts, matching
+	// production rebuildAuthorizationIndex (reconcile.go).
+	for _, accountLocalpart := range []string{"iree/amdgpu/pm", "infra/ci/runner", "service/stt/whisper"} {
+		daemon.authorizationIndex.SetPrincipal(accountLocalpart, permissiveObserveAllowances)
 	}
 
 	channelAlias := "#all:bureau.local"
@@ -485,10 +494,11 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 		},
 	})
 
+	fleetPrefix := daemon.fleet.Localpart()
 	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
-		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
-		{UserID: "@infra/ci/runner:bureau.local", Membership: "join"},
-		{UserID: "@service/stt/whisper:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/infra/ci/runner:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/service/stt/whisper:bureau.local", Membership: "join"},
 	})
 
 	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
@@ -520,11 +530,13 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 	daemon.lastConfig = &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "iree/amdgpu/pm",
+				Principal: testEntity(t, daemon.fleet, "iree/amdgpu/pm"),
 				Labels:    map[string]string{"role": "agent"},
 			},
 		},
 	}
+	// Authorization index uses bare account localparts, matching
+	// production rebuildAuthorizationIndex (reconcile.go).
 	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", permissiveObserveAllowances)
 	daemon.authorizationIndex.SetPrincipal("remote/agent", permissiveObserveAllowances)
 
@@ -553,9 +565,12 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 		},
 	})
 
-	// Both local and cross-machine members in the room.
+	// Local member uses fleet-scoped user ID (matching production).
+	// handleQueryLayout extracts account localparts via ExtractEntityName.
+	// Cross-machine member keeps its own server's user ID format.
+	fleetPrefix := daemon.fleet.Localpart()
 	matrixState.setRoomMembers(channelRoomID, []mockRoomMember{
-		{UserID: "@iree/amdgpu/pm:bureau.local", Membership: "join"},
+		{UserID: "@" + fleetPrefix + "/iree/amdgpu/pm:bureau.local", Membership: "join"},
 		{UserID: "@remote/agent:other.bureau.local", Membership: "join"},
 	})
 
@@ -575,6 +590,7 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 	if len(agentsWindow.Panes) != 1 {
 		t.Fatalf("agents window: expected 1 pane, got %d", len(agentsWindow.Panes))
 	}
+	// Observe values use bare account localparts.
 	if agentsWindow.Panes[0].Observe != "iree/amdgpu/pm" {
 		t.Errorf("agents pane observe = %q, want %q", agentsWindow.Panes[0].Observe, "iree/amdgpu/pm")
 	}

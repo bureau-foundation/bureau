@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -27,11 +28,11 @@ type activeToken struct {
 // a principal and prunes entries whose natural TTL has passed. Must be
 // called with reconcileMu held (the active tokens map is protected by
 // the same lock as the other per-principal tracking maps).
-func (d *Daemon) recordMintedTokens(localpart string, minted []activeToken) {
+func (d *Daemon) recordMintedTokens(principal ref.Entity, minted []activeToken) {
 	now := d.clock.Now()
 
 	// Prune expired entries from the existing set.
-	existing := d.activeTokens[localpart]
+	existing := d.activeTokens[principal]
 	pruned := existing[:0]
 	for _, token := range existing {
 		if now.Before(token.expiresAt) {
@@ -39,7 +40,7 @@ func (d *Daemon) recordMintedTokens(localpart string, minted []activeToken) {
 		}
 	}
 
-	d.activeTokens[localpart] = append(pruned, minted...)
+	d.activeTokens[principal] = append(pruned, minted...)
 }
 
 // revokeAndCleanupTokens handles token lifecycle cleanup when a sandbox
@@ -50,34 +51,36 @@ func (d *Daemon) recordMintedTokens(localpart string, minted []activeToken) {
 // The push to services is best-effort: failures are logged but do not
 // block the destroy. The 5-minute token TTL provides a natural fallback
 // — even if push fails, tokens expire shortly.
-func (d *Daemon) revokeAndCleanupTokens(ctx context.Context, localpart string) {
-	tokens := d.activeTokens[localpart]
-	mounts := d.lastServiceMounts[localpart]
+func (d *Daemon) revokeAndCleanupTokens(ctx context.Context, principal ref.Entity) {
+	tokens := d.activeTokens[principal]
+	mounts := d.lastServiceMounts[principal]
 
 	if len(tokens) > 0 && len(mounts) > 0 {
-		d.pushRevocations(ctx, localpart, tokens, mounts)
+		d.pushRevocations(ctx, principal, tokens, mounts)
 	}
 
-	// Remove the token directory from disk.
+	// Remove the token directory from disk. Uses AccountLocalpart()
+	// for the filesystem path since token directories are keyed by
+	// the bare account localpart (e.g., "agent/frontend").
 	if d.stateDir != "" {
-		tokenDir := filepath.Join(d.stateDir, "tokens", localpart)
+		tokenDir := filepath.Join(d.stateDir, "tokens", principal.AccountLocalpart())
 		if err := os.RemoveAll(tokenDir); err != nil {
 			d.logger.Error("failed to remove token directory",
-				"principal", localpart,
+				"principal", principal,
 				"path", tokenDir,
 				"error", err,
 			)
 		}
 	}
 
-	delete(d.activeTokens, localpart)
-	delete(d.lastServiceMounts, localpart)
+	delete(d.activeTokens, principal)
+	delete(d.lastServiceMounts, principal)
 }
 
 // pushRevocations sends signed revocation requests to each service that
 // holds tokens for the given principal. Best-effort: errors are logged
 // but the function always returns.
-func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens []activeToken, mounts []launcherServiceMount) {
+func (d *Daemon) pushRevocations(ctx context.Context, principal ref.Entity, tokens []activeToken, mounts []launcherServiceMount) {
 	// Build a role → socket path lookup from the cached service mounts.
 	socketByRole := make(map[string]string, len(mounts))
 	for _, mount := range mounts {
@@ -95,7 +98,7 @@ func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens [
 		if !ok {
 			d.logger.Warn("no cached socket path for revocation push",
 				"role", role,
-				"principal", localpart,
+				"principal", principal,
 			)
 			continue
 		}
@@ -117,7 +120,7 @@ func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens [
 		if err != nil {
 			d.logger.Error("failed to sign revocation request",
 				"role", role,
-				"principal", localpart,
+				"principal", principal,
 				"error", err,
 			)
 			continue
@@ -147,7 +150,7 @@ func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens [
 		if pushErr != nil {
 			d.logger.Warn("revocation push failed (tokens will expire via TTL)",
 				"role", role,
-				"principal", localpart,
+				"principal", principal,
 				"token_count", len(roleTokens),
 				"error", pushErr,
 			)
@@ -156,7 +159,7 @@ func (d *Daemon) pushRevocations(ctx context.Context, localpart string, tokens [
 
 		d.logger.Info("pushed token revocations to service",
 			"role", role,
-			"principal", localpart,
+			"principal", principal,
 			"revoked", len(roleTokens),
 		)
 	}

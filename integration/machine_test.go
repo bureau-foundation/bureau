@@ -47,17 +47,39 @@ type testMachine struct {
 }
 
 // PrincipalSocketPath returns the proxy socket path for a principal on
-// this machine, using the same derivation as the launcher.
-func (m *testMachine) PrincipalSocketPath(localpart string) string {
-	return principal.RunDirSocketPath(m.RunDir, localpart)
+// this machine, using the same fleet-scoped derivation as the launcher.
+func (m *testMachine) PrincipalSocketPath(t *testing.T, localpart string) string {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(m.Ref.Fleet(), localpart)
+	if err != nil {
+		t.Fatalf("PrincipalSocketPath(%q): %v", localpart, err)
+	}
+	return entity.SocketPath(m.Ref.Fleet().RunDir(m.RunDir))
 }
 
 // PrincipalAdminSocketPath returns the admin socket path for a principal
 // on this machine. The admin socket is on the host side (not
 // bind-mounted into the sandbox) and is used by the daemon and tests
 // to register services on the proxy.
-func (m *testMachine) PrincipalAdminSocketPath(localpart string) string {
-	return principal.RunDirAdminSocketPath(m.RunDir, localpart)
+func (m *testMachine) PrincipalAdminSocketPath(t *testing.T, localpart string) string {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(m.Ref.Fleet(), localpart)
+	if err != nil {
+		t.Fatalf("PrincipalAdminSocketPath(%q): %v", localpart, err)
+	}
+	return entity.AdminSocketPath(m.Ref.Fleet().RunDir(m.RunDir))
+}
+
+// principalSocketPath is a standalone version of testMachine.PrincipalSocketPath
+// for tests that construct launcher/daemon lifecycle manually without a full
+// testMachine. It uses the same fleet-scoped derivation as the method.
+func principalSocketPath(t *testing.T, machineRef ref.Machine, runDir, localpart string) string {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(machineRef.Fleet(), localpart)
+	if err != nil {
+		t.Fatalf("principalSocketPath(%q): %v", localpart, err)
+	}
+	return entity.SocketPath(machineRef.Fleet().RunDir(runDir))
 }
 
 // machineOptions configures process binaries and daemon settings for
@@ -374,7 +396,49 @@ func loginPrincipal(t *testing.T, localpart, password string) principalAccount {
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    principal.MatrixUserID(localpart, testServerName),
+		UserID:    ref.MatrixUserID(localpart, testServerName),
+		Token:     token,
+	}
+}
+
+// loginFleetPrincipal logs into a fleet-scoped Matrix account and returns
+// a principalAccount with the bare account localpart (matching the convention
+// used by registerFleetPrincipal and pushCredentials). Use this for re-login
+// scenarios (e.g., token rotation) where the account was originally created
+// via registerFleetPrincipal.
+func loginFleetPrincipal(t *testing.T, fleet *testFleet, accountLocalpart, password string) principalAccount {
+	t.Helper()
+
+	entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, accountLocalpart)
+	if err != nil {
+		t.Fatalf("construct fleet-scoped entity for %s: %v", accountLocalpart, err)
+	}
+
+	fleetLocalpart := entity.Localpart()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal login: %v", err)
+	}
+
+	passwordBuffer, err := secret.NewFromString(password)
+	if err != nil {
+		t.Fatalf("create password buffer: %v", err)
+	}
+	defer passwordBuffer.Close()
+
+	session, err := client.Login(t.Context(), fleetLocalpart, passwordBuffer)
+	if err != nil {
+		t.Fatalf("login fleet principal %q (fleet localpart %q): %v", accountLocalpart, fleetLocalpart, err)
+	}
+	token := session.AccessToken()
+	session.Close()
+
+	return principalAccount{
+		Localpart: accountLocalpart,
+		UserID:    entity.UserID(),
 		Token:     token,
 	}
 }
@@ -416,7 +480,69 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    principal.MatrixUserID(localpart, testServerName),
+		UserID:    ref.MatrixUserID(localpart, testServerName),
+		Token:     token,
+	}
+}
+
+// registerFleetPrincipal creates a Matrix account with a fleet-scoped
+// localpart, matching the production credential provisioning flow
+// (principal.Create registers accounts with entity.Localpart()). The
+// returned principalAccount has:
+//   - Localpart: the bare account localpart (for pushCredentials, which
+//     constructs the fleet-scoped entity via NewEntityFromAccountLocalpart)
+//   - UserID: the fleet-scoped Matrix user ID (matching what the daemon
+//     invites to rooms and what the proxy authenticates as)
+//   - Token: the access token for the fleet-scoped Matrix account
+//
+// Use this instead of registerPrincipal when the test involves room
+// membership operations through the proxy (workspace pipelines, Matrix
+// join/invite). Tests that only check proxy socket creation or whoami
+// can use registerPrincipal (bare-localpart accounts work fine when no
+// room membership is needed).
+func registerFleetPrincipal(t *testing.T, fleet *testFleet, accountLocalpart, password string) principalAccount {
+	t.Helper()
+
+	entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, accountLocalpart)
+	if err != nil {
+		t.Fatalf("construct fleet-scoped entity for %s: %v", accountLocalpart, err)
+	}
+
+	fleetLocalpart := entity.Localpart()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal registration: %v", err)
+	}
+
+	passwordBuffer, err := secret.NewFromString(password)
+	if err != nil {
+		t.Fatalf("create password buffer: %v", err)
+	}
+	defer passwordBuffer.Close()
+
+	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("create registration token buffer: %v", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	session, err := client.Register(t.Context(), messaging.RegisterRequest{
+		Username:          fleetLocalpart,
+		Password:          passwordBuffer,
+		RegistrationToken: registrationTokenBuffer,
+	})
+	if err != nil {
+		t.Fatalf("register fleet principal %q (fleet localpart %q): %v", accountLocalpart, fleetLocalpart, err)
+	}
+	token := session.AccessToken()
+	session.Close()
+
+	return principalAccount{
+		Localpart: accountLocalpart,
+		UserID:    entity.UserID(),
 		Token:     token,
 	}
 }
@@ -460,9 +586,13 @@ func pushCredentials(t *testing.T, admin *messaging.DirectSession, machine *test
 		t.Fatal("account.Token is required")
 	}
 
-	_, err := credential.Provision(t.Context(), admin, credential.ProvisionParams{
+	entity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), account.Localpart)
+	if err != nil {
+		t.Fatalf("build principal entity for %s: %v", account.Localpart, err)
+	}
+	_, err = credential.Provision(t.Context(), admin, credential.ProvisionParams{
 		Machine:       machine.Ref,
-		Principal:     account.Localpart,
+		Principal:     entity,
 		MachineRoomID: machine.MachineRoomID,
 		Credentials: map[string]string{
 			"MATRIX_TOKEN":          account.Token,
@@ -491,8 +621,12 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 
 	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
 	for i, spec := range config.Principals {
+		entity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), spec.Account.Localpart)
+		if err != nil {
+			t.Fatalf("build principal entity for %s: %v", spec.Account.Localpart, err)
+		}
 		assignments[i] = schema.PrincipalAssignment{
-			Localpart:         spec.Account.Localpart,
+			Principal:         entity,
 			Template:          spec.Template,
 			AutoStart:         true,
 			Payload:           spec.Payload,
@@ -540,7 +674,7 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 
 	proxySockets := make(map[string]string, len(config.Principals))
 	for _, spec := range config.Principals {
-		socketPath := machine.PrincipalSocketPath(spec.Account.Localpart)
+		socketPath := machine.PrincipalSocketPath(t, spec.Account.Localpart)
 		waitForFile(t, socketPath)
 		proxySockets[spec.Account.Localpart] = socketPath
 	}
@@ -706,9 +840,13 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	}
 	defer registrationTokenBuffer.Close()
 
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), options.Localpart)
+	if err != nil {
+		t.Fatalf("build principal entity for %s: %v", options.Localpart, err)
+	}
 	result, err := principal.Create(ctx, client, admin, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
 		Machine:     machine.Ref,
-		Localpart:   options.Localpart,
+		Principal:   principalEntity,
 		TemplateRef: templateRef,
 		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
 			_, err := template.Fetch(ctx, admin, ref, serverName)
@@ -724,7 +862,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		t.Fatalf("create agent %q: %v", options.Localpart, err)
 	}
 
-	proxySocketPath := machine.PrincipalSocketPath(options.Localpart)
+	proxySocketPath := machine.PrincipalSocketPath(t, options.Localpart)
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
@@ -739,7 +877,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		},
 		TemplateRef:     templateRef,
 		ProxySocketPath: proxySocketPath,
-		AdminSocketPath: machine.PrincipalAdminSocketPath(options.Localpart),
+		AdminSocketPath: machine.PrincipalAdminSocketPath(t, options.Localpart),
 	}
 }
 

@@ -47,17 +47,17 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 			{Actions: []string{"ticket/create", "ticket/read"}},
 		},
 	})
-	daemon.running["agent/alpha"] = true
-	daemon.lastSpecs["agent/alpha"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint["agent/alpha"] = fakeClock.Now()
+	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
 
 	// Read the initial token to get its expiry.
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
@@ -96,8 +96,8 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 	}
 
 	// lastTokenMint should be updated.
-	if daemon.lastTokenMint["agent/alpha"] != fakeClock.Now() {
-		t.Errorf("lastTokenMint = %v, want %v", daemon.lastTokenMint["agent/alpha"], fakeClock.Now())
+	if daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] != fakeClock.Now() {
+		t.Errorf("lastTokenMint = %v, want %v", daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")], fakeClock.Now())
 	}
 }
 
@@ -131,17 +131,17 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 		t.Fatalf("expected 2 grants before sweep, got %d", len(grants))
 	}
 
-	daemon.running["agent/alpha"] = true
-	daemon.lastSpecs["agent/alpha"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens (with both grants).
-	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint["agent/alpha"] = fakeClock.Now()
+	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
 
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
 	if len(initialToken.Grants) != 2 {
@@ -174,11 +174,11 @@ func TestRefreshTokens_SkipsPrincipalsWithoutServices(t *testing.T) {
 	daemon, fakeClock, _ := newTokenRefreshDaemon(t)
 
 	// Running principal with no RequiredServices.
-	daemon.running["agent/noservices"] = true
-	daemon.lastSpecs["agent/noservices"] = &schema.SandboxSpec{}
+	daemon.running[testEntity(t, daemon.fleet, "agent/noservices")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/noservices")] = &schema.SandboxSpec{}
 
 	// Running principal with nil spec.
-	daemon.running["agent/nospec"] = true
+	daemon.running[testEntity(t, daemon.fleet, "agent/nospec")] = true
 
 	// Advance well past threshold.
 	fakeClock.Advance(10 * time.Minute)
@@ -206,8 +206,8 @@ func TestRefreshTokens_InitialSweepMintsForAdoptedPrincipals(t *testing.T) {
 			{Actions: []string{"artifact/read"}},
 		},
 	})
-	daemon.running["agent/adopted"] = true
-	daemon.lastSpecs["agent/adopted"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/adopted")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/adopted")] = &schema.SandboxSpec{
 		RequiredServices: []string{"artifact"},
 	}
 	// lastTokenMint intentionally NOT set — zero value.
@@ -227,7 +227,7 @@ func TestRefreshTokens_InitialSweepMintsForAdoptedPrincipals(t *testing.T) {
 	}
 
 	// lastTokenMint should now be set.
-	if daemon.lastTokenMint["agent/adopted"].IsZero() {
+	if daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/adopted")].IsZero() {
 		t.Error("lastTokenMint should be set after initial sweep")
 	}
 }
@@ -243,17 +243,17 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 			{Actions: []string{"ticket/read"}},
 		},
 	})
-	daemon.running["agent/alpha"] = true
-	daemon.lastSpecs["agent/alpha"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint["agent/alpha"] = fakeClock.Now()
+	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
 
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
 	if len(initialToken.Grants) != 1 {
@@ -268,7 +268,7 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 			{Actions: []string{"ticket/create", "ticket/close"}},
 		},
 	})
-	daemon.lastTokenMint["agent/alpha"] = time.Time{} // force re-mint
+	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = time.Time{} // force re-mint
 
 	// Advance only 1 second (well before the normal 4-minute threshold).
 	fakeClock.Advance(1 * time.Second)
@@ -290,32 +290,32 @@ func TestTokenRefreshCandidates(t *testing.T) {
 	startTime := fakeClock.Now()
 
 	// Principal with tokens minted at start time (not yet due).
-	daemon.running["agent/fresh"] = true
-	daemon.lastSpecs["agent/fresh"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/fresh")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/fresh")] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
-	daemon.lastTokenMint["agent/fresh"] = startTime
+	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/fresh")] = startTime
 
 	// Principal with zero lastTokenMint (adopted, never minted).
-	daemon.running["agent/adopted"] = true
-	daemon.lastSpecs["agent/adopted"] = &schema.SandboxSpec{
+	daemon.running[testEntity(t, daemon.fleet, "agent/adopted")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/adopted")] = &schema.SandboxSpec{
 		RequiredServices: []string{"artifact"},
 	}
 
 	// Principal with no required services (should be skipped).
-	daemon.running["agent/noservices"] = true
-	daemon.lastSpecs["agent/noservices"] = &schema.SandboxSpec{}
+	daemon.running[testEntity(t, daemon.fleet, "agent/noservices")] = true
+	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/noservices")] = &schema.SandboxSpec{}
 
 	// Principal with nil spec (should be skipped).
-	daemon.running["agent/nospec"] = true
+	daemon.running[testEntity(t, daemon.fleet, "agent/nospec")] = true
 
 	// At start time, only agent/adopted should be a candidate (zero mint time).
 	candidates := daemon.tokenRefreshCandidates(startTime)
 	if len(candidates) != 1 {
 		t.Fatalf("at start: expected 1 candidate, got %d", len(candidates))
 	}
-	if candidates[0].localpart != "agent/adopted" {
-		t.Errorf("at start: candidate = %q, want %q", candidates[0].localpart, "agent/adopted")
+	if candidates[0].principal.AccountLocalpart() != "agent/adopted" {
+		t.Errorf("at start: candidate = %q, want %q", candidates[0].principal.AccountLocalpart(), "agent/adopted")
 	}
 
 	// Advance past threshold: both agent/fresh and agent/adopted should
@@ -326,11 +326,11 @@ func TestTokenRefreshCandidates(t *testing.T) {
 		t.Fatalf("past threshold: expected 2 candidates, got %d", len(candidates))
 	}
 	// Sorted by localpart.
-	if candidates[0].localpart != "agent/adopted" {
-		t.Errorf("past threshold: first candidate = %q, want %q", candidates[0].localpart, "agent/adopted")
+	if candidates[0].principal.AccountLocalpart() != "agent/adopted" {
+		t.Errorf("past threshold: first candidate = %q, want %q", candidates[0].principal.AccountLocalpart(), "agent/adopted")
 	}
-	if candidates[1].localpart != "agent/fresh" {
-		t.Errorf("past threshold: second candidate = %q, want %q", candidates[1].localpart, "agent/fresh")
+	if candidates[1].principal.AccountLocalpart() != "agent/fresh" {
+		t.Errorf("past threshold: second candidate = %q, want %q", candidates[1].principal.AccountLocalpart(), "agent/fresh")
 	}
 }
 

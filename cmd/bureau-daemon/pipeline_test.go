@@ -19,68 +19,60 @@ import (
 func TestPipelineLocalpart(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		pipelineRef string
-		wantPrefix  string
-	}{
-		{
-			name:        "ref with colon",
-			pipelineRef: "bureau/pipeline:dev-workspace-init",
-			wantPrefix:  "pipeline/dev-workspace-init/",
-		},
-		{
-			name:        "bare name",
-			pipelineRef: "my-pipeline",
-			wantPrefix:  "pipeline/my-pipeline/",
-		},
-		{
-			name:        "empty ref",
-			pipelineRef: "",
-			wantPrefix:  "pipeline/run/",
-		},
-		{
-			name:        "uppercase normalized",
-			pipelineRef: "bureau/pipeline:My-Pipeline",
-			wantPrefix:  "pipeline/my-pipeline/",
-		},
-		{
-			name:        "long name truncated",
-			pipelineRef: "bureau/pipeline:this-is-a-very-long-pipeline-name-that-exceeds-twenty-chars",
-			wantPrefix:  "pipeline/this-is-a-very-long-/",
-		},
-		{
-			name:        "special characters sanitized",
-			pipelineRef: "bureau/pipeline:my_pipeline.v2",
-			wantPrefix:  "pipeline/my-pipeline-v2/",
-		},
+	d := &Daemon{}
+
+	// First call produces pipeline/1.
+	first := d.pipelineLocalpart()
+	if first != "pipeline/1" {
+		t.Errorf("first pipelineLocalpart() = %q, want %q", first, "pipeline/1")
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			result := pipelineLocalpart(test.pipelineRef)
-			if !strings.HasPrefix(result, test.wantPrefix) {
-				t.Errorf("pipelineLocalpart(%q) = %q, want prefix %q",
-					test.pipelineRef, result, test.wantPrefix)
-			}
-			// Verify the localpart ends with a numeric timestamp.
-			afterPrefix := result[len(test.wantPrefix):]
-			if afterPrefix == "" {
-				t.Errorf("pipelineLocalpart(%q) = %q, missing timestamp suffix",
-					test.pipelineRef, result)
-			}
-		})
+	// Second call produces pipeline/2 (monotonically increasing).
+	second := d.pipelineLocalpart()
+	if second != "pipeline/2" {
+		t.Errorf("second pipelineLocalpart() = %q, want %q", second, "pipeline/2")
 	}
 
-	// Verify uniqueness: two calls produce different localparts.
-	first := pipelineLocalpart("test")
-	second := pipelineLocalpart("test")
-	// They could be the same if called within the same millisecond,
-	// but the timestamp should differ for calls separated by any delay.
-	// For a simple check, just verify they're non-empty.
-	if first == "" || second == "" {
-		t.Error("pipelineLocalpart should produce non-empty strings")
+	// Uniqueness: every call produces a different localpart.
+	if first == second {
+		t.Errorf("pipelineLocalpart should produce unique values, got %q twice", first)
+	}
+}
+
+func TestWorktreeLocalpart(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+
+	// Worktree localparts use the same counter as pipelines.
+	first := d.worktreeLocalpart()
+	if first != "worktree/1" {
+		t.Errorf("first worktreeLocalpart() = %q, want %q", first, "worktree/1")
+	}
+
+	second := d.worktreeLocalpart()
+	if second != "worktree/2" {
+		t.Errorf("second worktreeLocalpart() = %q, want %q", second, "worktree/2")
+	}
+}
+
+func TestEphemeralCounterSharedAcrossTypes(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+
+	pipeline := d.pipelineLocalpart()
+	worktree := d.worktreeLocalpart()
+	pipeline2 := d.pipelineLocalpart()
+
+	if pipeline != "pipeline/1" {
+		t.Errorf("pipeline = %q, want %q", pipeline, "pipeline/1")
+	}
+	if worktree != "worktree/2" {
+		t.Errorf("worktree = %q, want %q", worktree, "worktree/2")
+	}
+	if pipeline2 != "pipeline/3" {
+		t.Errorf("pipeline2 = %q, want %q", pipeline2, "pipeline/3")
 	}
 }
 

@@ -285,8 +285,12 @@ func runProvision(args []string) error {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
 	}
 
-	// Publish the credentials state event.
-	principalUserID := principal.MatrixUserID(principalName, serverName)
+	// Parse principal into typed ref for the user ID.
+	principalEntity, err := ref.ParseEntityLocalpart(principalName, serverName)
+	if err != nil {
+		return fmt.Errorf("invalid principal name: %w", err)
+	}
+	principalUserID := principalEntity.UserID()
 	credEvent := schema.Credentials{
 		Version:       1,
 		Principal:     principalUserID,
@@ -340,7 +344,8 @@ func runAssign(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
-	if err := principal.ValidateLocalpart(principalName); err != nil {
+	principalEntity, err := ref.ParseEntityLocalpart(principalName, serverName)
+	if err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
 
@@ -379,7 +384,7 @@ func runAssign(args []string) error {
 	// Check if the principal is already assigned.
 	found := false
 	for i, assignment := range config.Principals {
-		if assignment.Localpart == principalName {
+		if assignment.Principal.Localpart() == principalName {
 			// Update the existing assignment.
 			config.Principals[i].Template = template
 			config.Principals[i].AutoStart = autoStart
@@ -390,7 +395,7 @@ func runAssign(args []string) error {
 
 	if !found {
 		config.Principals = append(config.Principals, schema.PrincipalAssignment{
-			Localpart: principalName,
+			Principal: principalEntity,
 			Template:  template,
 			AutoStart: autoStart,
 		})
@@ -486,7 +491,7 @@ func runList(args []string) error {
 				if assignment.AutoStart {
 					autoStartStr = " [auto-start]"
 				}
-				fmt.Printf("  %s (template=%s)%s\n", assignment.Localpart, assignment.Template, autoStartStr)
+				fmt.Printf("  %s (template=%s)%s\n", assignment.Principal.Localpart(), assignment.Template, autoStartStr)
 			}
 			fmt.Println()
 		}

@@ -294,7 +294,7 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 		return 0, cli.Internal("reading machine room state: %w", err)
 	}
 
-	binding := schema.RoomServiceContent{Principal: service.UserID()}
+	binding := schema.RoomServiceContent{Principal: service.Entity()}
 	count := 0
 
 	for _, event := range events {
@@ -361,14 +361,20 @@ func publishFleetAssignment(ctx context.Context, session messaging.Session, mach
 
 	// Check if the principal already exists.
 	for _, existing := range config.Principals {
-		if existing.Localpart == service.Localpart() {
+		if existing.Principal.Localpart() == service.Localpart() {
 			fmt.Fprintf(os.Stderr, "Principal %s already in MachineConfig, skipping.\n", service.Localpart())
 			return nil
 		}
 	}
 
+	// Convert the Service ref to a generic Entity for the PrincipalAssignment.
+	principalEntity, err := ref.ParseEntityLocalpart(service.Localpart(), service.Server())
+	if err != nil {
+		return cli.Internal("converting service ref to entity: %w", err)
+	}
+
 	config.Principals = append(config.Principals, schema.PrincipalAssignment{
-		Localpart: service.Localpart(),
+		Principal: principalEntity,
 		AutoStart: false,
 		Labels: map[string]string{
 			"role":    "service",

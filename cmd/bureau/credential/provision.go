@@ -87,6 +87,10 @@ machine and an operator escrow key for recovery.`,
 			if err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}
+			principalEntity, err := ref.ParseEntityLocalpart(params.Principal, params.ServerName)
+			if err != nil {
+				return cli.Validation("invalid principal name: %v", err)
+			}
 
 			// Read the credential JSON from file or stdin.
 			credentials, err := readCredentialInput(params.FromFile)
@@ -104,7 +108,7 @@ machine and an operator escrow key for recovery.`,
 
 			result, err := libcred.Provision(ctx, session, libcred.ProvisionParams{
 				Machine:     machine,
-				Principal:   params.Principal,
+				Principal:   principalEntity,
 				EscrowKey:   params.EscrowKey,
 				Credentials: credentials,
 			})

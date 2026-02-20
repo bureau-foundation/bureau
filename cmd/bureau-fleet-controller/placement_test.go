@@ -234,7 +234,7 @@ func TestScoreMachineIneligibleAntiAffinity(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.assignments["service/llm/large"] = &schema.PrincipalAssignment{
-		Localpart: "service/llm/large",
+		Principal: testEntity(t, "service/llm/large"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 	fc.machines["machine/hasllm"] = machine
@@ -302,7 +302,7 @@ func TestScoreMachineCoLocateBonus(t *testing.T) {
 	// Machine with co-located service.
 	machineWith := standardMachine()
 	machineWith.assignments["service/rag/local"] = &schema.PrincipalAssignment{
-		Localpart: "service/rag/local",
+		Principal: testEntity(t, "service/rag/local"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 	fc.machines["machine/colocated"] = machineWith

@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -87,9 +88,9 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	}
 
 	// --- Register principals ---
-	setupAccount := registerPrincipal(t, "wst/lifecycle/setup", "test-password")
-	agentAccount := registerPrincipal(t, "wst/lifecycle/agent/0", "test-password")
-	teardownAccount := registerPrincipal(t, "wst/lifecycle/teardown", "test-password")
+	setupAccount := registerFleetPrincipal(t, fleet, "wst/lifecycle/setup", "test-password")
+	agentAccount := registerFleetPrincipal(t, fleet, "wst/lifecycle/agent/0", "test-password")
+	teardownAccount := registerFleetPrincipal(t, fleet, "wst/lifecycle/teardown", "test-password")
 
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
@@ -100,16 +101,23 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// The daemon reads this from the config room via /sync and reconciles.
 	// Setup starts immediately, agent and teardown are deferred by their
 	// StartConditions.
+	buildEntity := func(localpart string) ref.Entity {
+		entity, entityErr := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), localpart)
+		if entityErr != nil {
+			t.Fatalf("build principal entity for %s: %v", localpart, entityErr)
+		}
+		return entity
+	}
 	machineConfig := schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: setupAccount.Localpart,
+				Principal: buildEntity(setupAccount.Localpart),
 				Template:  "",
 				AutoStart: true,
 				Labels:    map[string]string{"role": "setup"},
 			},
 			{
-				Localpart: agentAccount.Localpart,
+				Principal: buildEntity(agentAccount.Localpart),
 				Template:  "",
 				AutoStart: true,
 				Labels:    map[string]string{"role": "agent"},
@@ -121,7 +129,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 				},
 			},
 			{
-				Localpart: teardownAccount.Localpart,
+				Principal: buildEntity(teardownAccount.Localpart),
 				Template:  "",
 				AutoStart: true,
 				Labels:    map[string]string{"role": "teardown"},
@@ -140,9 +148,9 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 		t.Fatalf("push machine config: %v", err)
 	}
 
-	setupSocket := machine.PrincipalSocketPath(setupAccount.Localpart)
-	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
-	teardownSocket := machine.PrincipalSocketPath(teardownAccount.Localpart)
+	setupSocket := machine.PrincipalSocketPath(t, setupAccount.Localpart)
+	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
+	teardownSocket := machine.PrincipalSocketPath(t, teardownAccount.Localpart)
 
 	// --- Phase 1: Setup starts, agent and teardown are deferred ---
 	t.Log("phase 1: verifying setup starts with pending workspace status")
@@ -310,12 +318,15 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	initTestGitRepo(t, ctx, seedRepoPath)
 
 	// --- Register principals ---
-	// workspace create generates localparts: <alias>/setup, <alias>/agent/0,
-	// <alias>/teardown. The CLI doesn't register accounts — in production,
-	// credential provisioning handles this. The test pre-creates them.
-	setupAccount := registerPrincipal(t, "wscli/main/setup", "test-password")
-	agentAccount := registerPrincipal(t, "wscli/main/agent/0", "test-password")
-	teardownAccount := registerPrincipal(t, "wscli/main/teardown", "test-password")
+	// workspace create generates localparts: agent/<alias>/setup,
+	// agent/<alias>/<index>, agent/<alias>/teardown. In production,
+	// credential provisioning (principal.Create) registers accounts with
+	// fleet-scoped localparts. Use registerFleetPrincipal to match production:
+	// the proxy authenticates as the fleet-scoped user, which the daemon
+	// invites to the workspace room via ensurePrincipalRoomAccess.
+	setupAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/setup", "test-password")
+	agentAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/0", "test-password")
+	teardownAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/teardown", "test-password")
 
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
@@ -389,7 +400,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Logf("workspace state verified: project=%s, machine=%s, status=%s", activeState.Project, activeState.Machine, activeState.Status)
 
 	// --- Phase 3: Verify agent started and its proxy works ---
-	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
+	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
 	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
 

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
 )
 
@@ -287,7 +287,17 @@ func (l *Launcher) reconnectSandboxes() error {
 
 		// Verify the admin socket exists. A live process without its
 		// socket is wedged — kill it and let the daemon recreate.
-		adminSocketPath := principal.RunDirAdminSocketPath(l.runDir, localpart)
+		principalRef, parseErr := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), localpart)
+		if parseErr != nil {
+			l.logger.Warn("cannot parse principal localpart for reconnection, killing proxy",
+				"principal", localpart, "proxy_pid", entry.ProxyPID, "error", parseErr)
+			process.Kill()
+			var status syscall.WaitStatus
+			syscall.Wait4(entry.ProxyPID, &status, 0, nil)
+			cleanupConfigDir(entry.ConfigDir)
+			continue
+		}
+		adminSocketPath := principalRef.AdminSocketPath(l.fleetRunDir)
 		if _, err := os.Stat(adminSocketPath); err != nil {
 			l.logger.Warn("reconnected sandbox admin socket missing, killing wedged proxy",
 				"principal", localpart, "proxy_pid", entry.ProxyPID,

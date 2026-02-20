@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -86,12 +87,15 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 	daemon.launcherSocket = launcherSocket
 
 	// Pre-populate running state with 3 principals.
-	daemon.running["agent/alpha"] = true
-	daemon.running["agent/beta"] = true
-	daemon.running["agent/gamma"] = true
-	daemon.lastSpecs["agent/alpha"] = &schema.SandboxSpec{}
-	daemon.lastSpecs["agent/beta"] = &schema.SandboxSpec{}
-	daemon.lastSpecs["agent/gamma"] = &schema.SandboxSpec{}
+	alphaEntity := testEntity(t, daemon.fleet, "agent/alpha")
+	betaEntity := testEntity(t, daemon.fleet, "agent/beta")
+	gammaEntity := testEntity(t, daemon.fleet, "agent/gamma")
+	daemon.running[alphaEntity] = true
+	daemon.running[betaEntity] = true
+	daemon.running[gammaEntity] = true
+	daemon.lastSpecs[alphaEntity] = &schema.SandboxSpec{}
+	daemon.lastSpecs[betaEntity] = &schema.SandboxSpec{}
+	daemon.lastSpecs[gammaEntity] = &schema.SandboxSpec{}
 
 	// Set up shutdownCancel to verify it's called.
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
@@ -113,15 +117,16 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 		t.Error("shutdownCtx should be cancelled after emergency shutdown")
 	}
 
-	// Collect destroyed principals.
+	// Collect destroyed principals. The IPC Principal field contains the
+	// account localpart (e.g., "agent/alpha"), not the fleet-scoped localpart.
 	close(destroyedPrincipals)
 	destroyed := make(map[string]bool)
 	for principal := range destroyedPrincipals {
 		destroyed[principal] = true
 	}
-	for _, expected := range []string{"agent/alpha", "agent/beta", "agent/gamma"} {
-		if !destroyed[expected] {
-			t.Errorf("expected destroy-sandbox IPC for %q", expected)
+	for _, entity := range []ref.Entity{alphaEntity, betaEntity, gammaEntity} {
+		if !destroyed[entity.AccountLocalpart()] {
+			t.Errorf("expected destroy-sandbox IPC for %q", entity.AccountLocalpart())
 		}
 	}
 }
@@ -135,10 +140,12 @@ func TestEmergencyShutdown_LauncherIPCFailure(t *testing.T) {
 	// Point at a nonexistent socket — all IPC calls will fail.
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 
-	daemon.running["agent/alpha"] = true
-	daemon.running["agent/beta"] = true
-	daemon.lastSpecs["agent/alpha"] = &schema.SandboxSpec{}
-	daemon.lastSpecs["agent/beta"] = &schema.SandboxSpec{}
+	alphaEntity := testEntity(t, daemon.fleet, "agent/alpha")
+	betaEntity := testEntity(t, daemon.fleet, "agent/beta")
+	daemon.running[alphaEntity] = true
+	daemon.running[betaEntity] = true
+	daemon.lastSpecs[alphaEntity] = &schema.SandboxSpec{}
+	daemon.lastSpecs[betaEntity] = &schema.SandboxSpec{}
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	daemon.shutdownCtx = shutdownCtx
@@ -198,8 +205,9 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 
 	// Pre-populate a running principal to verify it gets destroyed.
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{}
+	testAgentEntity := testEntity(t, daemon.fleet, "agent/test")
+	daemon.running[testAgentEntity] = true
+	daemon.lastSpecs[testAgentEntity] = &schema.SandboxSpec{}
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	daemon.shutdownCtx = shutdownCtx

@@ -13,9 +13,19 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+func testEntity(t *testing.T, userID string) ref.Entity {
+	t.Helper()
+	entity, err := ref.ParseEntityUserID(userID)
+	if err != nil {
+		t.Fatalf("parsing test entity %q: %v", userID, err)
+	}
+	return entity
+}
 
 // impactTestState extends the mock Matrix server pattern from
 // lib/template/resolve_test.go with JoinedRooms and GetRoomState support
@@ -257,7 +267,7 @@ func TestImpactDirectReference(t *testing.T) {
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "test/agent",
+				Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"),
 				Template:  "bureau/template:agent",
 			},
 		},
@@ -289,8 +299,8 @@ func TestImpactDirectReference(t *testing.T) {
 	if len(affected) != 1 {
 		t.Fatalf("affected count = %d, want 1", len(affected))
 	}
-	if affected[0].Principal != "test/agent" {
-		t.Errorf("Principal = %q, want test/agent", affected[0].Principal)
+	if affected[0].Principal != "bureau/fleet/test/agent/test-agent" {
+		t.Errorf("Principal = %q, want bureau/fleet/test/agent/test-agent", affected[0].Principal)
 	}
 	if affected[0].Depth != 0 {
 		t.Errorf("Depth = %d, want 0 (direct reference)", affected[0].Depth)
@@ -340,8 +350,8 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	// Principal uses the grandchild template. Impact analysis targets the base.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/llm", Template: "bureau/template:llm-agent"},
-			{Localpart: "test/plain", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/llm:test.local"), Template: "bureau/template:llm-agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/plain:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -370,25 +380,25 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	var llmResult, plainResult *impactResult
 	for _, result := range affected {
 		switch result.Principal {
-		case "test/llm":
+		case "bureau/fleet/test/agent/llm":
 			llmResult = result
-		case "test/plain":
+		case "bureau/fleet/test/agent/plain":
 			plainResult = result
 		}
 	}
 
 	if llmResult == nil {
-		t.Fatal("test/llm not found in affected results")
+		t.Fatal("bureau/fleet/test/agent/llm not found in affected results")
 	}
 	if llmResult.Depth != 2 {
-		t.Errorf("test/llm depth = %d, want 2 (grandchild → child → base)", llmResult.Depth)
+		t.Errorf("bureau/fleet/test/agent/llm depth = %d, want 2 (grandchild → child → base)", llmResult.Depth)
 	}
 
 	if plainResult == nil {
-		t.Fatal("test/plain not found in affected results")
+		t.Fatal("bureau/fleet/test/agent/plain not found in affected results")
 	}
 	if plainResult.Depth != 1 {
-		t.Errorf("test/plain depth = %d, want 1 (child → base)", plainResult.Depth)
+		t.Errorf("bureau/fleet/test/agent/plain depth = %d, want 1 (child → base)", plainResult.Depth)
 	}
 }
 
@@ -416,7 +426,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -458,14 +468,14 @@ func TestImpactMultipleMachines(t *testing.T) {
 	// Two machines, each with principals referencing the same template.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "ws/agent-a", Template: "bureau/template:base"},
-			{Localpart: "ws/agent-b", Template: "bureau/template:base"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/ws-a:test.local"), Template: "bureau/template:base"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/ws-b:test.local"), Template: "bureau/template:base"},
 		},
 	})
 
 	state.addConfigRoom("!config-gpu:test", "machine/gpu-server", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "gpu/training", Template: "bureau/template:base"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/gpu-training:test.local"), Template: "bureau/template:base"},
 		},
 	})
 
@@ -525,7 +535,7 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart:       "test/overridden",
+				Principal:       testEntity(t, "@bureau/fleet/test/agent/overridden:test.local"),
 				Template:        "bureau/template:agent",
 				CommandOverride: []string{"/usr/bin/custom-agent"},
 				ExtraEnvironmentVariables: map[string]string{
@@ -536,12 +546,12 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 				},
 			},
 			{
-				Localpart:           "test/env-override",
+				Principal:           testEntity(t, "@bureau/fleet/test/agent/env-override:test.local"),
 				Template:            "bureau/template:agent",
 				EnvironmentOverride: "/nix/store/custom-env",
 			},
 			{
-				Localpart: "test/no-overrides",
+				Principal: testEntity(t, "@bureau/fleet/test/agent/no-overrides:test.local"),
 				Template:  "bureau/template:agent",
 			},
 		},
@@ -574,12 +584,12 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 		resultMap[result.Principal] = result
 	}
 
-	overridden := resultMap["test/overridden"]
+	overridden := resultMap["bureau/fleet/test/agent/overridden"]
 	if overridden == nil {
-		t.Fatal("test/overridden not found")
+		t.Fatal("bureau/fleet/test/agent/overridden not found")
 	}
 	if len(overridden.Overrides) != 3 {
-		t.Errorf("test/overridden overrides = %v, want 3 entries", overridden.Overrides)
+		t.Errorf("bureau/fleet/test/agent/overridden overrides = %v, want 3 entries", overridden.Overrides)
 	}
 	expectedOverrides := map[string]bool{
 		"command_override":            true,
@@ -592,20 +602,20 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 		}
 	}
 
-	envOverride := resultMap["test/env-override"]
+	envOverride := resultMap["bureau/fleet/test/agent/env-override"]
 	if envOverride == nil {
-		t.Fatal("test/env-override not found")
+		t.Fatal("bureau/fleet/test/agent/env-override not found")
 	}
 	if len(envOverride.Overrides) != 1 || envOverride.Overrides[0] != "environment_override" {
-		t.Errorf("test/env-override overrides = %v, want [environment_override]", envOverride.Overrides)
+		t.Errorf("bureau/fleet/test/agent/env-override overrides = %v, want [environment_override]", envOverride.Overrides)
 	}
 
-	noOverrides := resultMap["test/no-overrides"]
+	noOverrides := resultMap["bureau/fleet/test/agent/no-overrides"]
 	if noOverrides == nil {
-		t.Fatal("test/no-overrides not found")
+		t.Fatal("bureau/fleet/test/agent/no-overrides not found")
 	}
 	if len(noOverrides.Overrides) != 0 {
-		t.Errorf("test/no-overrides overrides = %v, want empty", noOverrides.Overrides)
+		t.Errorf("bureau/fleet/test/agent/no-overrides overrides = %v, want empty", noOverrides.Overrides)
 	}
 }
 
@@ -626,7 +636,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -686,7 +696,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -738,7 +748,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -792,7 +802,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -865,7 +875,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 	// Principal uses the child template. Impact targets the base.
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
 	})
 
@@ -933,8 +943,8 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 
 	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:agent"},
-			{Localpart: "test/no-template", Template: ""},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/no-template:test.local"), Template: ""},
 		},
 	})
 
@@ -958,8 +968,8 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 	if len(affected) != 1 {
 		t.Fatalf("affected count = %d, want 1 (principal without template should be skipped)", len(affected))
 	}
-	if affected[0].Principal != "test/agent" {
-		t.Errorf("Principal = %q, want test/agent", affected[0].Principal)
+	if affected[0].Principal != "bureau/fleet/test/agent/test-agent" {
+		t.Errorf("Principal = %q, want bureau/fleet/test/agent/test-agent", affected[0].Principal)
 	}
 }
 

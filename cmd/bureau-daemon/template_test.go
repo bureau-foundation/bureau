@@ -514,8 +514,10 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 		},
 	}
 
+	_, fleet := testMachineSetup(t, "test", "test.local")
+
 	assignment := &schema.PrincipalAssignment{
-		Localpart:           "iree/amdgpu/pm",
+		Principal:           testEntity(t, fleet, "iree/amdgpu/pm"),
 		Template:            "bureau/template:llm-agent",
 		CommandOverride:     []string{"/usr/local/bin/custom-agent", "--gpu"},
 		EnvironmentOverride: "/nix/store/xyz-custom-env",
@@ -592,8 +594,10 @@ func TestResolveInstanceConfigNoOverrides(t *testing.T) {
 		},
 	}
 
+	_, fleet := testMachineSetup(t, "test", "test.local")
+
 	assignment := &schema.PrincipalAssignment{
-		Localpart: "test/agent",
+		Principal: testEntity(t, fleet, "test/agent"),
 		Template:  "bureau/template:bash",
 	}
 
@@ -633,8 +637,10 @@ func TestResolveInstanceConfigCarriesProxyServices(t *testing.T) {
 		},
 	}
 
+	_, fleet := testMachineSetup(t, "test", "test.local")
+
 	assignment := &schema.PrincipalAssignment{
-		Localpart: "test/claude-agent",
+		Principal: testEntity(t, fleet, "test/claude-agent"),
 		Template:  "bureau/template:claude",
 	}
 

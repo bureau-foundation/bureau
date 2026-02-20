@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/hwinfo"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -56,25 +57,27 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		// All map fields — adding a new map to Daemon means adding
 		// it here so no test panics on nil map write.
 		failedExecPaths:       make(map[string]bool),
-		startFailures:         make(map[string]*startFailure),
-		running:               make(map[string]bool),
-		exitWatchers:          make(map[string]context.CancelFunc),
-		proxyExitWatchers:     make(map[string]context.CancelFunc),
-		lastCredentials:       make(map[string]string),
-		lastGrants:            make(map[string][]schema.Grant),
-		lastTokenMint:         make(map[string]time.Time),
-		activeTokens:          make(map[string][]activeToken),
-		lastServiceMounts:     make(map[string][]launcherServiceMount),
-		lastObserveAllowances: make(map[string][]schema.Allowance),
-		lastSpecs:             make(map[string]*schema.SandboxSpec),
-		previousSpecs:         make(map[string]*schema.SandboxSpec),
-		lastTemplates:         make(map[string]*schema.TemplateContent),
-		healthMonitors:        make(map[string]*healthMonitor),
+		startFailures:         make(map[ref.Entity]*startFailure),
+		running:               make(map[ref.Entity]bool),
+		pipelineExecutors:     make(map[ref.Entity]bool),
+		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
+		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
+		lastCredentials:       make(map[ref.Entity]string),
+		lastGrants:            make(map[ref.Entity][]schema.Grant),
+		lastTokenMint:         make(map[ref.Entity]time.Time),
+		activeTokens:          make(map[ref.Entity][]activeToken),
+		lastServiceMounts:     make(map[ref.Entity][]launcherServiceMount),
+		lastObserveAllowances: make(map[ref.Entity][]schema.Allowance),
+		lastSpecs:             make(map[ref.Entity]*schema.SandboxSpec),
+		previousSpecs:         make(map[ref.Entity]*schema.SandboxSpec),
+		lastTemplates:         make(map[ref.Entity]*schema.TemplateContent),
+		healthMonitors:        make(map[ref.Entity]*healthMonitor),
+		previousCgroupCPU:     make(map[ref.Entity]*hwinfo.CgroupCPUReading),
 		services:              make(map[string]*schema.Service),
 		proxyRoutes:           make(map[string]string),
 		peerAddresses:         make(map[string]string),
 		peerTransports:        make(map[string]http.RoundTripper),
-		layoutWatchers:        make(map[string]*layoutWatcher),
+		layoutWatchers:        make(map[ref.Entity]*layoutWatcher),
 		tunnels:               make(map[string]*tunnelInstance),
 		validateCommandFunc:   func(string, string) error { return nil },
 	}
@@ -99,4 +102,15 @@ func testMachineSetup(t *testing.T, name, server string) (ref.Machine, ref.Fleet
 		t.Fatalf("create test machine: %v", err)
 	}
 	return machine, fleet
+}
+
+// testEntity constructs a ref.Entity from a fleet and a bare account
+// localpart (e.g., "agent/test", "service/stt/whisper"). Fatal on error.
+func testEntity(t *testing.T, fleet ref.Fleet, accountLocalpart string) ref.Entity {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(fleet, accountLocalpart)
+	if err != nil {
+		t.Fatalf("testEntity(%q): %v", accountLocalpart, err)
+	}
+	return entity
 }

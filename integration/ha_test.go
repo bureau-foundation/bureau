@@ -37,7 +37,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 	// Register the service principal and push credentials so the daemon
 	// can create a sandbox after acquiring the lease.
 	serviceLocalpart := "service/ha/acquire"
-	serviceAccount := registerPrincipal(t, serviceLocalpart, "ha-acquire-password")
+	serviceAccount := registerFleetPrincipal(t, fleet, serviceLocalpart, "ha-acquire-password")
 	pushCredentials(t, admin, machine, serviceAccount)
 
 	// Publish a template for the service.
@@ -82,7 +82,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 	}
 	var foundAssignment bool
 	for _, assignment := range config.Principals {
-		if assignment.Localpart == serviceLocalpart {
+		if assignment.Principal.AccountLocalpart() == serviceLocalpart {
 			foundAssignment = true
 			if assignment.Template != templateRef {
 				t.Errorf("assignment template = %q, want %q", assignment.Template, templateRef)
@@ -100,7 +100,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	// Wait for the proxy socket — proves the full end-to-end path:
 	// HA acquisition → PrincipalAssignment → reconcile → sandbox creation.
-	proxySocket := machine.PrincipalSocketPath(serviceLocalpart)
+	proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
 	waitForFile(t, proxySocket)
 
 	// Verify the proxy serves the correct identity.
@@ -173,7 +173,7 @@ func TestHALeaseFailover(t *testing.T) {
 	// Register the service principal and push credentials to both
 	// machines so either can create a sandbox after acquiring the lease.
 	serviceLocalpart := "service/ha/failover"
-	serviceAccount := registerPrincipal(t, serviceLocalpart, "ha-failover-password")
+	serviceAccount := registerFleetPrincipal(t, fleet, serviceLocalpart, "ha-failover-password")
 	pushCredentials(t, admin, machineA, serviceAccount)
 	pushCredentials(t, admin, machineB, serviceAccount)
 
@@ -226,7 +226,7 @@ func TestHALeaseFailover(t *testing.T) {
 	}
 
 	// Wait for the proxy socket on the winner.
-	winnerProxySocket := winner.PrincipalSocketPath(serviceLocalpart)
+	winnerProxySocket := winner.PrincipalSocketPath(t, serviceLocalpart)
 	waitForFile(t, winnerProxySocket)
 
 	proxyClient := proxyHTTPClient(winnerProxySocket)
@@ -268,7 +268,7 @@ func TestHALeaseFailover(t *testing.T) {
 	t.Logf("failover lease acquired by %s", loser.Name)
 
 	// Wait for the proxy socket on the loser (now the new holder).
-	loserProxySocket := loser.PrincipalSocketPath(serviceLocalpart)
+	loserProxySocket := loser.PrincipalSocketPath(t, serviceLocalpart)
 	waitForFile(t, loserProxySocket)
 
 	loserProxyClient := proxyHTTPClient(loserProxySocket)

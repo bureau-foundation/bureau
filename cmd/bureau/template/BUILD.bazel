@@ -35,6 +35,7 @@ go_test(
     ],
     embed = [":template"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//messaging",
     ],

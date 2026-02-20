@@ -212,6 +212,7 @@ func run() error {
 		machine:         machine,
 		homeserverURL:   homeserverURL,
 		runDir:          runDir,
+		fleetRunDir:     machine.Fleet().RunDir(runDir),
 		stateDir:        stateDir,
 		proxyBinaryPath: proxyBinaryPath,
 		workspaceRoot:   workspaceRoot,

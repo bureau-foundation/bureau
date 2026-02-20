@@ -221,7 +221,7 @@ current resource usage, and all assigned principals.`,
 					if assignment.AutoStart {
 						autoStart = "auto"
 					}
-					fmt.Fprintf(writer, "  %s\t%s\t%s\n", assignment.Localpart, assignment.Template, autoStart)
+					fmt.Fprintf(writer, "  %s\t%s\t%s\n", assignment.Principal.Localpart(), assignment.Template, autoStart)
 				}
 			}
 			writer.Flush()

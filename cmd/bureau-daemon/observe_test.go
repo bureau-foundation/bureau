@@ -179,16 +179,17 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		t.Fatalf("NewClient: %v", err)
 	}
 
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
+
 	var principals []schema.PrincipalAssignment
 	for _, localpart := range runningPrincipals {
 		principals = append(principals, schema.PrincipalAssignment{
-			Localpart: localpart,
+			Principal: testEntity(t, daemon.fleet, localpart),
 			AutoStart: true,
 		})
 	}
 
-	daemon, _ := newTestDaemon(t)
-	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.client = client
 	daemon.tokenVerifier = newTokenVerifier(client, 5*time.Minute, clock.Real(), logger)
@@ -196,7 +197,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		Principals: principals,
 	}
 	for _, localpart := range runningPrincipals {
-		daemon.running[localpart] = true
+		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
 		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
 	daemon.observeSocketPath = observeSocketPath
@@ -263,20 +264,20 @@ func TestListLocalPrincipals(t *testing.T) {
 		foundPrincipals[principal.Localpart] = principal
 	}
 
-	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper"} {
-		principal, ok := foundPrincipals[localpart]
+	for _, accountLocalpart := range []string{"iree/amdgpu/pm", "service/stt/whisper"} {
+		principal, ok := foundPrincipals[accountLocalpart]
 		if !ok {
-			t.Errorf("missing principal %s", localpart)
+			t.Errorf("missing principal %s", accountLocalpart)
 			continue
 		}
 		if !principal.Observable {
-			t.Errorf("%s should be observable", localpart)
+			t.Errorf("%s should be observable", accountLocalpart)
 		}
 		if !principal.Local {
-			t.Errorf("%s should be local", localpart)
+			t.Errorf("%s should be local", accountLocalpart)
 		}
 		if principal.Machine != daemon.machine.Localpart() {
-			t.Errorf("%s machine = %q, want %q", localpart, principal.Machine, daemon.machine.Localpart())
+			t.Errorf("%s machine = %q, want %q", accountLocalpart, principal.Machine, daemon.machine.Localpart())
 		}
 	}
 
@@ -297,14 +298,15 @@ func TestListWithRemoteServices(t *testing.T) {
 		[]string{"agent/alice"})
 
 	// Add a remote service to the daemon's service directory.
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Principal: testEntity(t, daemon.fleet, "service/tts/piper"),
+		Machine:   remoteMachine,
 		Protocol:  "http",
 	}
 	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
 	// Add the peer address so the remote service is reachable.
-	daemon.peerAddresses["@machine/cloud-gpu:bureau.local"] = "192.168.1.100:9090"
+	daemon.peerAddresses[remoteMachine.UserID()] = "192.168.1.100:9090"
 	daemon.transportDialer = &testTCPDialer{}
 
 	response := connectList(t, daemon.observeSocketPath, false)
@@ -321,7 +323,8 @@ func TestListWithRemoteServices(t *testing.T) {
 		foundPrincipals[principal.Localpart] = principal
 	}
 
-	// Local agent should be observable and local.
+	// Local agent should be observable and local. The list returns bare
+	// account localparts (not fleet-scoped).
 	alice := foundPrincipals["agent/alice"]
 	if !alice.Observable || !alice.Local {
 		t.Errorf("agent/alice: observable=%v local=%v, want true/true", alice.Observable, alice.Local)
@@ -335,8 +338,8 @@ func TestListWithRemoteServices(t *testing.T) {
 	if piper.Local {
 		t.Error("service/tts/piper should not be local")
 	}
-	if piper.Machine != "machine/cloud-gpu" {
-		t.Errorf("service/tts/piper machine = %q, want machine/cloud-gpu", piper.Machine)
+	if piper.Machine != remoteMachine.Localpart() {
+		t.Errorf("service/tts/piper machine = %q, want %q", piper.Machine, remoteMachine.Localpart())
 	}
 
 	// Should see two machines: self + peer.
@@ -350,9 +353,10 @@ func TestListObservableFilter(t *testing.T) {
 		[]string{"agent/alice"})
 
 	// Add a remote service with NO reachable peer (unreachable).
+	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   "@machine/cloud-gpu:bureau.local",
+		Principal: testEntity(t, daemon.fleet, "service/tts/piper"),
+		Machine:   remoteMachine,
 		Protocol:  "http",
 	}
 	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
@@ -376,7 +380,7 @@ func TestListObservableFilter(t *testing.T) {
 		t.Fatalf("filtered: got %d principals, want 1", len(filteredResponse.Principals))
 	}
 	if filteredResponse.Principals[0].Localpart != "agent/alice" {
-		t.Errorf("filtered principal = %q, want agent/alice", filteredResponse.Principals[0].Localpart)
+		t.Errorf("filtered principal = %q, want %q", filteredResponse.Principals[0].Localpart, "agent/alice")
 	}
 }
 
@@ -467,8 +471,9 @@ func TestObserveLocalBridge(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("expected OK response, got error: %s", response.Error)
 	}
-	if response.Session != "bureau/test/echo" {
-		t.Errorf("session = %q, want %q", response.Session, "bureau/test/echo")
+	expectedSession := "bureau/test/echo"
+	if response.Session != expectedSession {
+		t.Errorf("session = %q, want %q", response.Session, expectedSession)
 	}
 	if response.Machine != daemon.machine.Localpart() {
 		t.Errorf("machine = %q, want %q", response.Machine, daemon.machine.Localpart())
@@ -487,8 +492,8 @@ func TestObserveLocalBridge(t *testing.T) {
 	if err := json.Unmarshal(metadataPayload, &metadata); err != nil {
 		t.Fatalf("unmarshal metadata: %v", err)
 	}
-	if metadata["session"] != "bureau/test/echo" {
-		t.Errorf("metadata session = %v, want %q", metadata["session"], "bureau/test/echo")
+	if metadata["session"] != expectedSession {
+		t.Errorf("metadata session = %v, want %q", metadata["session"], expectedSession)
 	}
 
 	// Read history message (empty payload).

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -115,11 +114,12 @@ func runEnable(params *enableParams) error {
 
 	// Derive the service principal localpart from the space name.
 	servicePrincipal := "service/ticket/" + params.Space
-	if err := principal.ValidateLocalpart(servicePrincipal); err != nil {
+	serviceEntity, err := ref.ParseEntityLocalpart(servicePrincipal, params.ServerName)
+	if err != nil {
 		return cli.Internal("invalid service principal %q: %w", servicePrincipal, err)
 	}
 
-	serviceUserID := principal.MatrixUserID(servicePrincipal, params.ServerName)
+	serviceUserID := serviceEntity.UserID()
 	spaceAlias := schema.FullRoomAlias(params.Space, params.ServerName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -167,7 +167,7 @@ func runEnable(params *enableParams) error {
 	// Step 4: Configure each room for ticket management.
 	configuredRooms := make([]string, 0, len(childRoomIDs))
 	for _, roomID := range childRoomIDs {
-		if err := configureRoom(ctx, adminSession, roomID, serviceUserID, params.Prefix); err != nil {
+		if err := configureRoom(ctx, adminSession, roomID, serviceEntity, params.Prefix); err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: failed to configure room %s: %v\n", roomID, err)
 			continue
 		}
@@ -256,7 +256,7 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 	})
 	if registerErr != nil {
 		if messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
-			fmt.Fprintf(os.Stderr, "Service account %s already exists.\n", principal.MatrixUserID(servicePrincipal, serverName))
+			fmt.Fprintf(os.Stderr, "Service account @%s:%s already exists.\n", servicePrincipal, serverName)
 			return nil
 		}
 		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
@@ -286,7 +286,7 @@ func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomI
 // publishPrincipalAssignment adds the ticket service to the machine's
 // MachineConfig via read-modify-write. AutoStart is false because the
 // ticket service binary is externally managed — it runs its own Matrix
-// session and binds its CBOR socket directly to RunDirSocketPath. If
+// session and binds its CBOR socket directly to the fleet-scoped socket path. If
 // AutoStart were true, the daemon would create a proxy at the same
 // socket path, conflicting with the service binary.
 //
@@ -315,14 +315,20 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 
 	// Check if the principal already exists.
 	for _, existing := range config.Principals {
-		if existing.Localpart == servicePrincipal {
+		if existing.Principal.Localpart() == machine.Fleet().Localpart()+"/"+servicePrincipal {
 			fmt.Fprintf(os.Stderr, "Principal %s already in MachineConfig, skipping.\n", servicePrincipal)
 			return nil
 		}
 	}
 
+	// Convert the bare account localpart to a fleet-scoped entity.
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(machine.Fleet(), servicePrincipal)
+	if err != nil {
+		return cli.Internal("constructing principal entity for %s: %w", servicePrincipal, err)
+	}
+
 	config.Principals = append(config.Principals, schema.PrincipalAssignment{
-		Localpart: servicePrincipal,
+		Principal: principalEntity,
 		AutoStart: false,
 		Labels: map[string]string{
 			"role":    "service",
@@ -346,7 +352,7 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
-func configureRoom(ctx context.Context, session messaging.Session, roomID, serviceUserID, prefix string) error {
+func configureRoom(ctx context.Context, session messaging.Session, roomID string, serviceEntity ref.Entity, prefix string) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := schema.TicketConfigContent{
 		Version: schema.TicketConfigVersion,
@@ -359,7 +365,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID, servi
 
 	// Publish room service binding (state_key="ticket").
 	roomService := schema.RoomServiceContent{
-		Principal: serviceUserID,
+		Principal: serviceEntity,
 	}
 	_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeRoomService, "ticket", roomService)
 	if err != nil {
@@ -367,6 +373,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID, servi
 	}
 
 	// Invite the service to the room (idempotent — M_FORBIDDEN means already a member).
+	serviceUserID := serviceEntity.UserID()
 	if err := session.InviteUser(ctx, roomID, serviceUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			return cli.Internal("inviting service: %w", err)

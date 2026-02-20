@@ -95,7 +95,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	// Set up machine config so reconcile finds something.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "test/agent",
+			Principal: testEntity(t, fleet, "test/agent"),
 			AutoStart: true,
 		}},
 	})
@@ -174,14 +174,15 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	const serviceRoomID = "!service:test"
 
 	// Set up the service room with one service via GetRoomState.
+	// User IDs must be fleet-scoped to match the ref.Entity UnmarshalText parser.
 	serviceKey := "service/stt/whisper"
 	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
 			Content: map[string]any{
-				"principal":   "@service/stt/whisper:bureau.local",
-				"machine":     "@machine/remote:bureau.local",
+				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/remote:bureau.local",
 				"protocol":    "http",
 				"description": "Speech to text",
 			},
@@ -224,8 +225,8 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 								Type:     schema.EventTypeService,
 								StateKey: &serviceKey,
 								Content: map[string]any{
-									"principal": "@service/stt/whisper:bureau.local",
-									"machine":   "@machine/remote:bureau.local",
+									"principal": "@bureau/fleet/test/service/stt/whisper:bureau.local",
+									"machine":   "@bureau/fleet/test/machine/remote:bureau.local",
 									"protocol":  "http",
 								},
 							},
@@ -627,7 +628,7 @@ func TestInitialSync(t *testing.T) {
 	// Set up machine config.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "test/agent",
+			Principal: testEntity(t, fleet, "test/agent"),
 			AutoStart: true,
 		}},
 	})
@@ -652,8 +653,8 @@ func TestInitialSync(t *testing.T) {
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
 			Content: map[string]any{
-				"principal":   "@service/tts/piper:bureau.local",
-				"machine":     "@machine/peer:bureau.local",
+				"principal":   "@bureau/fleet/test/service/tts/piper:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/peer:bureau.local",
 				"protocol":    "http",
 				"description": "Text to speech",
 			},
@@ -751,7 +752,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	// Set up machine config so reconcile sets lastConfig.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "test/agent",
+			Principal: testEntity(t, fleet, "test/agent"),
 			AutoStart: true,
 		}},
 	})
@@ -828,7 +829,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	// Set up machine config so reconcile has something to process.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "test/agent",
+			Principal: testEntity(t, fleet, "test/agent"),
 			AutoStart: true,
 		}},
 	})
@@ -902,7 +903,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	// Set up machine config.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "test/agent",
+			Principal: testEntity(t, fleet, "test/agent"),
 			AutoStart: true,
 		}},
 	})

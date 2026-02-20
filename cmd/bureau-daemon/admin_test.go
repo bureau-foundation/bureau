@@ -235,9 +235,12 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	// Mock Matrix state with existing credentials.
+	// Mock Matrix state with existing credentials. The state key must be
+	// fleet-scoped because handleProvisionCredential constructs
+	// fleet.Localpart() + "/" + request.Principal for the lookup.
+	fleetScopedPrincipal := daemon.fleet.Localpart() + "/agent/builder"
 	state := newMockMatrixState()
-	state.setStateEvent(daemon.configRoomID, schema.EventTypeCredentials, "agent/builder", schema.Credentials{
+	state.setStateEvent(daemon.configRoomID, schema.EventTypeCredentials, fleetScopedPrincipal, schema.Credentials{
 		Version:    1,
 		Principal:  "agent/builder",
 		Keys:       []string{"OPENAI_API_KEY"},
@@ -564,7 +567,7 @@ func TestHasCredentialGrants(t *testing.T) {
 			}
 			daemon.authorizationIndex = index
 
-			result := daemon.hasCredentialGrants("connector/test")
+			result := daemon.hasCredentialGrants(testEntity(t, daemon.fleet, "connector/test"))
 			if result != test.expected {
 				t.Errorf("hasCredentialGrants() = %v, want %v", result, test.expected)
 			}
@@ -582,7 +585,7 @@ func TestAppendCredentialServiceMount(t *testing.T) {
 	existing := []launcherServiceMount{
 		{Role: "ticket", SocketPath: "/tmp/ticket.sock"},
 	}
-	result := daemon.appendCredentialServiceMount("agent/plain", existing)
+	result := daemon.appendCredentialServiceMount(testEntity(t, daemon.fleet, "agent/plain"), existing)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 mount for principal without credential grants, got %d", len(result))
 	}
@@ -593,7 +596,7 @@ func TestAppendCredentialServiceMount(t *testing.T) {
 			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"agent/**"}},
 		},
 	})
-	result = daemon.appendCredentialServiceMount("connector/github", existing)
+	result = daemon.appendCredentialServiceMount(testEntity(t, daemon.fleet, "connector/github"), existing)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 mounts for principal with credential grants, got %d", len(result))
 	}
@@ -613,7 +616,7 @@ func TestCredentialServiceRoles(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 
 	// No credential grants → nil.
-	roles := daemon.credentialServiceRoles("agent/plain")
+	roles := daemon.credentialServiceRoles(testEntity(t, daemon.fleet, "agent/plain"))
 	if roles != nil {
 		t.Errorf("expected nil for principal without credential grants, got %v", roles)
 	}
@@ -624,7 +627,7 @@ func TestCredentialServiceRoles(t *testing.T) {
 			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"agent/**"}},
 		},
 	})
-	roles = daemon.credentialServiceRoles("connector/github")
+	roles = daemon.credentialServiceRoles(testEntity(t, daemon.fleet, "connector/github"))
 	if len(roles) != 1 || roles[0] != credentialServiceRole {
 		t.Errorf("expected [credential], got %v", roles)
 	}

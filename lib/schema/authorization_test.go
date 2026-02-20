@@ -299,7 +299,7 @@ func TestPrincipalAssignmentAuthorizationField(t *testing.T) {
 	// Verify that the Authorization field on PrincipalAssignment
 	// round-trips correctly through JSON.
 	assignment := PrincipalAssignment{
-		Localpart: "iree/amdgpu/pm",
+		Principal: testEntity(t, "@bureau/fleet/test/agent/pm:bureau.local"),
 		Template:  "bureau/template:base",
 		Authorization: &AuthorizationPolicy{
 			Grants: []Grant{
@@ -335,7 +335,7 @@ func TestPrincipalAssignmentAuthorizationField(t *testing.T) {
 func TestMachineConfigDefaultPolicyField(t *testing.T) {
 	config := MachineConfig{
 		Principals: []PrincipalAssignment{
-			{Localpart: "test/agent", Template: "bureau/template:base"},
+			{Principal: testEntity(t, "@bureau/fleet/test/agent/test:bureau.local"), Template: "bureau/template:base"},
 		},
 		DefaultPolicy: &AuthorizationPolicy{
 			Grants: []Grant{

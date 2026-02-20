@@ -663,9 +663,13 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	initTestGitRepo(t, ctx, seedRepoPath)
 
 	// --- Register principals ---
-	setupAccount := registerPrincipal(t, "wswt/main/setup", "test-password")
-	agentAccount := registerPrincipal(t, "wswt/main/agent/0", "test-password")
-	teardownAccount := registerPrincipal(t, "wswt/main/teardown", "test-password")
+	// workspace create generates localparts: agent/<alias>/setup,
+	// agent/<alias>/<index>, agent/<alias>/teardown. Use fleet-scoped
+	// registration so the proxy authenticates as the fleet-scoped user
+	// that the daemon invites to the workspace room.
+	setupAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/setup", "test-password")
+	agentAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/0", "test-password")
+	teardownAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/teardown", "test-password")
 
 	// --- Push encrypted credentials ---
 	pushCredentials(t, admin, machine, setupAccount)
@@ -704,7 +708,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("workspace is active — setup pipeline completed")
 
 	// --- Phase 3: Agent starts ---
-	agentSocket := machine.PrincipalSocketPath(agentAccount.Localpart)
+	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
 	waitForFile(t, agentSocket)
 
 	agentProxyClient := proxyHTTPClient(agentSocket)
@@ -759,7 +763,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("worktree state is 'active'")
 
 	// --- Phase 5: Verify worktree on disk ---
-	worktreeDir := filepath.Join(machine.WorkspaceRoot, "wswt", "feature", "test-branch")
+	worktreeDir := filepath.Join(machine.WorkspaceRoot, "wswt", "feature/test-branch")
 	readmePath := filepath.Join(worktreeDir, "README.md")
 
 	if _, err := os.Stat(worktreeDir); err != nil {

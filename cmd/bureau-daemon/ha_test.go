@@ -351,7 +351,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	}
 	found := false
 	for _, principal := range config.Principals {
-		if principal.Localpart == serviceLocalpart {
+		if principal.Principal.AccountLocalpart() == serviceLocalpart {
 			found = true
 			if principal.Template != "bureau/template:fleet-controller" {
 				t.Errorf("principal template = %q, want %q",

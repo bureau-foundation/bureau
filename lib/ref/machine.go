@@ -44,9 +44,18 @@ func ParseMachine(localpart, server string) (Machine, error) {
 	return Machine{entity: ent}, nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler.
-// Parses the Matrix user ID form: @localpart:server.
+// Entity converts this Machine to a generic Entity reference. This is a
+// zero-cost type conversion — Machine, Service, and Entity all embed the
+// same unexported entity struct.
+func (m Machine) Entity() Entity { return Entity{m.entity} }
+
+// UnmarshalText implements encoding.TextUnmarshaler. Parses the Matrix
+// user ID form: @localpart:server. Empty input produces a zero value.
 func (m *Machine) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*m = Machine{}
+		return nil
+	}
 	parsed, err := ParseMachineUserID(string(data))
 	if err != nil {
 		return fmt.Errorf("unmarshal Machine: %w", err)

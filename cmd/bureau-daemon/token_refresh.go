@@ -7,6 +7,8 @@ import (
 	"context"
 	"sort"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // tokenRefreshInterval is the period between token refresh ticks. Each
@@ -22,7 +24,7 @@ const tokenRefreshThreshold = tokenTTL * 4 / 5
 // tokenRefreshCandidate holds the snapshot of a running principal's
 // state needed to decide whether to refresh its service tokens.
 type tokenRefreshCandidate struct {
-	localpart        string
+	principal        ref.Entity
 	requiredServices []string
 	lastMint         time.Time
 }
@@ -76,11 +78,17 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 		)
 
 		// Force re-mint for affected principals so their tokens
-		// no longer carry the expired grants.
-		d.reconcileMu.Lock()
+		// no longer carry the expired grants. SweepExpired returns
+		// account localparts (strings); match them against the
+		// Entity-keyed d.running map.
+		affectedSet := make(map[string]bool, len(affected))
 		for _, localpart := range affected {
-			if d.running[localpart] {
-				d.lastTokenMint[localpart] = time.Time{}
+			affectedSet[localpart] = true
+		}
+		d.reconcileMu.Lock()
+		for principal := range d.running {
+			if affectedSet[principal.AccountLocalpart()] {
+				d.lastTokenMint[principal] = time.Time{}
 			}
 		}
 		d.reconcileMu.Unlock()
@@ -102,10 +110,10 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 			return
 		}
 
-		_, minted, err := d.mintServiceTokens(candidate.localpart, candidate.requiredServices)
+		_, minted, err := d.mintServiceTokens(candidate.principal, candidate.requiredServices)
 		if err != nil {
 			d.logger.Error("token refresh failed",
-				"principal", candidate.localpart,
+				"principal", candidate.principal,
 				"error", err,
 			)
 			continue
@@ -115,13 +123,13 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 		// emergency revocation tracking. recordMintedTokens also
 		// prunes expired entries from previous mints.
 		d.reconcileMu.Lock()
-		d.lastTokenMint[candidate.localpart] = d.clock.Now()
-		d.recordMintedTokens(candidate.localpart, minted)
+		d.lastTokenMint[candidate.principal] = d.clock.Now()
+		d.recordMintedTokens(candidate.principal, minted)
 		d.reconcileMu.Unlock()
 
 		refreshed++
 		d.logger.Info("refreshed service tokens",
-			"principal", candidate.localpart,
+			"principal", candidate.principal,
 			"services", candidate.requiredServices,
 		)
 	}
@@ -144,23 +152,23 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 	defer d.reconcileMu.RUnlock()
 
 	var candidates []tokenRefreshCandidate
-	for localpart := range d.running {
+	for principal := range d.running {
 		// Combine template-required services with daemon-managed
 		// services (credential provisioning for principals with
 		// credential/* grants) to refresh all tokens together.
 		var allRoles []string
-		if spec := d.lastSpecs[localpart]; spec != nil {
+		if spec := d.lastSpecs[principal]; spec != nil {
 			allRoles = append(allRoles, spec.RequiredServices...)
 		}
-		allRoles = append(allRoles, d.credentialServiceRoles(localpart)...)
+		allRoles = append(allRoles, d.credentialServiceRoles(principal)...)
 		if len(allRoles) == 0 {
 			continue
 		}
 
-		lastMint := d.lastTokenMint[localpart]
+		lastMint := d.lastTokenMint[principal]
 		if lastMint.IsZero() || now.Sub(lastMint) >= tokenRefreshThreshold {
 			candidates = append(candidates, tokenRefreshCandidate{
-				localpart:        localpart,
+				principal:        principal,
 				requiredServices: allRoles,
 				lastMint:         lastMint,
 			})
@@ -169,7 +177,7 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 
 	// Sort for deterministic ordering in logs and tests.
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].localpart < candidates[j].localpart
+		return candidates[i].principal.AccountLocalpart() < candidates[j].principal.AccountLocalpart()
 	})
 
 	return candidates

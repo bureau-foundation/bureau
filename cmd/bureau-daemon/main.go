@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -284,41 +285,44 @@ func run() error {
 		serviceRoomID:          serviceRoomID,
 		fleetRoomID:            fleetRoomID,
 		runDir:                 runDir,
+		fleetRunDir:            fleet.RunDir(runDir),
 		launcherSocket:         principal.LauncherSocketPath(runDir),
 		statusInterval:         statusInterval,
 		daemonBinaryHash:       daemonBinaryHash,
 		daemonBinaryPath:       daemonBinaryPath,
 		stateDir:               stateDir,
-		previousCgroupCPU:      make(map[string]*hwinfo.CgroupCPUReading),
-		cgroupPathFunc:         hwinfo.CgroupDefaultPath,
-		failedExecPaths:        make(map[string]bool),
-		startFailures:          make(map[string]*startFailure),
-		running:                make(map[string]bool),
-		pipelineExecutors:      make(map[string]bool),
-		exitWatchers:           make(map[string]context.CancelFunc),
-		proxyExitWatchers:      make(map[string]context.CancelFunc),
-		lastCredentials:        make(map[string]string),
-		lastGrants:             make(map[string][]schema.Grant),
-		lastTokenMint:          make(map[string]time.Time),
-		activeTokens:           make(map[string][]activeToken),
-		lastServiceMounts:      make(map[string][]launcherServiceMount),
-		lastObserveAllowances:  make(map[string][]schema.Allowance),
-		lastSpecs:              make(map[string]*schema.SandboxSpec),
-		previousSpecs:          make(map[string]*schema.SandboxSpec),
-		lastTemplates:          make(map[string]*schema.TemplateContent),
-		healthMonitors:         make(map[string]*healthMonitor),
-		services:               make(map[string]*schema.Service),
-		proxyRoutes:            make(map[string]string),
-		peerAddresses:          make(map[string]string),
-		peerTransports:         make(map[string]http.RoundTripper),
-		tunnels:                make(map[string]*tunnelInstance),
-		adminSocketPathFunc: func(localpart string) string {
-			return principal.RunDirAdminSocketPath(runDir, localpart)
+		previousCgroupCPU:      make(map[ref.Entity]*hwinfo.CgroupCPUReading),
+		cgroupPathFunc: func(principal ref.Entity) string {
+			return hwinfo.CgroupDefaultPath(principal.AccountLocalpart())
+		},
+		failedExecPaths:       make(map[string]bool),
+		startFailures:         make(map[ref.Entity]*startFailure),
+		running:               make(map[ref.Entity]bool),
+		pipelineExecutors:     make(map[ref.Entity]bool),
+		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
+		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
+		lastCredentials:       make(map[ref.Entity]string),
+		lastGrants:            make(map[ref.Entity][]schema.Grant),
+		lastTokenMint:         make(map[ref.Entity]time.Time),
+		activeTokens:          make(map[ref.Entity][]activeToken),
+		lastServiceMounts:     make(map[ref.Entity][]launcherServiceMount),
+		lastObserveAllowances: make(map[ref.Entity][]schema.Allowance),
+		lastSpecs:             make(map[ref.Entity]*schema.SandboxSpec),
+		previousSpecs:         make(map[ref.Entity]*schema.SandboxSpec),
+		lastTemplates:         make(map[ref.Entity]*schema.TemplateContent),
+		healthMonitors:        make(map[ref.Entity]*healthMonitor),
+		services:              make(map[string]*schema.Service),
+		proxyRoutes:           make(map[string]string),
+		peerAddresses:         make(map[string]string),
+		peerTransports:        make(map[string]http.RoundTripper),
+		tunnels:               make(map[string]*tunnelInstance),
+		adminSocketPathFunc: func(principal ref.Entity) string {
+			return principal.AdminSocketPath(fleet.RunDir(runDir))
 		},
 		observeSocketPath:      principal.ObserveSocketPath(runDir),
 		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
 		observeRelayBinary:     observeRelayBinary,
-		layoutWatchers:         make(map[string]*layoutWatcher),
+		layoutWatchers:         make(map[ref.Entity]*layoutWatcher),
 		validateCommandFunc:    validateCommandBinary,
 		workspaceRoot:          workspaceRoot,
 		pipelineExecutorBinary: pipelineExecutorBinary,
@@ -485,7 +489,8 @@ type Daemon struct {
 	machineRoomID  string
 	serviceRoomID  string
 	fleetRoomID    string // fleet room for HA leases, service definitions, and alerts
-	runDir         string // runtime directory for sockets (e.g., /run/bureau)
+	runDir         string // base runtime directory (e.g., /run/bureau)
+	fleetRunDir    string // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
 	launcherSocket string
 	statusInterval time.Duration
 
@@ -529,7 +534,7 @@ type Daemon struct {
 	// watchProxyExit also clear entries so crash-restart isn't delayed.
 	//
 	// Protected by reconcileMu (same as running, lastSpecs, etc.).
-	startFailures map[string]*startFailure
+	startFailures map[ref.Entity]*startFailure
 
 	// execFunc replaces the current process with a new binary. Defaults
 	// to syscall.Exec. Tests override this to capture the exec call
@@ -544,8 +549,15 @@ type Daemon struct {
 	reconcileMu sync.RWMutex
 
 	// running tracks which principals we've asked the launcher to create.
-	// Keys are principal localparts.
-	running map[string]bool
+	// Keys are ref.Entity values from PrincipalAssignment.Principal.
+	running map[ref.Entity]bool
+
+	// ephemeralCounter is an atomic counter used to generate short,
+	// unique localparts for ephemeral principals (pipeline executors,
+	// worktree operations). Monotonically increasing within the daemon
+	// process lifetime. Cross-restart uniqueness is not needed since
+	// ephemeral sandboxes don't survive daemon restarts.
+	ephemeralCounter atomic.Uint64
 
 	// pipelineExecutors tracks running principals that are pipeline
 	// executor sandboxes (created via applyPipelineExecutorOverlay).
@@ -559,14 +571,14 @@ type Daemon struct {
 	// mid-execution leaves the workspace in a stuck state with no
 	// pipeline_result event. Pipeline executors are removed from this
 	// set when their sandbox exits (in watchSandboxExit).
-	pipelineExecutors map[string]bool
+	pipelineExecutors map[ref.Entity]bool
 
 	// lastCredentials stores the ciphertext from the most recently
 	// deployed m.bureau.credentials state event for each running
 	// principal. On each reconcile cycle, the daemon compares the
 	// current ciphertext against this stored value — a mismatch
 	// triggers a destroy+create cycle to rotate the proxy's credentials.
-	lastCredentials map[string]string
+	lastCredentials map[ref.Entity]string
 
 	// lastGrants stores the pre-resolved authorization grants most
 	// recently pushed to each running principal's proxy. On each
@@ -574,7 +586,7 @@ type Daemon struct {
 	// this stored value — a mismatch triggers a PUT /v1/admin/authorization
 	// call to hot-reload the proxy's grant-based enforcement without
 	// restarting the sandbox.
-	lastGrants map[string][]schema.Grant
+	lastGrants map[ref.Entity][]schema.Grant
 
 	// lastTokenMint stores when service tokens were last minted for
 	// each running principal. The token refresh goroutine checks this
@@ -582,7 +594,7 @@ type Daemon struct {
 	// of the token TTL). Set during sandbox creation and on each
 	// successful refresh. Reset to zero time when grants change to
 	// trigger an early re-mint. Protected by reconcileMu.
-	lastTokenMint map[string]time.Time
+	lastTokenMint map[ref.Entity]time.Time
 
 	// activeTokens tracks unexpired token IDs for each running
 	// principal. Updated on mint and refresh; read on destroy for
@@ -591,13 +603,13 @@ type Daemon struct {
 	// correct service), and its natural expiry time (for blacklist
 	// auto-cleanup on the service side). Expired entries are pruned
 	// on each mint. Protected by reconcileMu.
-	activeTokens map[string][]activeToken
+	activeTokens map[ref.Entity][]activeToken
 
 	// lastServiceMounts stores the resolved service socket paths for
 	// each running principal. Populated at sandbox creation from
 	// resolveServiceMounts; read at destroy time to push token
 	// revocations to the relevant services. Protected by reconcileMu.
-	lastServiceMounts map[string][]launcherServiceMount
+	lastServiceMounts map[ref.Entity][]launcherServiceMount
 
 	// lastObserveAllowances stores the per-principal resolved allowances
 	// from the authorization index at the end of the most recent reconcile
@@ -605,24 +617,24 @@ type Daemon struct {
 	// allowances in the index differ from the stored value, the daemon
 	// re-evaluates active observation sessions and terminates any that
 	// no longer pass authorization. Compared by reflect.DeepEqual.
-	lastObserveAllowances map[string][]schema.Allowance
+	lastObserveAllowances map[ref.Entity][]schema.Allowance
 
 	// lastSpecs stores the SandboxSpec sent to the launcher for each
 	// running principal. Used to detect payload-only changes that can
 	// be hot-reloaded without restarting the sandbox. Nil entries mean
 	// the principal was created without a SandboxSpec (no template).
-	lastSpecs map[string]*schema.SandboxSpec
+	lastSpecs map[ref.Entity]*schema.SandboxSpec
 
 	// previousSpecs stores the last-known-good SandboxSpec before a
 	// structural restart. On health check rollback, the daemon recreates
 	// the sandbox with this spec. Cleared after rollback or when the
 	// principal is removed from config. Keyed by principal localpart.
-	previousSpecs map[string]*schema.SandboxSpec
+	previousSpecs map[ref.Entity]*schema.SandboxSpec
 
 	// lastTemplates stores the resolved TemplateContent for each running
 	// principal. Health monitors read HealthCheck config from here.
 	// Keyed by principal localpart.
-	lastTemplates map[string]*schema.TemplateContent
+	lastTemplates map[ref.Entity]*schema.TemplateContent
 
 	// exitWatchers tracks per-principal cancellation functions for
 	// watchSandboxExit goroutines. When the daemon intentionally
@@ -630,19 +642,19 @@ type Daemon struct {
 	// condition change), it cancels the watcher first so the old
 	// goroutine does not see the destroy as an unexpected exit and
 	// corrupt the daemon's running state. Protected by reconcileMu.
-	exitWatchers map[string]context.CancelFunc
+	exitWatchers map[ref.Entity]context.CancelFunc
 
 	// proxyExitWatchers tracks per-principal cancellation functions
 	// for watchProxyExit goroutines. Mirrors exitWatchers but watches
 	// the proxy process instead of the tmux session. When the proxy
 	// dies unexpectedly, the watcher destroys the sandbox and triggers
 	// re-reconciliation. Protected by reconcileMu.
-	proxyExitWatchers map[string]context.CancelFunc
+	proxyExitWatchers map[ref.Entity]context.CancelFunc
 
 	// healthMonitors tracks running health check goroutines, keyed by
 	// principal localpart. Protected by healthMonitorsMu. Started after
 	// sandbox creation when the resolved template has a HealthCheck.
-	healthMonitors   map[string]*healthMonitor
+	healthMonitors   map[ref.Entity]*healthMonitor
 	healthMonitorsMu sync.Mutex
 
 	// previousCPU stores the last /proc/stat reading for CPU utilization
@@ -654,12 +666,12 @@ type Daemon struct {
 	// across heartbeat intervals. Accessed only by publishStatus in the
 	// statusLoop goroutine, so no mutex is needed (same pattern as
 	// previousCPU).
-	previousCgroupCPU map[string]*hwinfo.CgroupCPUReading
+	previousCgroupCPU map[ref.Entity]*hwinfo.CgroupCPUReading
 
 	// cgroupPathFunc returns the cgroup v2 directory path for a
 	// principal's sandbox. Defaults to hwinfo.CgroupDefaultPath. Tests
 	// override this to use temp directories with synthetic cgroup files.
-	cgroupPathFunc func(localpart string) string
+	cgroupPathFunc func(principal ref.Entity) string
 
 	// gpuCollectors holds per-vendor GPU metric collectors. Each collector
 	// keeps render node file descriptors open for the daemon's lifetime
@@ -684,9 +696,10 @@ type Daemon struct {
 	proxyRoutes map[string]string
 
 	// adminSocketPathFunc returns the admin socket path for a consumer
-	// principal's proxy. Defaults to principal.RunDirAdminSocketPath.
+	// principal's proxy. Defaults to parsing the localpart via
+	// ref.ParseEntityLocalpart and deriving the fleet-scoped path.
 	// Tests override this to use temp directories.
-	adminSocketPathFunc func(localpart string) string
+	adminSocketPathFunc func(principal ref.Entity) string
 
 	// prefetchFunc fetches a Nix store path and its closure from
 	// configured substituters. Defaults to prefetchNixStore. Tests
@@ -782,7 +795,7 @@ type Daemon struct {
 
 	// layoutWatchers tracks running layout sync goroutines, keyed by
 	// principal localpart. Protected by layoutWatchersMu.
-	layoutWatchers   map[string]*layoutWatcher
+	layoutWatchers   map[ref.Entity]*layoutWatcher
 	layoutWatchersMu sync.Mutex
 
 	// workspaceRoot is the root directory for project workspaces
@@ -874,9 +887,9 @@ const startFailureBackoffCap = 30 * time.Second
 // doubles the backoff up to startFailureBackoffCap (30s).
 //
 // Caller must hold reconcileMu.
-func (d *Daemon) recordStartFailure(localpart string, category startFailureCategory, message string) {
+func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureCategory, message string) {
 	now := d.clock.Now()
-	existing := d.startFailures[localpart]
+	existing := d.startFailures[principal]
 	attempts := 1
 	if existing != nil {
 		attempts = existing.attempts + 1
@@ -891,7 +904,7 @@ func (d *Daemon) recordStartFailure(localpart string, category startFailureCateg
 		}
 	}
 
-	d.startFailures[localpart] = &startFailure{
+	d.startFailures[principal] = &startFailure{
 		category:    category,
 		message:     message,
 		failedAt:    now,
@@ -918,9 +931,9 @@ func (d *Daemon) clearStartFailures() {
 // Caller must hold reconcileMu.
 func (d *Daemon) clearStartFailuresByCategory(category startFailureCategory) int {
 	cleared := 0
-	for localpart, failure := range d.startFailures {
+	for principal, failure := range d.startFailures {
 		if failure.category == category {
-			delete(d.startFailures, localpart)
+			delete(d.startFailures, principal)
 			cleared++
 		}
 	}
@@ -932,8 +945,8 @@ func (d *Daemon) clearStartFailuresByCategory(category startFailureCategory) int
 // (the exit watcher should not inherit stale backoff state).
 //
 // Caller must hold reconcileMu.
-func (d *Daemon) clearStartFailure(localpart string) {
-	delete(d.startFailures, localpart)
+func (d *Daemon) clearStartFailure(principal ref.Entity) {
+	delete(d.startFailures, principal)
 }
 
 // notifyReconcile sends a non-blocking signal on reconcileNotify.
@@ -970,10 +983,10 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 func (d *Daemon) publishStatus(ctx context.Context) {
 	d.reconcileMu.RLock()
 	runningCount := 0
-	runningPrincipals := make([]string, 0, len(d.running))
-	for localpart := range d.running {
+	runningPrincipals := make([]ref.Entity, 0, len(d.running))
+	for principal := range d.running {
 		runningCount++
-		runningPrincipals = append(runningPrincipals, localpart)
+		runningPrincipals = append(runningPrincipals, principal)
 	}
 	var lastActivity string
 	if !d.lastActivityAt.IsZero() {
@@ -1019,7 +1032,7 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 // in the status loop goroutine. The previousCgroupCPU map is accessed
 // without locking because publishStatus is the sole accessor (same
 // single-goroutine pattern as previousCPU).
-func (d *Daemon) collectPrincipalResources(principals []string) map[string]schema.PrincipalResourceUsage {
+func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[string]schema.PrincipalResourceUsage {
 	if len(principals) == 0 {
 		return nil
 	}
@@ -1027,18 +1040,18 @@ func (d *Daemon) collectPrincipalResources(principals []string) map[string]schem
 	intervalMicroseconds := uint64(d.statusInterval / time.Microsecond)
 
 	result := make(map[string]schema.PrincipalResourceUsage, len(principals))
-	runningSet := make(map[string]bool, len(principals))
+	runningSet := make(map[ref.Entity]bool, len(principals))
 
-	for _, localpart := range principals {
-		runningSet[localpart] = true
-		cgroupPath := d.cgroupPathFunc(localpart)
+	for _, principal := range principals {
+		runningSet[principal] = true
+		cgroupPath := d.cgroupPathFunc(principal)
 
 		// CPU: read usage_usec and compute delta from previous reading.
 		currentCPU := hwinfo.ReadCgroupCPUStats(cgroupPath)
-		previousCPU := d.previousCgroupCPU[localpart]
+		previousCPU := d.previousCgroupCPU[principal]
 		cpuPercent := hwinfo.CgroupCPUPercent(previousCPU, currentCPU, intervalMicroseconds)
 		if currentCPU != nil {
-			d.previousCgroupCPU[localpart] = currentCPU
+			d.previousCgroupCPU[principal] = currentCPU
 		}
 
 		// Memory: read current usage.
@@ -1047,7 +1060,9 @@ func (d *Daemon) collectPrincipalResources(principals []string) map[string]schem
 
 		status := hwinfo.DerivePrincipalStatus(cpuPercent, previousCPU != nil)
 
-		result[localpart] = schema.PrincipalResourceUsage{
+		// The status event uses account localparts as keys (matching the
+		// MachineStatus.Principals wire format).
+		result[principal.AccountLocalpart()] = schema.PrincipalResourceUsage{
 			CPUPercent: cpuPercent,
 			MemoryMB:   memoryMB,
 			Status:     status,
@@ -1055,9 +1070,9 @@ func (d *Daemon) collectPrincipalResources(principals []string) map[string]schem
 	}
 
 	// Clean up stale readings for principals that are no longer running.
-	for localpart := range d.previousCgroupCPU {
-		if !runningSet[localpart] {
-			delete(d.previousCgroupCPU, localpart)
+	for principal := range d.previousCgroupCPU {
+		if !runningSet[principal] {
+			delete(d.previousCgroupCPU, principal)
 		}
 	}
 

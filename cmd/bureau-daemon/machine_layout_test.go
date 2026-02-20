@@ -54,7 +54,7 @@ func TestMachineLayoutBasic(t *testing.T) {
 
 	// Mark three principals as running with permissive observe allowances.
 	for _, localpart := range []string{"iree/amdgpu/test", "iree/amdgpu/pm", "iree/amdgpu/codegen"} {
-		daemon.running[localpart] = true
+		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
 		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
 
@@ -120,7 +120,7 @@ func TestMachineLayoutAuthFiltering(t *testing.T) {
 		},
 	}
 	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper", "infra/ci/runner"} {
-		daemon.running[localpart] = true
+		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
 		daemon.authorizationIndex.SetPrincipal(localpart, restrictedPolicy)
 	}
 
@@ -138,10 +138,10 @@ func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 	// observation to a specific admin account that is NOT our test
 	// observer, so it should be filtered from the layout.
 	for _, localpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/codegen"} {
-		daemon.running[localpart] = true
+		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
 		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
 	}
-	daemon.running["secret/agent"] = true
+	daemon.running[testEntity(t, daemon.fleet, "secret/agent")] = true
 	daemon.authorizationIndex.SetPrincipal("secret/agent", schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
 			{Actions: []string{"observe"}, Actors: []string{"@secret-admin:bureau.local"}},
@@ -187,7 +187,7 @@ func TestMachineLayoutNoPrincipals(t *testing.T) {
 
 func TestMachineLayoutMachineName(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
-	daemon.running["test/agent"] = true
+	daemon.running[testEntity(t, daemon.fleet, "test/agent")] = true
 	daemon.authorizationIndex.SetPrincipal("test/agent", permissiveObserveAllowances)
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)

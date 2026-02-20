@@ -204,7 +204,7 @@ func sampleFleetController(t *testing.T) *FleetController {
 		},
 		assignments: map[string]*schema.PrincipalAssignment{
 			"service/stt/whisper": {
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
@@ -241,7 +241,7 @@ func sampleFleetController(t *testing.T) *FleetController {
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": {
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 			},
 		},
@@ -572,8 +572,8 @@ func TestShowMachineReturnsDetail(t *testing.T) {
 	if len(response.Assignments) != 1 {
 		t.Fatalf("expected 1 assignment, got %d", len(response.Assignments))
 	}
-	if response.Assignments[0].Localpart != "service/stt/whisper" {
-		t.Errorf("assignment localpart = %q, want service/stt/whisper", response.Assignments[0].Localpart)
+	if response.Assignments[0].Principal.AccountLocalpart() != "service/stt/whisper" {
+		t.Errorf("assignment localpart = %q, want service/stt/whisper", response.Assignments[0].Principal.AccountLocalpart())
 	}
 	if response.ConfigRoomID != "!config-ws:local" {
 		t.Errorf("config_room_id = %q, want !config-ws:local", response.ConfigRoomID)
@@ -695,7 +695,7 @@ func sampleFleetControllerForMutation(t *testing.T) *FleetController {
 	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "service/stt/whisper",
+				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 				AutoStart: true,
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -771,7 +771,7 @@ func TestPlaceNoEligibleMachine(t *testing.T) {
 	// Place whisper on both machines so no eligible machines remain.
 	// (workstation already has it via sampleFleetController)
 	fc.machines["machine/server"].assignments["service/stt/whisper"] = &schema.PrincipalAssignment{
-		Localpart: "service/stt/whisper",
+		Principal: testEntity(t, "service/stt/whisper"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 	fc.services["service/stt/whisper"].instances["machine/server"] = fc.machines["machine/server"].assignments["service/stt/whisper"]

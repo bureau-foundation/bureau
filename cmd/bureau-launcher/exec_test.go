@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
@@ -34,8 +34,8 @@ func TestWriteAndReadStateFile(t *testing.T) {
 	}
 
 	// Add some sandbox entries.
-	launcher.sandboxes["test/echo"] = &managedSandbox{
-		localpart:    "test/echo",
+	launcher.sandboxes["bureau/fleet/test/agent/echo"] = &managedSandbox{
+		localpart:    "bureau/fleet/test/agent/echo",
 		proxyProcess: &os.Process{Pid: 12345},
 		configDir:    "/tmp/bureau-proxy-test-echo-abc",
 		done:         make(chan struct{}),
@@ -43,8 +43,8 @@ func TestWriteAndReadStateFile(t *testing.T) {
 			"worker": {"python", "worker.py"},
 		},
 	}
-	launcher.sandboxes["service/stt"] = &managedSandbox{
-		localpart:    "service/stt",
+	launcher.sandboxes["bureau/fleet/test/service/stt"] = &managedSandbox{
+		localpart:    "bureau/fleet/test/service/stt",
 		proxyProcess: &os.Process{Pid: 67890},
 		configDir:    "/tmp/bureau-proxy-service-stt-def",
 		done:         make(chan struct{}),
@@ -53,8 +53,8 @@ func TestWriteAndReadStateFile(t *testing.T) {
 	// Also add an already-exited sandbox — it should be skipped.
 	exitedDone := make(chan struct{})
 	close(exitedDone)
-	launcher.sandboxes["dead/process"] = &managedSandbox{
-		localpart:    "dead/process",
+	launcher.sandboxes["bureau/fleet/test/agent/dead"] = &managedSandbox{
+		localpart:    "bureau/fleet/test/agent/dead",
 		proxyProcess: &os.Process{Pid: 99999},
 		configDir:    "/tmp/bureau-proxy-dead",
 		done:         exitedDone,
@@ -85,31 +85,31 @@ func TestWriteAndReadStateFile(t *testing.T) {
 		t.Fatalf("len(Sandboxes) = %d, want 2", len(state.Sandboxes))
 	}
 
-	echo := state.Sandboxes["test/echo"]
+	echo := state.Sandboxes["bureau/fleet/test/agent/echo"]
 	if echo == nil {
-		t.Fatal("missing sandbox entry for test/echo")
+		t.Fatal("missing sandbox entry for bureau/fleet/test/agent/echo")
 	}
 	if echo.ProxyPID != 12345 {
-		t.Errorf("test/echo ProxyPID = %d, want 12345", echo.ProxyPID)
+		t.Errorf("bureau/fleet/test/agent/echo ProxyPID = %d, want 12345", echo.ProxyPID)
 	}
 	if echo.ConfigDir != "/tmp/bureau-proxy-test-echo-abc" {
-		t.Errorf("test/echo ConfigDir = %q, want /tmp/bureau-proxy-test-echo-abc", echo.ConfigDir)
+		t.Errorf("bureau/fleet/test/agent/echo ConfigDir = %q, want /tmp/bureau-proxy-test-echo-abc", echo.ConfigDir)
 	}
 	if len(echo.Roles) != 1 || echo.Roles["worker"][0] != "python" {
-		t.Errorf("test/echo Roles = %v, want worker: [python worker.py]", echo.Roles)
+		t.Errorf("bureau/fleet/test/agent/echo Roles = %v, want worker: [python worker.py]", echo.Roles)
 	}
 
-	stt := state.Sandboxes["service/stt"]
+	stt := state.Sandboxes["bureau/fleet/test/service/stt"]
 	if stt == nil {
-		t.Fatal("missing sandbox entry for service/stt")
+		t.Fatal("missing sandbox entry for bureau/fleet/test/service/stt")
 	}
 	if stt.ProxyPID != 67890 {
-		t.Errorf("service/stt ProxyPID = %d, want 67890", stt.ProxyPID)
+		t.Errorf("bureau/fleet/test/service/stt ProxyPID = %d, want 67890", stt.ProxyPID)
 	}
 
-	// Verify dead/process was excluded.
-	if _, exists := state.Sandboxes["dead/process"]; exists {
-		t.Error("dead/process should have been excluded from state file (already exited)")
+	// Verify dead sandbox was excluded.
+	if _, exists := state.Sandboxes["bureau/fleet/test/agent/dead"]; exists {
+		t.Error("bureau/fleet/test/agent/dead should have been excluded from state file (already exited)")
 	}
 }
 
@@ -139,6 +139,8 @@ func TestClearStateFile(t *testing.T) {
 
 func TestReconnectSandboxes(t *testing.T) {
 	runDir := testutil.SocketDir(t)
+	machine := testMachine(t)
+	fleetRunDir := machine.Fleet().RunDir(runDir)
 
 	// Start a real subprocess that we can reconnect to.
 	sleepCmd := exec.Command("sleep", "60")
@@ -152,11 +154,15 @@ func TestReconnectSandboxes(t *testing.T) {
 	})
 
 	// Create the admin socket so the reconnect check passes.
-	adminSocketDir := filepath.Dir(principal.RunDirAdminSocketPath(runDir, "test/reconnect"))
+	principalRef, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/reconnect", "bureau.local")
+	if err != nil {
+		t.Fatalf("ParseEntityLocalpart: %v", err)
+	}
+	adminSocketPath := principalRef.AdminSocketPath(fleetRunDir)
+	adminSocketDir := filepath.Dir(adminSocketPath)
 	if err := os.MkdirAll(adminSocketDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	adminSocketPath := principal.RunDirAdminSocketPath(runDir, "test/reconnect")
 	// Create a dummy socket file (just needs to exist for the stat check).
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: adminSocketPath, Net: "unix"})
 	if err != nil {
@@ -169,7 +175,7 @@ func TestReconnectSandboxes(t *testing.T) {
 	// Write state file with the sleep process as the proxy.
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
-			"test/reconnect": {
+			"bureau/fleet/test/agent/reconnect": {
 				ProxyPID:  sleepPID,
 				ConfigDir: configDir,
 				Roles:     map[string][]string{"worker": {"sleep", "60"}},
@@ -186,6 +192,8 @@ func TestReconnectSandboxes(t *testing.T) {
 	tmuxServer := tmux.NewTestServer(t)
 
 	launcher := &Launcher{
+		machine:         machine,
+		fleetRunDir:     fleetRunDir,
 		runDir:          runDir,
 		stateDir:        t.TempDir(),
 		proxyBinaryPath: "",
@@ -200,9 +208,9 @@ func TestReconnectSandboxes(t *testing.T) {
 	}
 
 	// Verify the sandbox was reconnected.
-	sandbox, exists := launcher.sandboxes["test/reconnect"]
+	sandbox, exists := launcher.sandboxes["bureau/fleet/test/agent/reconnect"]
 	if !exists {
-		t.Fatal("sandbox test/reconnect not found after reconnect")
+		t.Fatal("sandbox bureau/fleet/test/agent/reconnect not found after reconnect")
 	}
 	if sandbox.proxyProcess.Pid != sleepPID {
 		t.Errorf("proxy PID = %d, want %d", sandbox.proxyProcess.Pid, sleepPID)
@@ -234,6 +242,7 @@ func TestReconnectSandboxes(t *testing.T) {
 
 func TestReconnectDeadProcess(t *testing.T) {
 	runDir := testutil.SocketDir(t)
+	machine := testMachine(t)
 
 	// Start and immediately kill a process to get a dead PID.
 	sleepCmd := exec.Command("sleep", "60")
@@ -252,7 +261,7 @@ func TestReconnectDeadProcess(t *testing.T) {
 	// Write state file with the dead PID.
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
-			"test/dead": {
+			"bureau/fleet/test/agent/dead-proc": {
 				ProxyPID:  deadPID,
 				ConfigDir: configDir,
 			},
@@ -263,6 +272,8 @@ func TestReconnectDeadProcess(t *testing.T) {
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
+		machine:         machine,
+		fleetRunDir:     machine.Fleet().RunDir(runDir),
 		runDir:          runDir,
 		stateDir:        t.TempDir(),
 		sandboxes:       make(map[string]*managedSandbox),
@@ -275,7 +286,7 @@ func TestReconnectDeadProcess(t *testing.T) {
 	}
 
 	// Dead process should not be in sandboxes.
-	if _, exists := launcher.sandboxes["test/dead"]; exists {
+	if _, exists := launcher.sandboxes["bureau/fleet/test/agent/dead-proc"]; exists {
 		t.Error("dead process should not be reconnected")
 	}
 
@@ -287,6 +298,7 @@ func TestReconnectDeadProcess(t *testing.T) {
 
 func TestReconnectMissingSocket(t *testing.T) {
 	runDir := testutil.SocketDir(t)
+	machine := testMachine(t)
 
 	// Start a real process (alive, but no admin socket).
 	sleepCmd := exec.Command("sleep", "60")
@@ -300,7 +312,7 @@ func TestReconnectMissingSocket(t *testing.T) {
 
 	state := launcherState{
 		Sandboxes: map[string]*sandboxEntry{
-			"test/nosocket": {
+			"bureau/fleet/test/agent/nosocket": {
 				ProxyPID:  sleepPID,
 				ConfigDir: configDir,
 			},
@@ -311,6 +323,8 @@ func TestReconnectMissingSocket(t *testing.T) {
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
+		machine:         machine,
+		fleetRunDir:     machine.Fleet().RunDir(runDir),
 		runDir:          runDir,
 		stateDir:        t.TempDir(),
 		sandboxes:       make(map[string]*managedSandbox),
@@ -323,7 +337,7 @@ func TestReconnectMissingSocket(t *testing.T) {
 	}
 
 	// Process should have been killed and not reconnected.
-	if _, exists := launcher.sandboxes["test/nosocket"]; exists {
+	if _, exists := launcher.sandboxes["bureau/fleet/test/agent/nosocket"]; exists {
 		t.Error("process without admin socket should not be reconnected")
 	}
 

@@ -29,7 +29,10 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema",
     visibility = ["//visibility:public"],
-    deps = ["//lib/cron"],
+    deps = [
+        "//lib/cron",
+        "//lib/ref",
+    ],
 )
 
 go_test(
@@ -55,4 +58,5 @@ go_test(
         "template_ref_test.go",
     ],
     embed = [":schema"],
+    deps = ["//lib/ref"],
 )

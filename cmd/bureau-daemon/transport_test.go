@@ -18,9 +18,26 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
+
+// testServiceEntry constructs a fleet-scoped service map entry for tests.
+// Returns the fleet-scoped localpart (map key) and the schema.Service value.
+// The service name uses hierarchical format (e.g., "stt/whisper").
+func testServiceEntry(t *testing.T, fleet ref.Fleet, serviceName string, machine ref.Machine, protocol string) (string, *schema.Service) {
+	t.Helper()
+	serviceRef, err := ref.NewService(fleet, serviceName)
+	if err != nil {
+		t.Fatalf("construct test service ref %q: %v", serviceName, err)
+	}
+	return serviceRef.Localpart(), &schema.Service{
+		Principal: serviceRef.Entity(),
+		Machine:   machine,
+		Protocol:  protocol,
+	}
+}
 
 // testTCPDialer implements transport.Dialer using plain TCP. This is used
 // by daemon tests where the "peer daemon" is a simple TCP-based HTTP server
@@ -70,26 +87,26 @@ func TestParseServiceFromPath(t *testing.T) {
 func TestServiceByProxyName(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "")
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "")
+	daemon.services[sttLocalpart] = sttService
+	daemon.services[ttsLocalpart] = ttsService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
 
 	t.Run("found", func(t *testing.T) {
-		localpart, service, ok := daemon.serviceByProxyName("service-stt-whisper")
+		localpart, service, ok := daemon.serviceByProxyName(sttProxyName)
 		if !ok {
-			t.Fatal("expected to find service-stt-whisper")
+			t.Fatalf("expected to find %s", sttProxyName)
 		}
-		if localpart != "service/stt/whisper" {
-			t.Errorf("localpart = %q, want %q", localpart, "service/stt/whisper")
+		if localpart != sttLocalpart {
+			t.Errorf("localpart = %q, want %q", localpart, sttLocalpart)
 		}
-		if service.Machine != daemon.machine.UserID() {
-			t.Errorf("machine = %q, want %q", service.Machine, daemon.machine.UserID())
+		if service.Machine != daemon.machine {
+			t.Errorf("machine = %v, want %v", service.Machine, daemon.machine)
 		}
 	})
 
@@ -105,30 +122,35 @@ func TestLocalProviderSocket(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "")
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "")
+	daemon.services[sttLocalpart] = sttService
+	daemon.services[ttsLocalpart] = ttsService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	ttsProxyName := principal.ProxyServiceName(ttsLocalpart)
 
 	t.Run("local service", func(t *testing.T) {
-		socket, ok := daemon.localProviderSocket("service-stt-whisper")
+		socket, ok := daemon.localProviderSocket(sttProxyName)
 		if !ok {
 			t.Fatal("expected to find local provider socket")
 		}
-		want := "/run/bureau/service/stt/whisper.sock"
+		sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+		if err != nil {
+			t.Fatalf("construct stt ref: %v", err)
+		}
+		want := sttRef.SocketPath(daemon.fleetRunDir)
 		if socket != want {
 			t.Errorf("socket = %q, want %q", socket, want)
 		}
 	})
 
 	t.Run("remote service", func(t *testing.T) {
-		_, ok := daemon.localProviderSocket("service-tts-piper")
+		_, ok := daemon.localProviderSocket(ttsProxyName)
 		if ok {
 			t.Error("expected remote service to not be found as local provider")
 		}
@@ -165,15 +187,16 @@ func TestRelayHandler(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-		Protocol:  "http",
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", remoteMachine, "http")
+	daemon.services[sttLocalpart] = sttService
 	daemon.peerAddresses[remoteMachine.UserID()] = peerAddress
 	daemon.transportDialer = &testTCPDialer{}
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
 
 	// Create a relay socket and serve the relay handler.
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
@@ -199,7 +222,8 @@ func TestRelayHandler(t *testing.T) {
 		Timeout: 5 * time.Second,
 	}
 
-	response, err := client.Get("http://localhost/http/service-stt-whisper/v1/transcribe")
+	requestPath := "/http/" + sttProxyName + "/v1/transcribe"
+	response, err := client.Get("http://localhost" + requestPath)
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
@@ -216,8 +240,8 @@ func TestRelayHandler(t *testing.T) {
 
 	// Verify the peer received the correct path.
 	peerRequest := testutil.RequireReceive(t, peerReceived, 5*time.Second, "peer did not receive request")
-	if peerRequest.URL.Path != "/http/service-stt-whisper/v1/transcribe" {
-		t.Errorf("peer received path = %q, want /http/service-stt-whisper/v1/transcribe", peerRequest.URL.Path)
+	if peerRequest.URL.Path != requestPath {
+		t.Errorf("peer received path = %q, want %s", peerRequest.URL.Path, requestPath)
 	}
 }
 
@@ -225,6 +249,7 @@ func TestRelayHandler_UnknownService(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	relaySocketPath := filepath.Join(testutil.SocketDir(t), "relay.sock")
@@ -281,12 +306,11 @@ func TestTransportInboundHandler(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
 
 	// Start the inbound handler on a TCP listener (simulating the
 	// transport listener).
@@ -302,24 +326,13 @@ func TestTransportInboundHandler(t *testing.T) {
 	go inboundServer.Serve(inboundListener)
 	defer inboundServer.Close()
 
-	// The inbound handler needs to find the provider's proxy socket.
-	// Override the services entry's principal to match our test socket.
-	// Since localProviderSocket derives the socket from the principal
-	// Matrix ID, we need the localpart "service/stt/whisper" to map
-	// to our test socket. The real SocketPath would be
-	// /run/bureau/service/stt/whisper.sock. For testing, we
-	// need to control the path.
-	//
-	// Rather than patching SocketPath (which is a package-level
-	// function), the inbound handler uses localProviderSocket which
-	// calls principal.SocketPath. So for this test to work with a real
-	// provider socket, we'd need the socket at the production path.
-	//
-	// Instead, test this via the full cross-transport integration test
-	// which uses real Bureau proxies at real socket paths.
-	//
-	// For this unit test, verify that the handler returns 404 for an
-	// unknown service and that it calls the handler at all.
+	// The inbound handler calls localProviderSocket which derives the
+	// fleet-scoped socket path from the service principal's entity ref.
+	// For this unit test to route to a real provider socket, the socket
+	// would need to exist at the fleet-scoped path under fleetRunDir.
+	// The cross-transport integration test (TestCrossTransportRouting)
+	// exercises the full chain with real sockets; here we only verify
+	// that the handler returns 404 for an unknown service.
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	response, err := client.Get("http://" + inboundListener.Addr().String() + "/http/nonexistent/v1/test")
@@ -408,20 +421,16 @@ func TestCrossTransportRouting(t *testing.T) {
 	providerDaemon, _ := newTestDaemon(t)
 	providerDaemon.runDir = principal.DefaultRunDir
 	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cloud-gpu", "bureau.local")
+	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(providerDaemon.runDir)
 	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	providerDaemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   providerDaemon.machine.UserID(),
-		Protocol:  "http",
-	}
+
+	sttLocalpart, sttProviderService := testServiceEntry(t, providerDaemon.fleet, "stt/whisper", providerDaemon.machine, "http")
+	providerDaemon.services[sttLocalpart] = sttProviderService
 
 	// The inbound handler calls localProviderSocket which derives the
-	// socket from the service principal. Since principal.SocketPath
-	// returns /run/bureau/... (not our temp dir), we need to
-	// hook the handler to use our test socket. We do this by making
-	// the inbound handler a closure that routes to the correct socket.
-	//
-	// For a clean test, use a custom inbound handler that bypasses
+	// fleet-scoped socket path from the service principal. Since the
+	// fleet-scoped path resolves under /run/bureau/... (not our temp
+	// dir), we use a custom inbound handler that bypasses
 	// localProviderSocket and routes directly to our test socket.
 	inboundMux := http.NewServeMux()
 	inboundMux.HandleFunc("/http/", func(w http.ResponseWriter, r *http.Request) {
@@ -462,12 +471,12 @@ func TestCrossTransportRouting(t *testing.T) {
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = principal.DefaultRunDir
 	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	consumerDaemon.fleetRunDir = consumerDaemon.fleet.RunDir(consumerDaemon.runDir)
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	consumerDaemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   providerDaemon.machine.UserID(),
-		Protocol:  "http",
-	}
+
+	// The consumer sees the same service but hosted on the provider machine.
+	sttConsumerLocalpart, sttConsumerService := testServiceEntry(t, consumerDaemon.fleet, "stt/whisper", providerDaemon.machine, "http")
+	consumerDaemon.services[sttConsumerLocalpart] = sttConsumerService
 	consumerDaemon.peerAddresses[providerDaemon.machine.UserID()] = transportListener.Addr().String()
 	consumerDaemon.transportDialer = &testTCPDialer{}
 
@@ -486,6 +495,7 @@ func TestCrossTransportRouting(t *testing.T) {
 
 	// 5. Send a request through the relay socket as if we were a
 	// consumer proxy routing a remote service request.
+	sttProxyName := principal.ProxyServiceName(sttConsumerLocalpart)
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -495,7 +505,7 @@ func TestCrossTransportRouting(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 
-	response, err := client.Get("http://localhost/http/service-stt-whisper/v1/transcribe")
+	response, err := client.Get("http://localhost/http/" + sttProxyName + "/v1/transcribe")
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
@@ -533,51 +543,32 @@ func TestTransportTunnel(t *testing.T) {
 
 	socketDir := testutil.SocketDir(t)
 
-	// 1. Start an echo server on a Unix socket. This simulates the
-	// artifact service or any non-HTTP service.
-	serviceLocalpart := "service/artifact/shared-cache"
-	serviceSocketPath := filepath.Join(socketDir, "service.sock")
-	serviceListener, err := net.Listen("unix", serviceSocketPath)
-	if err != nil {
-		t.Fatalf("Listen() error: %v", err)
-	}
-	defer serviceListener.Close()
-
-	go func() {
-		for {
-			conn, err := serviceListener.Accept()
-			if err != nil {
-				return
-			}
-			go func(connection net.Conn) {
-				defer connection.Close()
-				io.Copy(connection, connection) // echo
-			}(conn)
-		}
-	}()
-
-	// 2. Set up the "provider daemon" (machine hosting the shared cache)
+	// 1. Set up the "provider daemon" (machine hosting the shared cache)
 	// with a /tunnel/ handler on a TCP listener.
 	providerDaemon, _ := newTestDaemon(t)
 	providerDaemon.runDir = socketDir
 	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cache-server", "bureau.local")
+	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(socketDir)
 	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// The tunnel handler uses principal.RunDirSocketPath to derive
-	// the service socket from localpart. Override runDir so it finds
-	// our test socket. RunDirSocketPath returns runDir + "/" +
-	// localpart + ".sock".
-	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+	// The tunnel handler derives the service socket from the fleet-scoped
+	// entity ref. Build the ref and create the socket at the expected path.
+	serviceRef, err := ref.NewService(providerDaemon.fleet, "artifact/shared-cache")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+	serviceLocalpart := serviceRef.Localpart()
+	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
 
-	// Create the directory structure and symlink (or just re-listen).
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Close the original listener and re-listen at the RunDir path.
-	serviceListener.Close()
-	serviceListener, err = net.Listen("unix", serviceSocketViaRunDir)
+
+	// 2. Start an echo server on the fleet-scoped socket path. This
+	// simulates the artifact service or any non-HTTP service.
+	serviceListener, err := net.Listen("unix", serviceSocketViaRunDir)
 	if err != nil {
-		t.Fatalf("re-listen: %v", err)
+		t.Fatalf("Listen() error: %v", err)
 	}
 	defer serviceListener.Close()
 
@@ -613,6 +604,7 @@ func TestTransportTunnel(t *testing.T) {
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = socketDir
 	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	consumerDaemon.fleetRunDir = consumerDaemon.fleet.RunDir(socketDir)
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	consumerDaemon.transportDialer = &testTCPDialer{}
 
@@ -710,7 +702,16 @@ func TestTransportTunnel_ServiceNotFound(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = socketDir
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(socketDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Construct a valid fleet-scoped service localpart for a service
+	// whose socket does not exist on disk.
+	nonexistentRef, err := ref.NewService(daemon.fleet, "nonexistent")
+	if err != nil {
+		t.Fatalf("construct nonexistent service ref: %v", err)
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -725,7 +726,7 @@ func TestTransportTunnel_ServiceNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	request, _ := http.NewRequest("POST", "http://"+listener.Addr().String()+"/tunnel/nonexistent-service", nil)
+	request, _ := http.NewRequest("POST", "http://"+listener.Addr().String()+"/tunnel/"+nonexistentRef.Localpart(), nil)
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -753,9 +754,20 @@ func TestMultipleTunnels(t *testing.T) {
 
 	socketDir := testutil.SocketDir(t)
 
-	// Set up an echo service.
-	serviceLocalpart := "service/artifact/main"
-	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+	// Start a transport server (provider side).
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cache-server", "bureau.local")
+	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(socketDir)
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Set up an echo service at the fleet-scoped socket path.
+	serviceRef, err := ref.NewService(providerDaemon.fleet, "artifact/main")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+	serviceLocalpart := serviceRef.Localpart()
+	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -779,11 +791,6 @@ func TestMultipleTunnels(t *testing.T) {
 		}
 	}()
 
-	// Start a transport server (provider side).
-	providerDaemon, _ := newTestDaemon(t)
-	providerDaemon.runDir = socketDir
-	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
 	inboundMux := http.NewServeMux()
 	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
 
@@ -802,6 +809,8 @@ func TestMultipleTunnels(t *testing.T) {
 	// Consumer daemon with two named tunnels.
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = socketDir
+	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	consumerDaemon.fleetRunDir = consumerDaemon.fleet.RunDir(socketDir)
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	consumerDaemon.transportDialer = &testTCPDialer{}
 
@@ -898,9 +907,20 @@ func TestMultipleTunnels(t *testing.T) {
 func TestStopAllTunnels(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 
-	// Set up an echo service.
-	serviceLocalpart := "service/artifact/main"
-	serviceSocketViaRunDir := principal.RunDirSocketPath(socketDir, serviceLocalpart)
+	// Transport server (provider side).
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "cache-server", "bureau.local")
+	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(socketDir)
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Set up an echo service at the fleet-scoped socket path.
+	serviceRef, err := ref.NewService(providerDaemon.fleet, "artifact/main")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+	serviceLocalpart := serviceRef.Localpart()
+	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -924,11 +944,6 @@ func TestStopAllTunnels(t *testing.T) {
 		}
 	}()
 
-	// Transport server.
-	providerDaemon, _ := newTestDaemon(t)
-	providerDaemon.runDir = socketDir
-	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
 	inboundMux := http.NewServeMux()
 	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
 
@@ -947,6 +962,8 @@ func TestStopAllTunnels(t *testing.T) {
 	// Consumer with three tunnels.
 	consumerDaemon, _ := newTestDaemon(t)
 	consumerDaemon.runDir = socketDir
+	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	consumerDaemon.fleetRunDir = consumerDaemon.fleet.RunDir(socketDir)
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	consumerDaemon.transportDialer = &testTCPDialer{}
 

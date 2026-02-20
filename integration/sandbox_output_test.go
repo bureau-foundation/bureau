@@ -79,7 +79,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	}
 
 	// Register a principal and push credentials.
-	agent := registerPrincipal(t, "agent/will-fail", "password")
+	agent := registerFleetPrincipal(t, fleet, "agent/will-fail", "password")
 	pushCredentials(t, admin, machine, agent)
 
 	// Watch the config room BEFORE pushing the machine config so we

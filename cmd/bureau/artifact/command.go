@@ -23,7 +23,6 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/artifact"
-	"github.com/bureau-foundation/bureau/lib/principal"
 )
 
 // Sandbox-standard paths for the artifact service role. When an agent
@@ -122,26 +121,19 @@ func (c *ArtifactConnection) AddFlags(flagSet *pflag.FlagSet) {
 }
 
 // defaultArtifactSocketPath returns the default artifact service socket path.
-// Inside a sandbox (detected by the presence of the RequiredServices mount
-// point), the standard /run/bureau/service/artifact.sock path is used.
-// Outside a sandbox, the host-side principal socket path is used as a
-// fallback for direct CLI access.
+// Inside a sandbox, the daemon bind-mounts the artifact service socket at
+// the sandboxSocketPath. Outside a sandbox, the same path is used as the
+// default — operators running the CLI directly must specify --socket or
+// set BUREAU_ARTIFACT_SOCKET (the actual host-side socket is fleet-scoped
+// and not discoverable without fleet context).
 func defaultArtifactSocketPath() string {
-	if _, err := os.Stat(sandboxSocketPath); err == nil {
-		return sandboxSocketPath
-	}
-	return principal.SocketPath("service/artifact/main")
+	return sandboxSocketPath
 }
 
 // defaultArtifactTokenPath returns the default artifact service token path.
-// Inside a sandbox, the daemon-provisioned token at
-// /run/bureau/service/token/artifact.token is used. Outside a sandbox,
-// the same path is returned as a fallback (it will only exist if the
-// daemon minted tokens for this principal).
+// The daemon-provisioned token is at sandboxTokenPath. Operators outside
+// a sandbox must specify --token-file or set BUREAU_ARTIFACT_TOKEN.
 func defaultArtifactTokenPath() string {
-	if _, err := os.Stat(sandboxTokenPath); err == nil {
-		return sandboxTokenPath
-	}
 	return sandboxTokenPath
 }
 

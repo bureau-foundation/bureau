@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -58,7 +59,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	})
 
 	// Deploy a proxy-only principal with no MatrixPolicy (default-deny).
-	agent := registerPrincipal(t, "agent/policy-hr", "policy-hr-password")
+	agent := registerFleetPrincipal(t, fleet, "agent/policy-hr", "policy-hr-password")
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: agent}},
 	})
@@ -207,7 +208,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// pushes to all running proxies. If the proxy doesn't exist when
 	// the service event is processed, the push is a no-op and the
 	// message becomes a false synchronization signal.
-	agent := registerPrincipal(t, "agent/vis-hr", "vis-hr-password")
+	agent := registerFleetPrincipal(t, fleet, "agent/vis-hr", "vis-hr-password")
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:           agent,
@@ -229,12 +230,16 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// Publish a test service in the fleet service room. No actual service
 	// principal needs to run — the directory entry is constructed from
 	// the state event content regardless of whether the principal exists.
-	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-		"service/vis-hr/test", map[string]any{
-			"principal":   "@service/vis-hr/test:" + testServerName,
-			"machine":     machine.UserID,
-			"protocol":    "http",
-			"description": "Test service for visibility hot-reload",
+	mockServiceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "service/vis-hr/test")
+	if err != nil {
+		t.Fatalf("construct mock service entity ref: %v", err)
+	}
+	_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
+		"service/vis-hr/test", schema.Service{
+			Principal:   mockServiceEntity,
+			Machine:     machine.Ref,
+			Protocol:    "http",
+			Description: "Test service for visibility hot-reload",
 		})
 	if err != nil {
 		t.Fatalf("publish service event: %v", err)

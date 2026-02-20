@@ -172,9 +172,14 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 
 	fmt.Fprintf(os.Stderr, "Creating agent %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
 
+	principalEntity, err := ref.ParseEntityLocalpart(params.Name, params.ServerName)
+	if err != nil {
+		return cli.Validation("invalid agent name: %v", err)
+	}
+
 	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
 		Machine:     machine,
-		Localpart:   params.Name,
+		Principal:   principalEntity,
 		TemplateRef: templateRef,
 		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
 			_, err := template.Fetch(ctx, adminSession, ref, serverName)

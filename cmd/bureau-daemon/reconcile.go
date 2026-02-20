@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -71,23 +72,24 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// state-driven lifecycle orchestration: when a workspace status
 	// changes from "active" to "teardown", agents gated on "active"
 	// stop, and a teardown principal gated on "teardown" starts.
-	desired := make(map[string]schema.PrincipalAssignment, len(config.Principals))
-	triggerContents := make(map[string][]byte)
-	conditionRoomIDs := make(map[string]string) // localpart → resolved workspace room ID
+	desired := make(map[ref.Entity]schema.PrincipalAssignment, len(config.Principals))
+	triggerContents := make(map[ref.Entity][]byte)
+	conditionRoomIDs := make(map[ref.Entity]string) // principal → resolved workspace room ID
 	for _, assignment := range config.Principals {
 		if !assignment.AutoStart {
 			continue
 		}
-		satisfied, triggerContent, conditionRoomID := d.evaluateStartCondition(ctx, assignment.Localpart, assignment.StartCondition)
+		principal := assignment.Principal
+		satisfied, triggerContent, conditionRoomID := d.evaluateStartCondition(ctx, principal, assignment.StartCondition)
 		if !satisfied {
 			continue
 		}
-		desired[assignment.Localpart] = assignment
+		desired[principal] = assignment
 		if triggerContent != nil {
-			triggerContents[assignment.Localpart] = triggerContent
+			triggerContents[principal] = triggerContent
 		}
 		if conditionRoomID != "" {
-			conditionRoomIDs[assignment.Localpart] = conditionRoomID
+			conditionRoomIDs[principal] = conditionRoomID
 		}
 	}
 
@@ -96,24 +98,24 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// destroy the sandbox so the "create missing" pass below recreates
 	// it with the new credentials. This handles API key rotation, token
 	// refresh, and any other credential update without manual intervention.
-	var rotatedPrincipals []string
-	for localpart := range d.running {
-		if _, shouldRun := desired[localpart]; !shouldRun {
+	var rotatedPrincipals []ref.Entity
+	for principal := range d.running {
+		if _, shouldRun := desired[principal]; !shouldRun {
 			continue // Will be destroyed in the "remove" pass below.
 		}
 
-		credentials, err := d.readCredentials(ctx, localpart)
+		credentials, err := d.readCredentials(ctx, principal)
 		if err != nil {
 			d.logger.Error("reading credentials for rotation check",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 			continue
 		}
 
-		previousCiphertext, tracked := d.lastCredentials[localpart]
+		previousCiphertext, tracked := d.lastCredentials[principal]
 		if !tracked {
 			// First reconcile after daemon (re)start for this principal.
 			// Record the current ciphertext for future comparisons.
-			d.lastCredentials[localpart] = credentials.Ciphertext
+			d.lastCredentials[principal] = credentials.Ciphertext
 			continue
 		}
 
@@ -122,22 +124,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.logger.Info("credentials changed, restarting principal",
-			"principal", localpart)
+			"principal", principal)
 
-		if err := d.destroyPrincipal(ctx, localpart); err != nil {
+		if err := d.destroyPrincipal(ctx, principal); err != nil {
 			d.logger.Error("failed to destroy sandbox during credential rotation",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 			continue
 		}
 
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
-			"principal", localpart)
-		rotatedPrincipals = append(rotatedPrincipals, localpart)
+			"principal", principal)
+		rotatedPrincipals = append(rotatedPrincipals, principal)
 
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewCredentialsRotatedMessage(localpart, "restarting", "")); err != nil {
+			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), "restarting", "")); err != nil {
 			d.logger.Error("failed to post credential rotation message",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 	}
 
@@ -145,32 +147,32 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// principal. The proxy uses grants for Matrix API gating and service
 	// directory filtering.
 	if d.lastGrants == nil {
-		d.lastGrants = make(map[string][]schema.Grant)
+		d.lastGrants = make(map[ref.Entity][]schema.Grant)
 	}
-	for localpart, assignment := range desired {
-		if !d.running[localpart] {
+	for principal, assignment := range desired {
+		if !d.running[principal] {
 			continue
 		}
-		newGrants := d.resolveGrantsForProxy(localpart, assignment, config)
-		oldGrants := d.lastGrants[localpart]
+		newGrants := d.resolveGrantsForProxy(principal.AccountLocalpart(), assignment, config)
+		oldGrants := d.lastGrants[principal]
 		if !reflect.DeepEqual(oldGrants, newGrants) {
 			d.logger.Info("authorization grants changed, updating proxy",
-				"principal", localpart)
-			if err := d.pushAuthorizationToProxy(ctx, localpart, newGrants); err != nil {
+				"principal", principal)
+			if err := d.pushAuthorizationToProxy(ctx, principal, newGrants); err != nil {
 				d.logger.Error("push authorization grants failed during hot-reload",
-					"principal", localpart, "error", err)
+					"principal", principal, "error", err)
 				continue
 			}
-			d.lastGrants[localpart] = newGrants
+			d.lastGrants[principal] = newGrants
 
 			// Force the token refresh goroutine to re-mint service
 			// tokens on its next tick so they carry the updated grants.
-			d.lastTokenMint[localpart] = time.Time{}
+			d.lastTokenMint[principal] = time.Time{}
 
 			if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-				schema.NewGrantsUpdatedMessage(localpart, len(newGrants))); err != nil {
+				schema.NewGrantsUpdatedMessage(principal.AccountLocalpart(), len(newGrants))); err != nil {
 				d.logger.Error("failed to post grants update confirmation",
-					"principal", localpart, "error", err)
+					"principal", principal, "error", err)
 			}
 		}
 	}
@@ -183,24 +185,24 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// authorizeObserve uses the new allowances); this block detects
 	// which principals changed by comparing index allowances to the
 	// last-known state.
-	for localpart := range desired {
-		if !d.running[localpart] {
+	for principal := range desired {
+		if !d.running[principal] {
 			continue
 		}
-		newAllowances := d.authorizationIndex.Allowances(localpart)
-		oldAllowances := d.lastObserveAllowances[localpart]
+		newAllowances := d.authorizationIndex.Allowances(principal.AccountLocalpart())
+		oldAllowances := d.lastObserveAllowances[principal]
 		if !reflect.DeepEqual(oldAllowances, newAllowances) {
-			d.lastObserveAllowances[localpart] = newAllowances
-			d.enforceObserveAllowanceChange(localpart)
+			d.lastObserveAllowances[principal] = newAllowances
+			d.enforceObserveAllowanceChange(principal.AccountLocalpart())
 		}
 	}
 
 	// Check for hot-reloadable changes on already-running principals.
-	for localpart, assignment := range desired {
-		if !d.running[localpart] {
+	for principal, assignment := range desired {
+		if !d.running[principal] {
 			continue
 		}
-		d.reconcileRunningPrincipal(ctx, localpart, assignment)
+		d.reconcileRunningPrincipal(ctx, principal, assignment)
 	}
 
 	// Set up management goroutines for principals that survived a daemon
@@ -213,21 +215,21 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	//
 	// On subsequent reconcile calls all d.running entries have exit
 	// watchers, so this loop is a no-op in steady state.
-	for localpart, assignment := range desired {
-		if !d.running[localpart] {
+	for principal, assignment := range desired {
+		if !d.running[principal] {
 			continue
 		}
-		if _, hasWatcher := d.exitWatchers[localpart]; hasWatcher {
+		if _, hasWatcher := d.exitWatchers[principal]; hasWatcher {
 			continue // Already fully managed.
 		}
-		d.adoptSurvivingPrincipal(ctx, localpart, assignment)
+		d.adoptSurvivingPrincipal(ctx, principal, assignment)
 	}
 
 	// Create sandboxes for principals that should be running but aren't.
 	// StartConditions were already evaluated when building the desired
 	// set above — only principals with satisfied conditions are here.
-	for localpart, assignment := range desired {
-		if d.running[localpart] {
+	for principal, assignment := range desired {
+		if d.running[principal] {
 			continue
 		}
 
@@ -235,10 +237,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Event-driven clearing (config change, service sync, sandbox
 		// exit) resets the backoff so retries happen immediately when
 		// the root cause may have been resolved.
-		if failure := d.startFailures[localpart]; failure != nil {
+		if failure := d.startFailures[principal]; failure != nil {
 			if d.clock.Now().Before(failure.nextRetryAt) {
 				d.logger.Debug("principal in start backoff, skipping",
-					"principal", localpart,
+					"principal", principal,
 					"category", failure.category,
 					"attempts", failure.attempts,
 					"retry_at", failure.nextRetryAt,
@@ -247,18 +249,18 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			}
 		}
 
-		d.logger.Info("starting principal", "principal", localpart)
+		d.logger.Info("starting principal", "principal", principal)
 
 		// Read the credentials for this principal.
-		credentials, err := d.readCredentials(ctx, localpart)
+		credentials, err := d.readCredentials(ctx, principal)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-				d.logger.Warn("no credentials found for principal, skipping", "principal", localpart)
-				d.recordStartFailure(localpart, failureCategoryCredentials, "no credentials provisioned")
+				d.logger.Warn("no credentials found for principal, skipping", "principal", principal)
+				d.recordStartFailure(principal, failureCategoryCredentials, "no credentials provisioned")
 				continue
 			}
-			d.logger.Error("reading credentials", "principal", localpart, "error", err)
-			d.recordStartFailure(localpart, failureCategoryCredentials, err.Error())
+			d.logger.Error("reading credentials", "principal", principal, "error", err)
+			d.recordStartFailure(principal, failureCategoryCredentials, err.Error())
 			continue
 		}
 
@@ -270,22 +272,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if assignment.Template != "" {
 			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
 			if err != nil {
-				d.logger.Error("resolving template", "principal", localpart, "template", assignment.Template, "error", err)
-				d.recordStartFailure(localpart, failureCategoryTemplate, err.Error())
+				d.logger.Error("resolving template", "principal", principal, "template", assignment.Template, "error", err)
+				d.recordStartFailure(principal, failureCategoryTemplate, err.Error())
 				continue
 			}
 			resolvedTemplate = template
 			sandboxSpec = resolveInstanceConfig(template, &assignment)
 			d.logger.Info("resolved sandbox spec from template",
-				"principal", localpart,
+				"principal", principal,
 				"template", assignment.Template,
 				"command", sandboxSpec.Command,
 			)
 
 			if d.applyPipelineExecutorOverlay(sandboxSpec) {
-				d.pipelineExecutors[localpart] = true
+				d.pipelineExecutors[principal] = true
 				d.logger.Info("applied pipeline executor overlay",
-					"principal", localpart,
+					"principal", principal,
 					"template", assignment.Template,
 					"command", sandboxSpec.Command,
 				)
@@ -298,17 +300,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			if sandboxSpec.EnvironmentPath != "" {
 				if err := d.prefetchEnvironment(ctx, sandboxSpec.EnvironmentPath); err != nil {
 					d.logger.Error("prefetching nix environment",
-						"principal", localpart,
+						"principal", principal,
 						"store_path", sandboxSpec.EnvironmentPath,
 						"error", err,
 					)
-					isFirstFailure := d.startFailures[localpart] == nil
-					d.recordStartFailure(localpart, failureCategoryNixPrefetch, err.Error())
+					isFirstFailure := d.startFailures[principal] == nil
+					d.recordStartFailure(principal, failureCategoryNixPrefetch, err.Error())
 					if isFirstFailure {
 						if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-							schema.NewNixPrefetchFailedMessage(localpart, sandboxSpec.EnvironmentPath, err.Error())); err != nil {
+							schema.NewNixPrefetchFailedMessage(principal.AccountLocalpart(), sandboxSpec.EnvironmentPath, err.Error())); err != nil {
 							d.logger.Error("failed to post nix prefetch failure notification",
-								"principal", localpart, "error", err)
+								"principal", principal, "error", err)
 						}
 					}
 					continue
@@ -325,19 +327,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			if err := d.validateCommandFunc(sandboxSpec.Command[0], sandboxSpec.EnvironmentPath); err != nil {
 				templateName := assignment.Template
 				d.logger.Error("command binary not found",
-					"principal", localpart,
+					"principal", principal,
 					"template", templateName,
 					"command", sandboxSpec.Command,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[localpart] == nil
-				d.recordStartFailure(localpart, failureCategoryCommandBinary, err.Error())
+				isFirstFailure := d.startFailures[principal] == nil
+				d.recordStartFailure(principal, failureCategoryCommandBinary, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-						schema.NewPrincipalStartFailedMessage(localpart,
+						schema.NewPrincipalStartFailedMessage(principal.AccountLocalpart(),
 							fmt.Sprintf("template %q command binary %q not found: %v", templateName, sandboxSpec.Command[0], err))); err != nil {
 						d.logger.Error("failed to post command binary failure notification",
-							"principal", localpart, "error", err)
+							"principal", principal, "error", err)
 					}
 				}
 				continue
@@ -352,7 +354,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// config edits — write PrincipalAssignments without handling
 		// room membership. The daemon invites here; the proxy's
 		// acceptPendingInvites joins during startup.
-		d.ensurePrincipalRoomAccess(ctx, localpart, d.configRoomID)
+		d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.configRoomID)
 
 		// Invite the principal to any workspace room it references so it
 		// can publish state events after joining. Two sources:
@@ -360,14 +362,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// and WORKSPACE_ROOM_ID in the payload (static per-principal
 		// config from workspace create). Best-effort: if the invite
 		// fails, the sandbox is still created.
-		workspaceRoomID := conditionRoomIDs[localpart]
+		workspaceRoomID := conditionRoomIDs[principal]
 		if workspaceRoomID == "" && sandboxSpec != nil {
 			if value, ok := sandboxSpec.Payload["WORKSPACE_ROOM_ID"].(string); ok {
 				workspaceRoomID = value
 			}
 		}
 		if workspaceRoomID != "" {
-			d.ensurePrincipalRoomAccess(ctx, localpart, workspaceRoomID)
+			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, workspaceRoomID)
 		}
 
 		// Resolve required service sockets to host-side paths. The daemon
@@ -379,17 +381,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			mounts, err := d.resolveServiceMounts(ctx, sandboxSpec.RequiredServices, workspaceRoomID)
 			if err != nil {
 				d.logger.Error("resolving required services",
-					"principal", localpart,
+					"principal", principal,
 					"required_services", sandboxSpec.RequiredServices,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[localpart] == nil
-				d.recordStartFailure(localpart, failureCategoryServiceResolution, err.Error())
+				isFirstFailure := d.startFailures[principal] == nil
+				d.recordStartFailure(principal, failureCategoryServiceResolution, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-						schema.NewPrincipalStartFailedMessage(localpart, err.Error())); err != nil {
+						schema.NewPrincipalStartFailedMessage(principal.AccountLocalpart(), err.Error())); err != nil {
 						d.logger.Error("failed to post service resolution failure notification",
-							"principal", localpart, "error", err)
+							"principal", principal, "error", err)
 					}
 				}
 				continue
@@ -400,7 +402,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// If the principal has credential/* grants, mount the daemon's
 		// credential provisioning socket into the sandbox so the agent
 		// can inject per-principal credentials via the provisioning API.
-		serviceMounts = d.appendCredentialServiceMount(localpart, serviceMounts)
+		serviceMounts = d.appendCredentialServiceMount(principal, serviceMounts)
 
 		// Compute the full set of service roles that need tokens: the
 		// template's RequiredServices plus any daemon-managed services
@@ -410,7 +412,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if sandboxSpec != nil {
 			allServiceRoles = append(allServiceRoles, sandboxSpec.RequiredServices...)
 		}
-		allServiceRoles = append(allServiceRoles, d.credentialServiceRoles(localpart)...)
+		allServiceRoles = append(allServiceRoles, d.credentialServiceRoles(principal)...)
 
 		// Mint service tokens for each role. The tokens carry pre-resolved
 		// grants scoped to the service namespace. Written to disk and
@@ -419,19 +421,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		var tokenDirectory string
 		var mintedTokens []activeToken
 		if len(allServiceRoles) > 0 {
-			tokenDir, minted, err := d.mintServiceTokens(localpart, allServiceRoles)
+			tokenDir, minted, err := d.mintServiceTokens(principal, allServiceRoles)
 			if err != nil {
 				d.logger.Error("minting service tokens",
-					"principal", localpart,
+					"principal", principal,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[localpart] == nil
-				d.recordStartFailure(localpart, failureCategoryTokenMinting, err.Error())
+				isFirstFailure := d.startFailures[principal] == nil
+				d.recordStartFailure(principal, failureCategoryTokenMinting, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-						schema.NewPrincipalStartFailedMessage(localpart, fmt.Sprintf("failed to mint service tokens: %v", err))); err != nil {
+						schema.NewPrincipalStartFailedMessage(principal.AccountLocalpart(), fmt.Sprintf("failed to mint service tokens: %v", err))); err != nil {
 						d.logger.Error("failed to post token minting failure notification",
-							"principal", localpart, "error", err)
+							"principal", principal, "error", err)
 					}
 				}
 				continue
@@ -443,52 +445,52 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Resolve authorization grants before sandbox creation so the
 		// proxy starts with enforcement from the first request. The
 		// launcher pipes these to the proxy's stdin alongside credentials.
-		grants := d.resolveGrantsForProxy(localpart, assignment, config)
+		grants := d.resolveGrantsForProxy(principal.AccountLocalpart(), assignment, config)
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               "create-sandbox",
-			Principal:            localpart,
+			Principal:            principal.AccountLocalpart(),
 			EncryptedCredentials: credentials.Ciphertext,
 			Grants:               grants,
 			SandboxSpec:          sandboxSpec,
-			TriggerContent:       triggerContents[localpart],
+			TriggerContent:       triggerContents[principal],
 			ServiceMounts:        serviceMounts,
 			TokenDirectory:       tokenDirectory,
 		})
 		if err != nil {
-			d.logger.Error("create-sandbox IPC failed", "principal", localpart, "error", err)
-			d.recordStartFailure(localpart, failureCategoryLauncherIPC, err.Error())
+			d.logger.Error("create-sandbox IPC failed", "principal", principal, "error", err)
+			d.recordStartFailure(principal, failureCategoryLauncherIPC, err.Error())
 			continue
 		}
 		if !response.OK {
-			d.logger.Error("create-sandbox rejected", "principal", localpart, "error", response.Error)
-			d.recordStartFailure(localpart, failureCategoryLauncherIPC, response.Error)
+			d.logger.Error("create-sandbox rejected", "principal", principal, "error", response.Error)
+			d.recordStartFailure(principal, failureCategoryLauncherIPC, response.Error)
 			continue
 		}
 
-		d.clearStartFailure(localpart)
-		d.running[localpart] = true
-		d.lastCredentials[localpart] = credentials.Ciphertext
-		d.lastObserveAllowances[localpart] = d.authorizationIndex.Allowances(localpart)
-		d.lastSpecs[localpart] = sandboxSpec
-		d.lastTemplates[localpart] = resolvedTemplate
-		d.lastGrants[localpart] = grants
-		d.lastTokenMint[localpart] = d.clock.Now()
-		d.recordMintedTokens(localpart, mintedTokens)
-		d.lastServiceMounts[localpart] = serviceMounts
+		d.clearStartFailure(principal)
+		d.running[principal] = true
+		d.lastCredentials[principal] = credentials.Ciphertext
+		d.lastObserveAllowances[principal] = d.authorizationIndex.Allowances(principal.AccountLocalpart())
+		d.lastSpecs[principal] = sandboxSpec
+		d.lastTemplates[principal] = resolvedTemplate
+		d.lastGrants[principal] = grants
+		d.lastTokenMint[principal] = d.clock.Now()
+		d.recordMintedTokens(principal, mintedTokens)
+		d.lastServiceMounts[principal] = serviceMounts
 		d.lastActivityAt = d.clock.Now()
-		d.logger.Info("principal started", "principal", localpart)
+		d.logger.Info("principal started", "principal", principal)
 
 		// Start watching the tmux session for layout changes. This also
 		// restores any previously saved layout from Matrix.
-		d.startLayoutWatcher(ctx, localpart)
+		d.startLayoutWatcher(ctx, principal)
 
 		// Start health monitoring if the template defines a health check.
 		// The monitor waits a grace period before its first probe, giving
 		// the sandbox and proxy time to initialize.
 		if resolvedTemplate != nil && resolvedTemplate.HealthCheck != nil {
-			d.startHealthMonitor(ctx, localpart, resolvedTemplate.HealthCheck)
+			d.startHealthMonitor(ctx, principal, resolvedTemplate.HealthCheck)
 		}
 
 		// Register all known local service routes on the new consumer's
@@ -496,22 +498,22 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// started. The proxy socket is created synchronously by Start(),
 		// so it should be accepting connections by the time the launcher
 		// responds to create-sandbox.
-		d.configureConsumerProxy(ctx, localpart)
+		d.configureConsumerProxy(ctx, principal)
 
 		// Register external HTTP API services declared by the template
 		// (e.g., Anthropic, OpenAI). The proxy forwards requests to
 		// these upstreams with credential injection so agents reach
 		// external APIs at /http/<name>/... without seeing API keys.
 		if sandboxSpec != nil && len(sandboxSpec.ProxyServices) > 0 {
-			d.configureExternalProxyServices(ctx, localpart, sandboxSpec.ProxyServices)
+			d.configureExternalProxyServices(ctx, principal, sandboxSpec.ProxyServices)
 		}
 
 		// Push the service directory so the new consumer's agent can
 		// discover services via GET /v1/services.
 		directory := d.buildServiceDirectory()
-		if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
+		if err := d.pushDirectoryToProxy(ctx, principal, directory); err != nil {
 			d.logger.Error("failed to push service directory to new consumer proxy",
-				"consumer", localpart,
+				"consumer", principal,
 				"error", err,
 			)
 		}
@@ -533,28 +535,28 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// clear d.running, and trigger a duplicate recreation.
 		if d.shutdownCtx != nil {
 			watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
-			d.exitWatchers[localpart] = watcherCancel
-			go d.watchSandboxExit(watcherCtx, localpart)
+			d.exitWatchers[principal] = watcherCancel
+			go d.watchSandboxExit(watcherCtx, principal)
 
 			proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
-			d.proxyExitWatchers[localpart] = proxyCancel
-			go d.watchProxyExit(proxyCtx, localpart)
+			d.proxyExitWatchers[principal] = proxyCancel
+			go d.watchProxyExit(proxyCtx, principal)
 		}
 	}
 
 	// Report credential rotation outcomes. Rotated principals were
 	// destroyed above and should have been recreated by the create loop.
-	for _, localpart := range rotatedPrincipals {
+	for _, principal := range rotatedPrincipals {
 		status := "completed"
 		var errorMessage string
-		if !d.running[localpart] {
+		if !d.running[principal] {
 			status = "failed"
 			errorMessage = "principal not in desired state after credential rotation"
 		}
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewCredentialsRotatedMessage(localpart, status, errorMessage)); err != nil {
+			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), status, errorMessage)); err != nil {
 			d.logger.Error("failed to post credential rotation outcome",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 	}
 
@@ -567,21 +569,21 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// to "archived", making the "destroying" start condition false).
 	// The daemon will clean up pipeline executors when their sandbox
 	// exits via watchSandboxExit.
-	for localpart := range d.running {
-		if _, shouldRun := desired[localpart]; shouldRun {
+	for principal := range d.running {
+		if _, shouldRun := desired[principal]; shouldRun {
 			continue
 		}
-		if d.pipelineExecutors[localpart] {
+		if d.pipelineExecutors[principal] {
 			continue
 		}
 
-		d.logger.Info("stopping principal", "principal", localpart)
+		d.logger.Info("stopping principal", "principal", principal)
 
-		if err := d.destroyPrincipal(ctx, localpart); err != nil {
-			d.logger.Error("failed to destroy sandbox", "principal", localpart, "error", err)
+		if err := d.destroyPrincipal(ctx, principal); err != nil {
+			d.logger.Error("failed to destroy sandbox", "principal", principal, "error", err)
 			continue
 		}
-		d.logger.Info("principal stopped", "principal", localpart)
+		d.logger.Info("principal stopped", "principal", principal)
 	}
 
 	return nil
@@ -594,7 +596,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 //     missing" pass will recreate it with the new spec on the same cycle.
 //   - Payload-only changes: hot-reloads the bind-mounted payload file
 //     without restarting the sandbox.
-func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
+func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.Entity, assignment schema.PrincipalAssignment) {
 	// Can only detect changes for principals created from templates.
 	if assignment.Template == "" {
 		return
@@ -604,26 +606,26 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
 	if err != nil {
 		d.logger.Error("re-resolving template for running principal",
-			"principal", localpart, "template", assignment.Template, "error", err)
+			"principal", principal, "template", assignment.Template, "error", err)
 		return
 	}
 	newSpec := resolveInstanceConfig(template, &assignment)
 
 	// Apply the same pipeline executor overlay that the create path
-	// uses (line ~286). Without this, the stored spec (which has the
-	// overlay applied) would always differ from the freshly resolved
-	// spec, causing an infinite destroy-recreate loop.
+	// uses so the stored spec (which has the overlay applied) doesn't
+	// always differ from the freshly resolved spec, which would cause
+	// an infinite destroy-recreate loop.
 	d.applyPipelineExecutorOverlay(newSpec)
 
 	// Compare with the previously deployed spec.
-	oldSpec := d.lastSpecs[localpart]
+	oldSpec := d.lastSpecs[principal]
 	if oldSpec == nil {
 		// No previous spec stored (principal was created without one,
 		// or from a previous daemon instance). Store the current spec
 		// and template for future comparisons but don't trigger any
 		// changes.
-		d.lastSpecs[localpart] = newSpec
-		d.lastTemplates[localpart] = template
+		d.lastSpecs[principal] = newSpec
+		d.lastTemplates[principal] = template
 		return
 	}
 
@@ -634,7 +636,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	// new bwrap invocation.
 	if structurallyChanged(oldSpec, newSpec) {
 		d.logger.Info("structural change detected, restarting sandbox",
-			"principal", localpart,
+			"principal", principal,
 			"template", assignment.Template,
 		)
 
@@ -642,22 +644,22 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 		// The "create missing" pass will recreate the sandbox with the new
 		// spec; if health checks fail, the daemon can roll back to this
 		// previous working configuration.
-		rollbackSpec := d.lastSpecs[localpart]
+		rollbackSpec := d.lastSpecs[principal]
 
-		if err := d.destroyPrincipal(ctx, localpart); err != nil {
+		if err := d.destroyPrincipal(ctx, principal); err != nil {
 			d.logger.Error("failed to destroy sandbox during structural restart",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 			return
 		}
 
-		d.previousSpecs[localpart] = rollbackSpec
+		d.previousSpecs[principal] = rollbackSpec
 		d.logger.Info("sandbox destroyed for structural restart (will recreate)",
-			"principal", localpart)
+			"principal", principal)
 
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewPrincipalRestartedMessage(localpart, assignment.Template)); err != nil {
+			schema.NewPrincipalRestartedMessage(principal.AccountLocalpart(), assignment.Template)); err != nil {
 			d.logger.Error("failed to post structural restart notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 		return
 	}
@@ -668,31 +670,31 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 	// for the safety argument.
 	if payloadChanged(oldSpec, newSpec) {
 		d.logger.Info("payload changed for running principal, hot-reloading",
-			"principal", localpart,
+			"principal", principal,
 		)
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:    "update-payload",
-			Principal: localpart,
+			Principal: principal.AccountLocalpart(),
 			Payload:   newSpec.Payload,
 		})
 		if err != nil {
 			d.logger.Error("update-payload IPC failed",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 			return
 		}
 		if !response.OK {
 			d.logger.Error("update-payload rejected",
-				"principal", localpart, "error", response.Error)
+				"principal", principal, "error", response.Error)
 			return
 		}
-		d.lastSpecs[localpart] = newSpec
+		d.lastSpecs[principal] = newSpec
 		d.lastActivityAt = d.clock.Now()
-		d.logger.Info("payload hot-reloaded", "principal", localpart)
+		d.logger.Info("payload hot-reloaded", "principal", principal)
 
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewPayloadUpdatedMessage(localpart)); err != nil {
+			schema.NewPayloadUpdatedMessage(principal.AccountLocalpart())); err != nil {
 			d.logger.Error("failed to post payload update notification",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 	}
 }
@@ -708,32 +710,32 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, localpart string
 // the adoption pass.
 //
 // Caller must hold reconcileMu.
-func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, assignment schema.PrincipalAssignment) {
-	d.logger.Info("setting up management for adopted principal", "principal", localpart)
+func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, principal ref.Entity, assignment schema.PrincipalAssignment) {
+	d.logger.Info("setting up management for adopted principal", "principal", principal)
 
 	// Start watching the tmux session for layout changes.
-	d.startLayoutWatcher(ctx, localpart)
+	d.startLayoutWatcher(ctx, principal)
 
 	// Start health monitoring if the template defines a health check.
-	if template := d.lastTemplates[localpart]; template != nil && template.HealthCheck != nil {
-		d.startHealthMonitor(ctx, localpart, template.HealthCheck)
+	if template := d.lastTemplates[principal]; template != nil && template.HealthCheck != nil {
+		d.startHealthMonitor(ctx, principal, template.HealthCheck)
 	}
 
 	// Register all known local service routes on the adopted consumer's
 	// proxy so it can reach services discovered while the daemon was down.
-	d.configureConsumerProxy(ctx, localpart)
+	d.configureConsumerProxy(ctx, principal)
 
 	// Register external HTTP API services from the template.
-	if spec := d.lastSpecs[localpart]; spec != nil && len(spec.ProxyServices) > 0 {
-		d.configureExternalProxyServices(ctx, localpart, spec.ProxyServices)
+	if spec := d.lastSpecs[principal]; spec != nil && len(spec.ProxyServices) > 0 {
+		d.configureExternalProxyServices(ctx, principal, spec.ProxyServices)
 	}
 
 	// Push the service directory so the consumer's agent can discover
 	// services via GET /v1/services.
 	directory := d.buildServiceDirectory()
-	if err := d.pushDirectoryToProxy(ctx, localpart, directory); err != nil {
+	if err := d.pushDirectoryToProxy(ctx, principal, directory); err != nil {
 		d.logger.Error("failed to push service directory to adopted consumer proxy",
-			"consumer", localpart,
+			"consumer", principal,
 			"error", err,
 		)
 	}
@@ -746,18 +748,18 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, localpart string, 
 	// the sync cycle's ctx) so the watchers survive across sync iterations.
 	if d.shutdownCtx != nil {
 		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
-		d.exitWatchers[localpart] = watcherCancel
-		go d.watchSandboxExit(watcherCtx, localpart)
+		d.exitWatchers[principal] = watcherCancel
+		go d.watchSandboxExit(watcherCtx, principal)
 
 		proxyCtx, proxyCancel := context.WithCancel(d.shutdownCtx)
-		d.proxyExitWatchers[localpart] = proxyCancel
-		go d.watchProxyExit(proxyCtx, localpart)
+		d.proxyExitWatchers[principal] = proxyCancel
+		go d.watchProxyExit(proxyCtx, principal)
 	}
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewPrincipalAdoptedMessage(localpart)); err != nil {
+		schema.NewPrincipalAdoptedMessage(principal.AccountLocalpart())); err != nil {
 		d.logger.Error("failed to post adoption notification",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 }
 
@@ -805,7 +807,7 @@ func structurallyChanged(old, new *schema.SandboxSpec) bool {
 // set, the daemon resolves it to a room ID. When empty, the daemon checks the
 // principal's own config room (where MachineConfig lives). If the state event
 // exists, the condition is met. If it's M_NOT_FOUND, the principal is deferred.
-func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, condition *schema.StartCondition) (bool, json.RawMessage, string) {
+func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entity, condition *schema.StartCondition) (bool, json.RawMessage, string) {
 	if condition == nil {
 		return true, nil, ""
 	}
@@ -819,13 +821,13 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				d.logger.Info("start condition room alias not found, deferring principal",
-					"principal", localpart,
+					"principal", principal,
 					"room_alias", condition.RoomAlias,
 				)
 				return false, nil, ""
 			}
 			d.logger.Error("resolving start condition room alias",
-				"principal", localpart,
+				"principal", principal,
 				"room_alias", condition.RoomAlias,
 				"error", err,
 			)
@@ -839,7 +841,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			d.logger.Info("start condition not met, deferring principal",
-				"principal", localpart,
+				"principal", principal,
 				"event_type", condition.EventType,
 				"state_key", condition.StateKey,
 				"room_id", roomID,
@@ -847,7 +849,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 			return false, nil, ""
 		}
 		d.logger.Error("checking start condition",
-			"principal", localpart,
+			"principal", principal,
 			"event_type", condition.EventType,
 			"state_key", condition.StateKey,
 			"room_id", roomID,
@@ -862,7 +864,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		var contentMap map[string]any
 		if err := json.Unmarshal(content, &contentMap); err != nil {
 			d.logger.Info("start condition content not a JSON object, deferring principal",
-				"principal", localpart,
+				"principal", principal,
 				"event_type", condition.EventType,
 				"room_id", roomID,
 				"error", err,
@@ -872,7 +874,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		matched, failedKey, err := condition.ContentMatch.Evaluate(contentMap)
 		if err != nil {
 			d.logger.Error("start condition content_match expression error",
-				"principal", localpart,
+				"principal", principal,
 				"event_type", condition.EventType,
 				"room_id", roomID,
 				"key", failedKey,
@@ -882,7 +884,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, localpart string, c
 		}
 		if !matched {
 			d.logger.Info("start condition content_match not satisfied, deferring principal",
-				"principal", localpart,
+				"principal", principal,
 				"event_type", condition.EventType,
 				"room_id", roomID,
 				"key", failedKey,
@@ -968,16 +970,17 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 	return true
 }
 
-// readCredentials reads the Credentials state event for a specific principal.
-func (d *Daemon) readCredentials(ctx context.Context, principalLocalpart string) (*schema.Credentials, error) {
-	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, principalLocalpart)
+// readCredentials reads the Credentials state event for a principal.
+func (d *Daemon) readCredentials(ctx context.Context, principal ref.Entity) (*schema.Credentials, error) {
+	stateKey := principal.Localpart()
+	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, stateKey)
 	if err != nil {
 		return nil, err
 	}
 
 	var credentials schema.Credentials
 	if err := json.Unmarshal(content, &credentials); err != nil {
-		return nil, fmt.Errorf("parsing credentials for %q: %w", principalLocalpart, err)
+		return nil, fmt.Errorf("parsing credentials for %s: %w", principal, err)
 	}
 	return &credentials, nil
 }
@@ -1007,14 +1010,15 @@ func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
 	currentPrincipals := make(map[string]bool, len(config.Principals))
 
 	for _, assignment := range config.Principals {
-		currentPrincipals[assignment.Localpart] = true
+		accountLocalpart := assignment.Principal.AccountLocalpart()
+		currentPrincipals[accountLocalpart] = true
 
 		// Merge machine defaults with per-principal policy. Per-principal
 		// policy is additive: grants, denials, allowances, and allowance
 		// denials are appended to the machine defaults. A principal cannot
 		// have fewer permissions than the machine default.
 		merged := mergeAuthorizationPolicy(config.DefaultPolicy, assignment.Authorization)
-		d.authorizationIndex.SetPrincipal(assignment.Localpart, merged)
+		d.authorizationIndex.SetPrincipal(accountLocalpart, merged)
 	}
 
 	// Remove principals that are no longer in config. This also clears
@@ -1096,14 +1100,12 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 //
 // The invite is best-effort: failures are logged but do not block sandbox
 // creation. M_FORBIDDEN typically means the user is already a member.
-func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, localpart, roomID string) {
-	userID := principal.MatrixUserID(localpart, d.machine.Server())
-
-	if err := d.session.InviteUser(ctx, roomID, userID); err != nil {
+func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity ref.Entity, roomID string) {
+	if err := d.session.InviteUser(ctx, roomID, principalEntity.UserID()); err != nil {
 		// M_FORBIDDEN typically means the user is already a member.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			d.logger.Warn("failed to invite principal to room",
-				"principal", localpart,
+				"principal", principalEntity,
 				"room_id", roomID,
 				"error", err,
 			)
@@ -1161,16 +1163,8 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, roomID, err)
 		}
 
-		if binding.Principal == "" {
+		if binding.Principal.IsZero() {
 			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, roomID)
-		}
-
-		// Extract the localpart from the full Matrix user ID stored in
-		// the binding. The socket path is derived from the localpart,
-		// not the full user ID.
-		localpart, err := principal.LocalpartFromMatrixID(binding.Principal)
-		if err != nil {
-			return "", fmt.Errorf("invalid service principal %q for role %q in room %s: %w", binding.Principal, role, roomID, err)
 		}
 
 		// Ensure the service is a member of the room where its binding
@@ -1178,17 +1172,17 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		// (session lifecycle, metrics, context index, etc.). The invite
 		// is idempotent — M_FORBIDDEN means the service is already
 		// joined or the invite is otherwise redundant.
-		if inviteErr := d.session.InviteUser(ctx, roomID, binding.Principal); inviteErr != nil {
+		if inviteErr := d.session.InviteUser(ctx, roomID, binding.Principal.UserID()); inviteErr != nil {
 			if !messaging.IsMatrixError(inviteErr, "M_FORBIDDEN") {
 				return "", fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, roomID, inviteErr)
 			}
 		}
 
-		// Derive the host-side socket path from the service principal's
-		// localpart. For local services this is the actual proxy socket;
-		// for remote services (future) the daemon would create a tunnel
-		// socket and use that path instead.
-		socketPath := principal.RunDirSocketPath(d.runDir, localpart)
+		// Derive the host-side socket path from the service principal.
+		// For local services this is the actual proxy socket; for remote
+		// services (future) the daemon would create a tunnel socket and
+		// use that path instead.
+		socketPath := binding.Principal.SocketPath(d.fleetRunDir)
 		d.logger.Info("resolved service binding",
 			"role", role,
 			"principal", binding.Principal,
@@ -1218,12 +1212,12 @@ const tokenTTL = 5 * time.Minute
 //     namespace (role + "/**")
 //   - Converts schema.Grant to servicetoken.Grant (strips audit metadata)
 //   - Mints a servicetoken.Token with the daemon's signing key
-//   - Writes the raw signed bytes to <stateDir>/tokens/<localpart>/<role>
+//   - Writes the raw signed bytes to <stateDir>/tokens/<accountLocalpart>/<role>
 //
 // Returns ("", nil, nil) if there are no required services. Returns an
 // error if token minting or file I/O fails — callers should treat this
 // as a fatal condition that blocks sandbox creation.
-func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) (string, []activeToken, error) {
+func (d *Daemon) mintServiceTokens(principal ref.Entity, requiredServices []string) (string, []activeToken, error) {
 	if len(requiredServices) == 0 {
 		return "", nil, nil
 	}
@@ -1236,13 +1230,13 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 	}
 
 	// Ensure the token directory exists.
-	tokenDir := filepath.Join(d.stateDir, "tokens", localpart)
+	tokenDir := filepath.Join(d.stateDir, "tokens", principal.AccountLocalpart())
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		return "", nil, fmt.Errorf("creating token directory: %w", err)
 	}
 
 	// Get the principal's resolved grants from the authorization index.
-	grants := d.authorizationIndex.Grants(localpart)
+	grants := d.authorizationIndex.Grants(principal.AccountLocalpart())
 
 	now := d.clock.Now()
 	var minted []activeToken
@@ -1276,7 +1270,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 		}
 
 		token := &servicetoken.Token{
-			Subject:   localpart,
+			Subject:   principal.AccountLocalpart(),
 			Machine:   d.machine.Localpart(),
 			Audience:  role,
 			Grants:    tokenGrants,
@@ -1302,7 +1296,7 @@ func (d *Daemon) mintServiceTokens(localpart string, requiredServices []string) 
 		})
 
 		d.logger.Info("minted service token",
-			"principal", localpart,
+			"principal", principal,
 			"service", role,
 			"token_id", tokenID,
 			"grants", len(tokenGrants),
@@ -1369,8 +1363,8 @@ func generateTokenID() (string, error) {
 // Must be called before an intentional destroy-sandbox IPC so the watcher
 // does not interpret the destroy as an unexpected exit and corrupt daemon state.
 // Caller must hold reconcileMu.
-func (d *Daemon) cancelExitWatcher(localpart string) {
-	if cancel, ok := d.exitWatchers[localpart]; ok {
+func (d *Daemon) cancelExitWatcher(principal ref.Entity) {
+	if cancel, ok := d.exitWatchers[principal]; ok {
 		cancel()
 	}
 }
@@ -1380,8 +1374,8 @@ func (d *Daemon) cancelExitWatcher(localpart string) {
 // intentional destroy-sandbox IPC so the watcher does not interpret
 // the proxy's death (from the sandbox being torn down) as a crash.
 // Caller must hold reconcileMu.
-func (d *Daemon) cancelProxyExitWatcher(localpart string) {
-	if cancel, ok := d.proxyExitWatchers[localpart]; ok {
+func (d *Daemon) cancelProxyExitWatcher(principal ref.Entity) {
+	if cancel, ok := d.proxyExitWatchers[principal]; ok {
 		cancel()
 	}
 }
@@ -1395,16 +1389,16 @@ func (d *Daemon) cancelProxyExitWatcher(localpart string) {
 // tokens will expire via their natural 5-minute TTL. The error is returned
 // so callers can log it and decide whether to continue (emergency shutdown
 // paths must continue past errors).
-func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
-	d.cancelExitWatcher(localpart)
-	d.cancelProxyExitWatcher(localpart)
-	d.stopHealthMonitor(localpart)
-	d.stopLayoutWatcher(localpart)
+func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) error {
+	d.cancelExitWatcher(principal)
+	d.cancelProxyExitWatcher(principal)
+	d.stopHealthMonitor(principal)
+	d.stopLayoutWatcher(principal)
 
 	var destroyError error
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:    "destroy-sandbox",
-		Principal: localpart,
+		Principal: principal.AccountLocalpart(),
 	})
 	if err != nil {
 		destroyError = fmt.Errorf("destroy-sandbox IPC failed: %w", err)
@@ -1412,18 +1406,18 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
 		destroyError = fmt.Errorf("destroy-sandbox rejected: %s", response.Error)
 	}
 
-	d.revokeAndCleanupTokens(ctx, localpart)
-	delete(d.running, localpart)
-	delete(d.pipelineExecutors, localpart)
-	delete(d.exitWatchers, localpart)
-	delete(d.proxyExitWatchers, localpart)
-	delete(d.lastSpecs, localpart)
-	delete(d.previousSpecs, localpart)
-	delete(d.lastTemplates, localpart)
-	delete(d.lastCredentials, localpart)
-	delete(d.lastGrants, localpart)
-	delete(d.lastTokenMint, localpart)
-	delete(d.lastObserveAllowances, localpart)
+	d.revokeAndCleanupTokens(ctx, principal)
+	delete(d.running, principal)
+	delete(d.pipelineExecutors, principal)
+	delete(d.exitWatchers, principal)
+	delete(d.proxyExitWatchers, principal)
+	delete(d.lastSpecs, principal)
+	delete(d.previousSpecs, principal)
+	delete(d.lastTemplates, principal)
+	delete(d.lastCredentials, principal)
+	delete(d.lastGrants, principal)
+	delete(d.lastTokenMint, principal)
+	delete(d.lastObserveAllowances, principal)
 	d.lastActivityAt = d.clock.Now()
 
 	return destroyError
@@ -1440,14 +1434,14 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, localpart string) error {
 //   - Long-running agents restart automatically if their condition is still met.
 //
 // Must be called as a goroutine. Uses reconcileMu to safely modify shared state.
-func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
-	exitCode, exitDescription, exitOutput, err := d.launcherWaitSandbox(ctx, localpart)
+func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
+	exitCode, exitDescription, exitOutput, err := d.launcherWaitSandbox(ctx, principal.AccountLocalpart())
 	if err != nil {
 		if ctx.Err() != nil {
 			return // Daemon shutting down.
 		}
 		d.logger.Error("wait-sandbox failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 		return
@@ -1455,36 +1449,36 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 
 	if exitCode != 0 && exitOutput != "" {
 		d.logger.Warn("sandbox exited with captured output",
-			"principal", localpart,
+			"principal", principal,
 			"exit_code", exitCode,
 			"description", exitDescription,
 			"output", exitOutput,
 		)
 	} else {
 		d.logger.Info("sandbox exited",
-			"principal", localpart,
+			"principal", principal,
 			"exit_code", exitCode,
 			"description", exitDescription,
 		)
 	}
 
 	d.reconcileMu.Lock()
-	if d.running[localpart] {
-		d.cancelProxyExitWatcher(localpart)
-		d.stopHealthMonitor(localpart)
-		d.stopLayoutWatcher(localpart)
-		d.revokeAndCleanupTokens(ctx, localpart)
-		delete(d.running, localpart)
-		delete(d.pipelineExecutors, localpart)
-		delete(d.exitWatchers, localpart)
-		delete(d.proxyExitWatchers, localpart)
-		delete(d.lastSpecs, localpart)
-		delete(d.previousSpecs, localpart)
-		delete(d.lastTemplates, localpart)
-		delete(d.lastCredentials, localpart)
-		delete(d.lastGrants, localpart)
-		delete(d.lastTokenMint, localpart)
-		delete(d.lastObserveAllowances, localpart)
+	if d.running[principal] {
+		d.cancelProxyExitWatcher(principal)
+		d.stopHealthMonitor(principal)
+		d.stopLayoutWatcher(principal)
+		d.revokeAndCleanupTokens(ctx, principal)
+		delete(d.running, principal)
+		delete(d.pipelineExecutors, principal)
+		delete(d.exitWatchers, principal)
+		delete(d.proxyExitWatchers, principal)
+		delete(d.lastSpecs, principal)
+		delete(d.previousSpecs, principal)
+		delete(d.lastTemplates, principal)
+		delete(d.lastCredentials, principal)
+		delete(d.lastGrants, principal)
+		delete(d.lastTokenMint, principal)
+		delete(d.lastObserveAllowances, principal)
 		d.lastActivityAt = d.clock.Now()
 	}
 
@@ -1500,15 +1494,15 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	// reconcile restarts the sandbox, it crashes again, repeat.
 	var crashBackoff time.Duration
 	if exitCode == 0 {
-		d.clearStartFailure(localpart)
+		d.clearStartFailure(principal)
 	} else {
-		d.recordStartFailure(localpart, failureCategorySandboxCrash, exitDescription)
-		crashBackoff = time.Until(d.startFailures[localpart].nextRetryAt)
+		d.recordStartFailure(principal, failureCategorySandboxCrash, exitDescription)
+		crashBackoff = time.Until(d.startFailures[principal].nextRetryAt)
 		d.logger.Warn("sandbox crash, backing off before retry",
-			"principal", localpart,
+			"principal", principal,
 			"exit_code", exitCode,
-			"attempts", d.startFailures[localpart].attempts,
-			"retry_at", d.startFailures[localpart].nextRetryAt,
+			"attempts", d.startFailures[principal].attempts,
+			"retry_at", d.startFailures[principal].nextRetryAt,
 		)
 	}
 	d.reconcileMu.Unlock()
@@ -1524,9 +1518,9 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 		capturedOutput = tailLines(exitOutput, maxMatrixOutputLines)
 	}
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewSandboxExitedMessage(localpart, exitCode, exitDescription, capturedOutput)); err != nil {
+		schema.NewSandboxExitedMessage(principal.AccountLocalpart(), exitCode, exitDescription, capturedOutput)); err != nil {
 		d.logger.Error("failed to post sandbox exit notification",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 
 	// Trigger re-reconciliation so the loop can decide whether to restart.
@@ -1537,7 +1531,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 	// This acquires reconcileMu again — safe because we released it above.
 	if err := d.reconcile(ctx); err != nil {
 		d.logger.Error("reconciliation after sandbox exit failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 	}
@@ -1556,7 +1550,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, localpart string) {
 			case <-d.clock.After(crashBackoff):
 				if err := d.reconcile(d.shutdownCtx); err != nil {
 					d.logger.Error("deferred reconciliation after crash backoff expired",
-						"principal", localpart,
+						"principal", principal,
 						"error", err,
 					)
 				}
@@ -1618,9 +1612,15 @@ func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 	}
 
 	for _, entry := range response.Sandboxes {
-		d.running[entry.Localpart] = true
+		entity, err := ref.NewEntityFromAccountLocalpart(d.fleet, entry.Localpart)
+		if err != nil {
+			d.logger.Error("invalid localpart from launcher",
+				"localpart", entry.Localpart, "error", err)
+			continue
+		}
+		d.running[entity] = true
 		d.logger.Info("adopted pre-existing sandbox",
-			"principal", entry.Localpart,
+			"principal", entity,
 			"proxy_pid", entry.ProxyPID,
 		)
 	}
@@ -1908,26 +1908,26 @@ func (d *Daemon) launcherWaitProxy(ctx context.Context, principalLocalpart strin
 // This provides event-driven proxy death detection that fires within
 // milliseconds of the proxy exiting — much faster than health check polling,
 // and works even when the template has no HealthCheck configured.
-func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
-	exitCode, err := d.launcherWaitProxy(ctx, localpart)
+func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
+	exitCode, err := d.launcherWaitProxy(ctx, principal.AccountLocalpart())
 	if err != nil {
 		if ctx.Err() != nil {
 			return // Watcher cancelled or daemon shutting down.
 		}
 		d.logger.Error("wait-proxy failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 		return
 	}
 
 	d.logger.Warn("proxy exited unexpectedly",
-		"principal", localpart,
+		"principal", principal,
 		"exit_code", exitCode,
 	)
 
 	d.reconcileMu.Lock()
-	if !d.running[localpart] {
+	if !d.running[principal] {
 		// Already handled by another path (sandbox exit, reconcile, etc.).
 		d.reconcileMu.Unlock()
 		return
@@ -1938,47 +1938,47 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 	// which would cancel THIS goroutine's context — the same context
 	// passed to the launcher IPC call inside destroyPrincipal. Removing
 	// the entry first makes cancelProxyExitWatcher a no-op for us.
-	delete(d.proxyExitWatchers, localpart)
+	delete(d.proxyExitWatchers, principal)
 
-	if err := d.destroyPrincipal(ctx, localpart); err != nil {
+	if err := d.destroyPrincipal(ctx, principal); err != nil {
 		d.logger.Error("proxy exit handler: failed to destroy sandbox",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 
 	// Record a proxy crash failure with exponential backoff. The proxy
 	// dying is always abnormal — without backoff, a crashing proxy
 	// causes the same retry storm as a crashing sandbox.
-	d.recordStartFailure(localpart, failureCategoryProxyCrash, fmt.Sprintf("proxy exited with code %d", exitCode))
-	crashBackoff := time.Until(d.startFailures[localpart].nextRetryAt)
+	d.recordStartFailure(principal, failureCategoryProxyCrash, fmt.Sprintf("proxy exited with code %d", exitCode))
+	crashBackoff := time.Until(d.startFailures[principal].nextRetryAt)
 	d.logger.Warn("proxy crash, backing off before retry",
-		"principal", localpart,
+		"principal", principal,
 		"exit_code", exitCode,
-		"attempts", d.startFailures[localpart].attempts,
-		"retry_at", d.startFailures[localpart].nextRetryAt,
+		"attempts", d.startFailures[principal].attempts,
+		"retry_at", d.startFailures[principal].nextRetryAt,
 	)
 	d.reconcileMu.Unlock()
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewProxyCrashMessage(localpart, "detected", exitCode, "")); err != nil {
+		schema.NewProxyCrashMessage(principal.AccountLocalpart(), "detected", exitCode, "")); err != nil {
 		d.logger.Error("failed to post proxy crash notification",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 	}
 
 	// Trigger re-reconciliation. Reconcile will see the crash backoff
 	// and skip the principal until the backoff expires.
 	if err := d.reconcile(ctx); err != nil {
 		d.logger.Error("reconciliation after proxy exit failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 		if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewProxyCrashMessage(localpart, "failed", exitCode, err.Error())); sendErr != nil {
+			schema.NewProxyCrashMessage(principal.AccountLocalpart(), "failed", exitCode, err.Error())); sendErr != nil {
 			d.logger.Error("failed to post proxy recovery failure notification",
-				"principal", localpart, "error", sendErr)
+				"principal", principal, "error", sendErr)
 		}
 	} else {
 		d.reconcileMu.Lock()
-		recovered := d.running[localpart]
+		recovered := d.running[principal]
 		d.reconcileMu.Unlock()
 
 		status := "recovered"
@@ -1988,9 +1988,9 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			errorMessage = "proxy crashed, retry scheduled with exponential backoff"
 		}
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewProxyCrashMessage(localpart, status, exitCode, errorMessage)); err != nil {
+			schema.NewProxyCrashMessage(principal.AccountLocalpart(), status, exitCode, errorMessage)); err != nil {
 			d.logger.Error("failed to post proxy recovery status",
-				"principal", localpart, "error", err)
+				"principal", principal, "error", err)
 		}
 	}
 	d.notifyReconcile()
@@ -2008,19 +2008,19 @@ func (d *Daemon) watchProxyExit(ctx context.Context, localpart string) {
 			case <-d.clock.After(crashBackoff):
 				if err := d.reconcile(d.shutdownCtx); err != nil {
 					d.logger.Error("deferred reconciliation after proxy crash backoff expired",
-						"principal", localpart,
+						"principal", principal,
 						"error", err,
 					)
 				} else {
 					d.reconcileMu.Lock()
-					nowRunning := d.running[localpart]
+					nowRunning := d.running[principal]
 					d.reconcileMu.Unlock()
 					if nowRunning {
 						if _, err := d.sendEventRetry(d.shutdownCtx, d.configRoomID,
 							schema.MatrixEventTypeMessage,
-							schema.NewProxyCrashMessage(localpart, "recovered", exitCode, "")); err != nil {
+							schema.NewProxyCrashMessage(principal.AccountLocalpart(), "recovered", exitCode, "")); err != nil {
 							d.logger.Error("failed to post deferred proxy recovery notification",
-								"principal", localpart, "error", err)
+								"principal", principal, "error", err)
 						}
 					}
 				}

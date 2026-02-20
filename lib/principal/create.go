@@ -28,16 +28,17 @@ import (
 // credential.Provision under the hood. This function type breaks the import
 // cycle between lib/principal (which defines Create) and lib/credential
 // (which implements the encryption and publishing workflow).
-type ProvisionFunc func(ctx context.Context, session messaging.Session, machine ref.Machine, principalLocalpart, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
+type ProvisionFunc func(ctx context.Context, session messaging.Session, machine ref.Machine, principal ref.Entity, machineRoomID string, credentials map[string]string) (configRoomID string, err error)
 
 // CreateParams holds the parameters for creating and deploying a principal.
 type CreateParams struct {
 	// Machine identifies the target machine for this principal.
 	Machine ref.Machine
 
-	// Localpart is the principal's localpart (e.g., "agent/code-review"
-	// or "service/ticket").
-	Localpart string
+	// Principal identifies the target principal as a fleet-scoped entity
+	// reference. The Entity's Localpart() is used as the Matrix registration
+	// username, and UserID() as the canonical identity.
+	Principal ref.Entity
 
 	// TemplateRef identifies which template to use for this principal (e.g.,
 	// bureau/template:claude-dev). The template must already exist in Matrix.
@@ -136,8 +137,8 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	if params.Machine.IsZero() {
 		return nil, fmt.Errorf("machine is required")
 	}
-	if err := ValidateLocalpart(params.Localpart); err != nil {
-		return nil, fmt.Errorf("invalid principal localpart: %w", err)
+	if params.Principal.IsZero() {
+		return nil, fmt.Errorf("principal is required")
 	}
 	if params.TemplateRef == (schema.TemplateRef{}) {
 		return nil, fmt.Errorf("template reference is required")
@@ -176,12 +177,12 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	defer password.Close()
 
 	principalSession, err := client.Register(ctx, messaging.RegisterRequest{
-		Username:          params.Localpart,
+		Username:          params.Principal.Localpart(),
 		Password:          password,
 		RegistrationToken: registrationToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("register principal account %q: %w", params.Localpart, err)
+		return nil, fmt.Errorf("register principal account %q: %w", params.Principal.UserID(), err)
 	}
 	defer principalSession.Close()
 
@@ -202,7 +203,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	}
 
 	// Provision encrypted credentials to the machine's config room.
-	configRoomID, err := provision(ctx, session, params.Machine, params.Localpart, params.MachineRoomID, credentials)
+	configRoomID, err := provision(ctx, session, params.Machine, params.Principal, params.MachineRoomID, credentials)
 	if err != nil {
 		return nil, fmt.Errorf("provision credentials: %w", err)
 	}
@@ -258,7 +259,7 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 	}
 
 	assignment := schema.PrincipalAssignment{
-		Localpart:                 params.Localpart,
+		Principal:                 params.Principal,
 		Template:                  params.TemplateRef.String(),
 		AutoStart:                 params.AutoStart,
 		Labels:                    params.Labels,
@@ -270,7 +271,7 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 	// Check if the principal is already assigned; update in place if so.
 	found := false
 	for i, existing := range config.Principals {
-		if existing.Localpart == params.Localpart {
+		if existing.Principal.UserID() == params.Principal.UserID() {
 			config.Principals[i] = assignment
 			found = true
 			break

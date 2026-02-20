@@ -501,6 +501,125 @@ func TestAtToHashRule(t *testing.T) {
 	}
 }
 
+func TestParseEntityUserID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		userID     string
+		wantType   string
+		wantName   string
+		wantSocket string // relative to fleet RunDir
+		wantAdmin  string
+		wantErr    bool
+	}{
+		{
+			name:       "machine",
+			userID:     "@my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			wantType:   "machine",
+			wantName:   "gpu-box",
+			wantSocket: "/run/bureau/fleet/prod/machine/gpu-box.sock",
+			wantAdmin:  "/run/bureau/fleet/prod/machine/gpu-box.admin.sock",
+		},
+		{
+			name:       "service",
+			userID:     "@my_bureau/fleet/prod/service/ticket:" + testServer,
+			wantType:   "service",
+			wantName:   "ticket",
+			wantSocket: "/run/bureau/fleet/prod/service/ticket.sock",
+			wantAdmin:  "/run/bureau/fleet/prod/service/ticket.admin.sock",
+		},
+		{
+			name:       "hierarchical_service",
+			userID:     "@my_bureau/fleet/prod/service/stt/whisper:" + testServer,
+			wantType:   "service",
+			wantName:   "stt/whisper",
+			wantSocket: "/run/bureau/fleet/prod/service/stt/whisper.sock",
+			wantAdmin:  "/run/bureau/fleet/prod/service/stt/whisper.admin.sock",
+		},
+		{
+			name:       "agent",
+			userID:     "@my_bureau/fleet/prod/agent/code-reviewer:" + testServer,
+			wantType:   "agent",
+			wantName:   "code-reviewer",
+			wantSocket: "/run/bureau/fleet/prod/agent/code-reviewer.sock",
+			wantAdmin:  "/run/bureau/fleet/prod/agent/code-reviewer.admin.sock",
+		},
+		{
+			name:    "non_fleet_user_id",
+			userID:  "@admin:" + testServer,
+			wantErr: true,
+		},
+		{
+			name:    "legacy_localpart",
+			userID:  "@machine/workstation:" + testServer,
+			wantErr: true,
+		},
+		{
+			name:    "missing_sigil",
+			userID:  "my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			entity, err := ref.ParseEntityUserID(test.userID)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got entity %v", entity)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if entity.EntityType() != test.wantType {
+				t.Errorf("EntityType() = %q, want %q", entity.EntityType(), test.wantType)
+			}
+			if entity.Name() != test.wantName {
+				t.Errorf("Name() = %q, want %q", entity.Name(), test.wantName)
+			}
+
+			// Verify socket paths use fleet.RunDir layout.
+			ns, _ := ref.NewNamespace(testServer, "my_bureau")
+			fleet, _ := ref.NewFleet(ns, "prod")
+			fleetRunDir := fleet.RunDir("/run/bureau")
+
+			if got := entity.SocketPath(fleetRunDir); got != test.wantSocket {
+				t.Errorf("SocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantSocket)
+			}
+			if got := entity.AdminSocketPath(fleetRunDir); got != test.wantAdmin {
+				t.Errorf("AdminSocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantAdmin)
+			}
+		})
+	}
+}
+
+func TestParseEntityLocalpart(t *testing.T) {
+	t.Parallel()
+
+	entity, err := ref.ParseEntityLocalpart("my_bureau/fleet/prod/machine/gpu-box", testServer)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entity.EntityType() != "machine" {
+		t.Errorf("EntityType() = %q, want %q", entity.EntityType(), "machine")
+	}
+	if entity.Localpart() != "my_bureau/fleet/prod/machine/gpu-box" {
+		t.Errorf("Localpart() = %q, want %q", entity.Localpart(), "my_bureau/fleet/prod/machine/gpu-box")
+	}
+	if entity.UserID() != "@my_bureau/fleet/prod/machine/gpu-box:"+testServer {
+		t.Errorf("UserID() = %q, want %q", entity.UserID(), "@my_bureau/fleet/prod/machine/gpu-box:"+testServer)
+	}
+
+	// Verify Fleet() is populated correctly.
+	if entity.Fleet().FleetName() != "prod" {
+		t.Errorf("Fleet().Name() = %q, want %q", entity.Fleet().FleetName(), "prod")
+	}
+}
+
 func TestJSONRoundTripMachine(t *testing.T) {
 	ns, _ := ref.NewNamespace(testServer, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
@@ -654,15 +773,31 @@ func TestZeroValues(t *testing.T) {
 		t.Error("Agent should be zero")
 	}
 
-	// Zero values should fail to marshal.
+	// Namespace and Fleet zero values should fail to marshal — they have
+	// no deregistration protocol that needs empty-string serialization.
 	if _, err := ns.MarshalText(); err == nil {
 		t.Error("marshaling zero Namespace should fail")
 	}
 	if _, err := fleet.MarshalText(); err == nil {
 		t.Error("marshaling zero Fleet should fail")
 	}
-	if _, err := machine.MarshalText(); err == nil {
-		t.Error("marshaling zero Machine should fail")
+
+	// Entity types (Machine, Service, Agent, Entity) marshal zero values
+	// as empty string. This supports the service deregistration protocol
+	// where schema.Service{} is published to clear a directory entry.
+	machineBytes, err := machine.MarshalText()
+	if err != nil {
+		t.Errorf("marshaling zero Machine should succeed: %v", err)
+	}
+	if len(machineBytes) != 0 {
+		t.Errorf("zero Machine marshaled to %q, want empty", machineBytes)
+	}
+	serviceBytes, err := service.MarshalText()
+	if err != nil {
+		t.Errorf("marshaling zero Service should succeed: %v", err)
+	}
+	if len(serviceBytes) != 0 {
+		t.Errorf("zero Service marshaled to %q, want empty", serviceBytes)
 	}
 }
 
@@ -887,5 +1022,282 @@ func TestExtractEntityName(t *testing.T) {
 				t.Errorf("entityName = %q, want %q", entityName, test.wantEntityName)
 			}
 		})
+	}
+}
+
+func TestNewEntityFromAccountLocalpart(t *testing.T) {
+	ns, err := ref.NewNamespace(testServer, "bureau")
+	if err != nil {
+		t.Fatalf("creating namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(ns, "prod")
+	if err != nil {
+		t.Fatalf("creating fleet: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		accountLocalpart string
+		wantLocalpart    string
+		wantEntityType   string
+		wantEntityName   string
+		wantSocketSuffix string
+		wantErr          bool
+	}{
+		{
+			name:             "simple agent",
+			accountLocalpart: "agent/frontend",
+			wantLocalpart:    "bureau/fleet/prod/agent/frontend",
+			wantEntityType:   "agent",
+			wantEntityName:   "frontend",
+			wantSocketSuffix: "agent/frontend.sock",
+		},
+		{
+			name:             "simple service",
+			accountLocalpart: "service/ticket",
+			wantLocalpart:    "bureau/fleet/prod/service/ticket",
+			wantEntityType:   "service",
+			wantEntityName:   "ticket",
+			wantSocketSuffix: "service/ticket.sock",
+		},
+		{
+			name:             "hierarchical service",
+			accountLocalpart: "service/stt/whisper",
+			wantLocalpart:    "bureau/fleet/prod/service/stt/whisper",
+			wantEntityType:   "service",
+			wantEntityName:   "stt/whisper",
+			wantSocketSuffix: "service/stt/whisper.sock",
+		},
+		{
+			name:             "machine",
+			accountLocalpart: "machine/workstation",
+			wantLocalpart:    "bureau/fleet/prod/machine/workstation",
+			wantEntityType:   "machine",
+			wantEntityName:   "workstation",
+			wantSocketSuffix: "machine/workstation.sock",
+		},
+		{
+			name:             "pipeline executor",
+			accountLocalpart: "pipeline/deploy/1709234567123",
+			wantLocalpart:    "bureau/fleet/prod/pipeline/deploy/1709234567123",
+			wantEntityType:   "pipeline",
+			wantEntityName:   "deploy/1709234567123",
+			wantSocketSuffix: "pipeline/deploy/1709234567123.sock",
+		},
+		{
+			name:             "single segment only",
+			accountLocalpart: "frontend",
+			wantErr:          true,
+		},
+		{
+			name:             "empty",
+			accountLocalpart: "",
+			wantErr:          true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entity, err := ref.NewEntityFromAccountLocalpart(fleet, test.accountLocalpart)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got entity with localpart %q", entity.Localpart())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got := entity.Localpart(); got != test.wantLocalpart {
+				t.Errorf("Localpart() = %q, want %q", got, test.wantLocalpart)
+			}
+			if got := entity.EntityType(); got != test.wantEntityType {
+				t.Errorf("EntityType() = %q, want %q", got, test.wantEntityType)
+			}
+			if got := entity.Name(); got != test.wantEntityName {
+				t.Errorf("Name() = %q, want %q", got, test.wantEntityName)
+			}
+			if got := entity.AccountLocalpart(); got != test.accountLocalpart {
+				t.Errorf("AccountLocalpart() = %q, want %q", got, test.accountLocalpart)
+			}
+
+			// Verify socket path ends with the expected suffix.
+			socketPath := entity.SocketPath("/run/bureau/fleet/prod")
+			if !strings.HasSuffix(socketPath, test.wantSocketSuffix) {
+				t.Errorf("SocketPath() = %q, want suffix %q", socketPath, test.wantSocketSuffix)
+			}
+
+			// Verify the entity's fleet matches the input fleet.
+			if got := entity.Fleet().Localpart(); got != fleet.Localpart() {
+				t.Errorf("Fleet().Localpart() = %q, want %q", got, fleet.Localpart())
+			}
+		})
+	}
+}
+
+func TestEntityUnmarshalText(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantLocalpart string
+		wantType      string
+		wantName      string
+		wantErr       bool
+	}{
+		{
+			name:          "agent",
+			input:         "@bureau/fleet/prod/agent/frontend:bureau.local",
+			wantLocalpart: "bureau/fleet/prod/agent/frontend",
+			wantType:      "agent",
+			wantName:      "frontend",
+		},
+		{
+			name:          "service",
+			input:         "@bureau/fleet/prod/service/ticket:bureau.local",
+			wantLocalpart: "bureau/fleet/prod/service/ticket",
+			wantType:      "service",
+			wantName:      "ticket",
+		},
+		{
+			name:          "hierarchical service",
+			input:         "@bureau/fleet/prod/service/stt/whisper:bureau.local",
+			wantLocalpart: "bureau/fleet/prod/service/stt/whisper",
+			wantType:      "service",
+			wantName:      "stt/whisper",
+		},
+		{
+			name:    "bare localpart (not fleet-scoped)",
+			input:   "@agent/frontend:bureau.local",
+			wantErr: true,
+		},
+		{
+			name:  "empty string produces zero value",
+			input: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var entity ref.Entity
+			err := entity.UnmarshalText([]byte(test.input))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got entity with localpart %q", entity.Localpart())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := entity.Localpart(); got != test.wantLocalpart {
+				t.Errorf("Localpart() = %q, want %q", got, test.wantLocalpart)
+			}
+			if got := entity.EntityType(); got != test.wantType {
+				t.Errorf("EntityType() = %q, want %q", got, test.wantType)
+			}
+			if got := entity.Name(); got != test.wantName {
+				t.Errorf("Name() = %q, want %q", got, test.wantName)
+			}
+		})
+	}
+}
+
+func TestEntityJSONRoundtrip(t *testing.T) {
+	// Entity should serialize as a JSON string (the user ID) and
+	// deserialize back to an equivalent Entity.
+	type wrapper struct {
+		Principal ref.Entity `json:"principal"`
+	}
+
+	original, err := ref.ParseEntityUserID("@bureau/fleet/prod/agent/frontend:bureau.local")
+	if err != nil {
+		t.Fatalf("creating entity: %v", err)
+	}
+
+	originalWrapper := wrapper{Principal: original}
+
+	data, err := json.Marshal(originalWrapper)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Verify the JSON shape: the Entity should be a string, not an object.
+	wantJSON := `{"principal":"@bureau/fleet/prod/agent/frontend:bureau.local"}`
+	if string(data) != wantJSON {
+		t.Errorf("JSON = %s, want %s", data, wantJSON)
+	}
+
+	var roundtripped wrapper
+	if err := json.Unmarshal(data, &roundtripped); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if roundtripped.Principal.UserID() != original.UserID() {
+		t.Errorf("roundtripped UserID = %q, want %q", roundtripped.Principal.UserID(), original.UserID())
+	}
+	if roundtripped.Principal.Localpart() != original.Localpart() {
+		t.Errorf("roundtripped Localpart = %q, want %q", roundtripped.Principal.Localpart(), original.Localpart())
+	}
+	if roundtripped.Principal.EntityType() != "agent" {
+		t.Errorf("roundtripped EntityType = %q, want %q", roundtripped.Principal.EntityType(), "agent")
+	}
+}
+
+func TestMachineEntity(t *testing.T) {
+	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	if err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(ns, "prod")
+	if err != nil {
+		t.Fatalf("fleet: %v", err)
+	}
+	machine, err := ref.NewMachine(fleet, "gpu-box")
+	if err != nil {
+		t.Fatalf("machine: %v", err)
+	}
+
+	entity := machine.Entity()
+	if entity.UserID() != machine.UserID() {
+		t.Errorf("Entity().UserID() = %q, want %q", entity.UserID(), machine.UserID())
+	}
+	if entity.Localpart() != machine.Localpart() {
+		t.Errorf("Entity().Localpart() = %q, want %q", entity.Localpart(), machine.Localpart())
+	}
+	if entity.SocketPath("/run/bureau") != machine.SocketPath("/run/bureau") {
+		t.Errorf("Entity().SocketPath() = %q, want %q", entity.SocketPath("/run/bureau"), machine.SocketPath("/run/bureau"))
+	}
+	if entity.EntityType() != "machine" {
+		t.Errorf("Entity().EntityType() = %q, want %q", entity.EntityType(), "machine")
+	}
+}
+
+func TestServiceEntity(t *testing.T) {
+	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	if err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+	fleet, err := ref.NewFleet(ns, "prod")
+	if err != nil {
+		t.Fatalf("fleet: %v", err)
+	}
+	service, err := ref.NewService(fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	entity := service.Entity()
+	if entity.UserID() != service.UserID() {
+		t.Errorf("Entity().UserID() = %q, want %q", entity.UserID(), service.UserID())
+	}
+	if entity.Localpart() != service.Localpart() {
+		t.Errorf("Entity().Localpart() = %q, want %q", entity.Localpart(), service.Localpart())
+	}
+	if entity.SocketPath("/run/bureau") != service.SocketPath("/run/bureau") {
+		t.Errorf("Entity().SocketPath() = %q, want %q", entity.SocketPath("/run/bureau"), service.SocketPath("/run/bureau"))
+	}
+	if entity.EntityType() != "service" {
+		t.Errorf("Entity().EntityType() = %q, want %q", entity.EntityType(), "service")
 	}
 }

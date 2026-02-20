@@ -16,17 +16,19 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 func TestServiceChanged(t *testing.T) {
-	gpu1, _ := testMachineSetup(t, "gpu-1", "bureau.local")
+	gpu1, gpu1Fleet := testMachineSetup(t, "gpu-1", "bureau.local")
 	gpu2, _ := testMachineSetup(t, "gpu-2", "bureau.local")
+	whisperEntity := testEntity(t, gpu1Fleet, "service/stt/whisper")
 
 	base := &schema.Service{
-		Principal:    "@stt/whisper:bureau.local",
-		Machine:      gpu1.UserID(),
+		Principal:    whisperEntity,
+		Machine:      gpu1,
 		Capabilities: []string{"streaming", "diarization"},
 		Protocol:     "http",
 		Description:  "Speech-to-text via Whisper",
@@ -39,37 +41,37 @@ func TestServiceChanged(t *testing.T) {
 	}{
 		{
 			name:    "identical",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: false,
 		},
 		{
 			name:    "different machine",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu2.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu2, Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different protocol",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "grpc", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: []string{"streaming", "diarization"}, Protocol: "grpc", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different capabilities",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: []string{"streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "capabilities reordered",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"diarization", "streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: []string{"diarization", "streaming"}, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 		{
 			name:    "different description",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Updated description"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: []string{"streaming", "diarization"}, Protocol: "http", Description: "Updated description"},
 			changed: true,
 		},
 		{
 			name:    "nil vs empty capabilities",
-			current: &schema.Service{Principal: "@stt/whisper:bureau.local", Machine: gpu1.UserID(), Capabilities: nil, Protocol: "http", Description: "Speech-to-text via Whisper"},
+			current: &schema.Service{Principal: whisperEntity, Machine: gpu1, Capabilities: nil, Protocol: "http", Description: "Speech-to-text via Whisper"},
 			changed: true,
 		},
 	}
@@ -113,41 +115,34 @@ func TestLocalAndRemoteServices(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu-1", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.services["service/llm/mixtral"] = &schema.Service{
-		Principal: "@service/llm/mixtral:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "http")
+	llmLocalpart, llmService := testServiceEntry(t, daemon.fleet, "llm/mixtral", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
+	daemon.services[ttsLocalpart] = ttsService
+	daemon.services[llmLocalpart] = llmService
 
 	local := daemon.localServices()
 	if len(local) != 2 {
 		t.Errorf("localServices() returned %d services, want 2", len(local))
 	}
-	if _, ok := local["service/stt/whisper"]; !ok {
-		t.Error("localServices() missing service/stt/whisper")
+	if _, ok := local[sttLocalpart]; !ok {
+		t.Errorf("localServices() missing %s", sttLocalpart)
 	}
-	if _, ok := local["service/llm/mixtral"]; !ok {
-		t.Error("localServices() missing service/llm/mixtral")
+	if _, ok := local[llmLocalpart]; !ok {
+		t.Errorf("localServices() missing %s", llmLocalpart)
 	}
 
 	remote := daemon.remoteServices()
 	if len(remote) != 1 {
 		t.Errorf("remoteServices() returned %d services, want 1", len(remote))
 	}
-	if _, ok := remote["service/tts/piper"]; !ok {
-		t.Error("remoteServices() missing service/tts/piper")
+	if _, ok := remote[ttsLocalpart]; !ok {
+		t.Errorf("remoteServices() missing %s", ttsLocalpart)
 	}
 }
 
@@ -156,20 +151,20 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "http")
+	daemon.services[sttLocalpart] = sttService
+	daemon.services[ttsLocalpart] = ttsService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	ttsProxyName := principal.ProxyServiceName(ttsLocalpart)
+
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	// With no running consumers, reconcileServices should update
@@ -177,7 +172,7 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	daemon.reconcileServices(
 		context.Background(),
 		nil, // no running consumers
-		[]string{"service/stt/whisper", "service/tts/piper"},
+		[]string{sttLocalpart, ttsLocalpart},
 		nil,
 		nil,
 	)
@@ -188,13 +183,14 @@ func TestReconcileServices_LocalAndRemote(t *testing.T) {
 	}
 
 	// Verify the local service was recorded in proxyRoutes.
-	if _, ok := daemon.proxyRoutes["service-stt-whisper"]; !ok {
-		t.Error("proxyRoutes should contain service-stt-whisper")
+	if _, ok := daemon.proxyRoutes[sttProxyName]; !ok {
+		t.Errorf("proxyRoutes should contain %s", sttProxyName)
 	}
 
-	// Verify the remote service was NOT recorded in proxyRoutes.
-	if _, ok := daemon.proxyRoutes["service-tts-piper"]; ok {
-		t.Error("proxyRoutes should not contain remote service-tts-piper")
+	// Verify the remote service was NOT recorded in proxyRoutes
+	// (no relay configured).
+	if _, ok := daemon.proxyRoutes[ttsProxyName]; ok {
+		t.Errorf("proxyRoutes should not contain remote %s", ttsProxyName)
 	}
 }
 
@@ -203,9 +199,10 @@ func TestReconcileServices_NoChanges(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	// reconcileServices with no changes should be a no-op.
@@ -221,10 +218,19 @@ func TestReconcileServices_Removal(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+
+	sttLocalpart, _ := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
+	}
+	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	// Removing a service that was locally routed should clean up proxyRoutes.
@@ -232,12 +238,12 @@ func TestReconcileServices_Removal(t *testing.T) {
 		context.Background(),
 		nil, // no running consumers
 		nil,
-		[]string{"service/stt/whisper"},
+		[]string{sttLocalpart},
 		nil,
 	)
 
-	if _, ok := daemon.proxyRoutes["service-stt-whisper"]; ok {
-		t.Error("proxyRoutes should no longer contain service-stt-whisper after removal")
+	if _, ok := daemon.proxyRoutes[sttProxyName]; ok {
+		t.Errorf("proxyRoutes should no longer contain %s after removal", sttProxyName)
 	}
 }
 
@@ -246,16 +252,21 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   remoteMachine.UserID(), // moved to remote
-		Protocol:  "http",
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", remoteMachine, "http")
+	daemon.services[sttLocalpart] = sttService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	// Updating a service that moved to a remote machine should remove the
@@ -265,11 +276,11 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 		nil, // no running consumers
 		nil,
 		nil,
-		[]string{"service/stt/whisper"},
+		[]string{sttLocalpart},
 	)
 
-	if _, ok := daemon.proxyRoutes["service-stt-whisper"]; ok {
-		t.Error("proxyRoutes should not contain service-stt-whisper after migration to remote machine")
+	if _, ok := daemon.proxyRoutes[sttProxyName]; ok {
+		t.Errorf("proxyRoutes should not contain %s after migration to remote machine", sttProxyName)
 	}
 }
 
@@ -324,15 +335,23 @@ func TestProxyRouteRegistration(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.running["agent/alice"] = true
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(tempDir, localpart+".admin.sock")
+	expectedSocket := sttRef.SocketPath(daemon.fleetRunDir)
+
+	aliceEntity := testEntity(t, daemon.fleet, "agent/alice")
+	daemon.running[aliceEntity] = true
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	t.Run("register on add", func(t *testing.T) {
@@ -342,8 +361,8 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 		daemon.reconcileServices(
 			context.Background(),
-			[]string{"agent/alice"},
-			[]string{"service/stt/whisper"},
+			[]ref.Entity{aliceEntity},
+			[]string{sttLocalpart},
 			nil,
 			nil,
 		)
@@ -357,8 +376,8 @@ func TestProxyRouteRegistration(t *testing.T) {
 		if calls[0].method != "PUT" {
 			t.Errorf("expected PUT, got %s", calls[0].method)
 		}
-		if calls[0].serviceName != "service-stt-whisper" {
-			t.Errorf("expected service name service-stt-whisper, got %s", calls[0].serviceName)
+		if calls[0].serviceName != sttProxyName {
+			t.Errorf("expected service name %s, got %s", sttProxyName, calls[0].serviceName)
 		}
 
 		// Verify the request body contains the provider socket and path prefix.
@@ -366,21 +385,20 @@ func TestProxyRouteRegistration(t *testing.T) {
 		if err := json.Unmarshal([]byte(calls[0].body), &registration); err != nil {
 			t.Fatalf("unmarshal request body: %v", err)
 		}
-		expectedSocket := "/run/bureau/service/stt/whisper.sock"
 		if registration.UpstreamUnix != expectedSocket {
 			t.Errorf("upstream_unix = %q, want %q", registration.UpstreamUnix, expectedSocket)
 		}
 		// The URL should include the /http/ path prefix so the provider
 		// proxy routes the request to the correct service.
-		expectedURL := "http://localhost/http/service-stt-whisper"
+		expectedURL := "http://localhost/http/" + sttProxyName
 		if registration.UpstreamURL != expectedURL {
 			t.Errorf("upstream_url = %q, want %q", registration.UpstreamURL, expectedURL)
 		}
 
 		// Verify proxyRoutes was updated.
-		if daemon.proxyRoutes["service-stt-whisper"] != expectedSocket {
-			t.Errorf("proxyRoutes[service-stt-whisper] = %q, want %q",
-				daemon.proxyRoutes["service-stt-whisper"], expectedSocket)
+		if daemon.proxyRoutes[sttProxyName] != expectedSocket {
+			t.Errorf("proxyRoutes[%s] = %q, want %q",
+				sttProxyName, daemon.proxyRoutes[sttProxyName], expectedSocket)
 		}
 	})
 
@@ -394,9 +412,9 @@ func TestProxyRouteRegistration(t *testing.T) {
 
 		daemon.reconcileServices(
 			context.Background(),
-			[]string{"agent/alice"},
+			[]ref.Entity{aliceEntity},
 			nil,
-			[]string{"service/stt/whisper"},
+			[]string{sttLocalpart},
 			nil,
 		)
 
@@ -409,13 +427,13 @@ func TestProxyRouteRegistration(t *testing.T) {
 		if calls[0].method != "DELETE" {
 			t.Errorf("expected DELETE, got %s", calls[0].method)
 		}
-		if calls[0].serviceName != "service-stt-whisper" {
-			t.Errorf("expected service name service-stt-whisper, got %s", calls[0].serviceName)
+		if calls[0].serviceName != sttProxyName {
+			t.Errorf("expected service name %s, got %s", sttProxyName, calls[0].serviceName)
 		}
 
 		// Verify proxyRoutes was cleaned up.
-		if _, ok := daemon.proxyRoutes["service-stt-whisper"]; ok {
-			t.Error("proxyRoutes should not contain service-stt-whisper after removal")
+		if _, ok := daemon.proxyRoutes[sttProxyName]; ok {
+			t.Errorf("proxyRoutes should not contain %s after removal", sttProxyName)
 		}
 	})
 }
@@ -458,14 +476,30 @@ func TestConfigureConsumerProxy(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.proxyRoutes["service-stt-whisper"] = "/run/bureau/service/stt/whisper.sock"
-	daemon.proxyRoutes["service-llm-mixtral"] = "/run/bureau/service/llm/mixtral.sock"
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(tempDir, localpart+".admin.sock")
+
+	// configureConsumerProxy operates on proxyRoutes, which are keyed by
+	// the flat proxy service name. These are pre-populated by
+	// reconcileServices and use fleet-scoped proxy names.
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
+	}
+	llmRef, err := ref.NewService(daemon.fleet, "llm/mixtral")
+	if err != nil {
+		t.Fatalf("construct llm ref: %v", err)
+	}
+	sttProxyName := principal.ProxyServiceName(sttRef.Localpart())
+	llmProxyName := principal.ProxyServiceName(llmRef.Localpart())
+	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
+	daemon.proxyRoutes[llmProxyName] = llmRef.SocketPath(daemon.fleetRunDir)
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
-	daemon.configureConsumerProxy(context.Background(), "agent/bob")
+	daemon.configureConsumerProxy(context.Background(), testEntity(t, daemon.fleet, "agent/bob"))
 
 	callsMu.Lock()
 	defer callsMu.Unlock()
@@ -483,11 +517,11 @@ func TestConfigureConsumerProxy(t *testing.T) {
 		}
 		registered[call.serviceName] = true
 	}
-	if !registered["service-stt-whisper"] {
-		t.Error("service-stt-whisper should have been registered")
+	if !registered[sttProxyName] {
+		t.Errorf("%s should have been registered", sttProxyName)
 	}
-	if !registered["service-llm-mixtral"] {
-		t.Error("service-llm-mixtral should have been registered")
+	if !registered[llmProxyName] {
+		t.Errorf("%s should have been registered", llmProxyName)
 	}
 }
 
@@ -499,43 +533,48 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.relaySocketPath = relaySocket
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "http")
+	daemon.services[sttLocalpart] = sttService
+	daemon.services[ttsLocalpart] = ttsService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	ttsProxyName := principal.ProxyServiceName(ttsLocalpart)
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal: "@service/tts/piper:bureau.local",
-		Machine:   remoteMachine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+	expectedSttSocket := sttRef.SocketPath(daemon.fleetRunDir)
+
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	daemon.reconcileServices(
 		context.Background(),
 		nil, // no running consumers
-		[]string{"service/stt/whisper", "service/tts/piper"},
+		[]string{sttLocalpart, ttsLocalpart},
 		nil,
 		nil,
 	)
 
 	// Local service should be routed via provider socket.
-	if route, ok := daemon.proxyRoutes["service-stt-whisper"]; !ok {
-		t.Error("proxyRoutes should contain service-stt-whisper")
-	} else if route != "/run/bureau/service/stt/whisper.sock" {
-		t.Errorf("service-stt-whisper route = %q, want provider socket", route)
+	if route, ok := daemon.proxyRoutes[sttProxyName]; !ok {
+		t.Errorf("proxyRoutes should contain %s", sttProxyName)
+	} else if route != expectedSttSocket {
+		t.Errorf("%s route = %q, want provider socket %q", sttProxyName, route, expectedSttSocket)
 	}
 
 	// Remote service should be routed via relay socket.
-	if route, ok := daemon.proxyRoutes["service-tts-piper"]; !ok {
-		t.Error("proxyRoutes should contain service-tts-piper when relay is configured")
+	if route, ok := daemon.proxyRoutes[ttsProxyName]; !ok {
+		t.Errorf("proxyRoutes should contain %s when relay is configured", ttsProxyName)
 	} else if route != relaySocket {
-		t.Errorf("service-tts-piper route = %q, want relay socket %q", route, relaySocket)
+		t.Errorf("%s route = %q, want relay socket %q", ttsProxyName, route, relaySocket)
 	}
 }
 
@@ -543,23 +582,20 @@ func TestBuildServiceDirectory(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	gpuMachine, _ := testMachineSetup(t, "gpu-1", "bureau.local")
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal:    "@service/stt/whisper:bureau.local",
-		Machine:      gpuMachine.UserID(),
-		Capabilities: []string{"streaming", "speaker-diarization"},
-		Protocol:     "http",
-		Description:  "Speech-to-text via Whisper",
-		Metadata:     map[string]any{"model": "large-v3"},
-	}
-	daemon.services["service/tts/piper"] = &schema.Service{
-		Principal:    "@service/tts/piper:bureau.local",
-		Machine:      gpuMachine.UserID(),
-		Capabilities: []string{"streaming"},
-		Protocol:     "http",
-		Description:  "Text-to-speech via Piper",
-	}
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", gpuMachine, "http")
+	sttService.Capabilities = []string{"streaming", "speaker-diarization"}
+	sttService.Description = "Speech-to-text via Whisper"
+	sttService.Metadata = map[string]any{"model": "large-v3"}
+	daemon.services[sttLocalpart] = sttService
+
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", gpuMachine, "http")
+	ttsService.Capabilities = []string{"streaming"}
+	ttsService.Description = "Text-to-speech via Piper"
+	daemon.services[ttsLocalpart] = ttsService
 
 	directory := daemon.buildServiceDirectory()
 
@@ -573,12 +609,12 @@ func TestBuildServiceDirectory(t *testing.T) {
 		byLocalpart[entry.Localpart] = entry
 	}
 
-	whisper, ok := byLocalpart["service/stt/whisper"]
+	whisper, ok := byLocalpart[sttLocalpart]
 	if !ok {
-		t.Fatal("missing service/stt/whisper in directory")
+		t.Fatalf("missing %s in directory", sttLocalpart)
 	}
-	if whisper.Principal != "@service/stt/whisper:bureau.local" {
-		t.Errorf("whisper principal = %q, want @service/stt/whisper:bureau.local", whisper.Principal)
+	if whisper.Principal != sttService.Principal.UserID() {
+		t.Errorf("whisper principal = %q, want %q", whisper.Principal, sttService.Principal.UserID())
 	}
 	if whisper.Protocol != "http" {
 		t.Errorf("whisper protocol = %q, want http", whisper.Protocol)
@@ -590,9 +626,9 @@ func TestBuildServiceDirectory(t *testing.T) {
 		t.Errorf("whisper metadata not preserved: %v", whisper.Metadata)
 	}
 
-	piper, ok := byLocalpart["service/tts/piper"]
+	piper, ok := byLocalpart[ttsLocalpart]
 	if !ok {
-		t.Fatal("missing service/tts/piper in directory")
+		t.Fatalf("missing %s in directory", ttsLocalpart)
 	}
 	if piper.Description != "Text-to-speech via Piper" {
 		t.Errorf("piper description = %q", piper.Description)
@@ -655,25 +691,35 @@ func TestPushDirectoryToProxy(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(tempDir, localpart+".admin.sock")
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	gpuMachine, _ := testMachineSetup(t, "gpu-1", "bureau.local")
 	cpuMachine, _ := testMachineSetup(t, "cpu-1", "bureau.local")
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", gpuMachine, "http")
+	sttService.Description = "Speech-to-text"
+	sttService.Capabilities = []string{"streaming"}
+	e5Localpart, e5Service := testServiceEntry(t, daemon.fleet, "embedding/e5", cpuMachine, "grpc")
+	e5Service.Description = "Text embeddings"
+	e5Service.Metadata = map[string]any{"max_tokens": float64(512)}
+
 	directory := []adminDirectoryEntry{
 		{
-			Localpart:    "service/stt/whisper",
-			Principal:    "@service/stt/whisper:bureau.local",
+			Localpart:    sttLocalpart,
+			Principal:    sttService.Principal.UserID(),
 			Machine:      gpuMachine.UserID(),
 			Protocol:     "http",
 			Description:  "Speech-to-text",
 			Capabilities: []string{"streaming"},
 		},
 		{
-			Localpart:   "service/embedding/e5",
-			Principal:   "@service/embedding/e5:bureau.local",
+			Localpart:   e5Localpart,
+			Principal:   e5Service.Principal.UserID(),
 			Machine:     cpuMachine.UserID(),
 			Protocol:    "grpc",
 			Description: "Text embeddings",
@@ -681,7 +727,7 @@ func TestPushDirectoryToProxy(t *testing.T) {
 		},
 	}
 
-	err = daemon.pushDirectoryToProxy(context.Background(), "agent/alice", directory)
+	err = daemon.pushDirectoryToProxy(context.Background(), testEntity(t, daemon.fleet, "agent/alice"), directory)
 	if err != nil {
 		t.Fatalf("pushDirectoryToProxy: %v", err)
 	}
@@ -701,16 +747,16 @@ func TestPushDirectoryToProxy(t *testing.T) {
 	for _, entry := range receivedDirectory {
 		byLocalpart[entry.Localpart] = entry
 	}
-	whisper, ok := byLocalpart["service/stt/whisper"]
+	whisper, ok := byLocalpart[sttLocalpart]
 	if !ok {
-		t.Fatal("missing service/stt/whisper")
+		t.Fatalf("missing %s", sttLocalpart)
 	}
 	if whisper.Protocol != "http" {
 		t.Errorf("whisper protocol = %q, want http", whisper.Protocol)
 	}
-	e5, ok := byLocalpart["service/embedding/e5"]
+	e5, ok := byLocalpart[e5Localpart]
 	if !ok {
-		t.Fatal("missing service/embedding/e5")
+		t.Fatalf("missing %s", e5Localpart)
 	}
 	if e5.Protocol != "grpc" {
 		t.Errorf("e5 protocol = %q, want grpc", e5.Protocol)
@@ -721,13 +767,7 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 	// Verify pushServiceDirectory pushes to all running consumers.
 	tempDir := testutil.SocketDir(t)
 
-	var pushCounts sync.Map // map[string]int — consumer localpart → push count
-
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("PUT /v1/admin/directory", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "services": 1})
-	})
+	var pushCounts sync.Map // map[string]int -- consumer localpart -> push count
 
 	// Create admin sockets for two consumers.
 	for _, consumer := range []string{"agent/alice", "agent/bob"} {
@@ -758,19 +798,21 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
-	daemon.running["agent/alice"] = true
-	daemon.running["agent/bob"] = true
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(tempDir, localpart+".admin.sock")
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
+
+	aliceEntity := testEntity(t, daemon.fleet, "agent/alice")
+	bobEntity := testEntity(t, daemon.fleet, "agent/bob")
+	daemon.running[aliceEntity] = true
+	daemon.running[bobEntity] = true
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
-	daemon.pushServiceDirectory(context.Background(), []string{"agent/alice", "agent/bob"})
+	daemon.pushServiceDirectory(context.Background(), []ref.Entity{aliceEntity, bobEntity})
 
 	// Verify both consumers received a push.
 	for _, consumer := range []string{"agent/alice", "agent/bob"} {
@@ -788,14 +830,13 @@ func TestPushServiceDirectory_NoRunning(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(),
-		Protocol:  "http",
-	}
 
-	// Should not panic or error — just return immediately.
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
+
+	// Should not panic or error -- just return immediately.
 	daemon.pushServiceDirectory(context.Background(), nil)
 }
 
@@ -808,16 +849,23 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.relaySocketPath = relaySocket
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.services["service/stt/whisper"] = &schema.Service{
-		Principal: "@service/stt/whisper:bureau.local",
-		Machine:   daemon.machine.UserID(), // now local
-		Protocol:  "http",
+
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	daemon.services[sttLocalpart] = sttService
+
+	sttProxyName := principal.ProxyServiceName(sttLocalpart)
+	sttRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+	if err != nil {
+		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.proxyRoutes["service-stt-whisper"] = relaySocket // was remote
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(adminDir, localpart+".admin.sock")
+	expectedSocket := sttRef.SocketPath(daemon.fleetRunDir)
+
+	daemon.proxyRoutes[sttProxyName] = relaySocket // was remote
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
 
 	daemon.reconcileServices(
@@ -825,15 +873,15 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 		nil, // no running consumers
 		nil,
 		nil,
-		[]string{"service/stt/whisper"},
+		[]string{sttLocalpart},
 	)
 
 	// After migration to local, route should point to provider socket, not relay.
-	if route, ok := daemon.proxyRoutes["service-stt-whisper"]; !ok {
-		t.Error("proxyRoutes should contain service-stt-whisper")
+	if route, ok := daemon.proxyRoutes[sttProxyName]; !ok {
+		t.Errorf("proxyRoutes should contain %s", sttProxyName)
 	} else if route == relaySocket {
 		t.Error("route should have changed from relay to provider socket after migration to local")
-	} else if route != "/run/bureau/service/stt/whisper.sock" {
-		t.Errorf("route = %q, want provider socket", route)
+	} else if route != expectedSocket {
+		t.Errorf("route = %q, want provider socket %q", route, expectedSocket)
 	}
 }

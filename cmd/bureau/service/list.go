@@ -103,7 +103,7 @@ func runList(params serviceListParams) error {
 	for i, location := range locations {
 		entries[i] = serviceListEntry{
 			MachineName: location.Machine.Localpart(),
-			Localpart:   location.Assignment.Localpart,
+			Localpart:   location.Assignment.Principal.Localpart(),
 			Template:    location.Assignment.Template,
 			AutoStart:   location.Assignment.AutoStart,
 		}

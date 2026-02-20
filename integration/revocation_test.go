@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -120,7 +121,7 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	})
 
 	// Deploy a principal and verify the proxy is functional.
-	account := registerPrincipal(t, principalLocalpart, "password-revoke-destruct")
+	account := registerFleetPrincipal(t, fleet, principalLocalpart, "password-revoke-destruct")
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Account:      account,
@@ -202,8 +203,8 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	})
 
 	// Deploy two principals.
-	accountA := registerPrincipal(t, principalALocalpart, "password-revoke-a")
-	accountB := registerPrincipal(t, principalBLocalpart, "password-revoke-b")
+	accountA := registerFleetPrincipal(t, fleet, principalALocalpart, "password-revoke-a")
+	accountB := registerFleetPrincipal(t, fleet, principalBLocalpart, "password-revoke-b")
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{
 			{
@@ -273,12 +274,22 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 		t.Error("revocation initiated_at should not be empty")
 	}
 
-	// Verify both principals are listed in the revocation event.
+	// Verify both principals are listed in the revocation event. The
+	// Principals field contains fleet-scoped localparts because credential
+	// state keys are fleet-scoped (from credential.Provision).
+	entityA, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, principalALocalpart)
+	if err != nil {
+		t.Fatalf("construct entity for principal A: %v", err)
+	}
+	entityB, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, principalBLocalpart)
+	if err != nil {
+		t.Fatalf("construct entity for principal B: %v", err)
+	}
 	principalSet := make(map[string]bool)
 	for _, principal := range revocation.Principals {
 		principalSet[principal] = true
 	}
-	for _, expected := range []string{principalALocalpart, principalBLocalpart} {
+	for _, expected := range []string{entityA.Localpart(), entityB.Localpart()} {
 		if !principalSet[expected] {
 			t.Errorf("revocation principals should contain %q, got %v", expected, revocation.Principals)
 		}

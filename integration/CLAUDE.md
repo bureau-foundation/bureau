@@ -177,7 +177,8 @@ Use these instead of inlining the equivalent operations:
 | Push machine config | `pushMachineConfig(t, admin, machine, config)` | `schema.MachineConfig` via `SendStateEvent` |
 | Publish standard test template | `publishTestAgentTemplate(t, admin, machine, name)` | `lib/template.Push` |
 | Grant template room access | `grantTemplateAccess(t, admin, machine)` | `InviteUser` to template room |
-| Register a principal account | `registerPrincipal(t, localpart, password)` | `messaging.Client.Register` |
+| Register a fleet-scoped principal | `registerFleetPrincipal(t, fleet, localpart, password)` | `messaging.Client.Register` with fleet-scoped localpart |
+| Register a bare principal (no daemon) | `registerPrincipal(t, localpart, password)` | `messaging.Client.Register` — only for pure Matrix tests without daemon reconciliation |
 | Deploy principals end-to-end | `deployPrincipals(t, admin, machine, config)` | credentials + config + wait for sockets |
 
 For custom templates (non-standard content like `RequiredServices`,

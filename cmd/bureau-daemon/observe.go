@@ -31,6 +31,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -316,11 +317,20 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 		return
 	}
 
+	// Construct a fleet-scoped Entity from the request's account
+	// localpart to look up in the Entity-keyed d.running map.
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid principal %q: %v", request.Principal, err))
+		return
+	}
+
 	// Check if the principal is running locally. Snapshot under RLock
 	// to avoid racing with background goroutines (watchSandboxExit,
 	// rollbackPrincipal) that modify d.running under Lock.
 	d.reconcileMu.RLock()
-	isLocallyRunning := d.running[request.Principal]
+	isLocallyRunning := d.running[principalEntity]
 	d.reconcileMu.RUnlock()
 
 	if isLocallyRunning {
@@ -442,13 +452,20 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 	if d.lastConfig != nil {
 		for _, assignment := range d.lastConfig.Principals {
 			if len(assignment.Labels) > 0 {
-				principalLabels[assignment.Localpart] = assignment.Labels
+				principalLabels[assignment.Principal.AccountLocalpart()] = assignment.Labels
 			}
 		}
 	}
 
 	// Convert messaging.RoomMember to observe.RoomMember. Only include
 	// joined members — invited, left, and banned members are excluded.
+	//
+	// Member user IDs may be fleet-scoped (e.g., @bureau/fleet/prod/agent/pm:server).
+	// The principalLabels map and observe system use account localparts
+	// (e.g., "agent/pm"). Extract the account localpart via ExtractEntityName
+	// so labels match and the Observe pane field is compatible with
+	// handleObserveSession's NewEntityFromAccountLocalpart. Non-fleet
+	// members (e.g., @admin:bureau.local) fall back to the raw localpart.
 	var observeMembers []observe.RoomMember
 	for _, member := range matrixMembers {
 		if member.Membership != "join" {
@@ -457,14 +474,19 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		localpart, localpartErr := principal.LocalpartFromMatrixID(member.UserID)
 		if localpartErr != nil {
 			// Skip members whose user IDs don't match the Bureau
-			// @localpart:server convention (e.g., the admin account
-			// might be @admin:bureau.local without a hierarchical
-			// localpart).
+			// @localpart:server convention.
 			continue
 		}
+		// Extract the account localpart from fleet-scoped localparts.
+		// Falls back to the raw localpart for non-fleet members (e.g.,
+		// "admin" from @admin:bureau.local).
+		observeLocalpart := localpart
+		if entityType, entityName, err := ref.ExtractEntityName(localpart); err == nil {
+			observeLocalpart = entityType + "/" + entityName
+		}
 		observeMembers = append(observeMembers, observe.RoomMember{
-			Localpart: localpart,
-			Labels:    principalLabels[localpart],
+			Localpart: observeLocalpart,
+			Labels:    principalLabels[observeLocalpart],
 		})
 	}
 
@@ -505,9 +527,10 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 
 	// Collect running principals that the observer is authorized to see.
 	var authorizedPrincipals []string
-	for _, localpart := range runningSnapshot {
-		if d.authorizeList(request.Observer, localpart) {
-			authorizedPrincipals = append(authorizedPrincipals, localpart)
+	for _, principal := range runningSnapshot {
+		accountLocalpart := principal.AccountLocalpart()
+		if d.authorizeList(request.Observer, accountLocalpart) {
+			authorizedPrincipals = append(authorizedPrincipals, accountLocalpart)
 		}
 	}
 
@@ -559,8 +582,8 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	// checks against service directory entries below.
 	d.reconcileMu.RLock()
 	runningSet := make(map[string]bool, len(d.running))
-	for localpart := range d.running {
-		runningSet[localpart] = true
+	for principal := range d.running {
+		runningSet[principal.AccountLocalpart()] = true
 	}
 	d.reconcileMu.RUnlock()
 
@@ -571,15 +594,15 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	var principals []observe.ListPrincipal
 
 	// Locally running principals — filtered by authorization.
-	for localpart := range runningSet {
-		seen[localpart] = true
+	for accountLocalpart := range runningSet {
+		seen[accountLocalpart] = true
 
-		if !d.authorizeList(request.Observer, localpart) {
+		if !d.authorizeList(request.Observer, accountLocalpart) {
 			continue
 		}
 
 		principals = append(principals, observe.ListPrincipal{
-			Localpart:  localpart,
+			Localpart:  accountLocalpart,
 			Machine:    d.machine.Localpart(),
 			Observable: true,
 			Local:      true,
@@ -594,17 +617,14 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		}
 		seen[localpart] = true
 
-		machineLocalpart, err := principal.LocalpartFromMatrixID(service.Machine)
-		if err != nil {
-			machineLocalpart = service.Machine
-		}
+		machineLocalpart := service.Machine.Localpart()
 
-		isLocal := service.Machine == d.machine.UserID()
+		isLocal := service.Machine == d.machine
 		observable := isLocal && runningSet[localpart]
 		if !isLocal {
 			// Remote principal is observable if we have a transport
 			// dialer and the peer machine has a known address.
-			_, peerReachable := d.peerAddresses[service.Machine]
+			_, peerReachable := d.peerAddresses[service.Machine.UserID()]
 			observable = d.transportDialer != nil && peerReachable
 		}
 
@@ -907,6 +927,18 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Construct a fleet-scoped Entity from the request's account
+	// localpart to look up in the Entity-keyed d.running map.
+	transportEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("invalid principal %q: %v", request.Principal, err),
+		})
+		return
+	}
+
 	// Check local authorization for the forwarded observer identity.
 	requestedMode := request.Mode
 	authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
@@ -934,7 +966,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	d.reconcileMu.RLock()
-	principalRunning := d.running[request.Principal]
+	principalRunning := d.running[transportEntity]
 	d.reconcileMu.RUnlock()
 
 	if !principalRunning {
@@ -1105,17 +1137,13 @@ func (d *Daemon) findPrincipalPeer(localpart string) (peerAddress string, ok boo
 	}
 
 	for _, service := range d.services {
-		serviceLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
-		if err != nil {
+		if service.Principal.AccountLocalpart() != localpart {
 			continue
 		}
-		if serviceLocalpart != localpart {
-			continue
-		}
-		if service.Machine == d.machine.UserID() {
+		if service.Machine == d.machine {
 			continue // Local, not remote.
 		}
-		address, exists := d.peerAddresses[service.Machine]
+		address, exists := d.peerAddresses[service.Machine.UserID()]
 		if !exists || address == "" {
 			continue
 		}

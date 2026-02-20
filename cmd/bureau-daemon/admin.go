@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -108,10 +109,18 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 		return nil, fmt.Errorf("access denied: no grant for %s on %s", action, request.Principal)
 	}
 
+	// Construct a fleet-scoped Entity from the bare account localpart
+	// so we can use it for readCredentials (which derives the state
+	// key from Entity.Localpart()) and for the credential state key.
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
+	if err != nil {
+		return nil, fmt.Errorf("invalid principal %q: %w", request.Principal, err)
+	}
+
 	// Read the current credentials for the target principal. If none
 	// exist yet, the launcher will create a fresh bundle.
 	var currentCiphertext string
-	credentials, err := d.readCredentials(ctx, request.Principal)
+	credentials, err := d.readCredentials(ctx, principalEntity)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			// No existing credentials — the launcher will create a fresh bundle.
@@ -170,7 +179,8 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 		updatedCredentials.EncryptedFor = recipientKeys
 	}
 
-	if _, err := d.session.SendStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, request.Principal, updatedCredentials); err != nil {
+	credentialStateKey := principalEntity.Localpart()
+	if _, err := d.session.SendStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, credentialStateKey, updatedCredentials); err != nil {
 		return nil, fmt.Errorf("publishing updated credentials: %w", err)
 	}
 
@@ -226,8 +236,8 @@ func isAgePublicKey(s string) bool {
 // hasCredentialGrants checks whether a principal has any credential/*
 // grants in the authorization index. Used to determine whether to
 // mount the daemon's credential service socket into a sandbox.
-func (d *Daemon) hasCredentialGrants(localpart string) bool {
-	grants := d.authorizationIndex.Grants(localpart)
+func (d *Daemon) hasCredentialGrants(principal ref.Entity) bool {
+	grants := d.authorizationIndex.Grants(principal.AccountLocalpart())
 	for _, grant := range grants {
 		filtered := filterGrantsForService([]schema.Grant{grant}, credentialServiceRole)
 		if len(filtered) > 0 {
@@ -241,8 +251,8 @@ func (d *Daemon) hasCredentialGrants(localpart string) bool {
 // socket to the service mount list if the principal has credential/*
 // grants. Returns the original mounts unchanged if no credential
 // grants are present.
-func (d *Daemon) appendCredentialServiceMount(localpart string, mounts []launcherServiceMount) []launcherServiceMount {
-	if d.credentialSocketPath() == "" || !d.hasCredentialGrants(localpart) {
+func (d *Daemon) appendCredentialServiceMount(principal ref.Entity, mounts []launcherServiceMount) []launcherServiceMount {
+	if d.credentialSocketPath() == "" || !d.hasCredentialGrants(principal) {
 		return mounts
 	}
 	return append(mounts, launcherServiceMount{
@@ -254,8 +264,8 @@ func (d *Daemon) appendCredentialServiceMount(localpart string, mounts []launche
 // credentialServiceRoles returns ["credential"] if the principal has
 // credential/* grants, or nil otherwise. Used when computing which
 // service tokens need refreshing.
-func (d *Daemon) credentialServiceRoles(localpart string) []string {
-	if d.hasCredentialGrants(localpart) {
+func (d *Daemon) credentialServiceRoles(principal ref.Entity) []string {
+	if d.hasCredentialGrants(principal) {
 		return []string{credentialServiceRole}
 	}
 	return nil

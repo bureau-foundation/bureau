@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -73,8 +74,15 @@ func (fc *FleetController) buildAssignment(serviceLocalpart string, definition *
 		return schema.PrincipalAssignment{}, fmt.Errorf("parsing payload for %s: %w", serviceLocalpart, err)
 	}
 
+	// Construct a full entity reference from the bare account localpart
+	// (e.g., "service/stt/whisper") and the fleet controller's fleet context.
+	entity, err := ref.NewEntityFromAccountLocalpart(fc.fleet, serviceLocalpart)
+	if err != nil {
+		return schema.PrincipalAssignment{}, fmt.Errorf("constructing entity for %s: %w", serviceLocalpart, err)
+	}
+
 	return schema.PrincipalAssignment{
-		Localpart:         serviceLocalpart,
+		Principal:         entity,
 		Template:          definition.Template,
 		AutoStart:         true,
 		Payload:           payload,
@@ -193,7 +201,7 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 	// Remove only the matching principal, preserve everything else.
 	filtered := make([]schema.PrincipalAssignment, 0, len(config.Principals))
 	for _, principal := range config.Principals {
-		if principal.Localpart == serviceLocalpart {
+		if principal.Principal.AccountLocalpart() == serviceLocalpart {
 			continue
 		}
 		filtered = append(filtered, principal)

@@ -3,13 +3,16 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // PrincipalAssignment defines a single principal that should run on a machine.
 type PrincipalAssignment struct {
-	// XXX: should be a ref entity type (ref.Machine, ref.Service, or ref.Agent)
-	// once the daemon reconciliation loop is migrated to ref types.
-	// Localpart is the principal's localpart (e.g., "iree/amdgpu/pm").
-	// Must pass principal.ValidateLocalpart.
-	Localpart string `json:"localpart"`
+	// Principal identifies this principal as a fleet-scoped entity reference.
+	// Serialized as the full Matrix user ID (e.g.,
+	// "@bureau/fleet/prod/agent/frontend:bureau.local"). Deserialized via
+	// ref.Entity.UnmarshalText which validates the user ID and populates all
+	// derived fields (Localpart, Fleet, Name, EntityType, etc.).
+	Principal ref.Entity `json:"principal"`
 
 	// Template is a template reference identifying which template to
 	// instantiate for this principal. The format is:

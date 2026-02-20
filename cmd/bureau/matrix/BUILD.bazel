@@ -25,7 +25,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//lib/content",
-        "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
         "//lib/secret",
         "//messaging",

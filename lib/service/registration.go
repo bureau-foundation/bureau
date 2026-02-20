@@ -14,9 +14,8 @@ import (
 
 // Registration describes a service for the fleet's service directory room.
 type Registration struct {
-	// Machine is the full Matrix user ID of the machine running this
-	// service instance (e.g., "@bureau/fleet/prod/machine/workstation:bureau.local").
-	Machine string
+	// Machine is the machine running this service instance.
+	Machine ref.Machine
 
 	// Protocol is the wire protocol on the service socket. Bureau
 	// services use "cbor" (one CBOR request-response per connection).
@@ -44,7 +43,7 @@ type Registration struct {
 func Register(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
 	stateKey := svc.Localpart()
 	entry := schema.Service{
-		Principal:    svc.UserID(),
+		Principal:    svc.Entity(),
 		Machine:      reg.Machine,
 		Protocol:     reg.Protocol,
 		Description:  reg.Description,

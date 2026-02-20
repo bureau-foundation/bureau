@@ -23,6 +23,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -475,7 +476,9 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -595,7 +598,9 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = daemonHash
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -640,6 +645,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
@@ -650,13 +656,13 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, daemon.fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -715,11 +721,14 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
+	daemon.running[agentTestEntity] = true
+	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
 		Command: []string{"/bin/agent", "--mode=v1"},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -750,10 +759,10 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	}
 
 	if destroyIndex == -1 {
-		t.Error("expected destroy-sandbox call for agent/test")
+		t.Errorf("expected destroy-sandbox call for agent/test, got principals: %v", ipcPrincipals)
 	}
 	if createIndex == -1 {
-		t.Error("expected create-sandbox call for agent/test")
+		t.Errorf("expected create-sandbox call for agent/test, got principals: %v", ipcPrincipals)
 	}
 	if destroyIndex != -1 && createIndex != -1 && destroyIndex >= createIndex {
 		t.Errorf("destroy-sandbox (index %d) should come before create-sandbox (index %d)",
@@ -761,7 +770,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	}
 
 	// Principal should be running again after the cycle.
-	if !daemon.running["agent/test"] {
+	if !daemon.running[agentTestEntity] {
 		t.Error("principal should be running after structural restart cycle")
 	}
 
@@ -769,7 +778,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	// After the "create missing" pass recreates, previousSpecs should
 	// still hold the pre-restart spec (it's only cleared on rollback or
 	// principal removal).
-	if daemon.previousSpecs["agent/test"] == nil {
+	if daemon.previousSpecs[agentTestEntity] == nil {
 		t.Error("expected previousSpecs to be populated after structural restart")
 	}
 }
@@ -789,6 +798,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
@@ -799,13 +809,13 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, daemon.fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -845,15 +855,18 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Payload is nil in both old and new spec — only command differs.
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+	daemon.running[agentTestEntity] = true
+	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
 		Command: []string{"/bin/agent", "--mode=v1"},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -890,6 +903,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	// Template with same command but different payload.
 	state := newMockMatrixState()
@@ -901,13 +915,13 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, daemon.fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -940,16 +954,19 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 
 	// Old spec has same command but different payload.
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{
+	daemon.running[agentTestEntity] = true
+	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
 		Command: []string{"/bin/agent", "--mode=v1"},
 		Payload: map[string]any{"model": "gpt-4"},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -980,7 +997,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	}
 
 	// Principal should still be running (not restarted).
-	if !daemon.running["agent/test"] {
+	if !daemon.running[agentTestEntity] {
 		t.Error("principal should still be running after payload-only hot-reload")
 	}
 }
@@ -1218,14 +1235,14 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 		},
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/alpha",
+				Principal: testEntity(t, daemon.fleet, "agent/alpha"),
 				AutoStart: true,
 				Authorization: &schema.AuthorizationPolicy{
 					Grants: []schema.Grant{{Actions: []string{"service/discover"}}},
 				},
 			},
 			{
-				Localpart: "agent/beta",
+				Principal: testEntity(t, daemon.fleet, "agent/beta"),
 				AutoStart: true,
 				// No per-principal policy — only inherits defaults.
 			},
@@ -1241,6 +1258,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 	}
 
 	// agent/alpha should have 2 grants (1 default + 1 per-principal).
+	// The authorization index is keyed by bare account localpart.
 	alphaGrants := daemon.authorizationIndex.Grants("agent/alpha")
 	if len(alphaGrants) != 2 {
 		t.Fatalf("agent/alpha grants = %d, want 2", len(alphaGrants))
@@ -1272,8 +1290,8 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 	// First reconcile: two principals.
 	daemon.rebuildAuthorizationIndex(&schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "agent/alpha"},
-			{Localpart: "agent/beta"},
+			{Principal: testEntity(t, daemon.fleet, "agent/alpha")},
+			{Principal: testEntity(t, daemon.fleet, "agent/beta")},
 		},
 	})
 
@@ -1284,7 +1302,7 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 	// Second reconcile: only agent/alpha remains.
 	daemon.rebuildAuthorizationIndex(&schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "agent/alpha"},
+			{Principal: testEntity(t, daemon.fleet, "agent/alpha")},
 		},
 	})
 
@@ -1292,8 +1310,9 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 	if len(principals) != 1 {
 		t.Fatalf("after second rebuild: principals = %d, want 1", len(principals))
 	}
-	if principals[0] != "agent/alpha" {
-		t.Errorf("remaining principal = %q, want %q", principals[0], "agent/alpha")
+	expectedPrincipal := "agent/alpha"
+	if principals[0] != expectedPrincipal {
+		t.Errorf("remaining principal = %q, want %q", principals[0], expectedPrincipal)
 	}
 
 	// agent/beta should have no grants (fully removed).
@@ -1313,7 +1332,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 
 	config := &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
-			{Localpart: "agent/alpha"},
+			{Principal: testEntity(t, daemon.fleet, "agent/alpha")},
 		},
 	}
 
@@ -1447,7 +1466,7 @@ func TestMintServiceTokens(t *testing.T) {
 		},
 	})
 
-	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDir, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("mintServiceTokens: %v", err)
 	}
@@ -1510,7 +1529,7 @@ func TestMintServiceTokens_NoRequiredServices(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 
-	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", nil)
+	tokenDir, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), nil)
 	if err != nil {
 		t.Fatalf("mintServiceTokens with nil services: %v", err)
 	}
@@ -1530,7 +1549,7 @@ func TestMintServiceTokens_MissingPrivateKey(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
 
-	_, _, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	_, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err == nil {
 		t.Fatal("expected error when private key is nil")
 	}
@@ -1561,7 +1580,7 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 		},
 	})
 
-	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket", "artifact"})
+	tokenDir, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket", "artifact"})
 	if err != nil {
 		t.Fatalf("mintServiceTokens: %v", err)
 	}
@@ -1696,6 +1715,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	// MachineConfig with a MatrixPolicy and ServiceVisibility — these get
 	// synthesized into grants since there's no explicit Authorization field.
@@ -1703,14 +1723,14 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart:         "agent/test",
+				Principal:         testEntity(t, daemon.fleet, "agent/test"),
 				AutoStart:         true,
 				MatrixPolicy:      &schema.MatrixPolicy{AllowJoin: true, AllowInvite: true},
 				ServiceVisibility: []string{"service/stt/**"},
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -1770,17 +1790,20 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	go adminServer.Serve(adminListener)
 	defer adminServer.Close()
 
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastCredentials["agent/test"] = "encrypted-test-credentials"
+	daemon.running[agentTestEntity] = true
+	daemon.lastCredentials[agentTestEntity] = "encrypted-test-credentials"
 	// Old grants differ from what the config now produces.
-	daemon.lastGrants["agent/test"] = []schema.Grant{
+	daemon.lastGrants[agentTestEntity] = []schema.Grant{
 		{Actions: []string{"matrix/join"}},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -1816,7 +1839,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	}
 
 	// lastGrants should be updated to the new grants.
-	stored := daemon.lastGrants["agent/test"]
+	stored := daemon.lastGrants[agentTestEntity]
 	if len(stored) != 3 {
 		t.Errorf("lastGrants has %d entries, want 3", len(stored))
 	}
@@ -2279,6 +2302,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	state := newMockMatrixState()
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -2288,13 +2312,13 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, daemon.fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -2351,7 +2375,9 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -2378,7 +2404,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	}
 
 	// A command_binary failure should be recorded.
-	failure := daemon.startFailures["agent/test"]
+	failure := daemon.startFailures[testEntity(t, daemon.fleet, "agent/test")]
 	if failure == nil {
 		t.Fatal("expected a start failure for agent/test")
 	}

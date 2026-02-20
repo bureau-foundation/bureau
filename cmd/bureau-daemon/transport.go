@@ -22,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/transport"
@@ -198,7 +199,7 @@ func (d *Daemon) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up the machine's transport address.
-	peerAddress, ok := d.peerAddresses[service.Machine]
+	peerAddress, ok := d.peerAddresses[service.Machine.UserID()]
 	if !ok || peerAddress == "" {
 		d.logger.Warn("no transport address for remote service's machine",
 			"service", serviceName,
@@ -416,19 +417,10 @@ func (d *Daemon) localProviderSocket(proxyName string) (string, bool) {
 		if principal.ProxyServiceName(localpart) != proxyName {
 			continue
 		}
-		if service.Machine != d.machine.UserID() {
+		if service.Machine != d.machine {
 			continue // Remote, not local.
 		}
-		providerLocalpart, err := principal.LocalpartFromMatrixID(service.Principal)
-		if err != nil {
-			d.logger.Error("cannot derive socket from service principal",
-				"service", localpart,
-				"principal", service.Principal,
-				"error", err,
-			)
-			return "", false
-		}
-		return principal.RunDirSocketPath(d.runDir, providerLocalpart), true
+		return service.Principal.SocketPath(d.fleetRunDir), true
 	}
 	return "", false
 }
@@ -480,7 +472,7 @@ func parseServiceFromPath(path string) (string, error) {
 //
 // The handler:
 //   - Extracts the service localpart from the URL path
-//   - Connects to the service's Unix socket via principal.RunDirSocketPath
+//   - Connects to the service's Unix socket via fleet-scoped socket path
 //   - Hijacks the HTTP connection and clears deadlines
 //   - Writes a manual HTTP 200 response on the hijacked connection
 //   - Bridges bytes between the hijacked transport connection and the
@@ -505,7 +497,12 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Connect to the local service's Unix socket.
-	socketPath := principal.RunDirSocketPath(d.runDir, serviceLocalpart)
+	serviceRef, parseErr := ref.ParseEntityLocalpart(serviceLocalpart, d.machine.Server())
+	if parseErr != nil {
+		http.Error(w, fmt.Sprintf("invalid service localpart: %v", parseErr), http.StatusBadRequest)
+		return
+	}
+	socketPath := serviceRef.SocketPath(d.fleetRunDir)
 	serviceConnection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		d.logger.Error("tunnel: cannot connect to local service socket",

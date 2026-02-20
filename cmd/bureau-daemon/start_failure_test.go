@@ -12,11 +12,11 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-alpha"
+	principal := testEntity(t, daemon.fleet, "agent/alpha")
 
 	// First failure: backoff should be 1s.
-	daemon.recordStartFailure(localpart, failureCategoryServiceResolution, "no binding found")
-	failure := daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding found")
+	failure := daemon.startFailures[principal]
 	if failure == nil {
 		t.Fatal("expected start failure to be recorded")
 	}
@@ -33,8 +33,8 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 
 	// Second failure: backoff should be 2s.
 	fakeClock.Advance(2 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategoryServiceResolution, "still no binding")
-	failure = daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "still no binding")
+	failure = daemon.startFailures[principal]
 	if failure.attempts != 2 {
 		t.Errorf("attempts = %d, want 2", failure.attempts)
 	}
@@ -45,8 +45,8 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 
 	// Third failure: backoff should be 4s.
 	fakeClock.Advance(3 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategoryServiceResolution, "still no binding")
-	failure = daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "still no binding")
+	failure = daemon.startFailures[principal]
 	if failure.attempts != 3 {
 		t.Errorf("attempts = %d, want 3", failure.attempts)
 	}
@@ -60,21 +60,21 @@ func TestRecordStartFailure_BackoffCap(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-beta"
+	principal := testEntity(t, daemon.fleet, "agent/beta")
 
 	// Drive through enough failures to hit the cap.
 	// Backoffs: 1s, 2s, 4s, 8s, 16s, 30s (cap), 30s ...
 	for range 9 {
-		daemon.recordStartFailure(localpart, failureCategoryTemplate, "template not found")
+		daemon.recordStartFailure(principal, failureCategoryTemplate, "template not found")
 		fakeClock.Advance(1 * time.Minute) // advance past any backoff
 	}
 
 	// 10th failure: capture the time before recording so we can
 	// compute the expected nextRetryAt.
 	timeAtFailure := fakeClock.Now()
-	daemon.recordStartFailure(localpart, failureCategoryTemplate, "template not found")
+	daemon.recordStartFailure(principal, failureCategoryTemplate, "template not found")
 
-	failure := daemon.startFailures[localpart]
+	failure := daemon.startFailures[principal]
 	if failure.attempts != 10 {
 		t.Errorf("attempts = %d, want 10", failure.attempts)
 	}
@@ -91,9 +91,9 @@ func TestClearStartFailures(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 
-	daemon.recordStartFailure("agent-1", failureCategoryCredentials, "missing")
-	daemon.recordStartFailure("agent-2", failureCategoryServiceResolution, "no binding")
-	daemon.recordStartFailure("agent-3", failureCategoryTemplate, "not found")
+	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/one"), failureCategoryCredentials, "missing")
+	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/two"), failureCategoryServiceResolution, "no binding")
+	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/three"), failureCategoryTemplate, "not found")
 
 	if count := len(daemon.startFailures); count != 3 {
 		t.Fatalf("expected 3 failures, got %d", count)
@@ -111,10 +111,13 @@ func TestClearStartFailuresByCategory(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 
-	daemon.recordStartFailure("agent-1", failureCategoryServiceResolution, "no binding for ticket")
-	daemon.recordStartFailure("agent-2", failureCategoryServiceResolution, "no binding for stt")
-	daemon.recordStartFailure("agent-3", failureCategoryCredentials, "missing credentials")
-	daemon.recordStartFailure("agent-4", failureCategoryTemplate, "template not found")
+	agent3 := testEntity(t, daemon.fleet, "agent/three")
+	agent4 := testEntity(t, daemon.fleet, "agent/four")
+
+	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/one"), failureCategoryServiceResolution, "no binding for ticket")
+	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/two"), failureCategoryServiceResolution, "no binding for stt")
+	daemon.recordStartFailure(agent3, failureCategoryCredentials, "missing credentials")
+	daemon.recordStartFailure(agent4, failureCategoryTemplate, "template not found")
 
 	cleared := daemon.clearStartFailuresByCategory(failureCategoryServiceResolution)
 	if cleared != 2 {
@@ -126,11 +129,11 @@ func TestClearStartFailuresByCategory(t *testing.T) {
 	}
 
 	// Verify the right ones remain.
-	if daemon.startFailures["agent-3"] == nil {
-		t.Error("agent-3 (credentials) should still have a failure entry")
+	if daemon.startFailures[agent3] == nil {
+		t.Error("agent/three (credentials) should still have a failure entry")
 	}
-	if daemon.startFailures["agent-4"] == nil {
-		t.Error("agent-4 (template) should still have a failure entry")
+	if daemon.startFailures[agent4] == nil {
+		t.Error("agent/four (template) should still have a failure entry")
 	}
 }
 
@@ -139,16 +142,19 @@ func TestClearStartFailure_SinglePrincipal(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 
-	daemon.recordStartFailure("agent-1", failureCategoryCredentials, "missing")
-	daemon.recordStartFailure("agent-2", failureCategoryTemplate, "not found")
+	agent1 := testEntity(t, daemon.fleet, "agent/one")
+	agent2 := testEntity(t, daemon.fleet, "agent/two")
 
-	daemon.clearStartFailure("agent-1")
+	daemon.recordStartFailure(agent1, failureCategoryCredentials, "missing")
+	daemon.recordStartFailure(agent2, failureCategoryTemplate, "not found")
 
-	if daemon.startFailures["agent-1"] != nil {
-		t.Error("agent-1 should have been cleared")
+	daemon.clearStartFailure(agent1)
+
+	if daemon.startFailures[agent1] != nil {
+		t.Error("agent/one should have been cleared")
 	}
-	if daemon.startFailures["agent-2"] == nil {
-		t.Error("agent-2 should still have a failure entry")
+	if daemon.startFailures[agent2] == nil {
+		t.Error("agent/two should still have a failure entry")
 	}
 }
 
@@ -157,11 +163,13 @@ func TestStartFailure_BackoffCheckInReconcileLoop(t *testing.T) {
 
 	daemon, fakeClock := newTestDaemon(t)
 
+	principal := testEntity(t, daemon.fleet, "agent/one")
+
 	// Record a failure with 1s backoff.
-	daemon.recordStartFailure("agent-1", failureCategoryServiceResolution, "no binding")
+	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding")
 
 	// Before backoff expires: clock.Now() < nextRetryAt.
-	failure := daemon.startFailures["agent-1"]
+	failure := daemon.startFailures[principal]
 	if !fakeClock.Now().Before(failure.nextRetryAt) {
 		t.Fatal("expected current time to be before nextRetryAt")
 	}
@@ -177,14 +185,14 @@ func TestRecordStartFailure_CategoryChange(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-gamma"
+	principal := testEntity(t, daemon.fleet, "agent/gamma")
 
 	// First failure is service resolution.
-	daemon.recordStartFailure(localpart, failureCategoryServiceResolution, "no binding")
-	if daemon.startFailures[localpart].category != failureCategoryServiceResolution {
+	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding")
+	if daemon.startFailures[principal].category != failureCategoryServiceResolution {
 		t.Error("expected service_resolution category")
 	}
-	if daemon.startFailures[localpart].attempts != 1 {
+	if daemon.startFailures[principal].attempts != 1 {
 		t.Error("expected 1 attempt")
 	}
 
@@ -195,12 +203,12 @@ func TestRecordStartFailure_CategoryChange(t *testing.T) {
 	// increments because it's the same principal — the backoff tracks
 	// the principal, not the category. This prevents a principal from
 	// resetting its backoff by failing at a different stage.
-	daemon.recordStartFailure(localpart, failureCategoryTokenMinting, "signing key error")
-	if daemon.startFailures[localpart].category != failureCategoryTokenMinting {
+	daemon.recordStartFailure(principal, failureCategoryTokenMinting, "signing key error")
+	if daemon.startFailures[principal].category != failureCategoryTokenMinting {
 		t.Error("expected token_minting category")
 	}
-	if daemon.startFailures[localpart].attempts != 2 {
-		t.Errorf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
+	if daemon.startFailures[principal].attempts != 2 {
+		t.Errorf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
 	}
 }
 
@@ -208,11 +216,11 @@ func TestSandboxCrashBackoff(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-crashy"
+	principal := testEntity(t, daemon.fleet, "agent/crashy")
 
 	// First crash: 1s backoff.
-	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure := daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure := daemon.startFailures[principal]
 	if failure == nil {
 		t.Fatal("expected crash failure to be recorded")
 	}
@@ -234,8 +242,8 @@ func TestSandboxCrashBackoff(t *testing.T) {
 
 	// Second crash after first backoff expires: 2s backoff.
 	fakeClock.Advance(2 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure = daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure = daemon.startFailures[principal]
 	if failure.attempts != 2 {
 		t.Errorf("attempts = %d, want 2", failure.attempts)
 	}
@@ -246,8 +254,8 @@ func TestSandboxCrashBackoff(t *testing.T) {
 
 	// Third crash: 4s backoff.
 	fakeClock.Advance(3 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure = daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
+	failure = daemon.startFailures[principal]
 	if failure.attempts != 3 {
 		t.Errorf("attempts = %d, want 3", failure.attempts)
 	}
@@ -261,14 +269,14 @@ func TestSandboxCrashBackoff_ClearedByConfigChange(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
-	localpart := "agent-fixable"
+	principal := testEntity(t, daemon.fleet, "agent/fixable")
 
 	// Record several crashes to build up backoff.
 	for range 5 {
-		daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
+		daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
 	}
-	if daemon.startFailures[localpart].attempts != 5 {
-		t.Fatalf("attempts = %d, want 5", daemon.startFailures[localpart].attempts)
+	if daemon.startFailures[principal].attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", daemon.startFailures[principal].attempts)
 	}
 
 	// A config change clears all start failures (including crash
@@ -276,7 +284,7 @@ func TestSandboxCrashBackoff_ClearedByConfigChange(t *testing.T) {
 	// credentials, the principal should retry immediately.
 	daemon.clearStartFailures()
 
-	if daemon.startFailures[localpart] != nil {
+	if daemon.startFailures[principal] != nil {
 		t.Error("expected crash failure to be cleared by config change")
 	}
 }
@@ -285,11 +293,11 @@ func TestProxyCrashBackoff(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-proxy-crash"
+	principal := testEntity(t, daemon.fleet, "agent/proxy-crash")
 
 	// First proxy crash: 1s backoff.
-	daemon.recordStartFailure(localpart, failureCategoryProxyCrash, "proxy exited with code 1")
-	failure := daemon.startFailures[localpart]
+	daemon.recordStartFailure(principal, failureCategoryProxyCrash, "proxy exited with code 1")
+	failure := daemon.startFailures[principal]
 	if failure == nil {
 		t.Fatal("expected proxy crash failure to be recorded")
 	}
@@ -302,9 +310,9 @@ func TestProxyCrashBackoff(t *testing.T) {
 
 	// Crash backoff accumulates across proxy crashes like any other failure.
 	fakeClock.Advance(2 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategoryProxyCrash, "proxy exited with code 1")
-	if daemon.startFailures[localpart].attempts != 2 {
-		t.Errorf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
+	daemon.recordStartFailure(principal, failureCategoryProxyCrash, "proxy exited with code 1")
+	if daemon.startFailures[principal].attempts != 2 {
+		t.Errorf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
 	}
 }
 
@@ -312,22 +320,22 @@ func TestSandboxNormalExit_ClearsCrashBackoff(t *testing.T) {
 	t.Parallel()
 
 	daemon, fakeClock := newTestDaemon(t)
-	localpart := "agent-one-shot"
+	principal := testEntity(t, daemon.fleet, "agent/one-shot")
 
 	// Build up crash backoff from previous failures.
-	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
+	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
 	fakeClock.Advance(2 * time.Second)
-	daemon.recordStartFailure(localpart, failureCategorySandboxCrash, "exited with code 1")
-	if daemon.startFailures[localpart].attempts != 2 {
-		t.Fatalf("attempts = %d, want 2", daemon.startFailures[localpart].attempts)
+	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
+	if daemon.startFailures[principal].attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
 	}
 
 	// A normal exit (code 0) clears the crash backoff. One-shot
 	// principals (setup/teardown) should be able to re-evaluate
 	// conditions immediately after completing.
-	daemon.clearStartFailure(localpart)
+	daemon.clearStartFailure(principal)
 
-	if daemon.startFailures[localpart] != nil {
+	if daemon.startFailures[principal] != nil {
 		t.Error("expected crash backoff to be cleared by normal exit")
 	}
 }

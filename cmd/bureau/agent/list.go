@@ -120,7 +120,7 @@ func runList(params agentListParams) error {
 	for i, location := range locations {
 		entry := agentListEntry{
 			MachineName: location.Machine.Localpart(),
-			Localpart:   location.Assignment.Localpart,
+			Localpart:   location.Assignment.Principal.Localpart(),
 			Template:    location.Assignment.Template,
 			AutoStart:   location.Assignment.AutoStart,
 			Status:      "-",
@@ -186,7 +186,7 @@ func runList(params agentListParams) error {
 // for a given location. Returns nil for either if not found or on error
 // (best-effort enrichment).
 func readAgentServiceState(ctx context.Context, session messaging.Session, location principal.Location) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
-	localpart := location.Assignment.Localpart
+	localpart := location.Assignment.Principal.Localpart()
 	roomID := location.ConfigRoomID
 
 	var sessionContent *schema.AgentSessionContent

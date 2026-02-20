@@ -470,8 +470,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Register principals and provision credentials ---
-	principalAAccount := registerPrincipal(t, principalALocalpart, "pass-fleet-a")
-	principalBAccount := registerPrincipal(t, principalBLocalpart, "pass-fleet-b")
+	principalAAccount := registerFleetPrincipal(t, twoMachineFleet, principalALocalpart, "pass-fleet-a")
+	principalBAccount := registerFleetPrincipal(t, twoMachineFleet, principalBLocalpart, "pass-fleet-b")
 
 	type principalSetup struct {
 		account      principalAccount
@@ -494,9 +494,14 @@ func TestTwoMachineFleet(t *testing.T) {
 			t.Fatalf("admin join config room %s: %v", configAlias, err)
 		}
 
+		principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(p.machineSetup.machineRef.Fleet(), p.account.Localpart)
+		if entityErr != nil {
+			t.Fatalf("build principal entity for %s: %v", p.account.Localpart, entityErr)
+		}
+
 		_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
 			Machine:       p.machineSetup.machineRef,
-			Principal:     p.account.Localpart,
+			Principal:     principalEntity,
 			MachineRoomID: twoMachineFleet.MachineRoomID,
 			Credentials: map[string]string{
 				"MATRIX_TOKEN":          p.account.Token,
@@ -512,7 +517,7 @@ func TestTwoMachineFleet(t *testing.T) {
 			p.machineSetup.name, schema.MachineConfig{
 				Principals: []schema.PrincipalAssignment{
 					{
-						Localpart: p.account.Localpart,
+						Principal: principalEntity,
 						AutoStart: true,
 						MatrixPolicy: &schema.MatrixPolicy{
 							AllowJoin: true,
@@ -526,8 +531,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Wait for both proxy sockets ---
-	proxySocketA := principal.RunDirSocketPath(machineA.runDir, principalAAccount.Localpart)
-	proxySocketB := principal.RunDirSocketPath(machineB.runDir, principalBAccount.Localpart)
+	proxySocketA := principalSocketPath(t, machineA.machineRef, machineA.runDir, principalAAccount.Localpart)
+	proxySocketB := principalSocketPath(t, machineB.machineRef, machineB.runDir, principalBAccount.Localpart)
 	waitForFile(t, proxySocketA)
 	waitForFile(t, proxySocketB)
 	t.Log("both proxies spawned")

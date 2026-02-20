@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
@@ -50,17 +51,17 @@ type layoutWatcher struct {
 //
 // Requires d.tmuxServer to be non-nil. In production, this is always true
 // (set in run()). If nil, the watcher is not started and a warning is logged.
-func (d *Daemon) startLayoutWatcher(ctx context.Context, localpart string) {
+func (d *Daemon) startLayoutWatcher(ctx context.Context, principal ref.Entity) {
 	if d.tmuxServer == nil {
 		d.logger.Warn("layout watcher not started: tmux server not configured",
-			"principal", localpart)
+			"principal", principal)
 		return
 	}
 
 	d.layoutWatchersMu.Lock()
 	defer d.layoutWatchersMu.Unlock()
 
-	if _, exists := d.layoutWatchers[localpart]; exists {
+	if _, exists := d.layoutWatchers[principal]; exists {
 		return
 	}
 
@@ -70,21 +71,21 @@ func (d *Daemon) startLayoutWatcher(ctx context.Context, localpart string) {
 		ready:  make(chan struct{}),
 		done:   make(chan struct{}),
 	}
-	d.layoutWatchers[localpart] = watcher
+	d.layoutWatchers[principal] = watcher
 
-	go d.runLayoutWatcher(watchContext, localpart, watcher.ready, watcher.done)
+	go d.runLayoutWatcher(watchContext, principal, watcher.ready, watcher.done)
 }
 
 // stopLayoutWatcher cancels the layout watcher for a principal and waits
 // for the goroutine to exit. No-op if no watcher is running.
-func (d *Daemon) stopLayoutWatcher(localpart string) {
+func (d *Daemon) stopLayoutWatcher(principal ref.Entity) {
 	d.layoutWatchersMu.Lock()
-	watcher, exists := d.layoutWatchers[localpart]
+	watcher, exists := d.layoutWatchers[principal]
 	if !exists {
 		d.layoutWatchersMu.Unlock()
 		return
 	}
-	delete(d.layoutWatchers, localpart)
+	delete(d.layoutWatchers, principal)
 	d.layoutWatchersMu.Unlock()
 
 	watcher.cancel()
@@ -95,10 +96,10 @@ func (d *Daemon) stopLayoutWatcher(localpart string) {
 // if no watcher exists for the given principal. The ready channel
 // closes when the ControlClient is attached and any initial layout
 // restore has completed.
-func (d *Daemon) layoutWatcherReady(localpart string) <-chan struct{} {
+func (d *Daemon) layoutWatcherReady(principal ref.Entity) <-chan struct{} {
 	d.layoutWatchersMu.Lock()
 	defer d.layoutWatchersMu.Unlock()
-	watcher, exists := d.layoutWatchers[localpart]
+	watcher, exists := d.layoutWatchers[principal]
 	if !exists {
 		return nil
 	}
@@ -108,10 +109,10 @@ func (d *Daemon) layoutWatcherReady(localpart string) <-chan struct{} {
 // layoutWatcherDone returns the done channel for a watcher, or nil
 // if no watcher exists for the given principal. The done channel
 // closes when the watcher goroutine exits.
-func (d *Daemon) layoutWatcherDone(localpart string) <-chan struct{} {
+func (d *Daemon) layoutWatcherDone(principal ref.Entity) <-chan struct{} {
 	d.layoutWatchersMu.Lock()
 	defer d.layoutWatchersMu.Unlock()
-	watcher, exists := d.layoutWatchers[localpart]
+	watcher, exists := d.layoutWatchers[principal]
 	if !exists {
 		return nil
 	}
@@ -122,11 +123,11 @@ func (d *Daemon) layoutWatcherDone(localpart string) <-chan struct{} {
 // all goroutines to exit. Called during daemon shutdown.
 func (d *Daemon) stopAllLayoutWatchers() {
 	d.layoutWatchersMu.Lock()
-	watchers := make(map[string]*layoutWatcher, len(d.layoutWatchers))
-	for localpart, watcher := range d.layoutWatchers {
-		watchers[localpart] = watcher
+	watchers := make(map[ref.Entity]*layoutWatcher, len(d.layoutWatchers))
+	for principal, watcher := range d.layoutWatchers {
+		watchers[principal] = watcher
 	}
-	d.layoutWatchers = make(map[string]*layoutWatcher)
+	d.layoutWatchers = make(map[ref.Entity]*layoutWatcher)
 	d.layoutWatchersMu.Unlock()
 
 	// Cancel all watchers first, then wait. This ensures parallel
@@ -142,10 +143,10 @@ func (d *Daemon) stopAllLayoutWatchers() {
 // runLayoutWatcher is the main goroutine for a single principal's layout
 // sync. It restores the layout from Matrix (if available), then watches
 // for changes and publishes updates.
-func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, done chan struct{}) {
+func (d *Daemon) runLayoutWatcher(ctx context.Context, principal ref.Entity, ready, done chan struct{}) {
 	defer close(done)
 
-	sessionName := "bureau/" + localpart
+	sessionName := "bureau/" + principal.AccountLocalpart()
 
 	// Start the control mode client to watch for layout changes. Must be
 	// started before restoring from Matrix so we don't miss layout events
@@ -154,7 +155,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 	controlClient, err := observe.NewControlClient(ctx, d.tmuxServer, sessionName)
 	if err != nil {
 		d.logger.Error("start layout control client failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 		close(ready)
@@ -165,23 +166,24 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 	// Try to restore the layout from Matrix. If a layout event exists for
 	// this principal, apply it to the (newly created) tmux session and use
 	// it as the baseline for change detection.
+	stateKey := principal.AccountLocalpart()
 	var lastPublished *observe.Layout
-	if stored, err := d.readLayoutEvent(ctx, localpart); err == nil {
+	if stored, err := d.readLayoutEvent(ctx, principal); err == nil {
 		if err := observe.ApplyLayout(d.tmuxServer, sessionName, stored); err != nil {
 			d.logger.Error("restore layout from matrix failed",
-				"principal", localpart,
+				"principal", principal,
 				"error", err,
 			)
 		} else {
 			lastPublished = stored
 			d.logger.Info("layout restored from matrix",
-				"principal", localpart,
+				"principal", principal,
 				"windows", len(stored.Windows),
 			)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		d.logger.Error("read layout event failed",
-			"principal", localpart,
+			"principal", principal,
 			"error", err,
 		)
 	}
@@ -195,7 +197,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 		current, err := observe.ReadTmuxLayout(d.tmuxServer, sessionName)
 		if err != nil {
 			d.logger.Error("read tmux layout failed",
-				"principal", localpart,
+				"principal", principal,
 				"error", err,
 			)
 			continue
@@ -209,9 +211,9 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 		content.SourceMachine = d.machine.UserID()
 
 		if _, err := d.session.SendStateEvent(ctx, d.configRoomID,
-			schema.EventTypeLayout, localpart, content); err != nil {
+			schema.EventTypeLayout, stateKey, content); err != nil {
 			d.logger.Error("publish layout failed",
-				"principal", localpart,
+				"principal", principal,
 				"error", err,
 			)
 			continue
@@ -219,7 +221,7 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 
 		lastPublished = current
 		d.logger.Info("layout published",
-			"principal", localpart,
+			"principal", principal,
 			"windows", len(current.Windows),
 		)
 	}
@@ -227,15 +229,16 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, localpart string, ready, 
 
 // readLayoutEvent reads the layout state event for a principal from the
 // config room and returns it as a runtime Layout.
-func (d *Daemon) readLayoutEvent(ctx context.Context, localpart string) (*observe.Layout, error) {
-	raw, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeLayout, localpart)
+func (d *Daemon) readLayoutEvent(ctx context.Context, principal ref.Entity) (*observe.Layout, error) {
+	stateKey := principal.AccountLocalpart()
+	raw, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeLayout, stateKey)
 	if err != nil {
 		return nil, err
 	}
 
 	var content schema.LayoutContent
 	if err := json.Unmarshal(raw, &content); err != nil {
-		return nil, fmt.Errorf("parsing layout event for %q: %w", localpart, err)
+		return nil, fmt.Errorf("parsing layout event for %q: %w", stateKey, err)
 	}
 
 	return observe.SchemaToLayout(content), nil

@@ -40,6 +40,28 @@ func testMachine(t *testing.T) ref.Machine {
 	return machine
 }
 
+// testEntitySocketPath returns the agent-facing socket path for a fleet-scoped
+// localpart within the given fleet run directory.
+func testEntitySocketPath(t *testing.T, fleetRunDir, localpart string) string {
+	t.Helper()
+	entity, err := ref.ParseEntityLocalpart(localpart, "bureau.local")
+	if err != nil {
+		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
+	}
+	return entity.SocketPath(fleetRunDir)
+}
+
+// testEntityAdminSocketPath returns the admin socket path for a fleet-scoped
+// localpart within the given fleet run directory.
+func testEntityAdminSocketPath(t *testing.T, fleetRunDir, localpart string) string {
+	t.Helper()
+	entity, err := ref.ParseEntityLocalpart(localpart, "bureau.local")
+	if err != nil {
+		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
+	}
+	return entity.AdminSocketPath(fleetRunDir)
+}
+
 func testBuffer(t *testing.T, value string) *secret.Buffer {
 	t.Helper()
 	buffer, err := secret.NewFromString(value)
@@ -584,17 +606,21 @@ func TestBuildCredentialPayload(t *testing.T) {
 		machine:       testMachine(t),
 		logger:        slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
+	principalEntity, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/echo", "bureau.local")
+	if err != nil {
+		t.Fatalf("ParseEntityLocalpart: %v", err)
+	}
 
 	t.Run("full credentials", func(t *testing.T) {
 		credentials := map[string]string{
 			"MATRIX_HOMESERVER_URL": "http://custom:6167",
 			"MATRIX_TOKEN":          "syt_test_token",
-			"MATRIX_USER_ID":        "@test/echo:bureau.local",
+			"MATRIX_USER_ID":        "@bureau/fleet/test/agent/echo:bureau.local",
 			"OPENAI_API_KEY":        "sk-test",
 			"GITHUB_PAT":            "ghp_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -605,8 +631,8 @@ func TestBuildCredentialPayload(t *testing.T) {
 		if payload.MatrixToken != "syt_test_token" {
 			t.Errorf("MatrixToken = %q, want %q", payload.MatrixToken, "syt_test_token")
 		}
-		if payload.MatrixUserID != "@test/echo:bureau.local" {
-			t.Errorf("MatrixUserID = %q, want %q", payload.MatrixUserID, "@test/echo:bureau.local")
+		if payload.MatrixUserID != "@bureau/fleet/test/agent/echo:bureau.local" {
+			t.Errorf("MatrixUserID = %q, want %q", payload.MatrixUserID, "@bureau/fleet/test/agent/echo:bureau.local")
 		}
 
 		// Remaining credentials should not include Matrix fields.
@@ -626,7 +652,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"OPENAI_API_KEY": "sk-test",
 		}
 
-		_, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
+		_, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
 		if err == nil {
 			t.Error("expected error for missing MATRIX_TOKEN")
 		}
@@ -640,7 +666,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -656,14 +682,14 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload("test/echo", credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
 
 		// Should derive from principal localpart and server name.
-		if payload.MatrixUserID != "@test/echo:bureau.local" {
-			t.Errorf("MatrixUserID = %q, want %q", payload.MatrixUserID, "@test/echo:bureau.local")
+		if payload.MatrixUserID != "@bureau/fleet/test/agent/echo:bureau.local" {
+			t.Errorf("MatrixUserID = %q, want %q", payload.MatrixUserID, "@bureau/fleet/test/agent/echo:bureau.local")
 		}
 	})
 }
@@ -741,12 +767,14 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 	t.Cleanup(func() { keypair.Close() })
 
 	tempDir := testutil.SocketDir(t)
+	machine := testMachine(t)
 
 	launcher := &Launcher{
 		keypair:         keypair,
-		machine:         testMachine(t),
+		machine:         machine,
 		homeserverURL:   "http://localhost:9999",
 		runDir:          tempDir,
+		fleetRunDir:     machine.Fleet().RunDir(tempDir),
 		stateDir:        filepath.Join(tempDir, "state"),
 		proxyBinaryPath: proxyBinaryPath,
 		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(tempDir), "/dev/null"),
@@ -795,14 +823,14 @@ func TestProxyLifecycle(t *testing.T) {
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
-		"MATRIX_USER_ID": "@test/echo:bureau.local",
+		"MATRIX_USER_ID": "@bureau/fleet/test/agent/echo:bureau.local",
 		"OPENAI_API_KEY": "sk-test-fake",
 	})
 
 	// --- Create sandbox ---
 	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/echo",
+		Principal:            "bureau/fleet/test/agent/echo",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response.OK {
@@ -813,7 +841,7 @@ func TestProxyLifecycle(t *testing.T) {
 	}
 
 	// --- Verify agent socket exists and serves health check ---
-	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/echo")
+	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
 	agentClient := unixHTTPClient(socketPath)
 
 	healthResponse, err := agentClient.Get("http://localhost/health")
@@ -840,15 +868,15 @@ func TestProxyLifecycle(t *testing.T) {
 	if err := json.Unmarshal(identityBody, &identity); err != nil {
 		t.Fatalf("parsing identity response: %v\nbody: %s", err, identityBody)
 	}
-	if identity.UserID != "@test/echo:bureau.local" {
-		t.Errorf("identity user_id = %q, want %q", identity.UserID, "@test/echo:bureau.local")
+	if identity.UserID != "@bureau/fleet/test/agent/echo:bureau.local" {
+		t.Errorf("identity user_id = %q, want %q", identity.UserID, "@bureau/fleet/test/agent/echo:bureau.local")
 	}
 	if identity.ServerName != "bureau.local" {
 		t.Errorf("identity server_name = %q, want %q", identity.ServerName, "bureau.local")
 	}
 
 	// --- Verify admin socket accepts service registration ---
-	adminSocketPath := principal.RunDirAdminSocketPath(launcher.runDir, "test/echo")
+	adminSocketPath := testEntityAdminSocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
 	adminClient := unixHTTPClient(adminSocketPath)
 
 	serviceRequest, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/test-svc",
@@ -866,7 +894,7 @@ func TestProxyLifecycle(t *testing.T) {
 	// --- Verify duplicate create is rejected ---
 	duplicateResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/echo",
+		Principal:            "bureau/fleet/test/agent/echo",
 		EncryptedCredentials: ciphertext,
 	})
 	if duplicateResponse.OK {
@@ -879,14 +907,14 @@ func TestProxyLifecycle(t *testing.T) {
 	// --- Destroy sandbox ---
 	destroyResponse := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
 		Action:    "destroy-sandbox",
-		Principal: "test/echo",
+		Principal: "bureau/fleet/test/agent/echo",
 	})
 	if !destroyResponse.OK {
 		t.Fatalf("destroy-sandbox failed: %s", destroyResponse.Error)
 	}
 
 	// --- Verify cleanup ---
-	if _, exists := launcher.sandboxes["test/echo"]; exists {
+	if _, exists := launcher.sandboxes["bureau/fleet/test/agent/echo"]; exists {
 		t.Error("sandbox should be removed from map after destroy")
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
@@ -899,7 +927,7 @@ func TestProxyLifecycle(t *testing.T) {
 	// --- Verify re-creation works after destroy ---
 	recreateResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/echo",
+		Principal:            "bureau/fleet/test/agent/echo",
 		EncryptedCredentials: ciphertext,
 	})
 	if !recreateResponse.OK {
@@ -929,14 +957,14 @@ func TestProxyLifecycle_WithoutCredentials(t *testing.T) {
 	// won't be configured, but the proxy itself should function.
 	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:    "create-sandbox",
-		Principal: "test/nocreds",
+		Principal: "bureau/fleet/test/agent/nocreds",
 	})
 	if !response.OK {
 		t.Fatalf("create-sandbox without credentials failed: %s", response.Error)
 	}
 
 	// Verify health endpoint works.
-	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/nocreds")
+	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/nocreds")
 	client := unixHTTPClient(socketPath)
 
 	healthResponse, err := client.Get("http://localhost/health")
@@ -960,7 +988,7 @@ func TestProxyLifecycle_CrashedProcessRecreation(t *testing.T) {
 	// Create a sandbox.
 	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/crash",
+		Principal:            "bureau/fleet/test/agent/crash",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response.OK {
@@ -970,8 +998,8 @@ func TestProxyLifecycle_CrashedProcessRecreation(t *testing.T) {
 	// Kill the tmux session to simulate a sandbox crash. In the unified
 	// model, killing the tmux session is what ends the sandbox — the
 	// session watcher detects it and closes the done channel.
-	sandbox := launcher.sandboxes["test/crash"]
-	launcher.destroyTmuxSession("test/crash")
+	sandbox := launcher.sandboxes["bureau/fleet/test/agent/crash"]
+	launcher.destroyTmuxSession("bureau/fleet/test/agent/crash")
 
 	// Wait for the session watcher to detect the tmux session is gone.
 	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
@@ -980,7 +1008,7 @@ func TestProxyLifecycle_CrashedProcessRecreation(t *testing.T) {
 	// sandbox has exited (the launcher detects this and cleans up).
 	response2 := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/crash",
+		Principal:            "bureau/fleet/test/agent/crash",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response2.OK {
@@ -1002,7 +1030,7 @@ func TestShutdownAllSandboxes(t *testing.T) {
 	})
 
 	// Create multiple sandboxes.
-	for _, name := range []string{"test/a", "test/b", "test/c"} {
+	for _, name := range []string{"bureau/fleet/test/agent/a", "bureau/fleet/test/agent/b", "bureau/fleet/test/agent/c"} {
 		response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 			Action:               "create-sandbox",
 			Principal:            name,
@@ -1053,10 +1081,10 @@ func TestTmuxSessionName(t *testing.T) {
 		localpart string
 		want      string
 	}{
-		{"iree/amdgpu/pm", "bureau/iree/amdgpu/pm"},
-		{"service/stt/whisper", "bureau/service/stt/whisper"},
-		{"test/echo", "bureau/test/echo"},
-		{"simple", "bureau/simple"},
+		{"bureau/fleet/prod/agent/pm", "bureau/bureau/fleet/prod/agent/pm"},
+		{"bureau/fleet/prod/service/whisper", "bureau/bureau/fleet/prod/service/whisper"},
+		{"bureau/fleet/test/agent/echo", "bureau/bureau/fleet/test/agent/echo"},
+		{"bureau/fleet/test/machine/workstation", "bureau/bureau/fleet/test/machine/workstation"},
 	}
 	for _, test := range tests {
 		got := tmuxSessionName(test.localpart)
@@ -1078,7 +1106,7 @@ func TestTmuxSessionLifecycle(t *testing.T) {
 		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
-	localpart := "test/tmux"
+	localpart := "bureau/fleet/test/agent/tmux"
 	sessionName := tmuxSessionName(localpart)
 
 	// Create the session.
@@ -1111,7 +1139,7 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 		sandboxes:  make(map[string]*managedSandbox),
 		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
-	localpart := "test/config"
+	localpart := "bureau/fleet/test/agent/config"
 	sessionName := tmuxSessionName(localpart)
 
 	if err := launcher.createTmuxSession(localpart); err != nil {
@@ -1165,7 +1193,7 @@ func TestTmuxSessionMultipleSessions(t *testing.T) {
 		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
-	localparts := []string{"test/a", "test/b", "test/c"}
+	localparts := []string{"bureau/fleet/test/agent/a", "bureau/fleet/test/agent/b", "bureau/fleet/test/agent/c"}
 
 	// Create all sessions.
 	for _, localpart := range localparts {
@@ -1183,15 +1211,15 @@ func TestTmuxSessionMultipleSessions(t *testing.T) {
 	}
 
 	// Destroy one session and verify the others survive.
-	launcher.destroyTmuxSession("test/b")
-	if tmuxServer.HasSession(tmuxSessionName("test/b")) {
-		t.Error("session bureau/test/b should be gone after destroy")
+	launcher.destroyTmuxSession("bureau/fleet/test/agent/b")
+	if tmuxServer.HasSession(tmuxSessionName("bureau/fleet/test/agent/b")) {
+		t.Error("session bureau/bureau/fleet/test/agent/b should be gone after destroy")
 	}
-	if !tmuxServer.HasSession(tmuxSessionName("test/a")) {
-		t.Error("session bureau/test/a should still exist")
+	if !tmuxServer.HasSession(tmuxSessionName("bureau/fleet/test/agent/a")) {
+		t.Error("session bureau/bureau/fleet/test/agent/a should still exist")
 	}
-	if !tmuxServer.HasSession(tmuxSessionName("test/c")) {
-		t.Error("session bureau/test/c should still exist")
+	if !tmuxServer.HasSession(tmuxSessionName("bureau/fleet/test/agent/c")) {
+		t.Error("session bureau/bureau/fleet/test/agent/c should still exist")
 	}
 }
 
@@ -1202,30 +1230,31 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	launcher := newTestLauncher(t, proxyBinary)
 	runDir, tmuxServer := newTestRunDir(t)
 	launcher.runDir = runDir
+	launcher.fleetRunDir = launcher.machine.Fleet().RunDir(runDir)
 	launcher.tmuxServer = tmuxServer
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
-		"MATRIX_USER_ID": "@test/tmuxproxy:bureau.local",
+		"MATRIX_USER_ID": "@bureau/fleet/test/agent/tmuxproxy:bureau.local",
 	})
 
 	// Create a sandbox — this should spawn a proxy AND create a tmux session.
 	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/tmuxproxy",
+		Principal:            "bureau/fleet/test/agent/tmuxproxy",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response.OK {
 		t.Fatalf("create-sandbox failed: %s", response.Error)
 	}
 
-	sessionName := tmuxSessionName("test/tmuxproxy")
+	sessionName := tmuxSessionName("bureau/fleet/test/agent/tmuxproxy")
 	if !tmuxServer.HasSession(sessionName) {
 		t.Fatalf("tmux session %q should exist after sandbox creation", sessionName)
 	}
 
 	// Verify the proxy is also running (agent socket responds).
-	socketPath := principal.RunDirSocketPath(launcher.runDir, "test/tmuxproxy")
+	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/tmuxproxy")
 	agentClient := unixHTTPClient(socketPath)
 	healthResponse, err := agentClient.Get("http://localhost/health")
 	if err != nil {
@@ -1239,7 +1268,7 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	// Destroy the sandbox — should kill both proxy and tmux session.
 	destroyResponse := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
 		Action:    "destroy-sandbox",
-		Principal: "test/tmuxproxy",
+		Principal: "bureau/fleet/test/agent/tmuxproxy",
 	})
 	if !destroyResponse.OK {
 		t.Fatalf("destroy-sandbox failed: %s", destroyResponse.Error)
@@ -1248,7 +1277,7 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 	if tmuxServer.HasSession(sessionName) {
 		t.Errorf("tmux session %q should not exist after sandbox destruction", sessionName)
 	}
-	if _, exists := launcher.sandboxes["test/tmuxproxy"]; exists {
+	if _, exists := launcher.sandboxes["bureau/fleet/test/agent/tmuxproxy"]; exists {
 		t.Error("sandbox should be removed from map after destroy")
 	}
 }
@@ -1287,7 +1316,7 @@ func TestHandleUpdatePayload_Validation(t *testing.T) {
 	t.Run("no sandbox running", func(t *testing.T) {
 		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 			Action:    "update-payload",
-			Principal: "test/missing",
+			Principal: "bureau/fleet/test/agent/missing",
 			Payload:   map[string]any{"key": "value"},
 		})
 		if response.OK {
@@ -1301,16 +1330,16 @@ func TestHandleUpdatePayload_Validation(t *testing.T) {
 	t.Run("sandbox already exited", func(t *testing.T) {
 		done := make(chan struct{})
 		close(done) // simulate exited process
-		launcher.sandboxes["test/exited"] = &managedSandbox{
-			localpart: "test/exited",
+		launcher.sandboxes["bureau/fleet/test/agent/exited"] = &managedSandbox{
+			localpart: "bureau/fleet/test/agent/exited",
 			configDir: t.TempDir(),
 			done:      done,
 		}
-		defer delete(launcher.sandboxes, "test/exited")
+		defer delete(launcher.sandboxes, "bureau/fleet/test/agent/exited")
 
 		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 			Action:    "update-payload",
-			Principal: "test/exited",
+			Principal: "bureau/fleet/test/agent/exited",
 			Payload:   map[string]any{"key": "value"},
 		})
 		if response.OK {
@@ -1323,19 +1352,19 @@ func TestHandleUpdatePayload_Validation(t *testing.T) {
 
 	t.Run("nil payload", func(t *testing.T) {
 		done := make(chan struct{})
-		launcher.sandboxes["test/nopayload"] = &managedSandbox{
-			localpart: "test/nopayload",
+		launcher.sandboxes["bureau/fleet/test/agent/nopayload"] = &managedSandbox{
+			localpart: "bureau/fleet/test/agent/nopayload",
 			configDir: t.TempDir(),
 			done:      done,
 		}
 		defer func() {
-			delete(launcher.sandboxes, "test/nopayload")
+			delete(launcher.sandboxes, "bureau/fleet/test/agent/nopayload")
 			close(done)
 		}()
 
 		response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 			Action:    "update-payload",
-			Principal: "test/nopayload",
+			Principal: "bureau/fleet/test/agent/nopayload",
 		})
 		if response.OK {
 			t.Error("expected error for nil payload")
@@ -1359,8 +1388,8 @@ func TestHandleUpdatePayload_AtomicWrite(t *testing.T) {
 	done := make(chan struct{})
 	launcher := &Launcher{
 		sandboxes: map[string]*managedSandbox{
-			"test/update": {
-				localpart: "test/update",
+			"bureau/fleet/test/agent/update": {
+				localpart: "bureau/fleet/test/agent/update",
 				configDir: configDir,
 				done:      done,
 			},
@@ -1377,7 +1406,7 @@ func TestHandleUpdatePayload_AtomicWrite(t *testing.T) {
 
 	response := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 		Action:    "update-payload",
-		Principal: "test/update",
+		Principal: "bureau/fleet/test/agent/update",
 		Payload:   newPayload,
 	})
 	if !response.OK {
@@ -1422,13 +1451,13 @@ func TestHandleUpdatePayload_WithProxy(t *testing.T) {
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
-		"MATRIX_USER_ID": "@test/payload:bureau.local",
+		"MATRIX_USER_ID": "@bureau/fleet/test/agent/payload:bureau.local",
 	})
 
 	// Create a sandbox to get a real configDir and running process.
 	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/payload",
+		Principal:            "bureau/fleet/test/agent/payload",
 		EncryptedCredentials: ciphertext,
 	})
 	if !createResponse.OK {
@@ -1438,7 +1467,7 @@ func TestHandleUpdatePayload_WithProxy(t *testing.T) {
 	// Update the payload.
 	updateResponse := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 		Action:    "update-payload",
-		Principal: "test/payload",
+		Principal: "bureau/fleet/test/agent/payload",
 		Payload: map[string]any{
 			"prompt":     "You are a helpful assistant.",
 			"max_tokens": 4096,
@@ -1449,7 +1478,7 @@ func TestHandleUpdatePayload_WithProxy(t *testing.T) {
 	}
 
 	// Read back the payload file from the sandbox's configDir.
-	sandbox := launcher.sandboxes["test/payload"]
+	sandbox := launcher.sandboxes["bureau/fleet/test/agent/payload"]
 	payloadPath := filepath.Join(sandbox.configDir, "payload.json")
 	data, err := os.ReadFile(payloadPath)
 	if err != nil {
@@ -1472,7 +1501,7 @@ func TestHandleUpdatePayload_WithProxy(t *testing.T) {
 	// Update again to verify overwrites work.
 	update2 := launcher.handleUpdatePayload(context.Background(), &IPCRequest{
 		Action:    "update-payload",
-		Principal: "test/payload",
+		Principal: "bureau/fleet/test/agent/payload",
 		Payload:   map[string]any{"replaced": true},
 	})
 	if !update2.OK {
@@ -1503,6 +1532,7 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	launcher := newTestLauncher(t, proxyBinary)
 	runDir, tmuxServer := newTestRunDir(t)
 	launcher.runDir = runDir
+	launcher.fleetRunDir = launcher.machine.Fleet().RunDir(runDir)
 	launcher.tmuxServer = tmuxServer
 
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
@@ -1512,22 +1542,22 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	// Create a sandbox.
 	response := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/crash",
+		Principal:            "bureau/fleet/test/agent/crash",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response.OK {
 		t.Fatalf("create-sandbox: %s", response.Error)
 	}
 
-	sessionName := tmuxSessionName("test/crash")
+	sessionName := tmuxSessionName("bureau/fleet/test/agent/crash")
 	if !tmuxServer.HasSession(sessionName) {
 		t.Fatal("tmux session should exist after creation")
 	}
 
 	// Kill the tmux session to simulate a sandbox crash. The session
 	// watcher detects the session is gone and closes the done channel.
-	sandbox := launcher.sandboxes["test/crash"]
-	launcher.destroyTmuxSession("test/crash")
+	sandbox := launcher.sandboxes["bureau/fleet/test/agent/crash"]
+	launcher.destroyTmuxSession("bureau/fleet/test/agent/crash")
 
 	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 
@@ -1535,7 +1565,7 @@ func TestTmuxSessionCleanedUpOnCrashedSandbox(t *testing.T) {
 	// (via cleanupSandbox) and create a new one.
 	response2 := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/crash",
+		Principal:            "bureau/fleet/test/agent/crash",
 		EncryptedCredentials: ciphertext,
 	})
 	if !response2.OK {
@@ -1746,7 +1776,7 @@ func TestWaitSandbox_Validation(t *testing.T) {
 		},
 		{
 			name:      "unknown principal",
-			request:   IPCRequest{Action: "wait-sandbox", Principal: "test/nonexistent"},
+			request:   IPCRequest{Action: "wait-sandbox", Principal: "bureau/fleet/test/agent/nonexistent"},
 			expectErr: "no sandbox running",
 		},
 	}
@@ -1803,7 +1833,7 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 	// Create a sandbox.
 	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/waitnormal",
+		Principal:            "bureau/fleet/test/agent/waitnormal",
 		EncryptedCredentials: ciphertext,
 	})
 	if !createResponse.OK {
@@ -1831,7 +1861,7 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 
 		if encodeErr := codec.NewEncoder(conn).Encode(IPCRequest{
 			Action:    "wait-sandbox",
-			Principal: "test/waitnormal",
+			Principal: "bureau/fleet/test/agent/waitnormal",
 		}); encodeErr != nil {
 			t.Errorf("Encode: %v", encodeErr)
 			return
@@ -1869,7 +1899,7 @@ func TestWaitSandbox_ProcessExit(t *testing.T) {
 	// Kill the tmux session to end the sandbox. The session watcher
 	// detects the session is gone and closes the done channel, which
 	// unblocks wait-sandbox.
-	launcher.destroyTmuxSession("test/waitnormal")
+	launcher.destroyTmuxSession("bureau/fleet/test/agent/waitnormal")
 
 	// wait-sandbox should now return.
 	response := testutil.RequireReceive(t, responseChan, 5*time.Second, "wait-sandbox response after sandbox exit")
@@ -1900,15 +1930,15 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 	// Create a sandbox and immediately destroy the tmux session.
 	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/waitalready",
+		Principal:            "bureau/fleet/test/agent/waitalready",
 		EncryptedCredentials: ciphertext,
 	})
 	if !createResponse.OK {
 		t.Fatalf("create-sandbox: %s", createResponse.Error)
 	}
 
-	sandbox := launcher.sandboxes["test/waitalready"]
-	launcher.destroyTmuxSession("test/waitalready")
+	sandbox := launcher.sandboxes["bureau/fleet/test/agent/waitalready"]
+	launcher.destroyTmuxSession("bureau/fleet/test/agent/waitalready")
 
 	testutil.RequireClosed(t, sandbox.done, 5*time.Second, "session watcher close done channel")
 
@@ -1933,7 +1963,7 @@ func TestWaitSandbox_AlreadyExited(t *testing.T) {
 
 		if encodeErr := codec.NewEncoder(conn).Encode(IPCRequest{
 			Action:    "wait-sandbox",
-			Principal: "test/waitalready",
+			Principal: "bureau/fleet/test/agent/waitalready",
 		}); encodeErr != nil {
 			t.Errorf("Encode: %v", encodeErr)
 			return
@@ -1974,7 +2004,7 @@ func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
 	// Create a sandbox that stays alive.
 	createResponse := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/waitblock",
+		Principal:            "bureau/fleet/test/agent/waitblock",
 		EncryptedCredentials: ciphertext,
 	})
 	if !createResponse.OK {
@@ -2013,7 +2043,7 @@ func TestWaitSandbox_DoesNotBlockOtherRequests(t *testing.T) {
 
 	if encodeErr := codec.NewEncoder(waitConn).Encode(IPCRequest{
 		Action:    "wait-sandbox",
-		Principal: "test/waitblock",
+		Principal: "bureau/fleet/test/agent/waitblock",
 	}); encodeErr != nil {
 		t.Fatalf("Encode wait: %v", encodeErr)
 	}
@@ -2044,12 +2074,12 @@ func TestListSandboxes(t *testing.T) {
 	// Create two sandboxes.
 	ciphertext := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token",
-		"MATRIX_USER_ID": "@test/list-a:bureau.local",
+		"MATRIX_USER_ID": "@bureau/fleet/test/agent/list-a:bureau.local",
 	})
 
 	responseA := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/list-a",
+		Principal:            "bureau/fleet/test/agent/list-a",
 		EncryptedCredentials: ciphertext,
 	})
 	if !responseA.OK {
@@ -2058,11 +2088,11 @@ func TestListSandboxes(t *testing.T) {
 
 	ciphertextB := encryptCredentials(t, launcher.keypair, map[string]string{
 		"MATRIX_TOKEN":   "syt_fake_test_token_b",
-		"MATRIX_USER_ID": "@test/list-b:bureau.local",
+		"MATRIX_USER_ID": "@bureau/fleet/test/agent/list-b:bureau.local",
 	})
 	responseB := launcher.handleCreateSandbox(context.Background(), &IPCRequest{
 		Action:               "create-sandbox",
-		Principal:            "test/list-b",
+		Principal:            "bureau/fleet/test/agent/list-b",
 		EncryptedCredentials: ciphertextB,
 	})
 	if !responseB.OK {
@@ -2083,21 +2113,21 @@ func TestListSandboxes(t *testing.T) {
 	for _, entry := range listResponse.Sandboxes {
 		found[entry.Localpart] = entry.ProxyPID
 	}
-	if pid, ok := found["test/list-a"]; !ok {
-		t.Error("test/list-a not found in list-sandboxes response")
+	if pid, ok := found["bureau/fleet/test/agent/list-a"]; !ok {
+		t.Error("bureau/fleet/test/agent/list-a not found in list-sandboxes response")
 	} else if pid == 0 {
-		t.Error("test/list-a has zero proxy PID")
+		t.Error("bureau/fleet/test/agent/list-a has zero proxy PID")
 	}
-	if pid, ok := found["test/list-b"]; !ok {
-		t.Error("test/list-b not found in list-sandboxes response")
+	if pid, ok := found["bureau/fleet/test/agent/list-b"]; !ok {
+		t.Error("bureau/fleet/test/agent/list-b not found in list-sandboxes response")
 	} else if pid == 0 {
-		t.Error("test/list-b has zero proxy PID")
+		t.Error("bureau/fleet/test/agent/list-b has zero proxy PID")
 	}
 
 	// Destroy one sandbox.
 	destroyResponse := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
 		Action:    "destroy-sandbox",
-		Principal: "test/list-a",
+		Principal: "bureau/fleet/test/agent/list-a",
 	})
 	if !destroyResponse.OK {
 		t.Fatalf("destroy sandbox A: %s", destroyResponse.Error)
@@ -2111,7 +2141,7 @@ func TestListSandboxes(t *testing.T) {
 	if len(afterDestroyResponse.Sandboxes) != 1 {
 		t.Fatalf("expected 1 sandbox after destroy, got %d", len(afterDestroyResponse.Sandboxes))
 	}
-	if afterDestroyResponse.Sandboxes[0].Localpart != "test/list-b" {
+	if afterDestroyResponse.Sandboxes[0].Localpart != "bureau/fleet/test/agent/list-b" {
 		t.Errorf("surviving sandbox = %q, want test/list-b", afterDestroyResponse.Sandboxes[0].Localpart)
 	}
 }
@@ -2170,7 +2200,7 @@ func TestHandleProvisionCredential(t *testing.T) {
 		// Create an existing bundle with a Matrix token.
 		existingBundle := map[string]string{
 			"MATRIX_TOKEN":          "syt_existing",
-			"MATRIX_USER_ID":        "@test/agent:bureau.local",
+			"MATRIX_USER_ID":        "@bureau/fleet/test/agent/agent:bureau.local",
 			"MATRIX_HOMESERVER_URL": "http://localhost:8008",
 		}
 		existingJSON, err := json.Marshal(existingBundle)

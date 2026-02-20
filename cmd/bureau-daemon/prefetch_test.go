@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -256,7 +257,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	)
 
 	// Mock Matrix server with template and config state.
-	matrixState := newPrefetchTestMatrixState(t, configRoomID, templateRoomID, machineName)
+	matrixState := newPrefetchTestMatrixState(t, daemon.fleet, configRoomID, templateRoomID, machineName)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Intercept message sends to the config room. SendEvent uses
 		// PUT with url.PathEscape on room ID and event type.
@@ -314,7 +315,9 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return prefetchError
@@ -333,7 +336,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	}
 	launcherMu.Unlock()
 
-	if daemon.running["agent/test"] {
+	if daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
 		t.Error("principal should not be marked as running after prefetch failure")
 	}
 
@@ -372,7 +375,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	}
 	launcherMu.Unlock()
 
-	if !daemon.running["agent/test"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
 		t.Error("principal should be marked as running after successful prefetch")
 	}
 }
@@ -393,7 +396,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server()
 
-	matrixState := newPrefetchTestMatrixState(t, configRoomID, templateRoomID, machineName)
+	matrixState := newPrefetchTestMatrixState(t, daemon.fleet, configRoomID, templateRoomID, machineName)
 	// Override template to have no environment path.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/echo", "hello"},
@@ -427,7 +430,9 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		prefetchCalled = true
@@ -444,7 +449,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 		t.Error("prefetchFunc should not be called when template has no EnvironmentPath")
 	}
 
-	if !daemon.running["agent/test"] {
+	if !daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
 		t.Error("principal should be running (no prefetch needed)")
 	}
 }
@@ -454,9 +459,10 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 // newPrefetchTestMatrixState creates a mock Matrix state with a
 // template that has an EnvironmentPath and a MachineConfig that
 // references it. Used by the reconcile prefetch tests.
-func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, machineName string) *mockMatrixState {
+func newPrefetchTestMatrixState(t *testing.T, fleet ref.Fleet, configRoomID, templateRoomID, machineName string) *mockMatrixState {
 	t.Helper()
 
+	fleetLocalpart := fleet.Localpart() + "/agent/test"
 	state := newMockMatrixState()
 
 	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
@@ -469,14 +475,14 @@ func newPrefetchTestMatrixState(t *testing.T, configRoomID, templateRoomID, mach
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Localpart: "agent/test",
+				Principal: testEntity(t, fleet, "agent/test"),
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
 
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 

@@ -47,7 +47,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	templateRef := publishTestAgentTemplate(t, admin, machine, "sysadmin-test")
 
 	// Register a principal and deploy it with the sysadmin-test template.
-	agent := registerPrincipal(t, "sysadmin/quickstart-test", "test-password")
+	agent := registerFleetPrincipal(t, fleet, "sysadmin/quickstart-test", "test-password")
 	pushCredentials(t, admin, machine, agent)
 
 	// The test agent sends messages to the config room from inside the
@@ -76,7 +76,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	})
 
 	// Wait for the proxy socket to appear (proves sandbox creation worked).
-	proxySocketPath := machine.PrincipalSocketPath(agent.Localpart)
+	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 

@@ -233,7 +233,7 @@ func TestBootstrapScript(t *testing.T) {
 		}
 
 		// Register and deploy a minimal principal (no template, just proxy).
-		principalAccount := registerPrincipal(t, "agent/bootstrap-test", "test-password")
+		principalAccount := registerFleetPrincipal(t, bootstrapFleet, "agent/bootstrap-test", "test-password")
 		pushCredentials(t, admin, &testMachine{
 			Ref:           machineRef,
 			Name:          machineName,
@@ -243,23 +243,26 @@ func TestBootstrapScript(t *testing.T) {
 		}, principalAccount)
 
 		// Push machine config to trigger sandbox creation.
+		principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(
+			bootstrapFleet.Ref, principalAccount.Localpart)
+		if entityErr != nil {
+			t.Fatalf("construct principal entity ref: %v", entityErr)
+		}
 		_, err = admin.SendStateEvent(t.Context(), configRoomID,
-			schema.EventTypeMachineConfig, machineName, map[string]any{
-				"principals": []map[string]any{
-					{
-						"localpart":  principalAccount.Localpart,
-						"template":   "",
-						"auto_start": true,
-					},
-				},
+			schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+				Principals: []schema.PrincipalAssignment{{
+					Principal: principalEntity,
+					AutoStart: true,
+				}},
 			})
 		if err != nil {
 			t.Fatalf("push machine config: %v", err)
 		}
 
-		// Wait for the proxy socket inside the container.
-		// lib/principal derives: /run/bureau/<localpart>.sock
-		proxySocketPath := "/run/bureau/" + principalAccount.Localpart + ".sock"
+		// Wait for the proxy socket inside the container. The socket
+		// path is fleet-scoped: /run/bureau/fleet/<name>/<type>/<entity>.sock
+		fleetRunDir := bootstrapFleet.Ref.RunDir("/run/bureau")
+		proxySocketPath := principalEntity.SocketPath(fleetRunDir)
 		waitForFileInContainer(t, containerID, proxySocketPath, 30*time.Second)
 		t.Log("proxy socket appeared — sandbox created inside Docker container")
 	})

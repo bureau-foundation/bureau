@@ -154,15 +154,6 @@ func validatePath(path, label string) error {
 	return nil
 }
 
-// MatrixUserID constructs a full Matrix user ID from a localpart and
-// server name. The localpart is NOT validated — call ValidateLocalpart
-// first if the input is untrusted.
-//
-//	MatrixUserID("iree/amdgpu/pm", "bureau.local") → "@iree/amdgpu/pm:bureau.local"
-func MatrixUserID(localpart, serverName string) string {
-	return "@" + localpart + ":" + serverName
-}
-
 // RoomAliasLocalpart extracts the local alias name from a full Matrix room alias.
 // Returns the part between # and :server. Uses the first colon as the separator
 // because colons cannot appear in room alias localparts (same invariant as
@@ -180,32 +171,6 @@ func RoomAliasLocalpart(fullAlias string) string {
 		localpart = localpart[:colonIndex]
 	}
 	return localpart
-}
-
-// SocketPath returns the agent-facing unix socket path for a principal's
-// localpart using the default run directory.
-//
-//	SocketPath("iree/amdgpu/pm") → "/run/bureau/iree/amdgpu/pm.sock"
-//
-// The caller is responsible for creating intermediate directories.
-// The localpart should be validated with ValidateLocalpart before calling this.
-func SocketPath(localpart string) string {
-	return DefaultRunDir + "/" + localpart + SocketSuffix
-}
-
-// RunDirSocketPath returns the agent-facing socket path for a custom run directory.
-//
-//	RunDirSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/iree/amdgpu/pm.sock"
-func RunDirSocketPath(runDir, localpart string) string {
-	return runDir + "/" + localpart + SocketSuffix
-}
-
-// RunDirAdminSocketPath returns the daemon-only admin socket path for a custom
-// run directory.
-//
-//	RunDirAdminSocketPath("/tmp/test", "iree/amdgpu/pm") → "/tmp/test/iree/amdgpu/pm.admin.sock"
-func RunDirAdminSocketPath(runDir, localpart string) string {
-	return runDir + "/" + localpart + AdminSocketSuffix
 }
 
 // LauncherSocketPath returns the launcher IPC socket path for a run directory.

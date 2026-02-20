@@ -48,12 +48,12 @@ func TestRecordMintedTokens_TracksNewTokens(t *testing.T) {
 
 	daemon, _, _ := newTokenBlacklistDaemon(t)
 
-	daemon.recordMintedTokens("agent/alpha", []activeToken{
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), []activeToken{
 		{id: "token-1", serviceRole: "ticket", expiresAt: testDaemonEpoch.Add(5 * time.Minute)},
 		{id: "token-2", serviceRole: "artifact", expiresAt: testDaemonEpoch.Add(5 * time.Minute)},
 	})
 
-	tokens := daemon.activeTokens["agent/alpha"]
+	tokens := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]
 	if len(tokens) != 2 {
 		t.Fatalf("activeTokens = %d, want 2", len(tokens))
 	}
@@ -68,18 +68,18 @@ func TestRecordMintedTokens_AccumulatesAcrossRefreshes(t *testing.T) {
 	daemon, fakeClock, _ := newTokenBlacklistDaemon(t)
 
 	// First mint at epoch.
-	daemon.recordMintedTokens("agent/alpha", []activeToken{
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), []activeToken{
 		{id: "token-1", serviceRole: "ticket", expiresAt: testDaemonEpoch.Add(5 * time.Minute)},
 	})
 
 	// Refresh 4 minutes later (old token still has 1 min TTL).
 	fakeClock.Advance(4 * time.Minute)
-	daemon.recordMintedTokens("agent/alpha", []activeToken{
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), []activeToken{
 		{id: "token-2", serviceRole: "ticket", expiresAt: testDaemonEpoch.Add(4*time.Minute + 5*time.Minute)},
 	})
 
 	// Both tokens should be tracked (old one hasn't expired yet).
-	tokens := daemon.activeTokens["agent/alpha"]
+	tokens := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]
 	if len(tokens) != 2 {
 		t.Fatalf("activeTokens = %d, want 2 (old + new)", len(tokens))
 	}
@@ -91,18 +91,18 @@ func TestRecordMintedTokens_PrunesExpiredOnMint(t *testing.T) {
 	daemon, fakeClock, _ := newTokenBlacklistDaemon(t)
 
 	// First mint at epoch, expires at epoch+5min.
-	daemon.recordMintedTokens("agent/alpha", []activeToken{
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), []activeToken{
 		{id: "token-1", serviceRole: "ticket", expiresAt: testDaemonEpoch.Add(5 * time.Minute)},
 	})
 
 	// Advance past the first token's expiry, then mint new ones.
 	fakeClock.Advance(6 * time.Minute)
-	daemon.recordMintedTokens("agent/alpha", []activeToken{
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), []activeToken{
 		{id: "token-2", serviceRole: "ticket", expiresAt: fakeClock.Now().Add(5 * time.Minute)},
 	})
 
 	// Only the new token should remain — the old one was pruned.
-	tokens := daemon.activeTokens["agent/alpha"]
+	tokens := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]
 	if len(tokens) != 1 {
 		t.Fatalf("activeTokens = %d, want 1 (old should be pruned)", len(tokens))
 	}
@@ -127,14 +127,14 @@ func TestRevokeAndCleanupTokens_RemovesDirectory(t *testing.T) {
 	}
 
 	// Set up some active tokens to verify they're cleared.
-	daemon.activeTokens["agent/alpha"] = []activeToken{
+	daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")] = []activeToken{
 		{id: "token-1", serviceRole: "ticket", expiresAt: testDaemonEpoch.Add(5 * time.Minute)},
 	}
-	daemon.lastServiceMounts["agent/alpha"] = []launcherServiceMount{
+	daemon.lastServiceMounts[testEntity(t, daemon.fleet, "agent/alpha")] = []launcherServiceMount{
 		{Role: "ticket", SocketPath: "/tmp/nonexistent.sock"},
 	}
 
-	daemon.revokeAndCleanupTokens(context.Background(), "agent/alpha")
+	daemon.revokeAndCleanupTokens(context.Background(), testEntity(t, daemon.fleet, "agent/alpha"))
 
 	// Token directory should be gone.
 	if _, err := os.Stat(tokenDir); !os.IsNotExist(err) {
@@ -142,10 +142,10 @@ func TestRevokeAndCleanupTokens_RemovesDirectory(t *testing.T) {
 	}
 
 	// Tracking state should be cleared.
-	if _, exists := daemon.activeTokens["agent/alpha"]; exists {
+	if _, exists := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]; exists {
 		t.Error("activeTokens should have been deleted for agent/alpha")
 	}
-	if _, exists := daemon.lastServiceMounts["agent/alpha"]; exists {
+	if _, exists := daemon.lastServiceMounts[testEntity(t, daemon.fleet, "agent/alpha")]; exists {
 		t.Error("lastServiceMounts should have been deleted for agent/alpha")
 	}
 }
@@ -156,7 +156,7 @@ func TestRevokeAndCleanupTokens_NoTokensIsNoop(t *testing.T) {
 	daemon, _, _ := newTokenBlacklistDaemon(t)
 
 	// Should not panic or error when there are no tokens to clean up.
-	daemon.revokeAndCleanupTokens(context.Background(), "agent/nonexistent")
+	daemon.revokeAndCleanupTokens(context.Background(), testEntity(t, daemon.fleet, "agent/nonexistent"))
 }
 
 func TestPushRevocations_SendsToCorrectService(t *testing.T) {
@@ -200,7 +200,7 @@ func TestPushRevocations_SendsToCorrectService(t *testing.T) {
 		{Role: "ticket", SocketPath: socketPath},
 	}
 
-	daemon.pushRevocations(ctx, "agent/alpha", tokens, mounts)
+	daemon.pushRevocations(ctx, testEntity(t, daemon.fleet, "agent/alpha"), tokens, mounts)
 
 	// Verify the blacklist received both token IDs.
 	if blacklist.Len() != 2 {
@@ -265,7 +265,7 @@ func TestPushRevocations_MultipleServices(t *testing.T) {
 		{Role: "artifact", SocketPath: artifactPath},
 	}
 
-	daemon.pushRevocations(ctx, "agent/alpha", tokens, mounts)
+	daemon.pushRevocations(ctx, testEntity(t, daemon.fleet, "agent/alpha"), tokens, mounts)
 
 	// Each service should only have its own token revoked.
 	if ticketBlacklist.Len() != 1 {
@@ -301,7 +301,7 @@ func TestPushRevocations_ServiceDownIsBestEffort(t *testing.T) {
 	}
 
 	// Should not panic.
-	daemon.pushRevocations(context.Background(), "agent/alpha", tokens, mounts)
+	daemon.pushRevocations(context.Background(), testEntity(t, daemon.fleet, "agent/alpha"), tokens, mounts)
 }
 
 func TestTokenTrackingThroughMintAndRefresh(t *testing.T) {
@@ -316,28 +316,28 @@ func TestTokenTrackingThroughMintAndRefresh(t *testing.T) {
 	})
 
 	// Initial mint at epoch.
-	_, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	_, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.recordMintedTokens("agent/alpha", minted)
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), minted)
 
-	if len(daemon.activeTokens["agent/alpha"]) != 1 {
+	if len(daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]) != 1 {
 		t.Fatalf("after initial mint: activeTokens = %d, want 1",
-			len(daemon.activeTokens["agent/alpha"]))
+			len(daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]))
 	}
-	firstTokenID := daemon.activeTokens["agent/alpha"][0].id
+	firstTokenID := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")][0].id
 
 	// Simulate refresh at 80% of TTL (4 minutes).
 	fakeClock.Advance(4 * time.Minute)
-	_, refreshed, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	_, refreshed, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("refresh mint: %v", err)
 	}
-	daemon.recordMintedTokens("agent/alpha", refreshed)
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), refreshed)
 
 	// Both old and new tokens should be tracked (old hasn't expired).
-	tokens := daemon.activeTokens["agent/alpha"]
+	tokens := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]
 	if len(tokens) != 2 {
 		t.Fatalf("after refresh: activeTokens = %d, want 2", len(tokens))
 	}
@@ -350,15 +350,15 @@ func TestTokenTrackingThroughMintAndRefresh(t *testing.T) {
 
 	// Advance past the first token's expiry (epoch + 5min) and mint again.
 	fakeClock.Advance(2 * time.Minute) // now at epoch + 6min
-	_, thirdMint, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	_, thirdMint, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("second refresh mint: %v", err)
 	}
-	daemon.recordMintedTokens("agent/alpha", thirdMint)
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), thirdMint)
 
 	// The first token (expired at epoch+5min) should be pruned.
 	// The second (expires at epoch+4min+5min=epoch+9min) and third should remain.
-	tokens = daemon.activeTokens["agent/alpha"]
+	tokens = daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]
 	if len(tokens) != 2 {
 		t.Fatalf("after second refresh: activeTokens = %d, want 2 (first pruned)", len(tokens))
 	}
@@ -383,11 +383,11 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 		},
 	})
 
-	tokenDir, minted, err := daemon.mintServiceTokens("agent/alpha", []string{"ticket"})
+	tokenDir, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	daemon.recordMintedTokens("agent/alpha", minted)
+	daemon.recordMintedTokens(testEntity(t, daemon.fleet, "agent/alpha"), minted)
 
 	// Start a service socket to receive revocations.
 	socketDir := testutil.SocketDir(t)
@@ -415,12 +415,12 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 	waitForSocket(t, socketPath)
 
 	// Set up cached service mounts.
-	daemon.lastServiceMounts["agent/alpha"] = []launcherServiceMount{
+	daemon.lastServiceMounts[testEntity(t, daemon.fleet, "agent/alpha")] = []launcherServiceMount{
 		{Role: "ticket", SocketPath: socketPath},
 	}
 
 	// Simulate sandbox destroy.
-	daemon.revokeAndCleanupTokens(ctx, "agent/alpha")
+	daemon.revokeAndCleanupTokens(ctx, testEntity(t, daemon.fleet, "agent/alpha"))
 
 	// Service should have the token blacklisted.
 	if blacklist.Len() != 1 {
@@ -436,7 +436,7 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 	}
 
 	// Daemon tracking should be cleared.
-	if _, exists := daemon.activeTokens["agent/alpha"]; exists {
+	if _, exists := daemon.activeTokens[testEntity(t, daemon.fleet, "agent/alpha")]; exists {
 		t.Error("activeTokens should be cleared after revoke+cleanup")
 	}
 

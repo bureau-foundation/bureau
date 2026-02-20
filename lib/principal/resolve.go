@@ -51,7 +51,7 @@ func Resolve(ctx context.Context, session messaging.Session, localpart string, m
 	}
 
 	for i := range locations {
-		if locations[i].Assignment.Localpart == localpart {
+		if locations[i].Assignment.Principal.Localpart() == localpart {
 			return &locations[i], machineCount, nil
 		}
 	}
@@ -110,7 +110,7 @@ func readFromMachine(ctx context.Context, session messaging.Session, localpart s
 	}
 
 	for _, assignment := range config.Principals {
-		if assignment.Localpart == localpart {
+		if assignment.Principal.Localpart() == localpart {
 			return &Location{
 				Machine:      machine,
 				ConfigRoomID: configRoomID,

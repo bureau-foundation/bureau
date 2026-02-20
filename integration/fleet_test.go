@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -127,7 +128,7 @@ func TestPrincipalAssignment(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	agent := registerPrincipal(t, "test/agent", "test-principal-password")
+	agent := registerFleetPrincipal(t, fleet, "test/agent", "test-principal-password")
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: agent}},
 	})
@@ -168,7 +169,7 @@ func TestOperatorFlow(t *testing.T) {
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
 
-	observed := registerPrincipal(t, "test/observed", "test-observe-password")
+	observed := registerFleetPrincipal(t, fleet, "test/observed", "test-observe-password")
 	deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
@@ -360,7 +361,7 @@ func TestCredentialRotation(t *testing.T) {
 
 	// Register and deploy the principal with its initial token.
 	password := "rotate-test-password"
-	agent := registerPrincipal(t, "test/rotate", password)
+	agent := registerFleetPrincipal(t, fleet, "test/rotate", password)
 	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{Account: agent}},
 	})
@@ -375,7 +376,7 @@ func TestCredentialRotation(t *testing.T) {
 	// Log in again to get a fresh access token. This creates a new device
 	// on the homeserver — the original token remains valid but the new one
 	// is what we'll push as updated credentials.
-	rotated := loginPrincipal(t, agent.Localpart, password)
+	rotated := loginFleetPrincipal(t, fleet, agent.Localpart, password)
 	if rotated.Token == agent.Token {
 		t.Fatal("login returned the same token as registration (expected a new device token)")
 	}
@@ -453,7 +454,7 @@ func TestCrossMachineObservation(t *testing.T) {
 
 	// Deploy a principal on the provider with observation allowances
 	// that let the admin observe in readwrite mode.
-	observed := registerPrincipal(t, "test/xm-obs", "xm-observe-password")
+	observed := registerFleetPrincipal(t, fleet, "test/xm-obs", "xm-observe-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
 		Principals: []principalSpec{{Account: observed}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
@@ -474,12 +475,16 @@ func TestCrossMachineObservation(t *testing.T) {
 	// daemon can discover the principal on the provider machine. In
 	// production, services are registered by the daemon or admin; here
 	// we simulate that by pushing the state event directly.
-	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-		observed.Localpart, map[string]any{
-			"principal":   observed.UserID,
-			"machine":     provider.UserID,
-			"protocol":    "bureau-observe",
-			"description": "test principal for cross-machine observation",
+	observedEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, observed.Localpart)
+	if err != nil {
+		t.Fatalf("construct observed principal entity ref: %v", err)
+	}
+	_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
+		observed.Localpart, schema.Service{
+			Principal:   observedEntity,
+			Machine:     provider.Ref,
+			Protocol:    "bureau-observe",
+			Description: "test principal for cross-machine observation",
 		})
 	if err != nil {
 		t.Fatalf("publish service event: %v", err)
@@ -630,8 +635,8 @@ func TestConfigReconciliation(t *testing.T) {
 
 	// Register both principals upfront (Matrix account creation only —
 	// no sandboxes until credentials and config are pushed).
-	alpha := registerPrincipal(t, "test/alpha", "alpha-password")
-	beta := registerPrincipal(t, "test/beta", "beta-password")
+	alpha := registerFleetPrincipal(t, fleet, "test/alpha", "alpha-password")
+	beta := registerFleetPrincipal(t, fleet, "test/beta", "beta-password")
 
 	// Push encrypted credentials for both principals. Credentials are
 	// inert until a MachineConfig references the principal — the daemon
@@ -639,8 +644,8 @@ func TestConfigReconciliation(t *testing.T) {
 	pushCredentials(t, admin, machine, alpha)
 	pushCredentials(t, admin, machine, beta)
 
-	alphaSocket := machine.PrincipalSocketPath(alpha.Localpart)
-	betaSocket := machine.PrincipalSocketPath(beta.Localpart)
+	alphaSocket := machine.PrincipalSocketPath(t, alpha.Localpart)
+	betaSocket := machine.PrincipalSocketPath(t, beta.Localpart)
 
 	// --- Phase 1: deploy alpha ---
 	t.Run("AddFirstPrincipal", func(t *testing.T) {

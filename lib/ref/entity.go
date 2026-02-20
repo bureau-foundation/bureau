@@ -50,7 +50,7 @@ func newEntity(fleet Fleet, entityType, name string) (entity, error) {
 		name:       name,
 		entityType: entityType,
 		localpart:  localpart,
-		userID:     "@" + localpart + ":" + server,
+		userID:     MatrixUserID(localpart, server),
 		roomAlias:  "#" + localpart + ":" + server,
 	}, nil
 }
@@ -128,10 +128,111 @@ func (e entity) AdminSocketPath(runDir string) string {
 
 // MarshalText implements encoding.TextMarshaler. Serializes as the
 // Matrix user ID: @localpart:server. This is the canonical external
-// representation for entity references.
+// representation for entity references. A zero-value entity marshals
+// as empty string — used by service deregistration (publishing
+// schema.Service{} to clear a directory entry).
 func (e entity) MarshalText() ([]byte, error) {
 	if e.userID == "" {
-		return nil, fmt.Errorf("cannot marshal zero-value entity ref")
+		return []byte{}, nil
 	}
 	return []byte(e.userID), nil
+}
+
+// AccountLocalpart returns the bare account localpart (entityType/entityName)
+// without the fleet prefix. This is the form used in MachineConfig principal
+// assignments and daemon internal state (e.g., "agent/frontend",
+// "service/ticket", "pipeline/deploy/123456").
+func (e entity) AccountLocalpart() string {
+	return e.entityType + "/" + e.name
+}
+
+// Entity is a parsed fleet-scoped entity reference where the entity
+// type (machine, service, agent) is not known at the call site. Unlike
+// Machine, Service, and Agent, Entity accepts any valid entity type.
+//
+// Use ParseEntityUserID or ParseEntityLocalpart when you have a Matrix
+// user ID or localpart and need socket paths without caring about the
+// specific entity type. All accessor methods (SocketPath, AdminSocketPath,
+// Localpart, UserID, Fleet, Name, Server, etc.) are inherited.
+//
+// Entity implements encoding.TextMarshaler (via entity) and
+// encoding.TextUnmarshaler, so it can be used as a JSON or CBOR struct
+// field: serialized as the Matrix user ID string, deserialized by parsing
+// that user ID back into a full Entity.
+type Entity struct{ entity }
+
+// UnmarshalText implements encoding.TextUnmarshaler. Parses a Matrix
+// user ID (@localpart:server) into a full Entity reference. Empty
+// input produces a zero value — the symmetric counterpart to
+// MarshalText's zero-value behavior.
+func (e *Entity) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*e = Entity{}
+		return nil
+	}
+	parsed, err := ParseEntityUserID(string(data))
+	if err != nil {
+		return fmt.Errorf("unmarshal Entity: %w", err)
+	}
+	*e = parsed
+	return nil
+}
+
+// EntityType returns the entity type string ("machine", "service", "agent").
+func (e Entity) EntityType() string { return e.entityType }
+
+// ParseEntityUserID parses a Matrix user ID (@localpart:server) into a
+// generic Entity reference. The entity type is extracted from the
+// localpart structure — callers do not need to know it in advance.
+func ParseEntityUserID(userID string) (Entity, error) {
+	localpart, server, err := parseMatrixID(userID)
+	if err != nil {
+		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)
+	}
+	return ParseEntityLocalpart(localpart, server)
+}
+
+// ParseEntityLocalpart parses a fleet-scoped localpart and server into
+// a generic Entity reference. The localpart must have at least 5
+// segments (namespace/fleet/name/entityType/entityName).
+func ParseEntityLocalpart(localpart, server string) (Entity, error) {
+	namespace, fleetName, entityType, entityName, err := parseFleetLocalpart(localpart)
+	if err != nil {
+		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)
+	}
+	ns, err := NewNamespace(server, namespace)
+	if err != nil {
+		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)
+	}
+	fleet, err := NewFleet(ns, fleetName)
+	if err != nil {
+		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)
+	}
+	e, err := newEntity(fleet, entityType, entityName)
+	if err != nil {
+		return Entity{}, err
+	}
+	return Entity{e}, nil
+}
+
+// NewEntityFromAccountLocalpart creates an Entity from a fleet and a bare
+// account localpart. The account localpart must have the form
+// "entityType/entityName" (e.g., "agent/frontend", "service/ticket",
+// "pipeline/deploy/123456"). The entity type is extracted from the first
+// segment; the entity name is everything after the first slash.
+//
+// This is the bridge between MachineConfig's bare localparts and the
+// fleet-scoped ref system. The daemon uses this to construct IPC
+// requests with fleet-scoped principals, and the launcher parses them
+// back with ParseEntityLocalpart.
+func NewEntityFromAccountLocalpart(fleet Fleet, accountLocalpart string) (Entity, error) {
+	entityType, entityName, err := ExtractEntityName(accountLocalpart)
+	if err != nil {
+		return Entity{}, fmt.Errorf("invalid account localpart %q: %w", accountLocalpart, err)
+	}
+	e, err := newEntity(fleet, entityType, entityName)
+	if err != nil {
+		return Entity{}, err
+	}
+	return Entity{e}, nil
 }

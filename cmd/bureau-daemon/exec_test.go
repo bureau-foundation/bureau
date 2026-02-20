@@ -20,6 +20,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/watchdog"
@@ -531,8 +532,8 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	daemon.daemonBinaryHash = binhash.FormatDigest(testHash)
 	daemon.daemonBinaryPath = testBinary
 	daemon.stateDir = t.TempDir()
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(socketDir, localpart+".admin.sock")
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
 	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {

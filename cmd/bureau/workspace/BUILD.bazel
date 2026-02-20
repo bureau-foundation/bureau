@@ -26,5 +26,8 @@ go_test(
     name = "workspace_test",
     srcs = ["create_test.go"],
     embed = [":workspace"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )

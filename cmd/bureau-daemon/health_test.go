@@ -20,6 +20,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -93,10 +94,10 @@ func TestCheckHealth(t *testing.T) {
 
 		daemon, _ := newTestDaemon(t)
 		daemon.runDir = principal.DefaultRunDir
-		daemon.adminSocketPathFunc = func(localpart string) string { return socketPath }
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return socketPath }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if !daemon.checkHealth(context.Background(), "test/agent", "/health", 5) {
+		if !daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
 			t.Error("checkHealth returned false for a healthy proxy")
 		}
 	})
@@ -108,10 +109,10 @@ func TestCheckHealth(t *testing.T) {
 
 		daemon, _ := newTestDaemon(t)
 		daemon.runDir = principal.DefaultRunDir
-		daemon.adminSocketPathFunc = func(localpart string) string { return socketPath }
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return socketPath }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if daemon.checkHealth(context.Background(), "test/agent", "/health", 5) {
+		if daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
 			t.Error("checkHealth returned true for an unhealthy proxy (HTTP 503)")
 		}
 	})
@@ -120,10 +121,10 @@ func TestCheckHealth(t *testing.T) {
 		t.Parallel()
 		daemon, _ := newTestDaemon(t)
 		daemon.runDir = principal.DefaultRunDir
-		daemon.adminSocketPathFunc = func(localpart string) string { return "/nonexistent/proxy.sock" }
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return "/nonexistent/proxy.sock" }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if daemon.checkHealth(context.Background(), "test/agent", "/health", 1) {
+		if daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 1) {
 			t.Error("checkHealth returned true for a missing socket")
 		}
 	})
@@ -135,13 +136,13 @@ func TestCheckHealth(t *testing.T) {
 
 		daemon, _ := newTestDaemon(t)
 		daemon.runDir = principal.DefaultRunDir
-		daemon.adminSocketPathFunc = func(localpart string) string { return socketPath }
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return socketPath }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if daemon.checkHealth(ctx, "test/agent", "/health", 5) {
+		if daemon.checkHealth(ctx, testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
 			t.Error("checkHealth returned true with a cancelled context")
 		}
 	})
@@ -159,7 +160,9 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 
 	// Start a health monitor with a long grace period so it's still
 	// waiting when we stop it.
-	daemon.startHealthMonitor(ctx, "test/agent", &schema.HealthCheck{
+	entity := testEntity(t, daemon.fleet, "test/agent")
+
+	daemon.startHealthMonitor(ctx, entity, &schema.HealthCheck{
 		Endpoint:           "/health",
 		IntervalSeconds:    1,
 		GracePeriodSeconds: 3600, // 1 hour — we'll stop it long before this
@@ -170,7 +173,7 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 
 	// Verify the monitor is registered.
 	daemon.healthMonitorsMu.Lock()
-	if _, exists := daemon.healthMonitors["test/agent"]; !exists {
+	if _, exists := daemon.healthMonitors[entity]; !exists {
 		t.Fatal("health monitor not registered after startHealthMonitor")
 	}
 	daemon.healthMonitorsMu.Unlock()
@@ -179,7 +182,7 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 	// context cancellation, not grace period expiry).
 	done := make(chan struct{})
 	go func() {
-		daemon.stopHealthMonitor("test/agent")
+		daemon.stopHealthMonitor(entity)
 		close(done)
 	}()
 
@@ -187,7 +190,7 @@ func TestHealthMonitorStopDuringGracePeriod(t *testing.T) {
 
 	// Verify the monitor is deregistered.
 	daemon.healthMonitorsMu.Lock()
-	if _, exists := daemon.healthMonitors["test/agent"]; exists {
+	if _, exists := daemon.healthMonitors[entity]; exists {
 		t.Error("health monitor still registered after stopHealthMonitor")
 	}
 	daemon.healthMonitorsMu.Unlock()
@@ -209,8 +212,9 @@ func TestHealthMonitorIdempotentStart(t *testing.T) {
 		GracePeriodSeconds: 3600,
 	}
 
-	daemon.startHealthMonitor(ctx, "test/agent", healthCheck)
-	daemon.startHealthMonitor(ctx, "test/agent", healthCheck) // Second call is a no-op.
+	entity := testEntity(t, daemon.fleet, "test/agent")
+	daemon.startHealthMonitor(ctx, entity, healthCheck)
+	daemon.startHealthMonitor(ctx, entity, healthCheck) // Second call is a no-op.
 
 	daemon.healthMonitorsMu.Lock()
 	count := len(daemon.healthMonitors)
@@ -231,7 +235,7 @@ func TestHealthMonitorStopNonexistent(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Should be a no-op, not a panic or hang.
-	daemon.stopHealthMonitor("nonexistent/agent")
+	daemon.stopHealthMonitor(testEntity(t, daemon.fleet, "nonexistent/agent"))
 }
 
 func TestStopAllHealthMonitors(t *testing.T) {
@@ -244,8 +248,8 @@ func TestStopAllHealthMonitors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for _, localpart := range []string{"agent/one", "agent/two", "agent/three"} {
-		daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+	for _, accountLocalpart := range []string{"agent/one", "agent/two", "agent/three"} {
+		daemon.startHealthMonitor(ctx, testEntity(t, daemon.fleet, accountLocalpart), &schema.HealthCheck{
 			Endpoint:           "/health",
 			IntervalSeconds:    1,
 			GracePeriodSeconds: 3600,
@@ -277,8 +281,8 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	t.Parallel()
 
 	const (
-		configRoomID = "!config:test.local"
-		localpart    = "agent/test"
+		configRoomID     = "!config:test.local"
+		accountLocalpart = "agent/test"
 	)
 
 	daemon, fakeClock := newTestDaemon(t)
@@ -286,15 +290,19 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server()
 
+	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
+
 	// Mock Matrix: principal still in config with credentials.
+	// The credentials state key uses the fleet-scoped localpart
+	// (Entity.Localpart()), matching what readCredentials looks up.
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: localpart,
+			Principal: ipcEntity,
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, localpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
 		Ciphertext: "encrypted-creds",
 	})
 
@@ -385,16 +393,16 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
-	daemon.previousSpecs[localpart] = previousSpec
-	daemon.lastTemplates[localpart] = &schema.TemplateContent{
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
+	daemon.previousSpecs[ipcEntity] = previousSpec
+	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
 		HealthCheck: &schema.HealthCheck{
 			Endpoint:        "/health",
 			IntervalSeconds: 1,
 		},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return adminSocket }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -402,7 +410,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+	daemon.startHealthMonitor(ctx, ipcEntity, &schema.HealthCheck{
 		Endpoint:           "/health",
 		IntervalSeconds:    1,
 		FailureThreshold:   2,
@@ -435,14 +443,16 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		t.Errorf("rollback used wrong spec: got command %v, want [/bin/old-agent]", lastSpec.Command)
 	}
 
-	// Verify IPC sequence: destroy then create.
+	// Verify IPC sequence: destroy then create. The IPC Principal field
+	// carries the account localpart (AccountLocalpart()), not the
+	// fleet-scoped localpart.
 	destroyIndex := -1
 	createIndex := -1
 	for index, action := range ipcActions {
-		if action == "destroy-sandbox" && ipcPrincipals[index] == localpart && destroyIndex == -1 {
+		if action == "destroy-sandbox" && ipcPrincipals[index] == accountLocalpart && destroyIndex == -1 {
 			destroyIndex = index
 		}
-		if action == "create-sandbox" && ipcPrincipals[index] == localpart && createIndex == -1 {
+		if action == "create-sandbox" && ipcPrincipals[index] == accountLocalpart && createIndex == -1 {
 			createIndex = index
 		}
 	}
@@ -454,7 +464,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	// Verify principal is running again.
 	daemon.reconcileMu.RLock()
-	isRunning := daemon.running[localpart]
+	isRunning := daemon.running[ipcEntity]
 	daemon.reconcileMu.RUnlock()
 	if !isRunning {
 		t.Error("principal should be running after rollback")
@@ -462,7 +472,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	// Verify previousSpecs cleared after rollback (prevents double-rollback).
 	daemon.reconcileMu.RLock()
-	hasPreviousSpec := daemon.previousSpecs[localpart] != nil
+	hasPreviousSpec := daemon.previousSpecs[ipcEntity] != nil
 	daemon.reconcileMu.RUnlock()
 	if hasPreviousSpec {
 		t.Error("previousSpecs should be cleared after successful rollback")
@@ -472,7 +482,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	messagesMu.Lock()
 	foundRollbackMessage := false
 	for _, message := range messages {
-		if strings.Contains(message, "Rolled back") && strings.Contains(message, localpart) {
+		if strings.Contains(message, "Rolled back") && strings.Contains(message, accountLocalpart) {
 			foundRollbackMessage = true
 			break
 		}
@@ -487,8 +497,8 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	t.Parallel()
 
 	const (
-		configRoomID = "!config:test.local"
-		localpart    = "agent/test"
+		configRoomID     = "!config:test.local"
+		accountLocalpart = "agent/test"
 	)
 
 	daemon, _ := newTestDaemon(t)
@@ -496,10 +506,12 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server()
 
+	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
+
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: localpart,
+			Principal: ipcEntity,
 			AutoStart: true,
 		}},
 	})
@@ -555,17 +567,17 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
-	daemon.adminSocketPathFunc = func(localpart string) string {
-		return filepath.Join(socketDir, localpart+".admin.sock")
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
+	daemon.adminSocketPathFunc = func(ref.Entity) string {
+		return filepath.Join(socketDir, "admin.sock")
 	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// Call rollbackPrincipal directly — no previous spec.
-	daemon.rollbackPrincipal(context.Background(), localpart)
+	daemon.rollbackPrincipal(context.Background(), ipcEntity)
 
 	// Should have destroyed but NOT recreated.
 	launcherMu.Lock()
@@ -589,15 +601,16 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	}
 
 	// Principal should NOT be running.
-	if daemon.running[localpart] {
+	if daemon.running[ipcEntity] {
 		t.Error("principal should not be running after rollback with no previous spec")
 	}
 
-	// Should have sent CRITICAL message.
+	// Should have sent CRITICAL message. The health check notification
+	// uses AccountLocalpart() (bare account localpart, not fleet-scoped).
 	messagesMu.Lock()
 	foundCritical := false
 	for _, message := range messages {
-		if strings.Contains(message, "CRITICAL") && strings.Contains(message, localpart) {
+		if strings.Contains(message, "CRITICAL") && strings.Contains(message, accountLocalpart) {
 			foundCritical = true
 			break
 		}
@@ -616,7 +629,7 @@ func TestRollbackPrincipalAlreadyStopped(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Principal is not running — rollback should be a no-op.
-	daemon.rollbackPrincipal(context.Background(), "nonexistent/agent")
+	daemon.rollbackPrincipal(context.Background(), testEntity(t, daemon.fleet, "nonexistent/agent"))
 
 	// No panic, no IPC calls needed — success.
 }
@@ -643,14 +656,16 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 			IntervalSeconds: 10,
 		},
 	})
+	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
+	fleetLocalpart := fleetEntity.Localpart()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "agent/test",
+			Principal: fleetEntity,
 			Template:  "bureau/template:test-template",
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -686,7 +701,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -695,13 +710,13 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["agent/test"] {
+	if !daemon.running[fleetEntity] {
 		t.Fatal("principal should be running after reconcile")
 	}
 
 	// Verify a health monitor was started.
 	daemon.healthMonitorsMu.Lock()
-	_, hasMonitor := daemon.healthMonitors["agent/test"]
+	_, hasMonitor := daemon.healthMonitors[fleetEntity]
 	daemon.healthMonitorsMu.Unlock()
 
 	if !hasMonitor {
@@ -709,7 +724,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	}
 
 	// Verify lastTemplates was populated.
-	if daemon.lastTemplates["agent/test"] == nil {
+	if daemon.lastTemplates[fleetEntity] == nil {
 		t.Error("expected lastTemplates to be populated after reconcile")
 	}
 }
@@ -733,14 +748,16 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 		Command: []string{"/bin/agent"},
 		// No HealthCheck
 	})
+	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
+	fleetLocalpart := fleetEntity.Localpart()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: "agent/test",
+			Principal: fleetEntity,
 			Template:  "bureau/template:test-template",
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, "agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -769,7 +786,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -778,13 +795,13 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running["agent/test"] {
+	if !daemon.running[fleetEntity] {
 		t.Fatal("principal should be running")
 	}
 
 	// No HealthCheck in template → no health monitor.
 	daemon.healthMonitorsMu.Lock()
-	_, hasMonitor := daemon.healthMonitors["agent/test"]
+	_, hasMonitor := daemon.healthMonitors[fleetEntity]
 	daemon.healthMonitorsMu.Unlock()
 
 	if hasMonitor {
@@ -836,26 +853,27 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
+	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.running[fleetEntity] = true
+	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Start a health monitor manually (simulating one that was started
 	// during previous reconcile when the principal was created).
 	ctx := context.Background()
-	daemon.startHealthMonitor(ctx, "agent/test", &schema.HealthCheck{
+	daemon.startHealthMonitor(ctx, fleetEntity, &schema.HealthCheck{
 		Endpoint:           "/health",
 		IntervalSeconds:    1,
 		GracePeriodSeconds: 3600,
 	})
 
 	daemon.healthMonitorsMu.Lock()
-	if _, exists := daemon.healthMonitors["agent/test"]; !exists {
+	if _, exists := daemon.healthMonitors[fleetEntity]; !exists {
 		t.Fatal("health monitor should exist before reconcile")
 	}
 	daemon.healthMonitorsMu.Unlock()
@@ -865,12 +883,12 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if daemon.running["agent/test"] {
+	if daemon.running[fleetEntity] {
 		t.Error("principal should not be running after removal from config")
 	}
 
 	daemon.healthMonitorsMu.Lock()
-	_, stillExists := daemon.healthMonitors["agent/test"]
+	_, stillExists := daemon.healthMonitors[fleetEntity]
 	daemon.healthMonitorsMu.Unlock()
 
 	if stillExists {
@@ -880,8 +898,6 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 
 func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	t.Parallel()
-
-	const localpart = "agent/test"
 
 	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
@@ -929,16 +945,17 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.clock = fakeClock
 	daemon.runDir = principal.DefaultRunDir
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
-	daemon.adminSocketPathFunc = func(string) string { return adminSocket }
+	entity := testEntity(t, daemon.fleet, "agent/test")
+	daemon.running[entity] = true
+	daemon.lastSpecs[entity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+	daemon.startHealthMonitor(ctx, entity, &schema.HealthCheck{
 		Endpoint:           "/health",
 		IntervalSeconds:    1,
 		FailureThreshold:   3,
@@ -962,17 +979,15 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 
 	// If rollback had been triggered, rollbackPrincipal would attempt
 	// launcherRequest (which would fail with no launcher socket) and
-	// delete running[localpart]. The principal still being marked as
+	// delete running[entity]. The principal still being marked as
 	// running proves the recovery resets prevented false rollback.
-	if !daemon.running[localpart] {
+	if !daemon.running[entity] {
 		t.Error("principal should still be running: transient failures with recovery should not trigger rollback")
 	}
 }
 
 func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	t.Parallel()
-
-	const localpart = "agent/test"
 
 	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
@@ -1005,14 +1020,15 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.clock = fakeClock
 	daemon.runDir = principal.DefaultRunDir
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
-	daemon.adminSocketPathFunc = func(string) string { return adminSocket }
+	entity := testEntity(t, daemon.fleet, "agent/test")
+	daemon.running[entity] = true
+	daemon.lastSpecs[entity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	daemon.startHealthMonitor(ctx, localpart, &schema.HealthCheck{
+	daemon.startHealthMonitor(ctx, entity, &schema.HealthCheck{
 		Endpoint:           "/health",
 		IntervalSeconds:    1,
 		FailureThreshold:   3,
@@ -1040,14 +1056,14 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	// The monitor's goroutine should exit promptly via ctx.Done.
 	done := make(chan struct{})
 	go func() {
-		daemon.stopHealthMonitor(localpart)
+		daemon.stopHealthMonitor(entity)
 		close(done)
 	}()
 
 	testutil.RequireClosed(t, done, 5*time.Second, "health monitor did not stop after context cancellation")
 
 	// No rollback should have occurred — ctx.Done exits cleanly.
-	if !daemon.running[localpart] {
+	if !daemon.running[entity] {
 		t.Error("principal should still be running: context cancellation should not trigger rollback")
 	}
 }
@@ -1067,14 +1083,15 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 
 	// Matrix state: principal in config with credentials (so rollback
 	// reaches the create-sandbox step before the launcher rejects it).
+	ipcLocalpart := "bureau/fleet/test/" + localpart
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: localpart,
+			Principal: testEntity(t, daemon.fleet, localpart),
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, localpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcLocalpart, schema.Credentials{
 		Ciphertext: "encrypted-creds",
 	})
 
@@ -1134,22 +1151,23 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 
 	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
 
+	ipcEntity := testEntity(t, daemon.fleet, localpart)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
-	daemon.previousSpecs[localpart] = previousSpec
-	daemon.lastTemplates[localpart] = &schema.TemplateContent{
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
+	daemon.previousSpecs[ipcEntity] = previousSpec
+	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
 		HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 	}
-	daemon.adminSocketPathFunc = func(string) string { return filepath.Join(socketDir, "nonexistent.sock") }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "nonexistent.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
-	daemon.rollbackPrincipal(context.Background(), localpart)
+	daemon.rollbackPrincipal(context.Background(), ipcEntity)
 
 	// Verify IPC sequence: destroy succeeded, create attempted.
 	launcherMu.Lock()
@@ -1173,15 +1191,15 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	}
 
 	// Principal should NOT be running — create was rejected.
-	if daemon.running[localpart] {
+	if daemon.running[ipcEntity] {
 		t.Error("principal should not be running after failed rollback create")
 	}
 
 	// previousSpecs and lastTemplates should be cleaned up.
-	if daemon.previousSpecs[localpart] != nil {
+	if daemon.previousSpecs[ipcEntity] != nil {
 		t.Error("previousSpecs should be cleaned up after failed rollback")
 	}
-	if daemon.lastTemplates[localpart] != nil {
+	if daemon.lastTemplates[ipcEntity] != nil {
 		t.Error("lastTemplates should be cleaned up after failed rollback")
 	}
 
@@ -1213,12 +1231,13 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server()
 
+	ipcEntity := testEntity(t, daemon.fleet, localpart)
 	// Matrix state: principal in config but NO credentials. The
 	// readCredentials call during rollback returns M_NOT_FOUND.
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Localpart: localpart,
+			Principal: ipcEntity,
 			AutoStart: true,
 		}},
 	})
@@ -1276,18 +1295,18 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running[localpart] = true
-	daemon.lastSpecs[localpart] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
-	daemon.previousSpecs[localpart] = previousSpec
-	daemon.lastTemplates[localpart] = &schema.TemplateContent{
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
+	daemon.previousSpecs[ipcEntity] = previousSpec
+	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
 		HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 	}
-	daemon.adminSocketPathFunc = func(string) string { return filepath.Join(socketDir, "nonexistent.sock") }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "nonexistent.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
-	daemon.rollbackPrincipal(context.Background(), localpart)
+	daemon.rollbackPrincipal(context.Background(), ipcEntity)
 
 	// Destroy should have been called, but create should NOT — the
 	// credential read failure aborts before reaching create-sandbox.
@@ -1312,15 +1331,15 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	}
 
 	// Principal should NOT be running.
-	if daemon.running[localpart] {
+	if daemon.running[ipcEntity] {
 		t.Error("principal should not be running after failed credential read")
 	}
 
 	// previousSpecs and lastTemplates should be cleaned up.
-	if daemon.previousSpecs[localpart] != nil {
+	if daemon.previousSpecs[ipcEntity] != nil {
 		t.Error("previousSpecs should be cleaned up")
 	}
-	if daemon.lastTemplates[localpart] != nil {
+	if daemon.lastTemplates[ipcEntity] != nil {
 		t.Error("lastTemplates should be cleaned up")
 	}
 
@@ -1385,17 +1404,18 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// structural restart). When the principal is destroyed (removed from
 	// config), the destroy-extras pass should clean up all associated
 	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
+	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = configRoomID
 	daemon.launcherSocket = launcherSocket
-	daemon.running["agent/test"] = true
-	daemon.lastSpecs["agent/test"] = &schema.SandboxSpec{Command: []string{"/bin/agent-v2"}}
-	daemon.previousSpecs["agent/test"] = &schema.SandboxSpec{Command: []string{"/bin/agent-v1"}}
-	daemon.lastTemplates["agent/test"] = &schema.TemplateContent{
+	daemon.running[fleetEntity] = true
+	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v2"}}
+	daemon.previousSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v1"}}
+	daemon.lastTemplates[fleetEntity] = &schema.TemplateContent{
 		HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 	}
-	daemon.adminSocketPathFunc = func(localpart string) string { return filepath.Join(socketDir, localpart+".admin.sock") }
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
@@ -1404,16 +1424,16 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if daemon.running["agent/test"] {
+	if daemon.running[fleetEntity] {
 		t.Error("principal should not be running after removal from config")
 	}
-	if daemon.lastSpecs["agent/test"] != nil {
+	if daemon.lastSpecs[fleetEntity] != nil {
 		t.Error("lastSpecs should be cleaned up when principal is destroyed")
 	}
-	if daemon.previousSpecs["agent/test"] != nil {
+	if daemon.previousSpecs[fleetEntity] != nil {
 		t.Error("previousSpecs should be cleaned up when principal is destroyed")
 	}
-	if daemon.lastTemplates["agent/test"] != nil {
+	if daemon.lastTemplates[fleetEntity] != nil {
 		t.Error("lastTemplates should be cleaned up when principal is destroyed")
 	}
 }

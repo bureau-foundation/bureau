@@ -136,6 +136,19 @@ func testMachine(t *testing.T) ref.Machine {
 	return machine
 }
 
+// testEntity builds a valid ref.Entity for use in tests. The account
+// localpart is "agent/test-principal", giving a fleet-scoped localpart
+// of "my_bureau/fleet/prod/agent/test-principal".
+func testEntity(t *testing.T) ref.Entity {
+	t.Helper()
+	machine := testMachine(t)
+	entity, err := ref.NewEntityFromAccountLocalpart(machine.Fleet(), "agent/test-principal")
+	if err != nil {
+		t.Fatalf("NewEntityFromAccountLocalpart: %v", err)
+	}
+	return entity
+}
+
 // testKeypair generates a real age keypair for encryption tests.
 // The keypair is closed automatically when the test completes.
 func testKeypair(t *testing.T) *sealed.Keypair {
@@ -167,7 +180,7 @@ func machineKeyJSON(algorithm, publicKey string) json.RawMessage {
 func TestProvision_MissingMachine(t *testing.T) {
 	session := &mockSession{userID: "@operator:bureau.local"}
 	_, err := Provision(context.Background(), session, ProvisionParams{
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -179,17 +192,19 @@ func TestProvision_MissingMachine(t *testing.T) {
 	}
 }
 
-func TestProvision_InvalidPrincipal(t *testing.T) {
+func TestProvision_ZeroPrincipal(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{userID: "@operator:bureau.local"}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "../escape",
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
 	if err == nil {
-		t.Fatal("expected error for invalid principal, got nil")
+		t.Fatal("expected error for zero principal, got nil")
+	}
+	if got := err.Error(); got != "principal is required" {
+		t.Errorf("error = %q, want %q", got, "principal is required")
 	}
 }
 
@@ -198,7 +213,7 @@ func TestProvision_EmptyCredentials(t *testing.T) {
 	session := &mockSession{userID: "@operator:bureau.local"}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{},
 	})
@@ -215,7 +230,7 @@ func TestProvision_MissingMachineRoomID(t *testing.T) {
 	session := &mockSession{userID: "@operator:bureau.local"}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:     machine,
-		Principal:   "iree/amdgpu/pm",
+		Principal:   testEntity(t),
 		Credentials: map[string]string{"TOKEN": "secret"},
 	})
 	if err == nil {
@@ -236,7 +251,7 @@ func TestProvision_MachineKeyFetchFails(t *testing.T) {
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -260,7 +275,7 @@ func TestProvision_WrongKeyAlgorithm(t *testing.T) {
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -283,7 +298,7 @@ func TestProvision_InvalidPublicKey(t *testing.T) {
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -306,7 +321,7 @@ func TestProvision_ConfigRoomResolveFails(t *testing.T) {
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -336,7 +351,7 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		Credentials:   map[string]string{"TOKEN": "secret"},
 	})
@@ -351,6 +366,7 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 
 func TestProvision_HappyPath(t *testing.T) {
 	machine := testMachine(t)
+	entity := testEntity(t)
 	keypair := testKeypair(t)
 
 	var capturedRoomID, capturedEventType, capturedStateKey string
@@ -387,7 +403,7 @@ func TestProvision_HappyPath(t *testing.T) {
 
 	result, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     entity,
 		MachineRoomID: "!machine-room:bureau.local",
 		Credentials:   map[string]string{"MATRIX_TOKEN": "syt_secret", "API_KEY": "key123"},
 	})
@@ -402,8 +418,8 @@ func TestProvision_HappyPath(t *testing.T) {
 	if result.ConfigRoomID != "!config:bureau.local" {
 		t.Errorf("ConfigRoomID = %q, want %q", result.ConfigRoomID, "!config:bureau.local")
 	}
-	if result.PrincipalID != "@iree/amdgpu/pm:bureau.local" {
-		t.Errorf("PrincipalID = %q, want %q", result.PrincipalID, "@iree/amdgpu/pm:bureau.local")
+	if result.PrincipalID != entity.UserID() {
+		t.Errorf("PrincipalID = %q, want %q", result.PrincipalID, entity.UserID())
 	}
 	if len(result.EncryptedFor) != 1 || result.EncryptedFor[0] != machine.UserID() {
 		t.Errorf("EncryptedFor = %v, want [%q]", result.EncryptedFor, machine.UserID())
@@ -420,8 +436,8 @@ func TestProvision_HappyPath(t *testing.T) {
 	if capturedEventType != schema.EventTypeCredentials {
 		t.Errorf("SendStateEvent eventType = %q, want %q", capturedEventType, schema.EventTypeCredentials)
 	}
-	if capturedStateKey != "iree/amdgpu/pm" {
-		t.Errorf("SendStateEvent stateKey = %q, want %q", capturedStateKey, "iree/amdgpu/pm")
+	if capturedStateKey != entity.Localpart() {
+		t.Errorf("SendStateEvent stateKey = %q, want %q", capturedStateKey, entity.Localpart())
 	}
 
 	// Verify the credential event content.
@@ -432,8 +448,8 @@ func TestProvision_HappyPath(t *testing.T) {
 	if credentials.Version != schema.CredentialsVersion {
 		t.Errorf("Credentials.Version = %d, want %d", credentials.Version, schema.CredentialsVersion)
 	}
-	if credentials.Principal != "@iree/amdgpu/pm:bureau.local" {
-		t.Errorf("Credentials.Principal = %q, want %q", credentials.Principal, "@iree/amdgpu/pm:bureau.local")
+	if credentials.Principal != entity.UserID() {
+		t.Errorf("Credentials.Principal = %q, want %q", credentials.Principal, entity.UserID())
 	}
 	if credentials.ProvisionedBy != "@operator:bureau.local" {
 		t.Errorf("Credentials.ProvisionedBy = %q, want %q", credentials.ProvisionedBy, "@operator:bureau.local")
@@ -466,7 +482,7 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 
 	result, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!machine-room:bureau.local",
 		EscrowKey:     escrowKeypair.PublicKey,
 		Credentials:   map[string]string{"TOKEN": "secret"},
@@ -498,7 +514,7 @@ func TestProvision_InvalidEscrowKey(t *testing.T) {
 
 	_, err := Provision(context.Background(), session, ProvisionParams{
 		Machine:       machine,
-		Principal:     "iree/amdgpu/pm",
+		Principal:     testEntity(t),
 		MachineRoomID: "!room:bureau.local",
 		EscrowKey:     "not-a-valid-escrow-key",
 		Credentials:   map[string]string{"TOKEN": "secret"},
@@ -775,7 +791,7 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 		context.Background(),
 		session,
 		machine,
-		"iree/amdgpu/pm",
+		testEntity(t),
 		"!machine-room:bureau.local",
 		map[string]string{"TOKEN": "secret"},
 	)
@@ -801,7 +817,7 @@ func TestAsProvisionFunc_PropagatesError(t *testing.T) {
 		context.Background(),
 		session,
 		machine,
-		"iree/amdgpu/pm",
+		testEntity(t),
 		"!machine-room:bureau.local",
 		map[string]string{"TOKEN": "secret"},
 	)

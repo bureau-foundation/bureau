@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -51,7 +52,7 @@ func TestServiceDiscovery(t *testing.T) {
 	// --- Phase 1: Deploy all principals ---
 
 	// Deploy a principal that represents the service on the provider.
-	serviceAgent := registerPrincipal(t, "service/stt/test", "svc-discovery-password")
+	serviceAgent := registerFleetPrincipal(t, fleet, "service/stt/test", "svc-discovery-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
 		Principals: []principalSpec{{Account: serviceAgent}},
 	})
@@ -66,8 +67,8 @@ func TestServiceDiscovery(t *testing.T) {
 	// the proxies exist, making WaitForMessage an unreliable signal.
 	// Deploying consumers first guarantees they're in d.running when
 	// the service event is processed.
-	consumerWide := registerPrincipal(t, "test/svc-wide", "svc-wide-password")
-	consumerNarrow := registerPrincipal(t, "test/svc-narrow", "svc-narrow-password")
+	consumerWide := registerFleetPrincipal(t, fleet, "test/svc-wide", "svc-wide-password")
+	consumerNarrow := registerFleetPrincipal(t, fleet, "test/svc-narrow", "svc-narrow-password")
 
 	consumerSockets := deployPrincipals(t, admin, consumer, deploymentConfig{
 		Principals: []principalSpec{
@@ -92,13 +93,23 @@ func TestServiceDiscovery(t *testing.T) {
 	// any directory change messages arrive.
 	serviceWatch := watchRoom(t, admin, consumer.ConfigRoomID)
 
-	_, err := admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-		"service/stt/test", map[string]any{
-			"principal":    serviceAgent.UserID,
-			"machine":      provider.UserID,
-			"protocol":     "http",
-			"capabilities": []string{"streaming"},
-			"description":  "Test STT service",
+	// Construct fleet-scoped entity refs for the service agents. The
+	// schema.Service.Principal field is ref.Entity, which requires
+	// fleet-scoped localparts. registerPrincipal creates bare-localpart
+	// Matrix accounts; the fleet-scoped entity is the canonical identity
+	// the daemon uses for routing and directory entries.
+	serviceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, serviceAgent.Localpart)
+	if err != nil {
+		t.Fatalf("construct service entity ref: %v", err)
+	}
+
+	_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
+		"service/stt/test", schema.Service{
+			Principal:    serviceEntity,
+			Machine:      provider.Ref,
+			Protocol:     "http",
+			Capabilities: []string{"streaming"},
+			Description:  "Test STT service",
 		})
 	if err != nil {
 		t.Fatalf("publish service event: %v", err)
@@ -129,8 +140,8 @@ func TestServiceDiscovery(t *testing.T) {
 		if entry.Localpart != "service/stt/test" {
 			t.Errorf("localpart = %q, want %q", entry.Localpart, "service/stt/test")
 		}
-		if entry.Principal != serviceAgent.UserID {
-			t.Errorf("principal = %q, want %q", entry.Principal, serviceAgent.UserID)
+		if entry.Principal != serviceEntity.UserID() {
+			t.Errorf("principal = %q, want %q", entry.Principal, serviceEntity.UserID())
 		}
 		if entry.Machine != provider.UserID {
 			t.Errorf("machine = %q, want %q", entry.Machine, provider.UserID)
@@ -223,7 +234,7 @@ func TestServiceDiscovery(t *testing.T) {
 		partialWatch := watchRoom(t, admin, consumer.ConfigRoomID)
 
 		// Register a second service that the narrow consumer CAN see.
-		embeddingAgent := registerPrincipal(t, "service/embedding/test", "embedding-password")
+		embeddingAgent := registerFleetPrincipal(t, fleet, "service/embedding/test", "embedding-password")
 		deployPrincipals(t, admin, provider, deploymentConfig{
 			Principals: []principalSpec{
 				{Account: serviceAgent},
@@ -231,13 +242,18 @@ func TestServiceDiscovery(t *testing.T) {
 			},
 		})
 
+		embeddingEntity, entityErr := ref.NewEntityFromAccountLocalpart(fleet.Ref, embeddingAgent.Localpart)
+		if entityErr != nil {
+			t.Fatalf("construct embedding entity ref: %v", entityErr)
+		}
+
 		_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-			"service/embedding/test", map[string]any{
-				"principal":    embeddingAgent.UserID,
-				"machine":      provider.UserID,
-				"protocol":     "http",
-				"capabilities": []string{"batch"},
-				"description":  "Test embedding service",
+			"service/embedding/test", schema.Service{
+				Principal:    embeddingEntity,
+				Machine:      provider.Ref,
+				Protocol:     "http",
+				Capabilities: []string{"batch"},
+				Description:  "Test embedding service",
 			})
 		if err != nil {
 			t.Fatalf("publish embedding service event: %v", err)

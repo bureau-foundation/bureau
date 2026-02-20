@@ -20,13 +20,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
+
+// maxUnixSocketPathLength is the maximum length of a Unix domain socket
+// path. On Linux, struct sockaddr_un.sun_path is 108 bytes, but the
+// last byte must be a null terminator, giving 107 usable bytes.
+const maxUnixSocketPathLength = 107
 
 // handlePipelineExecute validates the pipeline.execute command,
 // starts an async goroutine for the execution lifecycle, and returns
@@ -61,10 +65,9 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID, eventID strin
 		}
 	}
 
-	// Generate an ephemeral principal localpart. The timestamp ensures
-	// uniqueness; the pipeline ref (sanitized) provides human-readable
-	// context in logs and tmux session names.
-	localpart := pipelineLocalpart(pipelineRef)
+	// Generate an ephemeral principal localpart. The counter ensures
+	// uniqueness; the pipeline ref is logged separately for context.
+	localpart := d.pipelineLocalpart()
 
 	d.logger.Info("pipeline.execute accepted",
 		"room_id", roomID,
@@ -85,51 +88,12 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID, eventID strin
 }
 
 // pipelineLocalpart generates a unique principal localpart for a
-// pipeline execution. Uses the current timestamp for uniqueness and
-// a sanitized fragment of the pipeline ref for readability.
-func pipelineLocalpart(pipelineRef string) string {
-	timestamp := time.Now().UnixMilli()
-
-	// Extract a short, filesystem-safe label from the pipeline ref.
-	// Use ParsePipelineRef to get the pipeline name cleanly; fall
-	// back to the raw ref string if parsing fails (e.g., bare names
-	// or malformed refs — we don't want localpart generation to fail).
-	label := "run"
-	if pipelineRef != "" {
-		ref, err := schema.ParsePipelineRef(pipelineRef)
-		if err == nil {
-			label = ref.Pipeline
-		} else {
-			label = pipelineRef
-		}
-		label = sanitizeLabel(label)
-	}
-
-	return fmt.Sprintf("pipeline/%s/%d", label, timestamp)
-}
-
-// sanitizeLabel converts a string into a lowercase, filesystem-safe
-// label suitable for use in principal localparts. Non-alphanumeric
-// characters (except dash) are replaced with dashes, uppercase is
-// lowered, and the result is truncated to 20 characters.
-func sanitizeLabel(input string) string {
-	var sanitized strings.Builder
-	for _, character := range input {
-		if (character >= 'a' && character <= 'z') ||
-			(character >= '0' && character <= '9') ||
-			character == '-' {
-			sanitized.WriteRune(character)
-		} else if character >= 'A' && character <= 'Z' {
-			sanitized.WriteRune(character - 'A' + 'a')
-		} else {
-			sanitized.WriteRune('-')
-		}
-	}
-	result := sanitized.String()
-	if len(result) > 20 {
-		result = result[:20]
-	}
-	return result
+// pipeline execution. Uses a monotonic counter for short, unique IDs.
+// The pipeline ref and other human-readable context live in log
+// messages, not the localpart — socket path length is the constraint.
+func (d *Daemon) pipelineLocalpart() string {
+	id := d.ephemeralCounter.Add(1)
+	return fmt.Sprintf("pipeline/%d", id)
 }
 
 // executePipeline is the async lifecycle for a pipeline.execute
@@ -148,6 +112,28 @@ func (d *Daemon) executePipeline(
 	if err := ctx.Err(); err != nil {
 		d.logger.Info("pipeline execution cancelled before start",
 			"localpart", localpart, "reason", err)
+		return
+	}
+
+	// Construct a fleet-scoped Entity from the pipeline localpart so
+	// destroyPipelineSandbox can use it with Entity-keyed daemon maps.
+	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
+	if err != nil {
+		d.logger.Error("invalid pipeline localpart",
+			"localpart", localpart, "error", err)
+		return
+	}
+
+	// Validate that the admin socket path (the longest variant) fits
+	// within the Unix sun_path limit. This catches misconfiguration
+	// (overlong fleet names, non-default run dirs) at pipeline start
+	// rather than letting it surface as a cryptic "bind: invalid
+	// argument" inside the launcher.
+	adminSocketPath := pipelineEntity.AdminSocketPath(d.fleetRunDir)
+	if length := len(adminSocketPath); length > maxUnixSocketPathLength {
+		d.postPipelineError(ctx, roomID, commandEventID, command, time.Now(),
+			fmt.Sprintf("admin socket path exceeds Unix limit: %d bytes > %d max (%s)",
+				length, maxUnixSocketPathLength, adminSocketPath))
 		return
 	}
 
@@ -241,7 +227,7 @@ func (d *Daemon) executePipeline(
 	if waitError != nil {
 		d.postPipelineError(ctx, roomID, commandEventID, command, start,
 			fmt.Sprintf("waiting for pipeline executor: %v", waitError))
-		d.destroyPipelineSandbox(ctx, localpart)
+		d.destroyPipelineSandbox(ctx, pipelineEntity)
 		return
 	}
 
@@ -276,7 +262,7 @@ func (d *Daemon) executePipeline(
 		exitCode, exitDescription, exitOutput, entries)
 
 	// Clean up the ephemeral sandbox.
-	d.destroyPipelineSandbox(ctx, localpart)
+	d.destroyPipelineSandbox(ctx, pipelineEntity)
 }
 
 // buildPipelineExecutorSpec constructs a SandboxSpec for the pipeline
@@ -295,13 +281,13 @@ func (d *Daemon) executePipeline(
 // pushUpstreamConfig: search d.services for a local service with the
 // "content-addressed-store" capability.
 func (d *Daemon) findLocalArtifactSocket() string {
-	for localpart, service := range d.services {
-		if service.Machine != d.machine.UserID() {
+	for _, service := range d.services {
+		if service.Machine != d.machine {
 			continue
 		}
 		for _, capability := range service.Capabilities {
 			if capability == "content-addressed-store" {
-				return principal.RunDirSocketPath(d.runDir, localpart)
+				return service.Principal.SocketPath(d.fleetRunDir)
 			}
 		}
 	}
@@ -385,22 +371,22 @@ func (d *Daemon) buildPipelineExecutorSpec(
 // destroyPipelineSandbox sends a destroy-sandbox request for an
 // ephemeral pipeline principal. Errors are logged but not propagated
 // — the result has already been posted by this point.
-func (d *Daemon) destroyPipelineSandbox(ctx context.Context, localpart string) {
+func (d *Daemon) destroyPipelineSandbox(ctx context.Context, principal ref.Entity) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:    "destroy-sandbox",
-		Principal: localpart,
+		Principal: principal.AccountLocalpart(),
 	})
 	if err != nil {
 		d.logger.Error("destroy-sandbox IPC failed for pipeline executor",
-			"principal", localpart, "error", err)
+			"principal", principal, "error", err)
 		return
 	}
 	if !response.OK {
 		d.logger.Error("destroy-sandbox rejected for pipeline executor",
-			"principal", localpart, "error", response.Error)
+			"principal", principal, "error", response.Error)
 		return
 	}
-	d.logger.Info("pipeline executor sandbox destroyed", "principal", localpart)
+	d.logger.Info("pipeline executor sandbox destroyed", "principal", principal)
 }
 
 // --- Result file reading ---

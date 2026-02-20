@@ -222,7 +222,7 @@ pushCredentials(t, admin, machine, account)
 
 ```go
 // BAD: inlines template room resolution and state event publish
-templateRoomID, _ := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasTemplate, server))
+templateRoomID, _ := admin.ResolveAlias(ctx, testNamespace.TemplateRoomAlias())
 admin.InviteUser(ctx, templateRoomID, machine.UserID)
 admin.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, name, content)
 

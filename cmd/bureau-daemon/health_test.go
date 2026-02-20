@@ -648,7 +648,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	serverName := daemon.machine.Server()
 
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		HealthCheck: &schema.HealthCheck{
@@ -743,7 +743,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	serverName := daemon.machine.Server()
 
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent"},
 		// No HealthCheck

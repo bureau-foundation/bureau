@@ -120,7 +120,12 @@ func runEnable(params *enableParams) error {
 	}
 
 	serviceUserID := serviceEntity.UserID()
-	spaceAlias := schema.FullRoomAlias(params.Space, params.ServerName)
+
+	namespace, err := ref.NewNamespace(params.ServerName, params.Space)
+	if err != nil {
+		return cli.Validation("invalid space name: %w", err)
+	}
+	spaceAlias := namespace.SpaceAlias()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

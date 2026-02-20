@@ -44,6 +44,17 @@ const (
 	testRegistrationToken = "test-registration-token"
 )
 
+// testNamespace is the Bureau namespace shared by all integration tests.
+// Individual tests create per-test fleets under this namespace via
+// createTestFleet.
+var testNamespace = func() ref.Namespace {
+	namespace, err := ref.NewNamespace(testServerName, "bureau")
+	if err != nil {
+		panic(err)
+	}
+	return namespace
+}()
+
 var (
 	// testHomeserverURL is set in TestMain after Docker Compose allocates
 	// a random host port for the Continuwuity container. Each test

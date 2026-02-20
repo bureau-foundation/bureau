@@ -893,7 +893,7 @@ func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *
 	}
 
 	templateRoomID, err := admin.ResolveAlias(t.Context(),
-		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
+		testNamespace.TemplateRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve template room: %v", err)
 	}

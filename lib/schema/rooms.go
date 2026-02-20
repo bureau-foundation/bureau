@@ -3,36 +3,12 @@
 
 package schema
 
-// Room alias localpart constants for Bureau's global Matrix rooms.
-// These are the localpart portion of the full room alias — combine
-// with FullRoomAlias to construct the complete "#localpart:server"
-// form used in Matrix API calls.
-//
-// Global rooms are fleet-independent: they hold definitions (templates,
-// pipelines, artifacts) and operational messages. Fleet-scoped rooms
-// (machines, services, fleet config) live under
-// <namespace>/fleet/<name>/ and are constructed via ref.Fleet methods.
-//
-// See naming-conventions.md for the full room topology.
-const (
-	// RoomAliasSpace is the root Bureau space.
-	RoomAliasSpace = "bureau"
-
-	// RoomAliasSystem is the operational messages room.
-	RoomAliasSystem = "bureau/system"
-
-	// RoomAliasTemplate is the built-in sandbox template room.
-	RoomAliasTemplate = "bureau/template"
-
-	// RoomAliasPipeline is the pipeline definitions room.
-	RoomAliasPipeline = "bureau/pipeline"
-
-	// RoomAliasArtifact is the artifact metadata room.
-	RoomAliasArtifact = "bureau/artifact"
-)
-
 // FullRoomAlias constructs a full Matrix room alias from a localpart
-// and server name: "#<localpart>:<serverName>".
+// and server name: "#<localpart>:<serverName>". Used at CLI and API
+// boundaries where a user-provided or domain-specific room localpart
+// needs to be turned into a resolvable alias. Namespace-scoped standard
+// rooms (system, template, pipeline, artifact) should use
+// ref.Namespace methods instead.
 func FullRoomAlias(localpart, serverName string) string {
 	return "#" + localpart + ":" + serverName
 }

@@ -5,32 +5,6 @@ package schema
 
 import "testing"
 
-func TestRoomAliasConstants(t *testing.T) {
-	t.Parallel()
-	// Room alias localparts are wire-format identifiers used in Matrix
-	// room alias resolution. They must match the values used by
-	// "bureau matrix setup" and the daemon's room discovery.
-	tests := []struct {
-		name     string
-		constant string
-		want     string
-	}{
-		{"space", RoomAliasSpace, "bureau"},
-		{"system", RoomAliasSystem, "bureau/system"},
-		{"template", RoomAliasTemplate, "bureau/template"},
-		{"pipeline", RoomAliasPipeline, "bureau/pipeline"},
-		{"artifact", RoomAliasArtifact, "bureau/artifact"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if test.constant != test.want {
-				t.Errorf("%s = %q, want %q", test.name, test.constant, test.want)
-			}
-		})
-	}
-}
-
 func TestFullRoomAlias(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -58,10 +32,16 @@ func TestFullRoomAlias(t *testing.T) {
 			"#bureau/fleet/prod/service:example.com",
 		},
 		{
-			"global_system_room",
-			RoomAliasSystem,
+			"namespace_system_room",
+			"bureau/system",
 			"bureau.local",
 			"#bureau/system:bureau.local",
+		},
+		{
+			"workspace_alias",
+			"iree/amdgpu/inference",
+			"bureau.local",
+			"#iree/amdgpu/inference:bureau.local",
 		},
 	}
 	for _, test := range tests {

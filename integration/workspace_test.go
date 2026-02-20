@@ -268,7 +268,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// accounts still need pipeline room membership for workspace
 	// setup/teardown pipelines (the pipeline executor authenticates
 	// as the principal via the proxy).
-	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve pipeline room: %v", err)
 	}

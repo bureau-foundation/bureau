@@ -624,7 +624,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	// Resolve the pipeline room for principal invitations. The machine
 	// itself was invited to all global rooms (template, pipeline, system,
 	// machine, service, fleet) during provisioning (startMachineLauncher).
-	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve pipeline room: %v", err)
 	}

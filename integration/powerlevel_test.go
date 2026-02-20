@@ -76,7 +76,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 
 	// Resolve global rooms (created by TestMain's bureau matrix setup) and
 	// create fleet-scoped rooms for machine/service power level testing.
-	pipelineRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasPipeline, testServerName))
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve pipeline room: %v", err)
 	}

@@ -203,7 +203,7 @@ func run() error {
 	// account must have been invited by the admin before the join can
 	// succeed. The daemon defensively re-joins on every startup to handle
 	// membership recovery (e.g., homeserver reset, account re-creation).
-	systemAlias := schema.FullRoomAlias(schema.RoomAliasSystem, machine.Server())
+	systemAlias := fleet.Namespace().SystemRoomAlias()
 	systemRoomID, err := session.ResolveAlias(ctx, systemAlias)
 	if err != nil {
 		return fmt.Errorf("resolving system room alias %q: %w", systemAlias, err)

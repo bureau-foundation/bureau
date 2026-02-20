@@ -35,7 +35,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Set up the workspace room with an active workspace event (condition is met).
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -99,7 +99,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Set up the workspace room alias but do NOT publish the workspace event.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -157,7 +157,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -231,7 +231,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Principal with no StartCondition.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -276,7 +276,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Principal gates on a custom state event in its own config room.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -331,7 +331,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Principal references a room alias that doesn't exist.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -388,7 +388,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace event exists but with "pending" status (not "active").
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -472,7 +472,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket event with an array "labels" field containing "bug".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -532,7 +532,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket with labels that do NOT include "security".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -592,7 +592,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Array with non-string elements only.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -652,7 +652,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-4", map[string]any{
@@ -711,7 +711,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-5", map[string]any{
@@ -770,7 +770,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-6", map[string]any{
@@ -832,7 +832,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace is initially active — condition is met.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -920,7 +920,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace is initially active.
 	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
@@ -1023,7 +1023,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Set up a workspace event with status "teardown" and a teardown_mode field.
 	// This is the event whose content should flow through as trigger content.
@@ -1157,7 +1157,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -1258,7 +1258,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket event with an array field. The "labels" array contains "urgent"
 	// which will satisfy the ContentMatch condition.
@@ -1409,7 +1409,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Initial ticket has labels that do NOT include "reviewed".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1497,7 +1497,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket initially has "active" in its tags array.
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1583,7 +1583,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket with labels containing "bug" and "frontend" but NOT "backend".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1702,7 +1702,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	machineName := machine.Localpart()
 	fleetPrefix := fleet.Localpart() + "/"
 
-	matrixState := newStartConditionTestState(t, configRoomID, templateRoomID)
+	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Start with "category" as a plain string value "infrastructure".
 	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
@@ -1783,12 +1783,12 @@ type principalTracker struct {
 
 // newStartConditionTestState creates a mock Matrix state with a base template.
 // The caller sets MachineConfig and StartCondition per test.
-func newStartConditionTestState(t *testing.T, configRoomID, templateRoomID string) *mockMatrixState {
+func newStartConditionTestState(t *testing.T, fleet ref.Fleet, configRoomID, templateRoomID string) *mockMatrixState {
 	t.Helper()
 
 	state := newMockMatrixState()
 
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/echo", "hello"},
 	})

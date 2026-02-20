@@ -649,7 +649,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -802,7 +802,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"/bin/agent", "--mode=v2"},
 	})
@@ -907,7 +907,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	// Template with same command but different payload.
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:        []string{"/bin/agent", "--mode=v1"},
 		DefaultPayload: map[string]any{"model": "claude-4"},
@@ -2305,7 +2305,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	fleetPrefix := daemon.fleet.Localpart() + "/"
 
 	state := newMockMatrixState()
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command: []string{"missing-agent-binary"},
 	})

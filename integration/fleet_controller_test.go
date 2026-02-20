@@ -145,7 +145,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	}
 
 	// Invite fleet controller to the system room (global) and fleet-scoped rooms.
-	systemRoomID, err := admin.ResolveAlias(ctx, schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
+	systemRoomID, err := admin.ResolveAlias(ctx, testNamespace.SystemRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
 	}

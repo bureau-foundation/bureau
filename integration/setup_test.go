@@ -42,9 +42,9 @@ func TestRoomsExistViaAPI(t *testing.T) {
 	defer session.Close()
 
 	expectedAliases := []string{
-		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
+		testNamespace.SpaceAlias(),
+		testNamespace.SystemRoomAlias(),
+		testNamespace.TemplateRoomAlias(),
 	}
 
 	for _, alias := range expectedAliases {
@@ -63,7 +63,7 @@ func TestSpaceHierarchy(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	spaceRoomID, err := session.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasSpace, testServerName))
+	spaceRoomID, err := session.ResolveAlias(t.Context(), testNamespace.SpaceAlias())
 	if err != nil {
 		t.Fatalf("resolve space alias: %v", err)
 	}
@@ -83,8 +83,8 @@ func TestSpaceHierarchy(t *testing.T) {
 
 	// Verify each standard room is a child of the space.
 	childRooms := []string{
-		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
+		testNamespace.SystemRoomAlias(),
+		testNamespace.TemplateRoomAlias(),
 	}
 
 	for _, alias := range childRooms {
@@ -103,7 +103,7 @@ func TestTemplatesPublished(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	templateRoomID, err := session.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName))
+	templateRoomID, err := session.ResolveAlias(t.Context(), testNamespace.TemplateRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve template alias: %v", err)
 	}
@@ -147,9 +147,9 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 	defer session.Close()
 
 	rooms := []string{
-		schema.FullRoomAlias(schema.RoomAliasSpace, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasSystem, testServerName),
-		schema.FullRoomAlias(schema.RoomAliasTemplate, testServerName),
+		testNamespace.SpaceAlias(),
+		testNamespace.SystemRoomAlias(),
+		testNamespace.TemplateRoomAlias(),
 	}
 
 	for _, alias := range rooms {

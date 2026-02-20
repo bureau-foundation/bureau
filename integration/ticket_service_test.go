@@ -694,7 +694,7 @@ func writeServiceSession(t *testing.T, stateDir string, account principalAccount
 func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) string {
 	t.Helper()
 
-	systemRoomID, err := admin.ResolveAlias(t.Context(), schema.FullRoomAlias(schema.RoomAliasSystem, testServerName))
+	systemRoomID, err := admin.ResolveAlias(t.Context(), testNamespace.SystemRoomAlias())
 	if err != nil {
 		t.Fatalf("resolve system room: %v", err)
 	}

@@ -465,7 +465,7 @@ func newPrefetchTestMatrixState(t *testing.T, fleet ref.Fleet, configRoomID, tem
 	fleetLocalpart := fleet.Localpart() + "/agent/test"
 	state := newMockMatrixState()
 
-	state.setRoomAlias(schema.FullRoomAlias(schema.RoomAliasTemplate, "test.local"), templateRoomID)
+	state.setRoomAlias(fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:     []string{"/bin/echo", "hello"},

@@ -1332,7 +1332,6 @@ func TestRoomIDUnmarshalTextRejectsInvalid(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"empty", ""},
 		{"no_exclamation", "abc123:bureau.local"},
 		{"alias_not_id", "#room:bureau.local"},
 		{"no_server", "!abc123"},
@@ -1346,6 +1345,17 @@ func TestRoomIDUnmarshalTextRejectsInvalid(t *testing.T) {
 				t.Errorf("UnmarshalText(%q) = nil, want error", test.input)
 			}
 		})
+	}
+}
+
+func TestRoomIDUnmarshalTextEmptyProducesZero(t *testing.T) {
+	t.Parallel()
+	var roomID ref.RoomID
+	if err := roomID.UnmarshalText([]byte("")); err != nil {
+		t.Fatalf("UnmarshalText(\"\") = %v, want nil", err)
+	}
+	if roomID.String() != "" {
+		t.Errorf("UnmarshalText(\"\") produced %q, want zero value", roomID)
 	}
 }
 

@@ -67,7 +67,12 @@ func (r RoomID) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler for JSON and other
 // text-based serialization formats. Validates the room ID format.
+// An empty input produces the zero value (unset room ID).
 func (r *RoomID) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*r = RoomID{}
+		return nil
+	}
 	parsed, err := ParseRoomID(string(data))
 	if err != nil {
 		return err

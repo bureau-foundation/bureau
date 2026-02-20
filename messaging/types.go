@@ -105,7 +105,7 @@ type Event struct {
 	Sender         string         `json:"sender"`
 	OriginServerTS int64          `json:"origin_server_ts"`
 	Content        map[string]any `json:"content"`
-	RoomID         string         `json:"room_id,omitempty"`
+	RoomID         ref.RoomID     `json:"room_id,omitempty"`
 	StateKey       *string        `json:"state_key,omitempty"`
 	Unsigned       *EventUnsigned `json:"unsigned,omitempty"`
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -916,8 +917,8 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				daemon.fleetRoomID.String(): {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				daemon.fleetRoomID: {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{

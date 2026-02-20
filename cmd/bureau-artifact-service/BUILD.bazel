@@ -41,6 +41,7 @@ go_test(
     deps = [
         "//lib/artifact",
         "//lib/clock",
+        "//lib/ref",
         "//lib/service",
         "//lib/servicetoken",
         "//lib/testutil",

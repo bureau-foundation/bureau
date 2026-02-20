@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -91,7 +92,7 @@ func (as *ArtifactService) initialSync(ctx context.Context) (string, error) {
 			)
 			continue
 		}
-		as.processRoomState(roomID.String(), events, nil)
+		as.processRoomState(roomID, events, nil)
 	}
 
 	as.logger.Info("artifact rooms discovered",
@@ -104,7 +105,7 @@ func (as *ArtifactService) initialSync(ctx context.Context) (string, error) {
 // processRoomState examines state and timeline events to find
 // artifact_scope configuration. Called during initial sync and when
 // the service joins a new room.
-func (as *ArtifactService) processRoomState(roomID string, stateEvents, timelineEvents []messaging.Event) {
+func (as *ArtifactService) processRoomState(roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) {
 	// Look for artifact_scope in both state and timeline sections.
 	// Timeline events with a state_key are state changes.
 	var scope *schema.ArtifactScope
@@ -148,7 +149,7 @@ func (as *ArtifactService) handleSync(ctx context.Context, response *messaging.S
 
 // processRoomSync handles state changes in a single room during
 // incremental sync.
-func (as *ArtifactService) processRoomSync(roomID string, room messaging.JoinedRoom) {
+func (as *ArtifactService) processRoomSync(roomID ref.RoomID, room messaging.JoinedRoom) {
 	// Collect state events from both state and timeline sections.
 	var stateEvents []messaging.Event
 	stateEvents = append(stateEvents, room.State.Events...)
@@ -171,7 +172,7 @@ func (as *ArtifactService) processRoomSync(roomID string, room messaging.JoinedR
 
 // handleArtifactScopeChange processes a change to a room's artifact
 // scope configuration.
-func (as *ArtifactService) handleArtifactScopeChange(roomID string, event messaging.Event) {
+func (as *ArtifactService) handleArtifactScopeChange(roomID ref.RoomID, event messaging.Event) {
 	scope := as.parseArtifactScope(event)
 	if scope == nil {
 		// Scope was removed or cleared — artifact integration disabled.

@@ -157,10 +157,12 @@ type SyncResponse struct {
 }
 
 // RoomsSection contains per-room sync data grouped by membership state.
+// Map keys are room IDs; encoding/json uses ref.RoomID's TextUnmarshaler
+// for automatic validation at deserialization.
 type RoomsSection struct {
-	Join   map[string]JoinedRoom  `json:"join,omitempty"`
-	Invite map[string]InvitedRoom `json:"invite,omitempty"`
-	Leave  map[string]LeftRoom    `json:"leave,omitempty"`
+	Join   map[ref.RoomID]JoinedRoom  `json:"join,omitempty"`
+	Invite map[ref.RoomID]InvitedRoom `json:"invite,omitempty"`
+	Leave  map[ref.RoomID]LeftRoom    `json:"leave,omitempty"`
 }
 
 // JoinedRoom contains sync data for a room the user has joined.

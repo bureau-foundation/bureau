@@ -51,7 +51,7 @@ type testServerOpts struct {
 // and returns a testEnv. The testEnv always carries a client, service
 // reference, clock, and cleanup function. The writer is nil when
 // opts.noWriter is set.
-func newTestServer(t *testing.T, rooms map[string]*roomState, opts testServerOpts) *testEnv {
+func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServerOpts) *testEnv {
 	t.Helper()
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -162,25 +162,25 @@ func newTestServer(t *testing.T, rooms map[string]*roomState, opts testServerOpt
 // compatibility with the large number of existing callers. New tests
 // should call newTestServer directly.
 
-func testServer(t *testing.T, rooms map[string]*roomState) (*service.ServiceClient, func()) {
+func testServer(t *testing.T, rooms map[ref.RoomID]*roomState) (*service.ServiceClient, func()) {
 	t.Helper()
 	env := newTestServer(t, rooms, testServerOpts{noWriter: true})
 	return env.client, env.cleanup
 }
 
-func testServerNoGrants(t *testing.T, rooms map[string]*roomState) (*service.ServiceClient, func()) {
+func testServerNoGrants(t *testing.T, rooms map[ref.RoomID]*roomState) (*service.ServiceClient, func()) {
 	t.Helper()
 	env := newTestServer(t, rooms, testServerOpts{noWriter: true, noGrants: true})
 	return env.client, env.cleanup
 }
 
-func testServerWithGrants(t *testing.T, rooms map[string]*roomState, grants []servicetoken.Grant) (*service.ServiceClient, func()) {
+func testServerWithGrants(t *testing.T, rooms map[ref.RoomID]*roomState, grants []servicetoken.Grant) (*service.ServiceClient, func()) {
 	t.Helper()
 	env := newTestServer(t, rooms, testServerOpts{noWriter: true, grants: grants})
 	return env.client, env.cleanup
 }
 
-func testMutationServerWithGrants(t *testing.T, rooms map[string]*roomState, grants []servicetoken.Grant) *testEnv {
+func testMutationServerWithGrants(t *testing.T, rooms map[ref.RoomID]*roomState, grants []servicetoken.Grant) *testEnv {
 	t.Helper()
 	return newTestServer(t, rooms, testServerOpts{grants: grants})
 }
@@ -247,7 +247,7 @@ func requireServiceError(t *testing.T, err error) *service.ServiceError {
 
 // sampleRooms returns a two-room setup for testing. Room A has 3
 // tickets (2 open, 1 closed); room B has 1 ticket with a dependency.
-func sampleRooms() map[string]*roomState {
+func sampleRooms() map[ref.RoomID]*roomState {
 	roomA := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -294,9 +294,9 @@ func sampleRooms() map[string]*roomState {
 		},
 	})
 
-	return map[string]*roomState{
-		"!roomA:local": roomA,
-		"!roomB:local": roomB,
+	return map[ref.RoomID]*roomState{
+		testRoomID("!roomA:local"): roomA,
+		testRoomID("!roomB:local"): roomB,
 	}
 }
 
@@ -474,8 +474,8 @@ func TestHandleReady(t *testing.T) {
 
 func TestHandleBlocked(t *testing.T) {
 	// Create a room where tkt-3 is blocked by tkt-1 (which is open).
-	rooms := map[string]*roomState{
-		"!room:local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-1": {Version: 1, Title: "blocker", Status: "open", Priority: 1, CreatedAt: "2026-01-01T00:00:00Z"},
 			"tkt-3": {Version: 1, Title: "blocked", Status: "open", Priority: 2, BlockedBy: []string{"tkt-1"}, CreatedAt: "2026-01-02T00:00:00Z"},
 		}),
@@ -822,8 +822,8 @@ func TestHandleDepsNotFound(t *testing.T) {
 func TestHandleRanked(t *testing.T) {
 	// Set up a room with scoring-relevant structure: one ticket
 	// that unblocks another (high leverage) and one that doesn't.
-	rooms := map[string]*roomState{
-		"!room:local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-blocker": {
 				Version:   1,
 				Title:     "high leverage blocker",
@@ -893,8 +893,8 @@ func TestHandleRanked(t *testing.T) {
 }
 
 func TestHandleRankedEmpty(t *testing.T) {
-	rooms := map[string]*roomState{
-		"!room:local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-closed": {
 				Version:   1,
 				Title:     "all done",
@@ -933,8 +933,8 @@ func TestHandleRankedMissingRoom(t *testing.T) {
 // --- Epic health tests ---
 
 func TestHandleEpicHealth(t *testing.T) {
-	rooms := map[string]*roomState{
-		"!room:local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-epic": {
 				Version:   1,
 				Title:     "the epic",
@@ -1181,19 +1181,19 @@ type testEnv struct {
 	cleanup func()
 }
 
-func testMutationServer(t *testing.T, rooms map[string]*roomState) *testEnv {
+func testMutationServer(t *testing.T, rooms map[ref.RoomID]*roomState) *testEnv {
 	t.Helper()
 	return newTestServer(t, rooms, testServerOpts{})
 }
 
-func testMutationServerWithTimers(t *testing.T, rooms map[string]*roomState) *testEnv {
+func testMutationServerWithTimers(t *testing.T, rooms map[ref.RoomID]*roomState) *testEnv {
 	t.Helper()
 	return newTestServer(t, rooms, testServerOpts{withTimers: true})
 }
 
 // mutationRooms returns a room with tickets in various states suitable
 // for mutation testing.
-func mutationRooms() map[string]*roomState {
+func mutationRooms() map[ref.RoomID]*roomState {
 	room := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-open": {
 			Version:   1,
@@ -1267,8 +1267,8 @@ func mutationRooms() map[string]*roomState {
 		},
 	})
 
-	return map[string]*roomState{
-		"!room:bureau.local": room,
+	return map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
 	}
 }
 
@@ -1301,7 +1301,7 @@ func TestHandleCreate(t *testing.T) {
 	}
 
 	// Verify ticket exists in the index.
-	content, exists := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if !exists {
 		t.Fatalf("ticket %s not in index after create", result.ID)
 	}
@@ -1346,7 +1346,7 @@ func TestHandleCreateWithBlockedBy(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	content, _ := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, _ := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if len(content.BlockedBy) != 1 || content.BlockedBy[0] != "tkt-open" {
 		t.Errorf("blocked_by: got %v, want [tkt-open]", content.BlockedBy)
 	}
@@ -1634,7 +1634,7 @@ func TestHandleCloseAlreadyClosed(t *testing.T) {
 
 // recurringRooms returns rooms with tickets that have recurring timer
 // gates, suitable for testing the auto-rearm behavior of handleClose.
-func recurringRooms() map[string]*roomState {
+func recurringRooms() map[ref.RoomID]*roomState {
 	room := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-recurring-schedule": {
 			Version:   1,
@@ -1715,8 +1715,8 @@ func recurringRooms() map[string]*roomState {
 		},
 	})
 
-	return map[string]*roomState{
-		"!room:bureau.local": room,
+	return map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
 	}
 }
 
@@ -1947,7 +1947,7 @@ func TestHandleBatchCreate(t *testing.T) {
 	idB := result.Refs["b"]
 	idC := result.Refs["c"]
 
-	index := env.service.rooms["!room:bureau.local"].index
+	index := env.service.rooms[testRoomID("!room:bureau.local")].index
 	contentB, exists := index.Get(idB)
 	if !exists {
 		t.Fatalf("ticket B (%s) not in index", idB)
@@ -2016,7 +2016,7 @@ func TestHandleBatchCreateWithExistingDep(t *testing.T) {
 	}
 
 	idA := result.Refs["a"]
-	content, _ := env.service.rooms["!room:bureau.local"].index.Get(idA)
+	content, _ := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(idA)
 	if len(content.BlockedBy) != 1 || content.BlockedBy[0] != "tkt-open" {
 		t.Errorf("blocked_by: got %v, want [tkt-open]", content.BlockedBy)
 	}
@@ -2304,7 +2304,7 @@ func TestHandleCreateWithSchedule(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	content, exists := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if !exists {
 		t.Fatalf("ticket %s not in index after create", result.ID)
 	}
@@ -2347,7 +2347,7 @@ func TestHandleCreateWithInterval(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	content, exists := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if !exists {
 		t.Fatalf("ticket %s not in index after create", result.ID)
 	}
@@ -2393,7 +2393,7 @@ func TestHandleCreateWithScheduleAndExistingGates(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	content, exists := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if !exists {
 		t.Fatalf("ticket %s not in index after create", result.ID)
 	}
@@ -2650,7 +2650,7 @@ func TestHandleCreateWithDeferFor(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	content, exists := env.service.rooms["!room:bureau.local"].index.Get(result.ID)
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
 	if !exists {
 		t.Fatalf("ticket %s not in index after create", result.ID)
 	}
@@ -2717,8 +2717,8 @@ func TestWildcardGrantCoversCloseAndReopen(t *testing.T) {
 // --- upcoming-gates tests ---
 
 func TestHandleUpcomingGates(t *testing.T) {
-	rooms := map[string]*roomState{
-		"!room1:bureau.local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-timer1": {
 				Version:   1,
 				Title:     "scheduled check",
@@ -2827,8 +2827,8 @@ func TestHandleUpcomingGates(t *testing.T) {
 }
 
 func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
-	rooms := map[string]*roomState{
-		"!room1:bureau.local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-a": {
 				Version: 1, Title: "room1 task", Status: "open",
 				Priority: 2, Type: "chore",
@@ -2840,7 +2840,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 				},
 			},
 		}),
-		"!room2:bureau.local": newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room2:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-b": {
 				Version: 1, Title: "room2 task", Status: "open",
 				Priority: 2, Type: "chore",
@@ -3081,8 +3081,8 @@ func TestTimerLifecycleIntervalFireAndRearm(t *testing.T) {
 func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 	// A recurring gate with max_occurrences=2 should stop rearming
 	// after 2 fires.
-	rooms := map[string]*roomState{
-		"!room:bureau.local": newTrackedRoom(map[string]schema.TicketContent{
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-max": {
 				Version:   1,
 				Title:     "limited recurring",
@@ -3189,7 +3189,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	room := "!deadline-room:bureau.local"
 
 	t.Run("CreateWithDeadline", func(t *testing.T) {
-		rooms := map[string]*roomState{room: newTrackedRoom(nil)}
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(nil)}
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
@@ -3201,7 +3201,7 @@ func TestDeadlineCRUD(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		content, exists := rooms[room].index.Get(result.ID)
+		content, exists := rooms[testRoomID(room)].index.Get(result.ID)
 		if !exists {
 			t.Fatalf("ticket %s not in index", result.ID)
 		}
@@ -3211,7 +3211,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	})
 
 	t.Run("CreateWithInvalidDeadline", func(t *testing.T) {
-		rooms := map[string]*roomState{room: newTrackedRoom(nil)}
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(nil)}
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
@@ -3226,7 +3226,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	})
 
 	t.Run("UpdateSetDeadline", func(t *testing.T) {
-		rooms := map[string]*roomState{room: newTrackedRoom(map[string]schema.TicketContent{
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-1": ticketFixture("No deadline yet", "open"),
 		})}
 		env := testMutationServer(t, rooms)
@@ -3247,7 +3247,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	t.Run("UpdateClearDeadline", func(t *testing.T) {
 		fixture := ticketFixture("Has deadline", "open")
 		fixture.Deadline = "2026-04-01T00:00:00Z"
-		rooms := map[string]*roomState{room: newTrackedRoom(map[string]schema.TicketContent{
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]schema.TicketContent{
 			"tkt-1": fixture,
 		})}
 		env := testMutationServer(t, rooms)
@@ -3273,8 +3273,8 @@ func TestDeadlineFireAddsNote(t *testing.T) {
 	// Deadline 2 hours from test epoch.
 	deadline := testClockEpoch.Add(2 * time.Hour).UTC().Format(time.RFC3339)
 
-	rooms := map[string]*roomState{
-		room: newTrackedRoom(nil),
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID(room): newTrackedRoom(nil),
 	}
 	env := testMutationServerWithTimers(t, rooms)
 	defer env.cleanup()
@@ -3330,8 +3330,8 @@ func TestDeadlineStaleEntryIgnored(t *testing.T) {
 	originalDeadline := testClockEpoch.Add(2 * time.Hour).UTC().Format(time.RFC3339)
 	newDeadline := testClockEpoch.Add(10 * time.Hour).UTC().Format(time.RFC3339)
 
-	rooms := map[string]*roomState{
-		room: newTrackedRoom(nil),
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID(room): newTrackedRoom(nil),
 	}
 	env := testMutationServerWithTimers(t, rooms)
 	defer env.cleanup()

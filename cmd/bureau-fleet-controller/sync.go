@@ -140,12 +140,7 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 	acceptedRooms := service.AcceptInvites(ctx, fc.session, response.Rooms.Invite, fc.logger)
 
 	// Build the fleet model from all joined rooms' state.
-	for roomIDStr, room := range response.Rooms.Join {
-		roomID, err := ref.ParseRoomID(roomIDStr)
-		if err != nil {
-			fc.logger.Error("invalid room ID in sync response", "room_id", roomIDStr, "error", err)
-			continue
-		}
+	for roomID, room := range response.Rooms.Join {
 		fc.processRoomState(roomID, room.State.Events, room.Timeline.Events)
 	}
 
@@ -529,17 +524,12 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Clean up state for rooms the fleet controller has been removed
 	// from. Process leaves before joins so that a leave+rejoin in the
 	// same sync batch processes cleanly.
-	for roomIDStr := range response.Rooms.Leave {
-		fc.processLeave(roomIDStr)
+	for roomID := range response.Rooms.Leave {
+		fc.processLeave(roomID)
 	}
 
 	// Process state changes in joined rooms.
-	for roomIDStr, room := range response.Rooms.Join {
-		roomID, err := ref.ParseRoomID(roomIDStr)
-		if err != nil {
-			fc.logger.Error("invalid room ID in sync response", "room_id", roomIDStr, "error", err)
-			continue
-		}
+	for roomID, room := range response.Rooms.Join {
 		fc.processRoomSync(roomID, room)
 	}
 
@@ -563,15 +553,15 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 // processLeave handles a room leave event. If the room was a known
 // config room, the associated machine state is cleaned up. If it was
 // the fleet or machine room, the event is logged as a warning.
-func (fc *FleetController) processLeave(roomIDStr string) {
+func (fc *FleetController) processLeave(roomID ref.RoomID) {
 	// Check if this is a config room and clean up the associated
 	// machine state.
 	for machineLocalpart, configRoom := range fc.configRooms {
-		if configRoom.String() != roomIDStr {
+		if configRoom != roomID {
 			continue
 		}
 		fc.logger.Info("config room left, removing machine assignments",
-			"room_id", roomIDStr,
+			"room_id", roomID,
 			"machine", machineLocalpart,
 		)
 		if machine, exists := fc.machines[machineLocalpart]; exists {
@@ -588,8 +578,8 @@ func (fc *FleetController) processLeave(roomIDStr string) {
 	}
 
 	// Check if this is the machine room.
-	if roomIDStr == fc.machineRoomID.String() {
-		fc.logger.Warn("left machine room", "room_id", roomIDStr)
+	if roomID == fc.machineRoomID {
+		fc.logger.Warn("left machine room", "room_id", roomID)
 		// Clean up all machine state since we can no longer
 		// receive heartbeats. Replace with a fresh map rather
 		// than deleting during iteration. Also clear all service
@@ -602,8 +592,8 @@ func (fc *FleetController) processLeave(roomIDStr string) {
 	}
 
 	// Check if this is the fleet room.
-	if roomIDStr == fc.fleetRoomID.String() {
-		fc.logger.Warn("left fleet room", "room_id", roomIDStr)
+	if roomID == fc.fleetRoomID {
+		fc.logger.Warn("left fleet room", "room_id", roomID)
 		return
 	}
 }

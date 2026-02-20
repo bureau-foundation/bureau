@@ -211,7 +211,7 @@ func (ts *TicketService) handleList(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	_, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func (ts *TicketService) roomQuery(
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	_, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	_, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +339,7 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 
 	return showResponse{
 		ID:          ticketID,
-		Room:        roomID,
+		Room:        roomID.String(),
 		Content:     content,
 		Blocks:      blocks,
 		ChildTotal:  childTotal,
@@ -409,7 +409,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 
 	// Room-scoped grep.
 	if request.Room != "" {
-		state, err := ts.requireRoom(request.Room)
+		_, state, err := ts.requireRoom(request.Room)
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +430,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 		for _, entry := range entries {
 			allEntries = append(allEntries, entryWithRoom{
 				ID:      entry.ID,
-				Room:    roomID,
+				Room:    roomID.String(),
 				Content: entry.Content,
 			})
 		}
@@ -476,7 +476,7 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 
 	// Room-scoped search.
 	if request.Room != "" {
-		state, err := ts.requireRoom(request.Room)
+		_, state, err := ts.requireRoom(request.Room)
 		if err != nil {
 			return nil, err
 		}
@@ -500,7 +500,7 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 		for _, result := range results {
 			allResults = append(allResults, searchEntryResponse{
 				ID:      result.ID,
-				Room:    roomID,
+				Room:    roomID.String(),
 				Content: result.Content,
 				Score:   result.Score,
 			})
@@ -539,7 +539,7 @@ func (ts *TicketService) handleStats(ctx context.Context, token *servicetoken.To
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	_, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +627,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 	var entries []upcomingGateEntry
 
 	for roomID, state := range ts.rooms {
-		if request.Room != "" && roomID != request.Room {
+		if request.Room != "" && roomID.String() != request.Room {
 			continue
 		}
 
@@ -662,7 +662,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 					Title:       pending.Content.Title,
 					Status:      pending.Content.Status,
 					Assignee:    pending.Content.Assignee,
-					Room:        roomID,
+					Room:        roomID.String(),
 					UntilFire:   untilFireStr,
 				})
 			}

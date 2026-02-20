@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -129,8 +130,8 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				configRoomID: {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(configRoomID): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
@@ -217,8 +218,8 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				serviceRoomID: {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(serviceRoomID): {
 					Timeline: messaging.TimelineSection{
 						Events: []messaging.Event{
 							{
@@ -306,8 +307,8 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				machineRoomID: {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(machineRoomID): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
@@ -787,8 +788,8 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				"!workspace/iree:test": {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID("!workspace/iree:test"): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{Type: schema.EventTypeWorkspace, StateKey: &stateKey},
@@ -862,8 +863,8 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Invite: map[string]messaging.InvitedRoom{
-				workspaceRoomID: {},
+			Invite: map[ref.RoomID]messaging.InvitedRoom{
+				mustRoomID(workspaceRoomID): {},
 			},
 		},
 	}
@@ -973,8 +974,8 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				"!config:test": {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID("!config:test"): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
@@ -1045,8 +1046,8 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				"!config:test": {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID("!config:test"): {
 					Timeline: messaging.TimelineSection{
 						Events: []messaging.Event{
 							{
@@ -1083,8 +1084,8 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				"!config:test": {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID("!config:test"): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{

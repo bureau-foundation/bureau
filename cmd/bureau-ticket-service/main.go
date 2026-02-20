@@ -63,8 +63,8 @@ func run() error {
 		runDir:        boot.RunDir,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
-		rooms:         make(map[string]*roomState),
-		aliasCache:    make(map[string]string),
+		rooms:         make(map[ref.RoomID]*roomState),
+		aliasCache:    make(map[string]ref.RoomID),
 		timerNotify:   make(chan struct{}, 1),
 		logger:        boot.Logger,
 	}
@@ -147,7 +147,7 @@ type TicketService struct {
 
 	// rooms maps room IDs to per-room state. Only rooms with
 	// m.bureau.ticket_config are tracked here. Protected by mu.
-	rooms map[string]*roomState
+	rooms map[ref.RoomID]*roomState
 
 	// aliasCache maps room aliases to resolved room IDs. Used by
 	// cross-room gate evaluation to avoid re-resolving the same
@@ -156,7 +156,7 @@ type TicketService struct {
 	// new room ID that won't match the old one, and the gate won't
 	// fire — operator action is needed anyway when aliases change).
 	// Protected by mu.
-	aliasCache map[string]string
+	aliasCache map[string]ref.RoomID
 
 	// timers is a min-heap of pending timer gate deadlines, ordered
 	// by target time (earliest first). Entries use lazy deletion:

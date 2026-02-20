@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -72,8 +73,8 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 			json.NewEncoder(writer).Encode(messaging.SyncResponse{
 				NextBatch: "batch_2",
 				Rooms: messaging.RoomsSection{
-					Join: map[string]messaging.JoinedRoom{
-						roomID.String(): {
+					Join: map[ref.RoomID]messaging.JoinedRoom{
+						roomID: {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{
@@ -144,8 +145,8 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 			json.NewEncoder(writer).Encode(messaging.SyncResponse{
 				NextBatch: "batch_2",
 				Rooms: messaging.RoomsSection{
-					Join: map[string]messaging.JoinedRoom{
-						roomID.String(): {
+					Join: map[ref.RoomID]messaging.JoinedRoom{
+						roomID: {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{

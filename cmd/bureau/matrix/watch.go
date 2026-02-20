@@ -152,7 +152,7 @@ func runWatchLoop(ctx context.Context, session messaging.Session, roomID ref.Roo
 		}
 		nextBatch = response.NextBatch
 
-		joinedRoom, ok := response.Rooms.Join[roomID.String()]
+		joinedRoom, ok := response.Rooms.Join[roomID]
 		if !ok {
 			continue
 		}

@@ -141,18 +141,23 @@ func requireGrant(token *servicetoken.Token, action string) error {
 	return nil
 }
 
-// requireRoom validates the "room" field from a request and returns
-// the corresponding room state. Returns an error if the room field
-// is empty or the room is not tracked.
-func (ts *TicketService) requireRoom(roomID string) (*roomState, error) {
-	if roomID == "" {
-		return nil, errors.New("missing required field: room")
+// requireRoom validates the "room" field from a request, parses it as
+// a ref.RoomID, and returns the corresponding room state and parsed ID.
+// Returns an error if the room field is empty, unparseable, or the room
+// is not tracked.
+func (ts *TicketService) requireRoom(roomIDString string) (ref.RoomID, *roomState, error) {
+	if roomIDString == "" {
+		return ref.RoomID{}, nil, errors.New("missing required field: room")
+	}
+	roomID, err := ref.ParseRoomID(roomIDString)
+	if err != nil {
+		return ref.RoomID{}, nil, fmt.Errorf("invalid room ID %q: %w", roomIDString, err)
 	}
 	state, exists := ts.rooms[roomID]
 	if !exists {
-		return nil, fmt.Errorf("room %s is not tracked by this service", roomID)
+		return ref.RoomID{}, nil, fmt.Errorf("room %s is not tracked by this service", roomID)
 	}
-	return state, nil
+	return roomID, state, nil
 }
 
 // --- Ticket resolution ---
@@ -168,71 +173,75 @@ func (ts *TicketService) requireRoom(roomID string) (*roomState, error) {
 // If requestRoom is a room alias localpart, it is matched against
 // tracked rooms' canonical aliases. If both the ticket reference and
 // requestRoom carry room context, they must agree.
-func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (string, *roomState, string, schema.TicketContent, error) {
-	ref := ticket.ParseTicketRef(ticketRefStr)
+func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (ref.RoomID, *roomState, string, schema.TicketContent, error) {
+	ticketRef := ticket.ParseTicketRef(ticketRefStr)
 
 	// Determine room context: from the reference, from the request, or both.
-	roomID, err := ts.resolveRoomContext(requestRoom, ref)
+	roomID, err := ts.resolveRoomContext(requestRoom, ticketRef)
 	if err != nil {
-		return "", nil, "", schema.TicketContent{}, err
+		return ref.RoomID{}, nil, "", schema.TicketContent{}, err
 	}
 
 	state, exists := ts.rooms[roomID]
 	if !exists {
-		return "", nil, "", schema.TicketContent{}, fmt.Errorf("room %s is not tracked by this service", roomID)
+		return ref.RoomID{}, nil, "", schema.TicketContent{}, fmt.Errorf("room %s is not tracked by this service", roomID)
 	}
 
-	content, exists := state.index.Get(ref.Ticket)
+	content, exists := state.index.Get(ticketRef.Ticket)
 	if !exists {
-		return "", nil, "", schema.TicketContent{}, fmt.Errorf("ticket %s not found in room %s", ref.Ticket, roomID)
+		return ref.RoomID{}, nil, "", schema.TicketContent{}, fmt.Errorf("ticket %s not found in room %s", ticketRef.Ticket, roomID)
 	}
 
-	return roomID, state, ref.Ticket, content, nil
+	return roomID, state, ticketRef.Ticket, content, nil
 }
 
 // resolveRoomContext determines the room ID from a combination of the
 // explicit Room field on the request and the room qualifier embedded
 // in a ticket reference. Returns an error if no room context is
 // available or if both sources disagree.
-func (ts *TicketService) resolveRoomContext(requestRoom string, ref ticket.TicketRef) (string, error) {
-	refRoomID := ts.resolveRoomRef(ref)
-	requestRoomID := ts.resolveRoomString(requestRoom)
+func (ts *TicketService) resolveRoomContext(requestRoom string, ticketRef ticket.TicketRef) (ref.RoomID, error) {
+	refRoomID, refFound := ts.resolveRoomRef(ticketRef)
+	requestRoomID, requestFound := ts.resolveRoomString(requestRoom)
 
 	switch {
-	case refRoomID != "" && requestRoomID != "":
+	case refFound && requestFound:
 		if refRoomID != requestRoomID {
-			return "", fmt.Errorf("room mismatch: ticket reference implies %s but request specifies %s", refRoomID, requestRoomID)
+			return ref.RoomID{}, fmt.Errorf("room mismatch: ticket reference implies %s but request specifies %s", refRoomID, requestRoomID)
 		}
 		return refRoomID, nil
-	case refRoomID != "":
+	case refFound:
 		return refRoomID, nil
-	case requestRoomID != "":
+	case requestFound:
 		return requestRoomID, nil
 	default:
-		return "", errors.New("ticket reference requires room context: use a room-qualified ticket reference (e.g., iree/general/tkt-a3f9) or provide room in the request")
+		return ref.RoomID{}, errors.New("ticket reference requires room context: use a room-qualified ticket reference (e.g., iree/general/tkt-a3f9) or provide room in the request")
 	}
 }
 
 // resolveRoomRef resolves the room qualifier from a parsed ticket
 // reference to a room ID. Returns empty string if the reference is
 // bare or the room cannot be resolved.
-func (ts *TicketService) resolveRoomRef(ref ticket.TicketRef) string {
-	if ref.IsBare() {
-		return ""
+func (ts *TicketService) resolveRoomRef(ticketRef ticket.TicketRef) (ref.RoomID, bool) {
+	if ticketRef.IsBare() {
+		return ref.RoomID{}, false
 	}
-	return ts.matchRoomAlias(ref.RoomLocalpart, ref.ServerName)
+	return ts.matchRoomAlias(ticketRef.RoomLocalpart, ticketRef.ServerName)
 }
 
 // resolveRoomString resolves a room string (from the Room field on a
 // request) to a room ID. The string may be a room ID (starts with
 // "!"), a room alias localpart, or empty.
-func (ts *TicketService) resolveRoomString(room string) string {
+func (ts *TicketService) resolveRoomString(room string) (ref.RoomID, bool) {
 	if room == "" {
-		return ""
+		return ref.RoomID{}, false
 	}
 	// Room IDs start with "!" and are used directly.
 	if len(room) > 0 && room[0] == '!' {
-		return room
+		roomID, err := ref.ParseRoomID(room)
+		if err != nil {
+			return ref.RoomID{}, false
+		}
+		return roomID, true
 	}
 	// Otherwise treat as an alias localpart on this server.
 	return ts.matchRoomAlias(room, "")
@@ -241,7 +250,7 @@ func (ts *TicketService) resolveRoomString(room string) string {
 // matchRoomAlias finds the room ID for a room alias localpart among
 // tracked rooms. If serverName is empty, matches against this
 // server's name. Returns empty string if no match is found.
-func (ts *TicketService) matchRoomAlias(localpart, serverName string) string {
+func (ts *TicketService) matchRoomAlias(localpart, serverName string) (ref.RoomID, bool) {
 	if serverName == "" {
 		serverName = ts.serverName
 	}
@@ -249,10 +258,10 @@ func (ts *TicketService) matchRoomAlias(localpart, serverName string) string {
 	expectedAlias := schema.FullRoomAlias(localpart, serverName)
 	for roomID, state := range ts.rooms {
 		if state.alias == expectedAlias {
-			return roomID
+			return roomID, true
 		}
 	}
-	return ""
+	return ref.RoomID{}, false
 }
 
 // --- Matrix state writer ---

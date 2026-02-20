@@ -184,7 +184,7 @@ func run() error {
 		upstreamSocket: upstreamSocket,
 		startedAt:      clk.Now(),
 		pushTargets:    make(map[string]servicetoken.PushTarget),
-		rooms:          make(map[string]*artifactRoomState),
+		rooms:          make(map[ref.RoomID]*artifactRoomState),
 		logger:         logger,
 	}
 
@@ -309,7 +309,7 @@ type ArtifactService struct {
 
 	// rooms maps room IDs to per-room artifact scope configuration.
 	// Only rooms with m.bureau.artifact_scope are tracked.
-	rooms map[string]*artifactRoomState
+	rooms map[ref.RoomID]*artifactRoomState
 
 	logger *slog.Logger
 }

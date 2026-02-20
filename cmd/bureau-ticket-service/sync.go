@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -150,7 +149,7 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 			)
 			continue
 		}
-		tickets := ts.processRoomState(ctx, roomID.String(), events, nil)
+		tickets := ts.processRoomState(ctx, roomID, events, nil)
 		totalTickets += tickets
 	}
 
@@ -168,7 +167,7 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 //
 // Called during initial sync for each joined room and can be called
 // when the service joins a new room during incremental sync.
-func (ts *TicketService) processRoomState(ctx context.Context, roomID string, stateEvents, timelineEvents []messaging.Event) int {
+func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) int {
 	// First pass: check for tombstone and look for ticket_config to
 	// determine if this room has ticket management enabled. Check
 	// both state and timeline events (timeline events with a
@@ -291,7 +290,7 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 
 // processRoomSync handles state changes in a single room during
 // incremental sync.
-func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, room messaging.JoinedRoom) {
+func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID, room messaging.JoinedRoom) {
 	// Collect all state events from both the state and timeline sections.
 	// State events in the timeline section have a non-nil StateKey.
 	stateEvents := collectStateEvents(room)
@@ -368,7 +367,7 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID string, roo
 // logged for operator visibility but the service does not auto-follow
 // the replacement (the replacement room needs its own ticket_config
 // and service invitation).
-func (ts *TicketService) handleRoomTombstone(roomID string, event messaging.Event) {
+func (ts *TicketService) handleRoomTombstone(roomID ref.RoomID, event messaging.Event) {
 	replacementRoom := ""
 	if body, ok := event.Content["replacement_room"]; ok {
 		if replacement, ok := body.(string); ok {
@@ -396,7 +395,7 @@ func (ts *TicketService) handleRoomTombstone(roomID string, event messaging.Even
 
 // handleTicketConfigChange processes a change to a room's ticket
 // configuration.
-func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID string, event messaging.Event) {
+func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID ref.RoomID, event messaging.Event) {
 	config := ts.parseTicketConfig(event)
 	if config == nil {
 		// Config was removed or cleared — ticket management disabled.
@@ -447,16 +446,8 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID st
 // mid-operation — the initial sync path processes state events from
 // the sync response directly and doesn't need this. Returns the
 // number of tickets indexed.
-func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID string, state *roomState) int {
-	parsedRoomID, err := ref.ParseRoomID(roomID)
-	if err != nil {
-		ts.logger.Error("invalid room ID for ticket backfill",
-			"room_id", roomID,
-			"error", err,
-		)
-		return 0
-	}
-	events, err := ts.session.GetRoomState(ctx, parsedRoomID)
+func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID ref.RoomID, state *roomState) int {
+	events, err := ts.session.GetRoomState(ctx, roomID)
 	if err != nil {
 		ts.logger.Error("failed to fetch room state for ticket backfill",
 			"room_id", roomID,
@@ -479,15 +470,11 @@ func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID string,
 // resolveRoomAlias fetches the canonical alias for a room. Returns
 // empty string if the room has no alias or the fetch fails. Called
 // once per room when it is first tracked. Used for logging only.
-func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID string) string {
+func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID ref.RoomID) string {
 	if ts.session == nil {
 		return ""
 	}
-	parsedRoomID, err := ref.ParseRoomID(roomID)
-	if err != nil {
-		return ""
-	}
-	raw, err := ts.session.GetStateEvent(ctx, parsedRoomID, schema.MatrixEventTypeCanonicalAlias, "")
+	raw, err := ts.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypeCanonicalAlias, "")
 	if err != nil {
 		return ""
 	}
@@ -594,12 +581,8 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 // local index must use this method instead of calling SendStateEvent
 // and index.Put directly. This includes socket handlers, gate
 // satisfaction, and any future write path.
-func (ts *TicketService) putWithEcho(ctx context.Context, roomID string, state *roomState, ticketID string, content schema.TicketContent) error {
-	parsedRoomID, err := ref.ParseRoomID(roomID)
-	if err != nil {
-		return fmt.Errorf("invalid room ID %q: %w", roomID, err)
-	}
-	eventID, err := ts.writer.SendStateEvent(ctx, parsedRoomID, schema.EventTypeTicket, ticketID, content)
+func (ts *TicketService) putWithEcho(ctx context.Context, roomID ref.RoomID, state *roomState, ticketID string, content schema.TicketContent) error {
+	eventID, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content)
 	if err != nil {
 		return err
 	}
@@ -619,7 +602,7 @@ func (ts *TicketService) totalTickets() int {
 
 // roomIndex returns the ticket index for a room. Returns nil if the
 // room doesn't have ticket management or isn't tracked by this service.
-func (ts *TicketService) roomIndex(roomID string) *ticket.Index {
+func (ts *TicketService) roomIndex(roomID ref.RoomID) *ticket.Index {
 	state, exists := ts.rooms[roomID]
 	if !exists {
 		return nil
@@ -644,7 +627,7 @@ func (ts *TicketService) roomStats() []roomSummary {
 }
 
 type roomSummary struct {
-	RoomID     string         `cbor:"room_id"`
+	RoomID     ref.RoomID     `cbor:"room_id"`
 	Tickets    int            `cbor:"tickets"`
 	ByStatus   map[string]int `cbor:"by_status"`
 	ByPriority map[int]int    `cbor:"by_priority"`

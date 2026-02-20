@@ -916,7 +916,7 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 		syncRetries = 0
 		w.nextBatch = response.NextBatch
 
-		if joined, ok := response.Rooms.Join[w.roomID.String()]; ok {
+		if joined, ok := response.Rooms.Join[w.roomID]; ok {
 			w.pending = append(w.pending, joined.State.Events...)
 			w.pending = append(w.pending, joined.Timeline.Events...)
 		}
@@ -1211,7 +1211,7 @@ func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID ref.RoomID)
 	if err := json.NewDecoder(response.Body).Decode(&syncResponse); err != nil {
 		t.Fatalf("decode sync response: %v", err)
 	}
-	joined, ok := syncResponse.Rooms.Join[roomID.String()]
+	joined, ok := syncResponse.Rooms.Join[roomID]
 	if !ok {
 		t.Fatalf("room %s not in sync response (have %d joined rooms)", roomID, len(syncResponse.Rooms.Join))
 	}

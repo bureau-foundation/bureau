@@ -34,7 +34,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -140,15 +139,10 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	// have been invited to workspace rooms while it was offline — joining
 	// them now ensures evaluateStartCondition can read workspace state
 	// events during the initial reconcile.
-	for roomIDString := range response.Rooms.Invite {
-		parsedRoomID, err := ref.ParseRoomID(roomIDString)
-		if err != nil {
-			d.logger.Warn("invalid room ID in invite", "room_id", roomIDString, "error", err)
-			continue
-		}
-		d.logger.Info("accepting pending invite", "room_id", parsedRoomID)
-		if _, err := d.session.JoinRoom(ctx, parsedRoomID); err != nil {
-			d.logger.Error("failed to accept pending invite", "room_id", parsedRoomID, "error", err)
+	for roomID := range response.Rooms.Invite {
+		d.logger.Info("accepting pending invite", "room_id", roomID)
+		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
+			d.logger.Error("failed to accept pending invite", "room_id", roomID, "error", err)
 		}
 	}
 
@@ -226,15 +220,10 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// Accept any pending invites. The daemon is invited to workspace rooms
 	// by "bureau workspace create" and must join to read workspace state
 	// events needed for StartCondition evaluation on deferred principals.
-	for roomIDString := range response.Rooms.Invite {
-		parsedRoomID, err := ref.ParseRoomID(roomIDString)
-		if err != nil {
-			d.logger.Warn("invalid room ID in invite", "room_id", roomIDString, "error", err)
-			continue
-		}
-		d.logger.Info("accepting room invite", "room_id", parsedRoomID)
-		if _, err := d.session.JoinRoom(ctx, parsedRoomID); err != nil {
-			d.logger.Error("failed to accept room invite", "room_id", parsedRoomID, "error", err)
+	for roomID := range response.Rooms.Invite {
+		d.logger.Info("accepting room invite", "room_id", roomID)
+		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
+			d.logger.Error("failed to accept room invite", "room_id", roomID, "error", err)
 			continue
 		}
 		needsReconcile = true
@@ -249,18 +238,12 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// same sync batch — the room appears in Rooms.Leave (not Rooms.Join)
 	// because the final membership state is "leave", so the tombstone
 	// events are never visible to the Join handler.
-	if _, kicked := response.Rooms.Leave[d.configRoomID.String()]; kicked {
+	if _, kicked := response.Rooms.Leave[d.configRoomID]; kicked {
 		d.logger.Error("evicted from config room, initiating emergency shutdown",
 			"config_room", d.configRoomID)
 		d.emergencyShutdown()
 		return
 	}
-
-	configRoomIDString := d.configRoomID.String()
-	machineRoomIDString := d.machineRoomID.String()
-	serviceRoomIDString := d.serviceRoomID.String()
-	fleetRoomIDString := d.fleetRoomID.String()
-	systemRoomIDString := d.systemRoomID.String()
 
 	for roomID, room := range response.Rooms.Join {
 		if !roomHasStateChanges(room) {
@@ -268,15 +251,15 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		}
 
 		switch roomID {
-		case configRoomIDString:
+		case d.configRoomID:
 			needsReconcile = true
-		case machineRoomIDString:
+		case d.machineRoomID:
 			needsPeerSync = true
-		case serviceRoomIDString:
+		case d.serviceRoomID:
 			needsServiceSync = true
-		case fleetRoomIDString:
+		case d.fleetRoomID:
 			needsHAEval = true
-		case systemRoomIDString:
+		case d.systemRoomID:
 			// The system room carries token signing keys and operational
 			// messages. State changes here don't require reconciliation.
 			continue
@@ -364,13 +347,8 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// Process command messages from all rooms. Commands can arrive in
 	// workspace rooms, config rooms, or any room the daemon is joined to.
 	// Authorization is checked per-command via room power levels.
-	for roomIDString, room := range response.Rooms.Join {
-		parsedRoomID, err := ref.ParseRoomID(roomIDString)
-		if err != nil {
-			d.logger.Warn("invalid room ID in sync response", "room_id", roomIDString, "error", err)
-			continue
-		}
-		d.processCommandMessages(ctx, parsedRoomID, room.Timeline.Events)
+	for roomID, room := range response.Rooms.Join {
+		d.processCommandMessages(ctx, roomID, room.Timeline.Events)
 	}
 }
 

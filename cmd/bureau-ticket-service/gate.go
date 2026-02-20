@@ -37,7 +37,7 @@ const deadlineHeapID = "__deadline__"
 // map returns candidates keyed by (eventType, stateKey); the full
 // match function (matchGateEvent) is still called for content-level
 // criteria (pipeline conclusion, content_match expressions).
-func (ts *TicketService) evaluateGatesForEvents(ctx context.Context, roomID string, state *roomState, events []messaging.Event) {
+func (ts *TicketService) evaluateGatesForEvents(ctx context.Context, roomID ref.RoomID, state *roomState, events []messaging.Event) {
 	for _, event := range events {
 		// Only state events can satisfy gates. Timeline-only events
 		// (messages) don't have state keys and aren't gate conditions.
@@ -53,7 +53,7 @@ func (ts *TicketService) evaluateGatesForEvents(ctx context.Context, roomID stri
 // gates that watch for its (eventType, stateKey). Called per-event so
 // that gate satisfaction from earlier events in the batch is visible to
 // later evaluations via the watch map update in satisfyGate → index.Put.
-func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID string, state *roomState, event messaging.Event) {
+func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.RoomID, state *roomState, event messaging.Event) {
 	// The watch map returns gates whose watch criteria match this
 	// event's type and state key. This is a snapshot slice — safe to
 	// iterate even though satisfyGate modifies the index (and thus
@@ -241,7 +241,7 @@ type aliasResolver interface {
 // in the /sync filter. If a gate references an event type the filter
 // doesn't include, the homeserver won't deliver those events and the
 // gate must be resolved manually via the resolve-gate API.
-func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms map[string]messaging.JoinedRoom) {
+func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms map[ref.RoomID]messaging.JoinedRoom) {
 	if ts.resolver == nil {
 		return
 	}
@@ -347,19 +347,18 @@ func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
 // the result. Cache entries persist for the lifetime of the service.
 // Aliases that fail to resolve are not cached (the room may not exist
 // yet, and a future attempt should retry).
-func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string) (string, error) {
+func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string) (ref.RoomID, error) {
 	if roomID, cached := ts.aliasCache[alias]; cached {
 		return roomID, nil
 	}
 
 	resolved, err := ts.resolver.ResolveAlias(ctx, alias)
 	if err != nil {
-		return "", err
+		return ref.RoomID{}, err
 	}
 
-	roomID := resolved.String()
-	ts.aliasCache[alias] = roomID
-	return roomID, nil
+	ts.aliasCache[alias] = resolved
+	return resolved, nil
 }
 
 // satisfyGate marks a gate as satisfied, writes the updated ticket to
@@ -367,7 +366,7 @@ func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string
 // the current version of the ticket from the index (not a stale copy).
 func (ts *TicketService) satisfyGate(
 	ctx context.Context,
-	roomID string,
+	roomID ref.RoomID,
 	state *roomState,
 	ticketID string,
 	content schema.TicketContent,
@@ -478,7 +477,7 @@ func enrichTimerTargets(content *schema.TicketContent, index *ticket.Index) {
 // has timer gates with base="unblocked" and empty Target, the target
 // is computed using the current clock time as the base (the moment
 // the ticket observes it has become unblocked).
-func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomID string, state *roomState, closedTicketIDs []string) {
+func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomID ref.RoomID, state *roomState, closedTicketIDs []string) {
 	now := ts.clock.Now()
 
 	for _, closedID := range closedTicketIDs {
@@ -549,7 +548,7 @@ func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomI
 // pending and the target matches before firing it.
 type timerHeapEntry struct {
 	target   time.Time
-	roomID   string
+	roomID   ref.RoomID
 	ticketID string
 	gateID   string
 }
@@ -573,7 +572,7 @@ func (h *timerHeap) Pop() any {
 // from the given ticket content to the timer heap, and reschedules
 // the timer if the new entries affect the earliest deadline.
 // Must be called with ts.mu held.
-func (ts *TicketService) pushTimerGates(roomID, ticketID string, content *schema.TicketContent) {
+func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, content *schema.TicketContent) {
 	pushed := false
 	for i := range content.Gates {
 		gate := &content.Gates[i]
@@ -603,7 +602,7 @@ func (ts *TicketService) pushTimerGates(roomID, ticketID string, content *schema
 // note instead of satisfying a gate. Stale entries from a previous
 // deadline are handled by lazy deletion in fireExpiredTimersLocked.
 // Must be called with ts.mu held.
-func (ts *TicketService) pushDeadlineEntry(roomID, ticketID string, content *schema.TicketContent) {
+func (ts *TicketService) pushDeadlineEntry(roomID ref.RoomID, ticketID string, content *schema.TicketContent) {
 	if content.Deadline == "" || content.Status == "closed" {
 		return
 	}

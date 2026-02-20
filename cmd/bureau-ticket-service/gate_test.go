@@ -378,7 +378,7 @@ func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
 
 func TestHumanGateNotAutoMatched(t *testing.T) {
 	ts := newGateTestService()
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version: 1,
@@ -501,12 +501,12 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-timer": {
 			Version:   1,
@@ -556,12 +556,12 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-timer": {
 			Version:   1,
@@ -606,12 +606,12 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-unblocked-pending": {
 			Version:   1,
@@ -667,12 +667,12 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-timer": {
 			Version:   1,
@@ -721,8 +721,8 @@ func TestTimerHeapOrdering(t *testing.T) {
 	// Verify the heap pops entries in target-time order.
 	ts := &TicketService{
 		clock:      clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -734,7 +734,7 @@ func TestTimerHeapOrdering(t *testing.T) {
 			{ID: "mid", Type: "timer", Status: "pending", Target: "2026-01-01T02:00:00Z"},
 		},
 	}
-	ts.pushTimerGates("!room:local", "tkt-1", content)
+	ts.pushTimerGates(testRoomID("!room:local"), "tkt-1", content)
 
 	if ts.timers.Len() != 3 {
 		t.Fatalf("expected 3 heap entries, got %d", ts.timers.Len())
@@ -755,13 +755,13 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 	ts := &TicketService{
 		writer:      writer,
 		clock:       fakeClock,
-		rooms:       make(map[string]*roomState),
-		aliasCache:  make(map[string]string),
+		rooms:       make(map[ref.RoomID]*roomState),
+		aliasCache:  make(map[string]ref.RoomID),
 		timerNotify: make(chan struct{}, 1),
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-timer": {
 			Version:   1,
@@ -825,13 +825,13 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 	ts := &TicketService{
 		writer:      writer,
 		clock:       fakeClock,
-		rooms:       make(map[string]*roomState),
-		aliasCache:  make(map[string]string),
+		rooms:       make(map[ref.RoomID]*roomState),
+		aliasCache:  make(map[string]ref.RoomID),
 		timerNotify: make(chan struct{}, 1),
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-far": {
 			Version:   1,
@@ -927,12 +927,12 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	content := schema.TicketContent{
 		Version:   1,
 		Title:     "gated",
@@ -980,7 +980,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 	if len(writer.events) != 1 {
 		t.Fatalf("expected 1 Matrix write, got %d", len(writer.events))
 	}
-	if writer.events[0].RoomID != roomID {
+	if writer.events[0].RoomID != roomID.String() {
 		t.Fatalf("write room should be %q, got %q", roomID, writer.events[0].RoomID)
 	}
 	if writer.events[0].StateKey != "tkt-1" {
@@ -993,7 +993,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1042,7 +1042,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	// Ticket tkt-2 has a gate waiting for tkt-1 to close.
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
@@ -1096,7 +1096,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1154,7 +1154,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1226,7 +1226,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1273,7 +1273,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1322,7 +1322,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
@@ -1374,7 +1374,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	ts := newGateTestServiceWithWriter(writer)
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 
 	// tkt-2 has a ticket gate waiting for tkt-1 to close.
 	// tkt-1 starts as "open" in the index.
@@ -1528,13 +1528,13 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	// Ticket room has a cross-room gate watching CI results.
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1557,8 +1557,8 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 	})
 
 	// Sync batch includes events from the CI room (not a ticket room).
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!ci-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!ci-room:local"): {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
@@ -1588,7 +1588,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 		t.Fatalf("expected 1 Matrix write, got %d", len(writer.events))
 	}
 	// The write should target the ticket room, not the watched room.
-	if writer.events[0].RoomID != ticketRoomID {
+	if writer.events[0].RoomID != ticketRoomID.String() {
 		t.Fatalf("write should target ticket room %q, got %q", ticketRoomID, writer.events[0].RoomID)
 	}
 }
@@ -1605,12 +1605,12 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1632,8 +1632,8 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 	})
 
 	// Sync batch has no events from the watched room.
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!other-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!other-room:local"): {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
@@ -1668,12 +1668,12 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1694,7 +1694,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 		},
 	})
 
-	joinedRooms := map[string]messaging.JoinedRoom{}
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{}
 
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
@@ -1714,8 +1714,8 @@ func TestCrossRoomGateAliasCaching(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1724,7 +1724,7 @@ func TestCrossRoomGateAliasCaching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first resolve failed: %v", err)
 	}
-	if roomID != "!ci-room:local" {
+	if roomID != testRoomID("!ci-room:local") {
 		t.Fatalf("expected !ci-room:local, got %q", roomID)
 	}
 	if resolver.callCount != 1 {
@@ -1736,7 +1736,7 @@ func TestCrossRoomGateAliasCaching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cached resolve failed: %v", err)
 	}
-	if roomID != "!ci-room:local" {
+	if roomID != testRoomID("!ci-room:local") {
 		t.Fatalf("expected !ci-room:local from cache, got %q", roomID)
 	}
 	if resolver.callCount != 1 {
@@ -1754,12 +1754,12 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1780,7 +1780,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 		},
 	})
 
-	joinedRooms := map[string]messaging.JoinedRoom{
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
 		ticketRoomID: {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
@@ -1822,12 +1822,12 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1847,8 +1847,8 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 		},
 	})
 
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!ci-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!ci-room:local"): {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
@@ -1885,12 +1885,12 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -1915,8 +1915,8 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 	})
 
 	// Event matches type but not content.
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!deploy-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!deploy-room:local"): {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
@@ -1938,7 +1938,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 	}
 
 	// Now send an event that matches content.
-	joinedRooms["!deploy-room:local"] = messaging.JoinedRoom{
+	joinedRooms[testRoomID("!deploy-room:local")] = messaging.JoinedRoom{
 		State: messaging.StateSection{
 			Events: []messaging.Event{
 				{
@@ -1976,12 +1976,12 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -2004,8 +2004,8 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 	})
 
 	// Event arrives in the timeline section (not state section).
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!ci-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!ci-room:local"): {
 			Timeline: messaging.TimelineSection{
 				Events: []messaging.Event{
 					{
@@ -2039,12 +2039,12 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 		resolver:   nil, // no resolver
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -2065,8 +2065,8 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 		},
 	})
 
-	joinedRooms := map[string]messaging.JoinedRoom{
-		"!ci-room:local": {
+	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{
+		testRoomID("!ci-room:local"): {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
@@ -2135,12 +2135,12 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 		resolver:   resolver,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	ticketRoomID := "!tickets:local"
+	ticketRoomID := testRoomID("!tickets:local")
 	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {
 			Version:   1,
@@ -2166,9 +2166,9 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 	// the watched CI room.
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
 				ticketRoomID: {}, // ticket room, no new events
-				"!ci-room:local": {
+				testRoomID("!ci-room:local"): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
@@ -2470,12 +2470,12 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
@@ -2530,12 +2530,12 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-blocker-a": {
 			Version:   1,
@@ -2592,12 +2592,12 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
@@ -2647,12 +2647,12 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 	ts := &TicketService{
 		writer:     writer,
 		clock:      fakeClock,
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	roomID := "!room:local"
+	roomID := testRoomID("!room:local")
 	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-blocker-a": {
 			Version:   1,
@@ -2776,8 +2776,8 @@ func newGateTestService() *TicketService {
 	return &TicketService{
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -2789,8 +2789,8 @@ func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 		writer:     writer,
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[string]*roomState),
-		aliasCache: make(map[string]string),
+		rooms:      make(map[ref.RoomID]*roomState),
+		aliasCache: make(map[string]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }

@@ -452,8 +452,8 @@ func TestSync(t *testing.T) {
 		writeJSON(writer, SyncResponse{
 			NextBatch: "s456",
 			Rooms: RoomsSection{
-				Join: map[string]JoinedRoom{
-					"!room1:local": {
+				Join: map[ref.RoomID]JoinedRoom{
+					mustRoomID("!room1:local"): {
 						Timeline: TimelineSection{
 							Events: []Event{
 								{EventID: "$evt1", Type: "m.room.message", Sender: "@alice:local"},
@@ -476,7 +476,7 @@ func TestSync(t *testing.T) {
 	if response.NextBatch != "s456" {
 		t.Errorf("unexpected next_batch: %s", response.NextBatch)
 	}
-	room, ok := response.Rooms.Join["!room1:local"]
+	room, ok := response.Rooms.Join[mustRoomID("!room1:local")]
 	if !ok {
 		t.Fatal("expected room !room1:local in sync response")
 	}

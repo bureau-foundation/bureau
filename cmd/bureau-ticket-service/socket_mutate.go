@@ -416,7 +416,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		request.Gates = append(request.Gates, gate)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	roomID, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -478,16 +478,16 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	// Write to Matrix and update the local index so the creator sees
 	// the result without a /sync round-trip. putWithEcho records the
 	// event ID so the sync loop won't overwrite this with stale data.
-	if err := ts.putWithEcho(ctx, request.Room, state, ticketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
 	// Push any timer gates to the heap so the timer loop fires
 	// them at the right time.
-	ts.pushTimerGates(request.Room, ticketID, &content)
+	ts.pushTimerGates(roomID, ticketID, &content)
 
 	// Push a deadline monitoring entry if set.
-	ts.pushDeadlineEntry(request.Room, ticketID, &content)
+	ts.pushDeadlineEntry(roomID, ticketID, &content)
 
 	return createResponse{
 		ID:   ticketID,
@@ -664,7 +664,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 			return mutationResponse{
 				ID:      ticketID,
-				Room:    roomID,
+				Room:    roomID.String(),
 				Content: content,
 			}, nil
 		}
@@ -695,7 +695,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }
@@ -780,7 +780,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 
 			return mutationResponse{
 				ID:      ticketID,
-				Room:    roomID,
+				Room:    roomID.String(),
 				Content: content,
 			}, nil
 		}
@@ -812,7 +812,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }
@@ -861,7 +861,7 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }
@@ -880,7 +880,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	roomID, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -909,7 +909,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			return nil, fmt.Errorf("tickets[%d]: duplicate ref %q", i, entry.Ref)
 		}
 
-		ticketID := ts.generateTicketID(state, request.Room, now, entry.Title, batchIDs)
+		ticketID := ts.generateTicketID(state, roomID.String(), now, entry.Title, batchIDs)
 		batchIDs[ticketID] = struct{}{}
 		refToID[entry.Ref] = ticketID
 
@@ -976,10 +976,10 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 
 	// Phase 4: Write all state events and update the index.
 	for i := range tickets {
-		if err := ts.putWithEcho(ctx, request.Room, state, tickets[i].id, tickets[i].content); err != nil {
+		if err := ts.putWithEcho(ctx, roomID, state, tickets[i].id, tickets[i].content); err != nil {
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", tickets[i].id, err)
 		}
-		ts.pushTimerGates(request.Room, tickets[i].id, &tickets[i].content)
+		ts.pushTimerGates(roomID, tickets[i].id, &tickets[i].content)
 	}
 
 	return batchCreateResponse{
@@ -1011,7 +1011,7 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("decoding request: %w", err)
 	}
 
-	state, err := ts.requireRoom(request.Room)
+	roomID, state, err := ts.requireRoom(request.Room)
 	if err != nil {
 		return nil, err
 	}
@@ -1062,7 +1062,7 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 
 	// Phase 2: Write all state events and update the index.
 	for _, entry := range request.Tickets {
-		if err := ts.putWithEcho(ctx, request.Room, state, entry.ID, entry.Content); err != nil {
+		if err := ts.putWithEcho(ctx, roomID, state, entry.ID, entry.Content); err != nil {
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", entry.ID, err)
 		}
 	}
@@ -1131,7 +1131,7 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }
@@ -1196,7 +1196,7 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }
@@ -1294,7 +1294,7 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 
 	return mutationResponse{
 		ID:      ticketID,
-		Room:    roomID,
+		Room:    roomID.String(),
 		Content: content,
 	}, nil
 }

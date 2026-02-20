@@ -110,7 +110,7 @@ func run() error {
 	// policy changes) to the config room that are not intended for the agent.
 	machineUserID := machine.UserID()
 	log("waiting for incoming message...")
-	message, err := waitForMessage(ctx, session, configRoomID.String(), whoamiUserID, machineUserID)
+	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
 	if err != nil {
 		return fmt.Errorf("wait for message: %w", err)
 	}
@@ -165,8 +165,8 @@ func readPayloadJSON() string {
 // an external user (someone other than the agent itself or the machine
 // daemon). The homeserver holds each /sync request for up to 30 seconds,
 // returning immediately when new events arrive. Returns the message body.
-func waitForMessage(ctx context.Context, session messaging.Session, roomID, ownUserID, machineUserID string) (string, error) {
-	filter := buildRoomMessageFilter(roomID)
+func waitForMessage(ctx context.Context, session messaging.Session, roomID ref.RoomID, ownUserID, machineUserID string) (string, error) {
+	filter := buildRoomMessageFilter(roomID.String())
 
 	// Initial /sync with timeout=0 to capture the stream position.
 	response, err := session.Sync(ctx, messaging.SyncOptions{

@@ -402,8 +402,8 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!config-ws:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				mustRoomID("!config-ws:local"): {},
 			},
 		},
 	}
@@ -459,8 +459,8 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!config-ws:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				mustRoomID("!config-ws:local"): {},
 			},
 		},
 	}
@@ -504,8 +504,8 @@ func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!machine:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				mustRoomID("!machine:local"): {},
 			},
 		},
 	}
@@ -649,8 +649,8 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Join: map[string]messaging.JoinedRoom{
-				"!machine:local": {
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID("!machine:local"): {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{

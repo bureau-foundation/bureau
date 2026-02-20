@@ -20,6 +20,16 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// testRoomID parses a raw room ID string, panicking if it is invalid.
+// Use in test setup where the input is a known-good constant.
+func testRoomID(raw string) ref.RoomID {
+	roomID, err := ref.ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("testRoomID(%q): %v", raw, err))
+	}
+	return roomID
+}
+
 // newTestService creates a TicketService suitable for unit testing sync
 // logic. The session is nil, which is safe for code paths that don't
 // make network calls (leave handling, tombstone detection, etc.).
@@ -27,7 +37,7 @@ func newTestService() *TicketService {
 	return &TicketService{
 		clock:     clock.Real(),
 		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[string]*roomState),
+		rooms:     make(map[ref.RoomID]*roomState),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -48,22 +58,22 @@ func newTrackedRoom(tickets map[string]schema.TicketContent) *roomState {
 
 func TestHandleSyncLeaveRemovesTrackedRoom(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!tracked:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!tracked:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "first", Status: "open"},
 		"tkt-2": {Version: 1, Title: "second", Status: "open"},
 	})
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!tracked:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				testRoomID("!tracked:local"): {},
 			},
 		},
 	}
 
 	ts.handleSync(context.Background(), response)
 
-	if _, exists := ts.rooms["!tracked:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!tracked:local")]; exists {
 		t.Fatal("room should have been removed after leave")
 	}
 }
@@ -73,8 +83,8 @@ func TestHandleSyncLeaveIgnoresUntrackedRoom(t *testing.T) {
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!untracked:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				testRoomID("!untracked:local"): {},
 			},
 		},
 	}
@@ -89,27 +99,27 @@ func TestHandleSyncLeaveIgnoresUntrackedRoom(t *testing.T) {
 
 func TestHandleSyncLeavePreservesOtherRooms(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!keep:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!keep:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "keep this", Status: "open"},
 	})
-	ts.rooms["!remove:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!remove:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-2": {Version: 1, Title: "remove this", Status: "open"},
 	})
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
-			Leave: map[string]messaging.LeftRoom{
-				"!remove:local": {},
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				testRoomID("!remove:local"): {},
 			},
 		},
 	}
 
 	ts.handleSync(context.Background(), response)
 
-	if _, exists := ts.rooms["!keep:local"]; !exists {
+	if _, exists := ts.rooms[testRoomID("!keep:local")]; !exists {
 		t.Fatal("other room should not have been removed")
 	}
-	if _, exists := ts.rooms["!remove:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!remove:local")]; exists {
 		t.Fatal("left room should have been removed")
 	}
 }
@@ -163,12 +173,12 @@ func TestProcessRoomStateIndexesTickets(t *testing.T) {
 		},
 	}
 
-	count := ts.processRoomState(context.Background(), "!room:local", stateEvents, nil)
+	count := ts.processRoomState(context.Background(), testRoomID("!room:local"), stateEvents, nil)
 
 	if count != 2 {
 		t.Fatalf("processRoomState returned %d, want 2", count)
 	}
-	state, exists := ts.rooms["!room:local"]
+	state, exists := ts.rooms[testRoomID("!room:local")]
 	if !exists {
 		t.Fatal("room should have been added to ts.rooms")
 	}
@@ -200,12 +210,12 @@ func TestProcessRoomStateSkipsRoomWithoutConfig(t *testing.T) {
 		},
 	}
 
-	count := ts.processRoomState(context.Background(), "!room:local", stateEvents, nil)
+	count := ts.processRoomState(context.Background(), testRoomID("!room:local"), stateEvents, nil)
 
 	if count != 0 {
 		t.Fatalf("processRoomState returned %d, want 0", count)
 	}
-	if _, exists := ts.rooms["!room:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("room without ticket_config should not be tracked")
 	}
 }
@@ -214,7 +224,7 @@ func TestProcessRoomStateSkipsRoomWithoutConfig(t *testing.T) {
 
 func TestProcessRoomSyncTombstoneRemovesTrackedRoom(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!room:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!room:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "doomed", Status: "open"},
 	})
 
@@ -229,9 +239,9 @@ func TestProcessRoomSyncTombstoneRemovesTrackedRoom(t *testing.T) {
 		},
 	}
 
-	ts.processRoomSync(context.Background(), "!room:local", room)
+	ts.processRoomSync(context.Background(), testRoomID("!room:local"), room)
 
-	if _, exists := ts.rooms["!room:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("tombstoned room should have been removed")
 	}
 }
@@ -251,7 +261,7 @@ func TestProcessRoomSyncTombstoneIgnoresUntrackedRoom(t *testing.T) {
 	}
 
 	// Should not panic.
-	ts.processRoomSync(context.Background(), "!untracked:local", room)
+	ts.processRoomSync(context.Background(), testRoomID("!untracked:local"), room)
 }
 
 func TestProcessRoomStateTombstoneSkipsRoom(t *testing.T) {
@@ -285,19 +295,19 @@ func TestProcessRoomStateTombstoneSkipsRoom(t *testing.T) {
 		},
 	}
 
-	count := ts.processRoomState(context.Background(), "!room:local", stateEvents, nil)
+	count := ts.processRoomState(context.Background(), testRoomID("!room:local"), stateEvents, nil)
 
 	if count != 0 {
 		t.Fatalf("processRoomState returned %d, want 0 for tombstoned room", count)
 	}
-	if _, exists := ts.rooms["!room:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("tombstoned room should not be tracked")
 	}
 }
 
 func TestHandleRoomTombstoneExtractsReplacementRoom(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!room:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!room:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "test", Status: "open"},
 	})
 
@@ -309,16 +319,16 @@ func TestHandleRoomTombstoneExtractsReplacementRoom(t *testing.T) {
 		},
 	}
 
-	ts.handleRoomTombstone("!room:local", event)
+	ts.handleRoomTombstone(testRoomID("!room:local"), event)
 
-	if _, exists := ts.rooms["!room:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("room should have been removed after tombstone")
 	}
 }
 
 func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!room:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!room:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "test", Status: "open"},
 	})
 
@@ -328,9 +338,9 @@ func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 	}
 
 	// Should not panic when replacement_room is missing.
-	ts.handleRoomTombstone("!room:local", event)
+	ts.handleRoomTombstone(testRoomID("!room:local"), event)
 
-	if _, exists := ts.rooms["!room:local"]; exists {
+	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("room should have been removed after tombstone")
 	}
 }
@@ -342,7 +352,7 @@ func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 // the race detector. Now it verifies the RWMutex serialization.
 func TestConcurrentSyncAndReads(t *testing.T) {
 	ts := newTestService()
-	ts.rooms["!room:local"] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[testRoomID("!room:local")] = newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "existing", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 
@@ -361,7 +371,7 @@ func TestConcurrentSyncAndReads(t *testing.T) {
 		startBarrier.Wait()
 		for range iterations {
 			ts.mu.RLock()
-			state, exists := ts.rooms["!room:local"]
+			state, exists := ts.rooms[testRoomID("!room:local")]
 			if exists {
 				state.index.List(ticket.Filter{})
 				state.index.Ready()
@@ -379,8 +389,8 @@ func TestConcurrentSyncAndReads(t *testing.T) {
 		for i := range iterations {
 			syncResponse := &messaging.SyncResponse{
 				Rooms: messaging.RoomsSection{
-					Join: map[string]messaging.JoinedRoom{
-						"!room:local": {
+					Join: map[ref.RoomID]messaging.JoinedRoom{
+						testRoomID("!room:local"): {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{{
 									Type:     schema.EventTypeTicket,
@@ -409,7 +419,7 @@ func TestConcurrentSyncAndReads(t *testing.T) {
 
 	// Verify the final state is consistent: should have the original
 	// ticket plus all synced tickets.
-	state := ts.rooms["!room:local"]
+	state := ts.rooms[testRoomID("!room:local")]
 	if state == nil {
 		t.Fatal("room state should exist")
 	}
@@ -435,7 +445,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 	state := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	// Simulate a mutation handler writing to the ticket. The handler
 	// called putWithEcho which stored the pending echo.
@@ -487,7 +497,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	state := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	// Simulate a pending echo from a mutation handler.
 	state.pendingEchoes["tkt-1"] = "$echo-event-id"
@@ -533,7 +543,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 	state := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	// Set up and clear a pending echo (simulating echo arrival).
 	state.pendingEchoes["tkt-1"] = "$echo-event-id"
@@ -580,7 +590,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	state := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	// First mutation: claim (in_progress).
 	state.pendingEchoes["tkt-1"] = "$claim-event-id"
@@ -648,7 +658,7 @@ func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 	state := newTrackedRoom(map[string]schema.TicketContent{
 		"tkt-1": {Version: 1, Title: "original", Status: "open", Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	// No pending echo — events should be indexed normally.
 	newContent := toContentMap(t, schema.TicketContent{
@@ -682,12 +692,12 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 		writer:    writer,
 		clock:     clock.Real(),
 		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[string]*roomState),
+		rooms:     make(map[ref.RoomID]*roomState),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	state := newTrackedRoom(nil)
-	ts.rooms["!room:local"] = state
+	ts.rooms[testRoomID("!room:local")] = state
 
 	content := schema.TicketContent{
 		Version: 1, Title: "test", Status: "open",
@@ -697,7 +707,7 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 
 	writer.nextEventID = "$returned-event-42"
 
-	err := ts.putWithEcho(context.Background(), "!room:local", state, "tkt-1", content)
+	err := ts.putWithEcho(context.Background(), testRoomID("!room:local"), state, "tkt-1", content)
 	if err != nil {
 		t.Fatalf("putWithEcho: %v", err)
 	}

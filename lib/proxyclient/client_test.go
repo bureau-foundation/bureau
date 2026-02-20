@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -405,7 +406,11 @@ func TestSync(t *testing.T) {
 		t.Errorf("incremental NextBatch = %q, want s_after_message", response.NextBatch)
 	}
 
-	joined, ok := response.Rooms.Join["!config:test"]
+	configRoomID, err := ref.ParseRoomID("!config:test")
+	if err != nil {
+		t.Fatalf("parse room ID: %v", err)
+	}
+	joined, ok := response.Rooms.Join[configRoomID]
 	if !ok {
 		t.Fatal("room !config:test not in sync response")
 	}

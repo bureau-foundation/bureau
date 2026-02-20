@@ -20,6 +20,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/artifact"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -61,7 +62,7 @@ func testService(t *testing.T) *ArtifactService {
 		artifactIndex: artifact.NewArtifactIndex(),
 		clock:         clock.Fake(testClockEpoch),
 		startedAt:     testClockEpoch,
-		rooms:         make(map[string]*artifactRoomState),
+		rooms:         make(map[ref.RoomID]*artifactRoomState),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -1725,7 +1726,7 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 		authConfig:    authConfig,
 		clock:         testClock,
 		startedAt:     testClockEpoch,
-		rooms:         make(map[string]*artifactRoomState),
+		rooms:         make(map[ref.RoomID]*artifactRoomState),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 

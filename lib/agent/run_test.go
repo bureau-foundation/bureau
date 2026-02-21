@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // mockProcess implements Process for testing.
@@ -107,7 +108,7 @@ func testProxyClient(t *testing.T, handler http.Handler) *proxyclient.Client {
 	return proxyclient.NewForTesting(&testServerTransport{
 		server:    server,
 		transport: http.DefaultTransport,
-	}, "test.local")
+	}, ref.MustParseServerName("test.local"))
 }
 
 // testServerTransport rewrites requests to target the test server.

@@ -161,9 +161,14 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	}
 	defer adminSession.Close()
 
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	// Parse the machine ref at the CLI boundary. Fleet is derived from the
 	// machine ref since every machine belongs to exactly one fleet.
-	machine, err := ref.ParseMachine(params.Machine, params.ServerName)
+	machine, err := ref.ParseMachine(params.Machine, serverName)
 	if err != nil {
 		return cli.Validation("invalid machine: %v", err)
 	}
@@ -187,8 +192,8 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 		Machine:     machine,
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
-		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
-			_, err := template.Fetch(ctx, adminSession, ref, serverName)
+		ValidateTemplate: func(ctx context.Context, templateReference schema.TemplateRef, server ref.ServerName) error {
+			_, err := template.Fetch(ctx, adminSession, templateReference, server)
 			return err
 		},
 		HomeserverURL: homeserverURL,

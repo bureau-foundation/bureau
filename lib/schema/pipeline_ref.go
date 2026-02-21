@@ -69,10 +69,9 @@ func (ref PipelineRef) String() string {
 
 // RoomAlias returns the full Matrix room alias for this pipeline reference,
 // using defaultServer when the reference doesn't specify a server.
-func (pipelineRef PipelineRef) RoomAlias(defaultServer string) ref.RoomAlias {
-	server := pipelineRef.Server
-	if server == "" {
-		server = defaultServer
+func (pipelineRef PipelineRef) RoomAlias(defaultServer ref.ServerName) ref.RoomAlias {
+	if pipelineRef.Server != "" {
+		return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + pipelineRef.Server)
 	}
-	return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + server)
+	return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + defaultServer.String())
 }

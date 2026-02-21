@@ -29,7 +29,7 @@ import (
 
 func testMachine(t *testing.T) ref.Machine {
 	t.Helper()
-	fleet, err := ref.ParseFleet("bureau/fleet/test", "bureau.local")
+	fleet, err := ref.ParseFleet("bureau/fleet/test", ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseFleet: %v", err)
 	}
@@ -44,7 +44,7 @@ func testMachine(t *testing.T) ref.Machine {
 // localpart within the given fleet run directory.
 func testEntitySocketPath(t *testing.T, fleetRunDir, localpart string) string {
 	t.Helper()
-	entity, err := ref.ParseEntityLocalpart(localpart, "bureau.local")
+	entity, err := ref.ParseEntityLocalpart(localpart, ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
 	}
@@ -55,7 +55,7 @@ func testEntitySocketPath(t *testing.T, fleetRunDir, localpart string) string {
 // localpart within the given fleet run directory.
 func testEntityAdminSocketPath(t *testing.T, fleetRunDir, localpart string) string {
 	t.Helper()
-	entity, err := ref.ParseEntityLocalpart(localpart, "bureau.local")
+	entity, err := ref.ParseEntityLocalpart(localpart, ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
 	}
@@ -606,7 +606,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 		machine:       testMachine(t),
 		logger:        slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
-	principalEntity, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/echo", "bureau.local")
+	principalEntity, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/echo", ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart: %v", err)
 	}

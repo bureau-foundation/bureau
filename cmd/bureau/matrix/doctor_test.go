@@ -420,7 +420,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == statusFail {
@@ -505,7 +505,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
 
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " credential") && result.Status != statusPass {
@@ -537,7 +537,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
 
 	found := false
 	for _, result := range results {
@@ -567,7 +567,7 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	if len(results) == 0 {
 		t.Fatal("expected at least one result")
@@ -612,7 +612,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	if results[0].Status != statusPass {
 		t.Errorf("expected homeserver PASS, got %s: %s", results[0].Status, results[0].Message)
@@ -651,7 +651,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	// Space child checks should fail with fix hints.
 	for _, result := range results {
@@ -711,7 +711,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	// System room join rules should fail.
 	var systemJoinRulesIndex int
@@ -785,7 +785,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	// Find the system room state_default check.
 	found := false
@@ -852,7 +852,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 		t.Fatalf("ReadCredentialFile: %v", err)
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", storedCredentials, credentialFile, testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), storedCredentials, credentialFile, testLogger())
 
 	// System room credential should be FAIL (was !wrong:local, should be !system:local).
 	// Missing keys (machine, service, template, pipeline) should also be FAIL.
@@ -925,7 +925,7 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 		"MATRIX_SYSTEM_ROOM": "!system:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, "local", credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
 
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " credential") && result.Status == statusWarn {
@@ -953,7 +953,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	executeFixes(t.Context(), session, results, true)
 
@@ -986,7 +986,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, "local", nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == statusFail && result.fix != nil && result.FixHint == "" {

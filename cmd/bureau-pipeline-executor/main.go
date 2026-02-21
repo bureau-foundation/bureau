@@ -63,7 +63,7 @@ func run() error {
 	if socketPath == "" {
 		socketPath = defaultProxySocket
 	}
-	proxy := proxyclient.New(socketPath, "")
+	proxy := proxyclient.New(socketPath, ref.ServerName{})
 
 	// Discover server name — needed for constructing room aliases.
 	if _, err := proxy.DiscoverServerName(ctx); err != nil {

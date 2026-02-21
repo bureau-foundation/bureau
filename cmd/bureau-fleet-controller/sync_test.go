@@ -34,7 +34,7 @@ func mustRoomID(raw string) ref.RoomID {
 // localpart "bureau/fleet/prod".
 func testFleet(t *testing.T) ref.Fleet {
 	t.Helper()
-	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	ns, err := ref.NewNamespace(ref.MustParseServerName("bureau.local"), "bureau")
 	if err != nil {
 		t.Fatalf("creating test namespace: %v", err)
 	}

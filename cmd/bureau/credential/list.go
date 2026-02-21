@@ -68,7 +68,12 @@ Useful for auditing which principals have credentials on a machine.`,
 				return cli.Validation("--machine is required")
 			}
 
-			machine, err := ref.ParseMachine(params.MachineName, params.ServerName)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			machine, err := ref.ParseMachine(params.MachineName, serverName)
 			if err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}

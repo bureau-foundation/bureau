@@ -377,7 +377,7 @@ func publishFleetOperatorTemplate(t *testing.T, admin *messaging.DirectSession, 
 			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
 			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
 		},
-	}, testServerName)
+	}, testServer)
 	if err != nil {
 		t.Fatalf("push fleet operator template: %v", err)
 	}

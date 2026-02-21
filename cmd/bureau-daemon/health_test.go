@@ -288,7 +288,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
@@ -504,7 +504,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
@@ -645,7 +645,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -740,7 +740,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -817,7 +817,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()
@@ -1079,7 +1079,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	// Matrix state: principal in config with credentials (so rollback
 	// reaches the create-sandbox step before the launcher rejects it).
@@ -1229,7 +1229,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	ipcEntity := testEntity(t, daemon.fleet, localpart)
 	// Matrix state: principal in config but NO credentials. The
@@ -1366,7 +1366,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()

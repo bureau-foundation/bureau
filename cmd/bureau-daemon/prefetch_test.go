@@ -248,7 +248,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	// Track messages sent to the config room (prefetch error messages).
 	var (
@@ -394,7 +394,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	matrixState := newPrefetchTestMatrixState(t, daemon.fleet, configRoomID, templateRoomID, machineName)
 	// Override template to have no environment path.

@@ -33,7 +33,7 @@ func ParseAgentUserID(userID string) (Agent, error) {
 }
 
 // ParseAgent parses a fleet-scoped localpart and server into an Agent.
-func ParseAgent(localpart, server string) (Agent, error) {
+func ParseAgent(localpart string, server ServerName) (Agent, error) {
 	ent, err := parseEntityLocalpart(localpart, server, entityTypeAgent)
 	if err != nil {
 		return Agent{}, err

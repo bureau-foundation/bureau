@@ -51,7 +51,7 @@ type CreateParams struct {
 	// lib/principal and lib/template: callers that already have a
 	// messaging.Session close over template.Fetch to provide the validation.
 	// Required — Create returns an error if nil.
-	ValidateTemplate func(ctx context.Context, templateRef schema.TemplateRef, serverName string) error
+	ValidateTemplate func(ctx context.Context, templateRef schema.TemplateRef, serverName ref.ServerName) error
 
 	// HomeserverURL is the Matrix homeserver URL included in the encrypted
 	// credential bundle. The launcher uses this to configure the proxy's

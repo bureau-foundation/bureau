@@ -76,7 +76,7 @@ exist without actually publishing.`,
 			filePath := args[1]
 
 			// Parse the template reference.
-			ref, err := schema.ParseTemplateRef(templateRefString)
+			templateRef, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
 				return cli.Validation("parsing template reference: %w", err)
 			}
@@ -104,9 +104,14 @@ exist without actually publishing.`,
 				return err
 			}
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			// Dry-run: resolve room and verify inheritance without publishing.
 			if params.DryRun {
-				roomAlias := ref.RoomAlias(params.ServerName)
+				roomAlias := templateRef.RoomAlias(serverName)
 				roomID, err := session.ResolveAlias(ctx, roomAlias)
 				if err != nil {
 					return cli.NotFound("resolving target room %q: %w", roomAlias, err)
@@ -117,47 +122,47 @@ exist without actually publishing.`,
 					if err != nil {
 						return cli.Validation("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
 					}
-					if _, err := libtmpl.Fetch(ctx, session, parentRef, params.ServerName); err != nil {
+					if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
 						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err)
 					}
 					fmt.Fprintf(os.Stderr, "parent template %q: found\n", parentRefString)
 				}
 
 				if done, err := params.EmitJSON(templatePushResult{
-					Ref:          ref.String(),
+					Ref:          templateRef.String(),
 					File:         filePath,
 					RoomAlias:    roomAlias,
 					RoomID:       roomID,
-					TemplateName: ref.Template,
+					TemplateName: templateRef.Template,
 					DryRun:       true,
 				}); done {
 					return err
 				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
-				fmt.Fprintf(os.Stdout, "  template name: %s\n", ref.Template)
+				fmt.Fprintf(os.Stdout, "  template name: %s\n", templateRef.Template)
 				return nil
 			}
 
 			// Publish the template via the library function.
-			result, err := libtmpl.Push(ctx, session, ref, *content, params.ServerName)
+			result, err := libtmpl.Push(ctx, session, templateRef, *content, serverName)
 			if err != nil {
 				return cli.Internal("publishing template: %w", err)
 			}
 
 			if done, err := params.EmitJSON(templatePushResult{
-				Ref:          ref.String(),
+				Ref:          templateRef.String(),
 				File:         filePath,
 				RoomAlias:    result.RoomAlias,
 				RoomID:       result.RoomID,
-				TemplateName: ref.Template,
+				TemplateName: templateRef.Template,
 				EventID:      result.EventID,
 				DryRun:       false,
 			}); done {
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), result.RoomAlias, result.EventID)
+			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", templateRef.String(), result.RoomAlias, result.EventID)
 			return nil
 		},
 	}

@@ -144,7 +144,7 @@ type FleetController struct {
 
 	principalName string
 	machineName   string
-	serverName    string
+	serverName    ref.ServerName
 	fleet         ref.Fleet
 	runDir        string
 	serviceRoomID ref.RoomID

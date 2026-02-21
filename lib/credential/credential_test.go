@@ -139,7 +139,7 @@ var _ messaging.Session = (*mockSession)(nil)
 // "bureau.local" as the server and "my_bureau/fleet/prod" as the fleet.
 func testMachine(t *testing.T) ref.Machine {
 	t.Helper()
-	namespace, err := ref.NewNamespace("bureau.local", "my_bureau")
+	namespace, err := ref.NewNamespace(ref.MustParseServerName("bureau.local"), "my_bureau")
 	if err != nil {
 		t.Fatalf("NewNamespace: %v", err)
 	}

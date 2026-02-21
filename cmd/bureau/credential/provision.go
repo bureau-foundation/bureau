@@ -83,11 +83,16 @@ machine and an operator escrow key for recovery.`,
 				return cli.Validation("--principal is required")
 			}
 
-			machine, err := ref.ParseMachine(params.MachineName, params.ServerName)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			machine, err := ref.ParseMachine(params.MachineName, serverName)
 			if err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}
-			principalEntity, err := ref.ParseEntityLocalpart(params.Principal, params.ServerName)
+			principalEntity, err := ref.ParseEntityLocalpart(params.Principal, serverName)
 			if err != nil {
 				return cli.Validation("invalid principal name: %v", err)
 			}

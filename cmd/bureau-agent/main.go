@@ -29,6 +29,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func main() {
@@ -38,9 +39,15 @@ func main() {
 		Level: slog.LevelDebug,
 	}))
 
+	serverName, err := ref.ParseServerName(config.ServerName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bureau-agent: invalid server name %q: %v\n", config.ServerName, err)
+		os.Exit(1)
+	}
+
 	driver := &nativeDriver{
 		proxySocketPath: config.ProxySocketPath,
-		serverName:      config.ServerName,
+		serverName:      serverName,
 		logger:          config.Logger,
 	}
 

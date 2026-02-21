@@ -58,7 +58,7 @@ func (u UserID) Localpart() string {
 
 // Server returns the server portion of the user ID (after the ':').
 // Panics if called on a zero-value UserID.
-func (u UserID) Server() string {
+func (u UserID) Server() ServerName {
 	if u.id == "" {
 		panic("UserID.Server called on zero value")
 	}
@@ -67,7 +67,7 @@ func (u UserID) Server() string {
 		// UserID was validated at construction — this is unreachable.
 		panic(fmt.Sprintf("UserID.Server: internal error parsing %q: %v", u.id, err))
 	}
-	return server
+	return newServerName(server)
 }
 
 // MustParseUserID is like ParseUserID but panics on error. Use in

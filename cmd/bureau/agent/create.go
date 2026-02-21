@@ -98,7 +98,13 @@ token for creating the agent's account.`,
 			if params.Name == "" {
 				return cli.Validation("--name is required")
 			}
-			if _, err := ref.ParseMachine(params.Machine, params.ServerName); err != nil {
+
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			if _, err := ref.ParseMachine(params.Machine, serverName); err != nil {
 				return cli.Validation("invalid machine: %v", err)
 			}
 			if err := principal.ValidateLocalpart(params.Name); err != nil {
@@ -110,12 +116,12 @@ token for creating the agent's account.`,
 				return cli.Validation("invalid template reference: %v", err)
 			}
 
-			return runCreate(templateRef, params)
+			return runCreate(templateRef, serverName, params)
 		},
 	}
 }
 
-func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
+func runCreate(templateRef schema.TemplateRef, serverName ref.ServerName, params agentCreateParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -164,7 +170,7 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 	defer adminSession.Close()
 
 	// Parse the machine ref and resolve the fleet machine room for credential provisioning.
-	machine, err := ref.ParseMachine(params.Machine, params.ServerName)
+	machine, err := ref.ParseMachine(params.Machine, serverName)
 	if err != nil {
 		return cli.Internal("parse machine: %w", err)
 	}
@@ -177,7 +183,7 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 
 	fmt.Fprintf(os.Stderr, "Creating agent %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
 
-	principalEntity, err := ref.ParseEntityLocalpart(params.Name, params.ServerName)
+	principalEntity, err := ref.ParseEntityLocalpart(params.Name, serverName)
 	if err != nil {
 		return cli.Validation("invalid agent name: %v", err)
 	}
@@ -186,8 +192,8 @@ func runCreate(templateRef schema.TemplateRef, params agentCreateParams) error {
 		Machine:     machine,
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
-		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
-			_, err := template.Fetch(ctx, adminSession, ref, serverName)
+		ValidateTemplate: func(ctx context.Context, templateRef schema.TemplateRef, serverName ref.ServerName) error {
+			_, err := template.Fetch(ctx, adminSession, templateRef, serverName)
 			return err
 		},
 		HomeserverURL: homeserverURL,

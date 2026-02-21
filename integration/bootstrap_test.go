@@ -68,7 +68,7 @@ func TestBootstrapScript(t *testing.T) {
 	}
 	t.Logf("machine provisioned: %s (password length %d)", bootstrapConfig.MachineName, len(bootstrapConfig.Password))
 	machineName := bootstrapConfig.MachineName
-	machineRef, err := ref.ParseMachine(machineName, testServerName)
+	machineRef, err := ref.ParseMachine(machineName, testServer)
 	if err != nil {
 		t.Fatalf("parse machine ref: %v", err)
 	}

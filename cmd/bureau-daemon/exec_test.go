@@ -465,7 +465,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server()
+	serverName := daemon.machine.Server().String()
 
 	// Create a real binary to hash (reuse the test binary itself).
 	testBinary, err := os.Executable()

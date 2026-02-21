@@ -140,9 +140,14 @@ Use "bureau matrix room leave" separately to remove the room.`,
 // mode BEFORE updating the workspace status. Both changes arrive in the
 // same /sync batch, so the daemon sees the correct payload when the
 // teardown principal's condition becomes true.
-func runDestroy(alias string, session *cli.SessionConfig, mode, serverName string) error {
+func runDestroy(alias string, session *cli.SessionConfig, mode, serverNameString string) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid workspace alias: %w", err)
+	}
+
+	serverName, err := ref.ParseServerName(serverNameString)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -368,7 +373,7 @@ type workspaceAliasParams struct {
 
 // aliasRunFunc is the signature for workspace commands that operate on
 // a single alias with the standard server-name and json flags.
-type aliasRunFunc func(alias, serverName string, jsonOutput *cli.JSONOutput) error
+type aliasRunFunc func(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error
 
 // aliasCommand constructs a workspace subcommand that takes a single
 // positional alias argument and the standard workspaceAliasParams flags.
@@ -389,7 +394,11 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			return run(args[0], params.ServerName, &params.JSONOutput)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+			return run(args[0], serverName, &params.JSONOutput)
 		},
 	}
 }
@@ -409,7 +418,7 @@ it and replies via Matrix.`,
 		runStatus)
 }
 
-func runStatus(alias, serverName string, jsonOutput *cli.JSONOutput) error {
+func runStatus(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -468,7 +477,7 @@ each worktree, .shared/ (virtualenvs, build caches), and .cache/
 		runDu)
 }
 
-func runDu(alias, serverName string, jsonOutput *cli.JSONOutput) error {
+func runDu(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -581,12 +590,16 @@ an "accepted" status.`,
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			return runWorktreeAdd(args[0], params.Branch, params.ServerName, &params.JSONOutput)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+			return runWorktreeAdd(args[0], params.Branch, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeAdd(alias, branch, serverName string, jsonOutput *cli.JSONOutput) error {
+func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
@@ -714,12 +727,16 @@ an async operation — the command returns immediately.`,
 			if params.Mode != "archive" && params.Mode != "delete" {
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
-			return runWorktreeRemove(args[0], params.Mode, params.ServerName, &params.JSONOutput)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+			return runWorktreeRemove(args[0], params.Mode, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeRemove(alias, mode, serverName string, jsonOutput *cli.JSONOutput) error {
+func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
@@ -803,7 +820,7 @@ timeout is extended to 5 minutes.`,
 		runFetch)
 }
 
-func runFetch(alias, serverName string, jsonOutput *cli.JSONOutput) error {
+func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
@@ -861,7 +878,7 @@ raw git worktree list output including paths and branch information.`,
 		runWorktreeList)
 }
 
-func runWorktreeList(alias, serverName string, jsonOutput *cli.JSONOutput) error {
+func runWorktreeList(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	ctx, cancel, session, err := cli.ConnectOperator()
 	if err != nil {
 		return err

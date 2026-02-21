@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 )
@@ -81,7 +82,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			filePath := params.File
 
 			// Parse the template reference.
-			ref, err := schema.ParseTemplateRef(templateRefString)
+			templateRef, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
 				return cli.Validation("parsing template reference: %w", err)
 			}
@@ -99,7 +100,12 @@ content, not the resolved inheritance chain — use "bureau template show
 			}
 			defer cancel()
 
-			remoteContent, err := libtmpl.Fetch(ctx, session, ref, params.ServerName)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			remoteContent, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
 			if err != nil {
 				return err
 			}
@@ -135,7 +141,7 @@ content, not the resolved inheritance chain — use "bureau template show
 				return nil
 			}
 
-			fmt.Fprintf(os.Stdout, "--- %s (Matrix)\n", ref.String())
+			fmt.Fprintf(os.Stdout, "--- %s (Matrix)\n", templateRef.String())
 			fmt.Fprintf(os.Stdout, "+++ %s (local)\n", filePath)
 			for _, line := range differences {
 				fmt.Fprintln(os.Stdout, line)

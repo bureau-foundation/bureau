@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
@@ -31,7 +32,7 @@ import (
 // drivers use: stdin for message injection, stdout for structured events.
 type nativeDriver struct {
 	proxySocketPath string
-	serverName      string
+	serverName      ref.ServerName
 	logger          *slog.Logger
 }
 

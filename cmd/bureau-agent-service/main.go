@@ -147,7 +147,7 @@ type AgentService struct {
 
 	principalName    string
 	machineName      string
-	serverName       string
+	serverName       ref.ServerName
 	configRoomID     ref.RoomID
 	configRoomJoined bool
 	startedAt        time.Time

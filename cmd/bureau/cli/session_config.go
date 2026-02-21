@@ -144,7 +144,7 @@ func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session,
 		return nil, Validation("no credentials provided and BUREAU_PROXY_SOCKET is not set\n\nUse --credential-file, or run inside a Bureau sandbox where the proxy socket is available")
 	}
 
-	proxy := proxyclient.New(socketPath, "")
+	proxy := proxyclient.New(socketPath, ref.ServerName{})
 
 	// Discover the principal's identity from the proxy. The proxy knows
 	// who we are (the daemon told it) — we just need to ask.

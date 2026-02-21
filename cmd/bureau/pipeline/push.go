@@ -106,6 +106,11 @@ without actually publishing.`,
 				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			// Connect to Matrix for room verification and publishing.
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
@@ -114,7 +119,7 @@ without actually publishing.`,
 			defer cancel()
 
 			// Verify the target room exists.
-			roomAlias := pipelineRef.RoomAlias(params.ServerName)
+			roomAlias := pipelineRef.RoomAlias(serverName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return cli.NotFound("resolving target room %q: %w", roomAlias, err)

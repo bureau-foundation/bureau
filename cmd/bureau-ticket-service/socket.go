@@ -225,7 +225,15 @@ func (ts *TicketService) resolveRoomRef(ticketRef ticket.TicketRef) (ref.RoomID,
 	if ticketRef.IsBare() {
 		return ref.RoomID{}, false
 	}
-	return ts.matchRoomAlias(ticketRef.RoomLocalpart, ticketRef.ServerName)
+	var serverName ref.ServerName
+	if ticketRef.ServerName != "" {
+		var err error
+		serverName, err = ref.ParseServerName(ticketRef.ServerName)
+		if err != nil {
+			return ref.RoomID{}, false
+		}
+	}
+	return ts.matchRoomAlias(ticketRef.RoomLocalpart, serverName)
 }
 
 // resolveRoomString resolves a room string (from the Room field on a
@@ -244,14 +252,14 @@ func (ts *TicketService) resolveRoomString(room string) (ref.RoomID, bool) {
 		return roomID, true
 	}
 	// Otherwise treat as an alias localpart on this server.
-	return ts.matchRoomAlias(room, "")
+	return ts.matchRoomAlias(room, ref.ServerName{})
 }
 
 // matchRoomAlias finds the room ID for a room alias localpart among
-// tracked rooms. If serverName is empty, matches against this
-// server's name. Returns empty string if no match is found.
-func (ts *TicketService) matchRoomAlias(localpart, serverName string) (ref.RoomID, bool) {
-	if serverName == "" {
+// tracked rooms. If serverName is zero, matches against this
+// server's name. Returns zero RoomID if no match is found.
+func (ts *TicketService) matchRoomAlias(localpart string, serverName ref.ServerName) (ref.RoomID, bool) {
+	if serverName.IsZero() {
 		serverName = ts.service.Server()
 	}
 	// Build the expected canonical alias: "#localpart:server"

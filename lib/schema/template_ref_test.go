@@ -5,6 +5,8 @@ package schema
 
 import (
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestParseTemplateRef(t *testing.T) {
@@ -201,7 +203,7 @@ func TestTemplateRefRoomAlias(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := test.ref.RoomAlias(test.defaultServer).String()
+			got := test.ref.RoomAlias(ref.MustParseServerName(test.defaultServer)).String()
 			if got != test.want {
 				t.Errorf("RoomAlias(%q) = %q, want %q", test.defaultServer, got, test.want)
 			}

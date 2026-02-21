@@ -142,7 +142,7 @@ func newTestSession(t *testing.T, state *templateTestState) *messaging.DirectSes
 	return session
 }
 
-const testServerName = "test.local"
+var testServerName = ref.MustParseServerName("test.local")
 
 func TestFetchSimple(t *testing.T) {
 	t.Parallel()

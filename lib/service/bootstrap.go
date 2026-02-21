@@ -130,8 +130,8 @@ type BootstrapResult struct {
 	MachineName string
 
 	// ServerName is the Matrix server name as passed via
-	// --server-name.
-	ServerName string
+	// --server-name, validated and typed.
+	ServerName ref.ServerName
 
 	// RunDir is the validated runtime directory for sockets.
 	RunDir string
@@ -185,8 +185,14 @@ func Bootstrap(ctx context.Context, config BootstrapConfig) (*BootstrapResult, f
 		return nil, nil, fmt.Errorf("--fleet is required")
 	}
 
+	// Parse the server name at the CLI boundary.
+	serverName, err := ref.ParseServerName(flags.ServerName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	// Construct typed identity refs from the string flags.
-	fleet, err := ref.ParseFleet(flags.FleetPrefix, flags.ServerName)
+	fleet, err := ref.ParseFleet(flags.FleetPrefix, serverName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid fleet: %w", err)
 	}
@@ -308,7 +314,7 @@ func Bootstrap(ctx context.Context, config BootstrapConfig) (*BootstrapResult, f
 		SocketPath:    socketPath,
 		PrincipalName: flags.PrincipalName,
 		MachineName:   flags.MachineName,
-		ServerName:    flags.ServerName,
+		ServerName:    serverName,
 		RunDir:        flags.RunDir,
 	}, cleanup, nil
 }

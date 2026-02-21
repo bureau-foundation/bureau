@@ -121,9 +121,14 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			repairedNames := make(map[string]bool)
 			var results []checkResult
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			for iteration := range maxFixIterations {
 				_ = iteration
-				results = runDoctor(ctx, client, sess, params.ServerName, storedCredentials, params.SessionConfig.CredentialFile, logger)
+				results = runDoctor(ctx, client, sess, serverName, storedCredentials, params.SessionConfig.CredentialFile, logger)
 
 				if !params.Fix {
 					break
@@ -291,7 +296,7 @@ var standardRooms = []standardRoom{
 // When credentialFilePath is non-empty, credential mismatches are reported
 // as fixable failures (the fix updates the credential file). When empty,
 // credential mismatches remain warnings since there is no file to update.
-func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName string, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
+func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName ref.ServerName, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
 	var results []checkResult
 
 	// Section 1: Connectivity and authentication.
@@ -428,7 +433,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 					result.FixHint = fmt.Sprintf("add %s as child of Bureau space", capturedName)
 					result.fix = func(ctx context.Context, session messaging.Session) error {
 						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID.String(),
-							map[string]any{"via": []string{serverName}})
+							map[string]any{"via": []string{serverName.String()}})
 						return err
 					}
 				}
@@ -734,7 +739,7 @@ func checkJoinRules(ctx context.Context, session messaging.Session, name string,
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
 // they are only invited to global rooms during provisioning.
-func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName string, roomIDs map[string]ref.RoomID) []checkResult {
+func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName ref.ServerName, roomIDs map[string]ref.RoomID) []checkResult {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
 	if err != nil {
@@ -751,7 +756,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 			continue
 		}
 		// Machine accounts have localparts like "machine/worker-01".
-		localpart := strings.TrimSuffix(strings.TrimPrefix(member.UserID, "@"), ":"+serverName)
+		localpart := strings.TrimSuffix(strings.TrimPrefix(member.UserID, "@"), ":"+serverName.String())
 		if strings.HasPrefix(localpart, "machine/") {
 			continue
 		}

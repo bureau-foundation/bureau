@@ -268,7 +268,7 @@ type ArtifactService struct {
 
 	principalName string
 	machineName   string
-	serverName    string
+	serverName    ref.ServerName
 	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time

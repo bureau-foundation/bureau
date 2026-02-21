@@ -53,7 +53,12 @@ This is a direct view of the m.bureau.agent_session state event.`,
 }
 
 func runSession(localpart string, params agentSessionParams) error {
-	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	agentRef, err := ref.ParseAgent(localpart, serverName)
 	if err != nil {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
@@ -69,7 +74,7 @@ func runSession(localpart string, params agentSessionParams) error {
 
 	var machine ref.Machine
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
@@ -77,7 +82,7 @@ func runSession(localpart string, params agentSessionParams) error {
 
 	var fleet ref.Fleet
 	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}

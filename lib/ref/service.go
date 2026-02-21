@@ -34,7 +34,7 @@ func ParseServiceUserID(userID string) (Service, error) {
 }
 
 // ParseService parses a fleet-scoped localpart and server into a Service.
-func ParseService(localpart, server string) (Service, error) {
+func ParseService(localpart string, server ServerName) (Service, error) {
 	ent, err := parseEntityLocalpart(localpart, server, entityTypeService)
 	if err != nil {
 		return Service{}, err

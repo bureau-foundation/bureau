@@ -84,6 +84,11 @@ modification time. Use --prefix to filter keys (e.g., --prefix "summary/").`,
 }
 
 func runContextList(localpart string, params contextListParams) error {
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -95,7 +100,7 @@ func runContextList(localpart string, params contextListParams) error {
 
 	var machine ref.Machine
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
@@ -103,7 +108,7 @@ func runContextList(localpart string, params contextListParams) error {
 
 	var fleet ref.Fleet
 	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}
@@ -224,7 +229,12 @@ available.`,
 }
 
 func runContextShow(localpart, key string, params contextShowParams) error {
-	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	agentRef, err := ref.ParseAgent(localpart, serverName)
 	if err != nil {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
@@ -240,7 +250,7 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 
 	var machine ref.Machine
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
@@ -248,7 +258,7 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 
 	var fleet ref.Fleet
 	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}

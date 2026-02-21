@@ -95,7 +95,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 		t.Fatalf("create test room: %v", err)
 	}
 	testRoomID := testRoom.RoomID
-	fullAlias := schema.FullRoomAlias(roomAlias, testServerName)
+	fullAlias := schema.FullRoomAlias(roomAlias, testServer)
 	t.Logf("created test room %s (%s)", testRoomID, fullAlias)
 
 	// Join the agent to the test room so it can publish state and send

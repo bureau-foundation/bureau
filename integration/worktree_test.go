@@ -654,7 +654,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 			"HOME": "/workspace",
 			"TERM": "xterm-256color",
 		},
-	}, testServerName)
+	}, testServer)
 	if err != nil {
 		t.Fatalf("push agent template: %v", err)
 	}

@@ -84,7 +84,11 @@ func run() error {
 	}
 
 	// Construct typed identity refs from the string flags.
-	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
+	parsedServerName, err := ref.ParseServerName(serverName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+	fleet, err := ref.ParseFleet(fleetPrefix, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid fleet: %w", err)
 	}

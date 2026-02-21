@@ -46,7 +46,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 	t.Helper()
 	fakeClock := clock.Fake(testDaemonEpoch)
 
-	namespace, err := ref.NewNamespace("test.local", "bureau")
+	namespace, err := ref.NewNamespace(ref.MustParseServerName("test.local"), "bureau")
 	if err != nil {
 		t.Fatalf("create test namespace: %v", err)
 	}
@@ -112,7 +112,7 @@ func mustParseUserID(raw string) ref.UserID {
 // and fleet "test" for all test machines.
 func testMachineSetup(t *testing.T, name, server string) (ref.Machine, ref.Fleet) {
 	t.Helper()
-	namespace, err := ref.NewNamespace(server, "bureau")
+	namespace, err := ref.NewNamespace(ref.MustParseServerName(server), "bureau")
 	if err != nil {
 		t.Fatalf("create test namespace: %v", err)
 	}

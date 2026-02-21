@@ -154,7 +154,7 @@ func newTemplateTestSession(t *testing.T, state *templateTestState) *messaging.D
 	return session
 }
 
-const testServerName = "test.local"
+var testServerName = ref.MustParseServerName("test.local")
 
 // testTemplateNamespace is the namespace used by template resolution tests.
 // Namespace "bureau" on server "test.local" produces aliases like

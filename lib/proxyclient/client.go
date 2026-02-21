@@ -30,13 +30,13 @@ import (
 // Client is a typed HTTP client for the Bureau proxy Unix socket API.
 type Client struct {
 	httpClient *http.Client
-	serverName string
+	serverName ref.ServerName
 }
 
 // New creates a Client that communicates with the proxy over the given
 // Unix socket path. The serverName is used for constructing Matrix room
 // aliases (e.g., "#bureau/fleet/prod/machine/ws:serverName").
-func New(socketPath string, serverName string) *Client {
+func New(socketPath string, serverName ref.ServerName) *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Transport: &http.Transport{
@@ -52,7 +52,7 @@ func New(socketPath string, serverName string) *Client {
 // NewForTesting creates a Client with a custom transport. This is used by
 // tests that need to redirect requests to a httptest.Server instead of a
 // Unix socket.
-func NewForTesting(transport http.RoundTripper, serverName string) *Client {
+func NewForTesting(transport http.RoundTripper, serverName ref.ServerName) *Client {
 	return &Client{
 		httpClient: &http.Client{Transport: transport},
 		serverName: serverName,
@@ -60,7 +60,7 @@ func NewForTesting(transport http.RoundTripper, serverName string) *Client {
 }
 
 // ServerName returns the Matrix server name this client was configured with.
-func (client *Client) ServerName() string {
+func (client *Client) ServerName() ref.ServerName {
 	return client.serverName
 }
 
@@ -177,10 +177,10 @@ func (client *Client) Whoami(ctx context.Context) (ref.UserID, error) {
 // WhoamiServerName calls Whoami and extracts the server name from the
 // Matrix user ID. Convenience method for callers that need the server
 // name but don't have it from configuration.
-func (client *Client) WhoamiServerName(ctx context.Context) (string, error) {
+func (client *Client) WhoamiServerName(ctx context.Context) (ref.ServerName, error) {
 	userID, err := client.Whoami(ctx)
 	if err != nil {
-		return "", err
+		return ref.ServerName{}, err
 	}
 	return userID.Server(), nil
 }
@@ -189,10 +189,10 @@ func (client *Client) WhoamiServerName(ctx context.Context) (string, error) {
 // that subsequent calls to ServerName() return the discovered name.
 // Use this when the server name is not known at construction time (e.g.,
 // the pipeline executor discovers it via the proxy at startup).
-func (client *Client) DiscoverServerName(ctx context.Context) (string, error) {
+func (client *Client) DiscoverServerName(ctx context.Context) (ref.ServerName, error) {
 	serverName, err := client.WhoamiServerName(ctx)
 	if err != nil {
-		return "", err
+		return ref.ServerName{}, err
 	}
 	client.serverName = serverName
 	return serverName, nil

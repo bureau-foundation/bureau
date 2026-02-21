@@ -294,7 +294,7 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"PROXY_SOCKET":   "/run/bureau/proxy.sock",
 		"TERM":           os.Getenv("TERM"),
 		"MACHINE_NAME":   l.machine.Localpart(),
-		"SERVER_NAME":    l.machine.Server(),
+		"SERVER_NAME":    l.machine.Server().String(),
 	}
 	// Extract workspace variables from the payload. The daemon populates
 	// these for workspace principals via PrincipalAssignment.Payload;

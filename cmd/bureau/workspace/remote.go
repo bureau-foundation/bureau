@@ -30,7 +30,7 @@ type commandResult struct {
 // resolveWorkspaceRoom validates the alias and resolves it to a Matrix
 // room ID. The alias is the Bureau localpart (e.g., "iree/amdgpu/inference")
 // without the leading # or trailing :server.
-func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string) (ref.RoomID, error) {
+func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias string, serverName ref.ServerName) (ref.RoomID, error) {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return ref.RoomID{}, cli.Validation("invalid alias %q: %w", alias, err)
 	}
@@ -54,7 +54,7 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias,
 // Returns the parent workspace's room ID, its parsed workspace state,
 // and the alias localpart that matched. Returns an error if no parent
 // workspace is found.
-func findParentWorkspace(ctx context.Context, session messaging.Session, alias, serverName string) (ref.RoomID, *schema.WorkspaceState, string, error) {
+func findParentWorkspace(ctx context.Context, session messaging.Session, alias string, serverName ref.ServerName) (ref.RoomID, *schema.WorkspaceState, string, error) {
 	// Walk up the alias path, dropping the last segment each time.
 	remaining := alias
 	for {

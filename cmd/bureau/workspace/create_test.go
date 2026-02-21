@@ -26,7 +26,7 @@ func mustRoomID(raw string) ref.RoomID {
 // "bureau.local".
 func testMachine(t *testing.T, name string) ref.Machine {
 	t.Helper()
-	namespace, err := ref.NewNamespace("bureau.local", "bureau")
+	namespace, err := ref.NewNamespace(ref.MustParseServerName("bureau.local"), "bureau")
 	if err != nil {
 		t.Fatalf("NewNamespace: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestBuildPrincipalAssignments_SetupPayload(t *testing.T) {
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		testRoomID,
 		map[string]string{
@@ -115,7 +115,7 @@ func TestBuildPrincipalAssignments_IncludesTeardown(t *testing.T) {
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		testRoomID,
 		map[string]string{
@@ -180,7 +180,7 @@ func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		mustRoomID("!room:bureau.local"),
 		map[string]string{
@@ -220,7 +220,7 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		1,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		mustRoomID("!room:bureau.local"),
 		map[string]string{
@@ -260,7 +260,7 @@ func TestBuildPrincipalAssignments_AgentCondition(t *testing.T) {
 		"iree/amdgpu/inference",
 		"bureau/template:base",
 		2,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		mustRoomID("!room:bureau.local"),
 		map[string]string{"branch": "main"},
@@ -315,7 +315,7 @@ func TestBuildPrincipalAssignments_ZeroAgents(t *testing.T) {
 		"docs/writing",
 		"bureau/template:base",
 		0,
-		"bureau.local",
+		ref.MustParseServerName("bureau.local"),
 		machine,
 		mustRoomID("!room:bureau.local"),
 		map[string]string{"branch": "main"},

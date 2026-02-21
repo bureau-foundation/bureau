@@ -70,7 +70,12 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 				return cli.Validation("room is required\n\nusage: bureau template list [flags] <room-alias-localpart>")
 			}
 
-			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, params.ServerName))
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, serverName))
 
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {

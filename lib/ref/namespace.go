@@ -13,16 +13,16 @@ import "fmt"
 // Size: ~32 bytes (two string headers). Alias methods compute strings
 // on demand via simple concatenation.
 type Namespace struct {
-	server    string
+	server    ServerName
 	namespace string
 }
 
 // NewNamespace creates a validated Namespace reference.
 // The namespace name must be a single path segment (no slashes)
 // using only lowercase letters, digits, and the symbols . _ = -.
-func NewNamespace(server, namespace string) (Namespace, error) {
-	if err := validateServer(server); err != nil {
-		return Namespace{}, fmt.Errorf("invalid namespace: %w", err)
+func NewNamespace(server ServerName, namespace string) (Namespace, error) {
+	if server.IsZero() {
+		return Namespace{}, fmt.Errorf("invalid namespace: server name is empty")
 	}
 	if namespace == "" {
 		return Namespace{}, fmt.Errorf("invalid namespace: namespace name is empty")
@@ -37,7 +37,7 @@ func NewNamespace(server, namespace string) (Namespace, error) {
 }
 
 // Server returns the Matrix homeserver name.
-func (n Namespace) Server() string { return n.server }
+func (n Namespace) Server() ServerName { return n.server }
 
 // Name returns the namespace name (e.g., "my_bureau").
 func (n Namespace) Name() string { return n.namespace }
@@ -46,7 +46,7 @@ func (n Namespace) Name() string { return n.namespace }
 func (n Namespace) String() string { return n.namespace }
 
 // IsZero reports whether this is an uninitialized zero-value Namespace.
-func (n Namespace) IsZero() bool { return n.server == "" && n.namespace == "" }
+func (n Namespace) IsZero() bool { return n.server.IsZero() && n.namespace == "" }
 
 // SpaceAlias returns the Matrix space alias: #namespace:server.
 func (n Namespace) SpaceAlias() RoomAlias {
@@ -115,7 +115,7 @@ func (n *Namespace) UnmarshalText(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("invalid Namespace: %w", err)
 	}
-	parsed, err := NewNamespace(server, localpart)
+	parsed, err := NewNamespace(newServerName(server), localpart)
 	if err != nil {
 		return err
 	}

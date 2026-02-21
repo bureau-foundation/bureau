@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -14,7 +15,7 @@ import (
 // resolveTemplate fetches a template from Matrix and walks its inheritance
 // chain to produce a fully-merged TemplateContent. Delegates to
 // lib/template.Resolve.
-func resolveTemplate(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName string) (*schema.TemplateContent, error) {
+func resolveTemplate(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (*schema.TemplateContent, error) {
 	return libtmpl.Resolve(ctx, session, templateRef, serverName)
 }
 

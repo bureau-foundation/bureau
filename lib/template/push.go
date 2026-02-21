@@ -32,9 +32,9 @@ type PushResult struct {
 //
 // The session must have permission to read the target room (for alias
 // resolution and parent verification) and write state events to it.
-func Push(ctx context.Context, session messaging.Session, ref schema.TemplateRef, content schema.TemplateContent, serverName string) (*PushResult, error) {
+func Push(ctx context.Context, session messaging.Session, templateRef schema.TemplateRef, content schema.TemplateContent, serverName ref.ServerName) (*PushResult, error) {
 	// Resolve the target room.
-	roomAlias := ref.RoomAlias(serverName)
+	roomAlias := templateRef.RoomAlias(serverName)
 	roomID, err := session.ResolveAlias(ctx, roomAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving target room %q: %w", roomAlias, err)
@@ -52,9 +52,9 @@ func Push(ctx context.Context, session messaging.Session, ref schema.TemplateRef
 	}
 
 	// Publish the template state event.
-	eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTemplate, ref.Template, content)
+	eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTemplate, templateRef.Template, content)
 	if err != nil {
-		return nil, fmt.Errorf("publishing template %q to room %q (%s): %w", ref.Template, roomAlias, roomID, err)
+		return nil, fmt.Errorf("publishing template %q to room %q (%s): %w", templateRef.Template, roomAlias, roomID, err)
 	}
 
 	return &PushResult{

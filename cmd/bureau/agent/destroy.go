@@ -71,6 +71,11 @@ state event trail remain intact for auditing.`,
 }
 
 func runDestroy(localpart string, params agentDestroyParams) error {
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -82,7 +87,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 
 	var machine ref.Machine
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
@@ -90,7 +95,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 
 	var fleet ref.Fleet
 	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}

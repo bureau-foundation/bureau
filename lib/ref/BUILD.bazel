@@ -15,6 +15,7 @@ go_library(
         "namespace.go",
         "room.go",
         "room_alias.go",
+        "server_name.go",
         "service.go",
         "user.go",
         "validate.go",

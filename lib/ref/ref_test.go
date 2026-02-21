@@ -13,6 +13,8 @@ import (
 
 const testServer = "bureau.local"
 
+var testServerName = ref.MustParseServerName(testServer)
+
 func TestNamespaceConstruction(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -37,7 +39,14 @@ func TestNamespaceConstruction(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ns, err := ref.NewNamespace(tt.server, tt.namespace)
+			server, serverErr := ref.ParseServerName(tt.server)
+			if serverErr != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("unexpected ParseServerName error: %v", serverErr)
+			}
+			ns, err := ref.NewNamespace(server, tt.namespace)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got namespace %v", ns)
@@ -47,7 +56,7 @@ func TestNamespaceConstruction(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if ns.Server() != tt.server {
+			if ns.Server().String() != tt.server {
 				t.Errorf("Server() = %q, want %q", ns.Server(), tt.server)
 			}
 			if ns.Name() != tt.namespace {
@@ -64,7 +73,7 @@ func TestNamespaceConstruction(t *testing.T) {
 }
 
 func TestNamespaceAliases(t *testing.T) {
-	ns, err := ref.NewNamespace(testServer, "my_bureau")
+	ns, err := ref.NewNamespace(testServerName, "my_bureau")
 	if err != nil {
 		t.Fatalf("NewNamespace: %v", err)
 	}
@@ -94,7 +103,7 @@ func TestNamespaceAliases(t *testing.T) {
 }
 
 func TestFleetConstruction(t *testing.T) {
-	ns, err := ref.NewNamespace(testServer, "my_bureau")
+	ns, err := ref.NewNamespace(testServerName, "my_bureau")
 	if err != nil {
 		t.Fatalf("NewNamespace: %v", err)
 	}
@@ -134,7 +143,7 @@ func TestFleetConstruction(t *testing.T) {
 			if fleet.Namespace().Name() != "my_bureau" {
 				t.Errorf("Namespace().Name() = %q, want %q", fleet.Namespace().Name(), "my_bureau")
 			}
-			if fleet.Server() != testServer {
+			if fleet.Server() != testServerName {
 				t.Errorf("Server() = %q, want %q", fleet.Server(), testServer)
 			}
 			if fleet.String() != tt.wantLp {
@@ -156,7 +165,7 @@ func TestFleetZeroNamespace(t *testing.T) {
 }
 
 func TestFleetAliases(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, err := ref.NewFleet(ns, "prod")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
@@ -227,7 +236,14 @@ func TestParseFleet(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fleet, err := ref.ParseFleet(tt.localpart, tt.server)
+			server, serverErr := ref.ParseServerName(tt.server)
+			if serverErr != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("unexpected ParseServerName error: %v", serverErr)
+			}
+			fleet, err := ref.ParseFleet(tt.localpart, server)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got fleet %v", fleet)
@@ -255,13 +271,13 @@ func TestParseFleetRoomAlias(t *testing.T) {
 	if fleet.Localpart() != "my_bureau/fleet/prod" {
 		t.Errorf("Localpart() = %q", fleet.Localpart())
 	}
-	if fleet.Server() != testServer {
+	if fleet.Server() != testServerName {
 		t.Errorf("Server() = %q", fleet.Server())
 	}
 }
 
 func TestMachineConstruction(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 
 	tests := []struct {
@@ -315,7 +331,7 @@ func TestMachineConstruction(t *testing.T) {
 			if m.Name() != tt.machine {
 				t.Errorf("Name() = %q, want %q", m.Name(), tt.machine)
 			}
-			if m.Server() != testServer {
+			if m.Server() != testServerName {
 				t.Errorf("Server() = %q, want %q", m.Server(), testServer)
 			}
 			if m.Fleet().FleetName() != "prod" {
@@ -329,7 +345,7 @@ func TestMachineConstruction(t *testing.T) {
 }
 
 func TestServiceHierarchicalName(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "acme")
+	ns, _ := ref.NewNamespace(testServerName, "acme")
 	fleet, _ := ref.NewFleet(ns, "staging")
 
 	service, err := ref.NewService(fleet, "stt/whisper")
@@ -349,7 +365,7 @@ func TestServiceHierarchicalName(t *testing.T) {
 }
 
 func TestAgentConstruction(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 
 	agent, err := ref.NewAgent(fleet, "code-reviewer")
@@ -449,7 +465,7 @@ func TestParseServiceUserID(t *testing.T) {
 }
 
 func TestParseMachineLocalpart(t *testing.T) {
-	machine, err := ref.ParseMachine("my_bureau/fleet/prod/machine/gpu-box", testServer)
+	machine, err := ref.ParseMachine("my_bureau/fleet/prod/machine/gpu-box", testServerName)
 	if err != nil {
 		t.Fatalf("ParseMachine: %v", err)
 	}
@@ -462,7 +478,7 @@ func TestParseMachineLocalpart(t *testing.T) {
 }
 
 func TestSocketPaths(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 	service, _ := ref.NewService(fleet, "stt/whisper")
@@ -488,7 +504,7 @@ func TestSocketPaths(t *testing.T) {
 }
 
 func TestAtToHashRule(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 
@@ -583,7 +599,7 @@ func TestParseEntityUserID(t *testing.T) {
 			}
 
 			// Verify socket paths use fleet.RunDir layout.
-			ns, _ := ref.NewNamespace(testServer, "my_bureau")
+			ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 			fleet, _ := ref.NewFleet(ns, "prod")
 			fleetRunDir := fleet.RunDir("/run/bureau")
 
@@ -600,7 +616,7 @@ func TestParseEntityUserID(t *testing.T) {
 func TestParseEntityLocalpart(t *testing.T) {
 	t.Parallel()
 
-	entity, err := ref.ParseEntityLocalpart("my_bureau/fleet/prod/machine/gpu-box", testServer)
+	entity, err := ref.ParseEntityLocalpart("my_bureau/fleet/prod/machine/gpu-box", testServerName)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -621,7 +637,7 @@ func TestParseEntityLocalpart(t *testing.T) {
 }
 
 func TestJSONRoundTripMachine(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 
@@ -650,7 +666,7 @@ func TestJSONRoundTripMachine(t *testing.T) {
 }
 
 func TestJSONRoundTripService(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "acme")
+	ns, _ := ref.NewNamespace(testServerName, "acme")
 	fleet, _ := ref.NewFleet(ns, "staging")
 	service, _ := ref.NewService(fleet, "stt/whisper")
 
@@ -672,7 +688,7 @@ func TestJSONRoundTripService(t *testing.T) {
 }
 
 func TestJSONRoundTripFleet(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 
 	data, err := json.Marshal(fleet)
@@ -697,7 +713,7 @@ func TestJSONRoundTripFleet(t *testing.T) {
 }
 
 func TestJSONRoundTripNamespace(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 
 	data, err := json.Marshal(ns)
 	if err != nil {
@@ -727,7 +743,7 @@ func TestJSONInStructField(t *testing.T) {
 		Service ref.Service `json:"service"`
 	}
 
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 	service, _ := ref.NewService(fleet, "ticket")
@@ -802,7 +818,7 @@ func TestZeroValues(t *testing.T) {
 }
 
 func TestLocalpartLengthLimit(t *testing.T) {
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 
 	// "my_bureau/fleet/prod/machine/" is 30 characters.
@@ -846,7 +862,7 @@ func TestEntityTypeValidation(t *testing.T) {
 
 func TestConstructionRoundTrip(t *testing.T) {
 	// Construct via NewMachine, serialize, parse back, verify equality.
-	ns, _ := ref.NewNamespace(testServer, "my_bureau")
+	ns, _ := ref.NewNamespace(testServerName, "my_bureau")
 	fleet, _ := ref.NewFleet(ns, "prod")
 	original, _ := ref.NewMachine(fleet, "gpu-box")
 
@@ -880,7 +896,7 @@ func TestConstructionRoundTrip(t *testing.T) {
 
 func TestServerWithPort(t *testing.T) {
 	// Matrix server names can include ports.
-	ns, err := ref.NewNamespace("example.org:8448", "acme")
+	ns, err := ref.NewNamespace(ref.MustParseServerName("example.org:8448"), "acme")
 	if err != nil {
 		t.Fatalf("NewNamespace with port: %v", err)
 	}
@@ -898,7 +914,7 @@ func TestServerWithPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMachineUserID with port: %v", err)
 	}
-	if parsed.Server() != "example.org:8448" {
+	if parsed.Server().String() != "example.org:8448" {
 		t.Errorf("Server() = %q, want %q", parsed.Server(), "example.org:8448")
 	}
 	if parsed.Name() != "box" {
@@ -934,7 +950,7 @@ func TestServerFromUserID(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if server != test.wantServer {
+			if server.String() != test.wantServer {
 				t.Errorf("server = %q, want %q", server, test.wantServer)
 			}
 		})
@@ -1026,7 +1042,7 @@ func TestExtractEntityName(t *testing.T) {
 }
 
 func TestNewEntityFromAccountLocalpart(t *testing.T) {
-	ns, err := ref.NewNamespace(testServer, "bureau")
+	ns, err := ref.NewNamespace(testServerName, "bureau")
 	if err != nil {
 		t.Fatalf("creating namespace: %v", err)
 	}
@@ -1245,7 +1261,7 @@ func TestEntityJSONRoundtrip(t *testing.T) {
 }
 
 func TestMachineEntity(t *testing.T) {
-	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	ns, err := ref.NewNamespace(ref.MustParseServerName("bureau.local"), "bureau")
 	if err != nil {
 		t.Fatalf("namespace: %v", err)
 	}
@@ -1274,7 +1290,7 @@ func TestMachineEntity(t *testing.T) {
 }
 
 func TestServiceEntity(t *testing.T) {
-	ns, err := ref.NewNamespace("bureau.local", "bureau")
+	ns, err := ref.NewNamespace(ref.MustParseServerName("bureau.local"), "bureau")
 	if err != nil {
 		t.Fatalf("namespace: %v", err)
 	}

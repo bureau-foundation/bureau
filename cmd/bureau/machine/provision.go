@@ -318,7 +318,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 	// use the fleet-scoped localpart format consumed by the launcher.
 	config := &bootstrap.Config{
 		HomeserverURL: homeserverURL,
-		ServerName:    server,
+		ServerName:    server.String(),
 		MachineName:   machine.Localpart(),
 		Password:      oneTimePassword.String(),
 		FleetPrefix:   fleet.Localpart(),

@@ -117,10 +117,9 @@ func (ref TemplateRef) String() string {
 
 // RoomAlias returns the full Matrix room alias for this template reference,
 // using defaultServer when the reference doesn't specify a server.
-func (templateRef TemplateRef) RoomAlias(defaultServer string) ref.RoomAlias {
-	server := templateRef.Server
-	if server == "" {
-		server = defaultServer
+func (templateRef TemplateRef) RoomAlias(defaultServer ref.ServerName) ref.RoomAlias {
+	if templateRef.Server != "" {
+		return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + templateRef.Server)
 	}
-	return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + server)
+	return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + defaultServer.String())
 }

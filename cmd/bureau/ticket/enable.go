@@ -106,22 +106,27 @@ func runEnable(params *enableParams) error {
 		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
 	}
 
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	// Parse and validate the machine localpart as a typed ref.
-	machineRef, err := ref.ParseMachine(host, params.ServerName)
+	machineRef, err := ref.ParseMachine(host, serverName)
 	if err != nil {
 		return cli.Validation("invalid host: %w", err)
 	}
 
 	// Derive the service principal localpart from the space name.
 	servicePrincipal := "service/ticket/" + params.Space
-	serviceEntity, err := ref.ParseEntityLocalpart(servicePrincipal, params.ServerName)
+	serviceEntity, err := ref.ParseEntityLocalpart(servicePrincipal, serverName)
 	if err != nil {
 		return cli.Internal("invalid service principal %q: %w", servicePrincipal, err)
 	}
 
 	serviceUserID := serviceEntity.UserID()
 
-	namespace, err := ref.NewNamespace(params.ServerName, params.Space)
+	namespace, err := ref.NewNamespace(serverName, params.Space)
 	if err != nil {
 		return cli.Validation("invalid space name: %w", err)
 	}
@@ -147,7 +152,7 @@ func runEnable(params *enableParams) error {
 	defer adminSession.Close()
 
 	// Step 1: Register the ticket service Matrix account (idempotent).
-	if err := registerServiceAccount(ctx, credentials, servicePrincipal, params.ServerName); err != nil {
+	if err := registerServiceAccount(ctx, credentials, servicePrincipal, serverName); err != nil {
 		return cli.Internal("registering service account: %w", err)
 	}
 
@@ -214,7 +219,7 @@ func runEnable(params *enableParams) error {
 
 // registerServiceAccount registers a Matrix account for the ticket service.
 // Idempotent: M_USER_IN_USE is silently ignored.
-func registerServiceAccount(ctx context.Context, credentials map[string]string, servicePrincipal, serverName string) error {
+func registerServiceAccount(ctx context.Context, credentials map[string]string, servicePrincipal string, serverName ref.ServerName) error {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		homeserverURL = "http://localhost:6167"

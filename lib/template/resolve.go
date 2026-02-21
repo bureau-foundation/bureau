@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -25,7 +26,7 @@ import (
 // appears on the current resolution stack, an error is returned. Diamond
 // inheritance (two parents sharing a common ancestor) is valid and handled
 // efficiently via a resolution cache.
-func Resolve(ctx context.Context, session messaging.Session, templateRef string, serverName string) (*schema.TemplateContent, error) {
+func Resolve(ctx context.Context, session messaging.Session, templateRef string, serverName ref.ServerName) (*schema.TemplateContent, error) {
 	ref, err := schema.ParseTemplateRef(templateRef)
 	if err != nil {
 		return nil, fmt.Errorf("parsing template reference %q: %w", templateRef, err)
@@ -44,7 +45,7 @@ func Resolve(ctx context.Context, session messaging.Session, templateRef string,
 // re-fetch or re-resolve the same template. stack tracks the current
 // resolution path for cycle detection: a ref appearing in stack means
 // we are already resolving it (a cycle).
-func resolve(ctx context.Context, session messaging.Session, ref schema.TemplateRef, serverName string, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
+func resolve(ctx context.Context, session messaging.Session, ref schema.TemplateRef, serverName ref.ServerName, cache map[string]*schema.TemplateContent, stack map[string]bool) (*schema.TemplateContent, error) {
 	refString := ref.String()
 
 	// Check resolution cache first (handles diamond inheritance).
@@ -102,21 +103,21 @@ func resolve(ctx context.Context, session messaging.Session, ref schema.Template
 // Fetch resolves a single template reference to its content. It resolves
 // the room alias to a room ID, then fetches the m.bureau.template state
 // event for the template name. No inheritance resolution is performed.
-func Fetch(ctx context.Context, session messaging.Session, ref schema.TemplateRef, serverName string) (*schema.TemplateContent, error) {
-	roomAlias := ref.RoomAlias(serverName)
+func Fetch(ctx context.Context, session messaging.Session, templateRef schema.TemplateRef, serverName ref.ServerName) (*schema.TemplateContent, error) {
+	roomAlias := templateRef.RoomAlias(serverName)
 	roomID, err := session.ResolveAlias(ctx, roomAlias)
 	if err != nil {
-		return nil, fmt.Errorf("resolving room alias %q for template %q: %w", roomAlias, ref.String(), err)
+		return nil, fmt.Errorf("resolving room alias %q for template %q: %w", roomAlias, templateRef.String(), err)
 	}
 
-	content, err := session.GetStateEvent(ctx, roomID, schema.EventTypeTemplate, ref.Template)
+	content, err := session.GetStateEvent(ctx, roomID, schema.EventTypeTemplate, templateRef.Template)
 	if err != nil {
-		return nil, fmt.Errorf("fetching template %q from room %q (%s): %w", ref.Template, roomAlias, roomID, err)
+		return nil, fmt.Errorf("fetching template %q from room %q (%s): %w", templateRef.Template, roomAlias, roomID, err)
 	}
 
 	var template schema.TemplateContent
 	if err := json.Unmarshal(content, &template); err != nil {
-		return nil, fmt.Errorf("parsing template %q from room %q: %w", ref.Template, roomAlias, err)
+		return nil, fmt.Errorf("parsing template %q from room %q: %w", templateRef.Template, roomAlias, err)
 	}
 
 	return &template, nil

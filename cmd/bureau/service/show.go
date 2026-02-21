@@ -62,7 +62,12 @@ is assigned. The scan count is reported for diagnostics.`,
 }
 
 func runShow(localpart string, params serviceShowParams) error {
-	serviceRef, err := ref.ParseService(localpart, params.ServerName)
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	serviceRef, err := ref.ParseService(localpart, serverName)
 	if err != nil {
 		return cli.Validation("invalid service localpart: %v", err)
 	}
@@ -79,12 +84,12 @@ func runShow(localpart string, params serviceShowParams) error {
 	var machine ref.Machine
 	var fleet ref.Fleet
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
 	} else {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}

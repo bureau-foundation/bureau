@@ -43,8 +43,8 @@ func MustParseRoomAlias(raw string) RoomAlias {
 // newRoomAlias constructs a RoomAlias from a known-valid localpart and server.
 // Used internally by Namespace, Fleet, and entity constructors where the
 // components have already been validated.
-func newRoomAlias(localpart, server string) RoomAlias {
-	return RoomAlias{alias: "#" + localpart + ":" + server}
+func newRoomAlias(localpart string, server ServerName) RoomAlias {
+	return RoomAlias{alias: "#" + localpart + ":" + server.name}
 }
 
 // String returns the full room alias string (e.g., "#bureau/system:bureau.local").
@@ -64,12 +64,12 @@ func (a RoomAlias) Localpart() string {
 }
 
 // Server returns the server name from the alias.
-func (a RoomAlias) Server() string {
+func (a RoomAlias) Server() ServerName {
 	if a.alias == "" {
-		return ""
+		return ServerName{}
 	}
 	_, server, _ := parseRoomAlias(a.alias)
-	return server
+	return newServerName(server)
 }
 
 // MarshalText implements encoding.TextMarshaler for JSON and other

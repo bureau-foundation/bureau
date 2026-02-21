@@ -251,7 +251,7 @@ func newImpactTestSession(t *testing.T, state *impactTestState) *messaging.Direc
 	return session
 }
 
-const impactServerName = "test.local"
+var impactServerName = ref.MustParseServerName("test.local")
 
 func TestImpactDirectReference(t *testing.T) {
 	t.Parallel()
@@ -268,7 +268,7 @@ func TestImpactDirectReference(t *testing.T) {
 	)
 
 	// One machine with one principal using that template directly.
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"),
@@ -352,7 +352,7 @@ func TestImpactTransitiveInheritance(t *testing.T) {
 	)
 
 	// Principal uses the grandchild template. Impact analysis targets the base.
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/llm:test.local"), Template: "bureau/template:llm-agent"},
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/plain:test.local"), Template: "bureau/template:agent"},
@@ -428,7 +428,7 @@ func TestImpactNoAffectedPrincipals(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -470,14 +470,14 @@ func TestImpactMultipleMachines(t *testing.T) {
 	)
 
 	// Two machines, each with principals referencing the same template.
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/ws-a:test.local"), Template: "bureau/template:base"},
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/ws-b:test.local"), Template: "bureau/template:base"},
 		},
 	})
 
-	state.addConfigRoom("!config-gpu:test", "machine/gpu-server", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-gpu:test", "machine/gpu-server", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/gpu-training:test.local"), Template: "bureau/template:base"},
 		},
@@ -536,7 +536,7 @@ func TestImpactInstanceOverrideAnnotation(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal:       testEntity(t, "@bureau/fleet/test/agent/overridden:test.local"),
@@ -638,7 +638,7 @@ func TestImpactChangeClassificationStructural(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -698,7 +698,7 @@ func TestImpactChangeClassificationPayloadOnly(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -750,7 +750,7 @@ func TestImpactChangeClassificationMetadata(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -804,7 +804,7 @@ func TestImpactChangeClassificationNoChange(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -877,7 +877,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 	)
 
 	// Principal uses the child template. Impact targets the base.
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 		},
@@ -945,7 +945,7 @@ func TestImpactSkipsPrincipalsWithoutTemplate(t *testing.T) {
 		},
 	)
 
-	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName, schema.MachineConfig{
+	state.addConfigRoom("!config-ws:test", "machine/workstation", impactServerName.String(), schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/test-agent:test.local"), Template: "bureau/template:agent"},
 			{Principal: testEntity(t, "@bureau/fleet/test/agent/no-template:test.local"), Template: ""},

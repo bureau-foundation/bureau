@@ -119,11 +119,16 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			return runSetup(ctx, logger, setupConfig{
 				homeserverURL:     params.HomeserverURL,
 				registrationToken: registrationToken,
 				credentialFile:    params.CredentialFile,
-				serverName:        params.ServerName,
+				serverName:        serverName,
 				adminUsername:     params.AdminUsername,
 				inviteUsers:       params.InviteUsers,
 			})
@@ -135,7 +140,7 @@ type setupConfig struct {
 	homeserverURL     string
 	registrationToken *secret.Buffer
 	credentialFile    string
-	serverName        string
+	serverName        ref.ServerName
 	adminUsername     string
 	inviteUsers       []string
 }
@@ -259,7 +264,7 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username str
 }
 
 // ensureSpace creates the Bureau space if it doesn't exist.
-func ensureSpace(ctx context.Context, session messaging.Session, serverName string, logger *slog.Logger) (ref.RoomID, error) {
+func ensureSpace(ctx context.Context, session messaging.Session, serverName ref.ServerName, logger *slog.Logger) (ref.RoomID, error) {
 	alias := ref.MustParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -290,7 +295,7 @@ func ensureSpace(ctx context.Context, session messaging.Session, serverName stri
 
 // ensureRoom creates a room if it doesn't exist and adds it as a child of the space.
 // The powerLevels parameter sets the room's power level structure directly.
-func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name, topic string, spaceRoomID ref.RoomID, serverName string, powerLevels map[string]any, logger *slog.Logger) (ref.RoomID, error) {
+func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name, topic string, spaceRoomID ref.RoomID, serverName ref.ServerName, powerLevels map[string]any, logger *slog.Logger) (ref.RoomID, error) {
 	alias := ref.MustParseRoomAlias(schema.FullRoomAlias(aliasLocal, serverName))
 
 	roomID, err := session.ResolveAlias(ctx, alias)
@@ -316,7 +321,7 @@ func ensureRoom(ctx context.Context, session messaging.Session, aliasLocal, name
 
 	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID.String(),
 		map[string]any{
-			"via": []string{serverName},
+			"via": []string{serverName.String()},
 		})
 	if err != nil {
 		return ref.RoomID{}, cli.Internal("add room %q as child of space: %w", aliasLocal, err)

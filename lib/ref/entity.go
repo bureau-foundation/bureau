@@ -62,12 +62,12 @@ func parseEntityUserID(userID, expectedType string) (entity, error) {
 	if err != nil {
 		return entity{}, fmt.Errorf("invalid %s ref: %w", expectedType, err)
 	}
-	return parseEntityLocalpart(localpart, server, expectedType)
+	return parseEntityLocalpart(localpart, newServerName(server), expectedType)
 }
 
 // parseEntityLocalpart parses a fleet-scoped localpart and server into
 // an entity, validating the entity type.
-func parseEntityLocalpart(localpart, server, expectedType string) (entity, error) {
+func parseEntityLocalpart(localpart string, server ServerName, expectedType string) (entity, error) {
 	namespace, fleetName, entityType, entityName, err := parseFleetLocalpart(localpart)
 	if err != nil {
 		return entity{}, fmt.Errorf("invalid %s ref: %w", expectedType, err)
@@ -106,7 +106,7 @@ func (e entity) UserID() UserID { return e.userID }
 func (e entity) RoomAlias() RoomAlias { return e.roomAlias }
 
 // Server returns the Matrix homeserver name.
-func (e entity) Server() string { return e.fleet.ns.server }
+func (e entity) Server() ServerName { return e.fleet.ns.server }
 
 // String returns the localpart, satisfying fmt.Stringer.
 func (e entity) String() string { return e.localpart }
@@ -186,13 +186,13 @@ func ParseEntityUserID(userID string) (Entity, error) {
 	if err != nil {
 		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)
 	}
-	return ParseEntityLocalpart(localpart, server)
+	return ParseEntityLocalpart(localpart, newServerName(server))
 }
 
 // ParseEntityLocalpart parses a fleet-scoped localpart and server into
 // a generic Entity reference. The localpart must have at least 5
 // segments (namespace/fleet/name/entityType/entityName).
-func ParseEntityLocalpart(localpart, server string) (Entity, error) {
+func ParseEntityLocalpart(localpart string, server ServerName) (Entity, error) {
 	namespace, fleetName, entityType, entityName, err := parseFleetLocalpart(localpart)
 	if err != nil {
 		return Entity{}, fmt.Errorf("invalid entity ref: %w", err)

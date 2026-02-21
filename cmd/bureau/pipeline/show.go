@@ -5,8 +5,10 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -54,9 +56,14 @@ see is what the executor runs.`,
 				return cli.Validation("pipeline reference is required\n\nusage: bureau pipeline show [flags] <pipeline-ref>")
 			}
 
-			ref, err := schema.ParsePipelineRef(params.PipelineRef)
+			pipelineRef, err := schema.ParsePipelineRef(params.PipelineRef)
 			if err != nil {
 				return cli.Validation("parsing pipeline reference: %w", err)
+			}
+
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
 			}
 
 			ctx, cancel, session, err := cli.ConnectOperator()
@@ -65,15 +72,15 @@ see is what the executor runs.`,
 			}
 			defer cancel()
 
-			roomAlias := ref.RoomAlias(params.ServerName)
+			roomAlias := pipelineRef.RoomAlias(serverName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return cli.NotFound("resolving room alias %q: %w", roomAlias, err)
 			}
 
-			raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypePipeline, ref.Pipeline)
+			raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypePipeline, pipelineRef.Pipeline)
 			if err != nil {
-				return cli.NotFound("fetching pipeline %q from %s: %w", ref.Pipeline, roomAlias, err)
+				return cli.NotFound("fetching pipeline %q from %s: %w", pipelineRef.Pipeline, roomAlias, err)
 			}
 
 			var content schema.PipelineContent

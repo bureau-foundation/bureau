@@ -53,7 +53,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 		privateKey:   d.tokenSigningPrivateKey,
 		session:      d.session,
 		systemRoomID: d.systemRoomID,
-		serverName:   d.machine.Server(),
+		serverName:   d.machine.Server().String(),
 	}
 
 	// Create the WebRTC transport (implements both Listener and Dialer).

@@ -125,13 +125,18 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		return fmt.Errorf("BUREAU_SERVER_NAME is required")
 	}
 
-	machine, err := ref.ParseMachine(config.MachineName, config.ServerName)
+	serverName, err := ref.ParseServerName(config.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid server name %q: %w", config.ServerName, err)
+	}
+
+	machine, err := ref.ParseMachine(config.MachineName, serverName)
 	if err != nil {
 		return fmt.Errorf("invalid machine name %q: %w", config.MachineName, err)
 	}
 
 	// Create proxy client and verify connectivity.
-	proxy := proxyclient.New(config.ProxySocketPath, config.ServerName)
+	proxy := proxyclient.New(config.ProxySocketPath, serverName)
 
 	logger.Info("building agent context")
 	agentContext, err := BuildContext(ctx, proxy, machine)

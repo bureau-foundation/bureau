@@ -86,7 +86,7 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath string,
 	if config.MachineName != machine.Localpart() {
 		return fmt.Errorf("bootstrap config machine_name %q does not match machine localpart %q", config.MachineName, machine.Localpart())
 	}
-	if config.ServerName != machine.Server() {
+	if config.ServerName != machine.Server().String() {
 		return fmt.Errorf("bootstrap config server_name %q does not match --server-name %q", config.ServerName, machine.Server())
 	}
 

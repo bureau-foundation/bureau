@@ -265,7 +265,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 			"BUREAU_AGENT_SERVICE":    "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS": "1024",
 		},
-	}), testServerName)
+	}), testServer)
 	if err != nil {
 		t.Fatalf("push ticket-lifecycle-agent template: %v", err)
 	}

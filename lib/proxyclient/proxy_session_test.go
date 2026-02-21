@@ -44,7 +44,7 @@ func testProxySession(t *testing.T, handler http.Handler) *ProxySession {
 func TestProxySessionUserID(t *testing.T) {
 	t.Parallel()
 
-	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), mustUserID("@agent/x:test.local"))
+	session := NewProxySession(New("/tmp/nonexistent.sock", ref.MustParseServerName("test.local")), mustUserID("@agent/x:test.local"))
 	if session.UserID() != mustUserID("@agent/x:test.local") {
 		t.Errorf("UserID = %q, want @agent/x:test.local", session.UserID())
 	}
@@ -53,7 +53,7 @@ func TestProxySessionUserID(t *testing.T) {
 func TestProxySessionClose(t *testing.T) {
 	t.Parallel()
 
-	session := NewProxySession(New("/tmp/nonexistent.sock", "test.local"), mustUserID("@agent/x:test.local"))
+	session := NewProxySession(New("/tmp/nonexistent.sock", ref.MustParseServerName("test.local")), mustUserID("@agent/x:test.local"))
 	// Close is a no-op — should not error.
 	if err := session.Close(); err != nil {
 		t.Errorf("Close: %v", err)
@@ -63,7 +63,7 @@ func TestProxySessionClose(t *testing.T) {
 func TestProxySessionClient(t *testing.T) {
 	t.Parallel()
 
-	client := New("/tmp/nonexistent.sock", "test.local")
+	client := New("/tmp/nonexistent.sock", ref.MustParseServerName("test.local"))
 	session := NewProxySession(client, mustUserID("@agent/x:test.local"))
 	if session.Client() != client {
 		t.Error("Client() did not return the underlying client")

@@ -3,7 +3,11 @@
 
 package schema
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 func TestFullRoomAlias(t *testing.T) {
 	t.Parallel()
@@ -47,7 +51,7 @@ func TestFullRoomAlias(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			got := FullRoomAlias(test.localpart, test.serverName)
+			got := FullRoomAlias(test.localpart, ref.MustParseServerName(test.serverName))
 			if got != test.want {
 				t.Errorf("FullRoomAlias(%q, %q) = %q, want %q",
 					test.localpart, test.serverName, got, test.want)

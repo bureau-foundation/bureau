@@ -44,11 +44,15 @@ const (
 	testRegistrationToken = "test-registration-token"
 )
 
+// testServer is the parsed ref.ServerName form of testServerName for use
+// with library functions that require typed server names.
+var testServer = ref.MustParseServerName(testServerName)
+
 // testNamespace is the Bureau namespace shared by all integration tests.
 // Individual tests create per-test fleets under this namespace via
 // createTestFleet.
 var testNamespace = func() ref.Namespace {
-	namespace, err := ref.NewNamespace(testServerName, "bureau")
+	namespace, err := ref.NewNamespace(testServer, "bureau")
 	if err != nil {
 		panic(err)
 	}
@@ -513,7 +517,7 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	fleetName := strings.ToLower(t.Name())
 	namespace := "bureau"
 
-	namespaceRef, err := ref.NewNamespace(testServerName, namespace)
+	namespaceRef, err := ref.NewNamespace(testServer, namespace)
 	if err != nil {
 		t.Fatalf("create namespace ref: %v", err)
 	}

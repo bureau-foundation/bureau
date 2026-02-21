@@ -176,6 +176,11 @@ func runProvision(args []string) error {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
 
+	parsedServerName, err := ref.ParseServerName(serverName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -228,7 +233,7 @@ func runProvision(args []string) error {
 	}
 
 	// Parse the fleet prefix to derive the fleet machine room alias.
-	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
+	fleet, err := ref.ParseFleet(fleetPrefix, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("parsing fleet prefix: %w", err)
 	}
@@ -257,7 +262,7 @@ func runProvision(args []string) error {
 	}
 
 	// Parse the machine ref for typed identity construction.
-	machineRef, err := ref.ParseMachine(machineName, serverName)
+	machineRef, err := ref.ParseMachine(machineName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
@@ -290,7 +295,7 @@ func runProvision(args []string) error {
 	}
 
 	// Parse principal into typed ref for the user ID.
-	principalEntity, err := ref.ParseEntityLocalpart(principalName, serverName)
+	principalEntity, err := ref.ParseEntityLocalpart(principalName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
@@ -344,11 +349,16 @@ func runAssign(args []string) error {
 		return fmt.Errorf("--config, --machine, --principal, and --template are required")
 	}
 
-	machineRef, err := ref.ParseMachine(machineName, serverName)
+	parsedServerName, err := ref.ParseServerName(serverName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	machineRef, err := ref.ParseMachine(machineName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
-	principalEntity, err := ref.ParseEntityLocalpart(principalName, serverName)
+	principalEntity, err := ref.ParseEntityLocalpart(principalName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
@@ -441,7 +451,12 @@ func runList(args []string) error {
 		return fmt.Errorf("--config and --machine are required")
 	}
 
-	machineRef, err := ref.ParseMachine(machineName, serverName)
+	parsedServerName, err := ref.ParseServerName(serverName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	machineRef, err := ref.ParseMachine(machineName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}

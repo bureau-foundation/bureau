@@ -36,7 +36,7 @@ func ParseMachineUserID(userID string) (Machine, error) {
 }
 
 // ParseMachine parses a fleet-scoped localpart and server into a Machine.
-func ParseMachine(localpart, server string) (Machine, error) {
+func ParseMachine(localpart string, server ServerName) (Machine, error) {
 	ent, err := parseEntityLocalpart(localpart, server, entityTypeMachine)
 	if err != nil {
 		return Machine{}, err

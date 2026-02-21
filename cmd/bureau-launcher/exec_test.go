@@ -154,7 +154,7 @@ func TestReconnectSandboxes(t *testing.T) {
 	})
 
 	// Create the admin socket so the reconnect check passes.
-	principalRef, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/reconnect", "bureau.local")
+	principalRef, err := ref.ParseEntityLocalpart("bureau/fleet/test/agent/reconnect", ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart: %v", err)
 	}

@@ -73,7 +73,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 			"HOME": "/tmp",
 			"TERM": "xterm-256color",
 		},
-	}, testServerName)
+	}, testServer)
 	if err != nil {
 		t.Fatalf("push failing template: %v", err)
 	}

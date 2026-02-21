@@ -68,7 +68,12 @@ plus agent service state (session lifecycle, aggregated metrics).`,
 }
 
 func runShow(localpart string, params agentShowParams) error {
-	agentRef, err := ref.ParseAgent(localpart, params.ServerName)
+	serverName, err := ref.ParseServerName(params.ServerName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
+	agentRef, err := ref.ParseAgent(localpart, serverName)
 	if err != nil {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
@@ -84,7 +89,7 @@ func runShow(localpart string, params agentShowParams) error {
 
 	var machine ref.Machine
 	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, params.ServerName)
+		machine, err = ref.ParseMachine(params.Machine, serverName)
 		if err != nil {
 			return cli.Validation("invalid machine: %v", err)
 		}
@@ -92,7 +97,7 @@ func runShow(localpart string, params agentShowParams) error {
 
 	var fleet ref.Fleet
 	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, params.ServerName)
+		fleet, err = ref.ParseFleet(params.Fleet, serverName)
 		if err != nil {
 			return cli.Validation("invalid fleet: %v", err)
 		}

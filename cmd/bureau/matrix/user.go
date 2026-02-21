@@ -202,10 +202,15 @@ and proceeds directly to ensuring room membership.`,
 				return cli.Internal("create matrix client: %w", err)
 			}
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			// Register the account. In operator mode, M_USER_IN_USE means
 			// the account already exists — verify the password matches
 			// (if one was explicitly provided) and proceed to room invites.
-			userID := ref.MatrixUserID(username, params.ServerName)
+			userID := ref.MatrixUserID(username, serverName)
 			registrationTokenBuffer, tokenErr := secret.NewFromString(registrationToken)
 			if tokenErr != nil {
 				return cli.Internal("protecting registration token: %w", tokenErr)

@@ -31,7 +31,7 @@ func testServer(t *testing.T, handler http.Handler) *Client {
 				transport: http.DefaultTransport,
 			},
 		},
-		serverName: "test.local",
+		serverName: ref.MustParseServerName("test.local"),
 	}
 }
 
@@ -183,7 +183,7 @@ func TestWhoamiServerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WhoamiServerName: %v", err)
 	}
-	if serverName != "bureau.example.com" {
+	if serverName.String() != "bureau.example.com" {
 		t.Errorf("ServerName = %q, want bureau.example.com", serverName)
 	}
 }
@@ -199,7 +199,7 @@ func TestDiscoverServerName(t *testing.T) {
 
 	client := testServer(t, mux)
 	// Before discovery, server name is the constructor value.
-	if client.ServerName() != "test.local" {
+	if client.ServerName().String() != "test.local" {
 		t.Errorf("ServerName before discover = %q, want test.local", client.ServerName())
 	}
 
@@ -207,10 +207,10 @@ func TestDiscoverServerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverServerName: %v", err)
 	}
-	if serverName != "discovered.local" {
+	if serverName.String() != "discovered.local" {
 		t.Errorf("returned ServerName = %q, want discovered.local", serverName)
 	}
-	if client.ServerName() != "discovered.local" {
+	if client.ServerName().String() != "discovered.local" {
 		t.Errorf("ServerName after discover = %q, want discovered.local", client.ServerName())
 	}
 }
@@ -455,7 +455,7 @@ func TestSyncError(t *testing.T) {
 func TestHTTPClient(t *testing.T) {
 	t.Parallel()
 
-	client := New("/tmp/nonexistent.sock", "test.local")
+	client := New("/tmp/nonexistent.sock", ref.MustParseServerName("test.local"))
 	httpClient := client.HTTPClient()
 	if httpClient == nil {
 		t.Fatal("HTTPClient returned nil")
@@ -465,8 +465,8 @@ func TestHTTPClient(t *testing.T) {
 func TestServerName(t *testing.T) {
 	t.Parallel()
 
-	client := New("/tmp/nonexistent.sock", "bureau.local")
-	if client.ServerName() != "bureau.local" {
+	client := New("/tmp/nonexistent.sock", ref.MustParseServerName("bureau.local"))
+	if client.ServerName().String() != "bureau.local" {
 		t.Errorf("ServerName = %q, want bureau.local", client.ServerName())
 	}
 }

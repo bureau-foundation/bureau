@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	libtmpl "github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -85,9 +86,14 @@ With a file argument, also classifies each change:
 			}
 			defer cancel()
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			analyzer := &impactAnalyzer{
 				session:    session,
-				serverName: params.ServerName,
+				serverName: serverName,
 				ctx:        ctx,
 				cache:      make(map[string]*schema.TemplateContent),
 			}
@@ -136,7 +142,7 @@ type impactResult struct {
 // impactAnalyzer holds state for the impact analysis.
 type impactAnalyzer struct {
 	session    messaging.Session
-	serverName string
+	serverName ref.ServerName
 	ctx        context.Context
 	cache      map[string]*schema.TemplateContent
 }

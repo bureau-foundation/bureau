@@ -43,7 +43,7 @@ func NewFleet(ns Namespace, fleet string) (Fleet, error) {
 
 // ParseFleet parses a fleet localpart ("my_bureau/fleet/prod") and server
 // into a Fleet reference.
-func ParseFleet(localpart, server string) (Fleet, error) {
+func ParseFleet(localpart string, server ServerName) (Fleet, error) {
 	namespace, fleetName, err := parseFleetPrefix(localpart)
 	if err != nil {
 		return Fleet{}, fmt.Errorf("invalid fleet: %w", err)
@@ -62,7 +62,7 @@ func ParseFleetRoomAlias(alias string) (Fleet, error) {
 	if err != nil {
 		return Fleet{}, fmt.Errorf("invalid fleet: %w", err)
 	}
-	return ParseFleet(localpart, server)
+	return ParseFleet(localpart, newServerName(server))
 }
 
 // Namespace returns the parent Namespace.
@@ -72,7 +72,7 @@ func (f Fleet) Namespace() Namespace { return f.ns }
 func (f Fleet) FleetName() string { return f.fleet }
 
 // Server returns the Matrix homeserver name.
-func (f Fleet) Server() string { return f.ns.server }
+func (f Fleet) Server() ServerName { return f.ns.server }
 
 // Localpart returns the full fleet localpart: "my_bureau/fleet/prod".
 func (f Fleet) Localpart() string { return f.localpart }

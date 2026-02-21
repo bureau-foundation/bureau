@@ -45,9 +45,13 @@ func run() error {
 	if machineName == "" {
 		return fmt.Errorf("BUREAU_MACHINE_NAME not set")
 	}
-	serverName := os.Getenv("BUREAU_SERVER_NAME")
-	if serverName == "" {
+	serverNameStr := os.Getenv("BUREAU_SERVER_NAME")
+	if serverNameStr == "" {
 		return fmt.Errorf("BUREAU_SERVER_NAME not set")
+	}
+	serverName, err := ref.ParseServerName(serverNameStr)
+	if err != nil {
+		return fmt.Errorf("invalid BUREAU_SERVER_NAME %q: %w", serverNameStr, err)
 	}
 
 	machine, err := ref.ParseMachine(machineName, serverName)

@@ -90,8 +90,13 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}
 
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
 			// Parse and validate the machine localpart as a typed ref.
-			machine, err := ref.ParseMachine(params.Machine, params.ServerName)
+			machine, err := ref.ParseMachine(params.Machine, serverName)
 			if err != nil {
 				return cli.Validation("invalid machine name: %w", err)
 			}

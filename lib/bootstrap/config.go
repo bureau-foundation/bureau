@@ -54,10 +54,14 @@ func (config *Config) Validate() error {
 	if config.ServerName == "" {
 		return fmt.Errorf("bootstrap config: server_name is required")
 	}
+	serverName, err := ref.ParseServerName(config.ServerName)
+	if err != nil {
+		return fmt.Errorf("bootstrap config: invalid server_name: %w", err)
+	}
 	if config.MachineName == "" {
 		return fmt.Errorf("bootstrap config: machine_name is required")
 	}
-	if _, err := ref.ParseMachine(config.MachineName, config.ServerName); err != nil {
+	if _, err := ref.ParseMachine(config.MachineName, serverName); err != nil {
 		return fmt.Errorf("bootstrap config: invalid machine_name: %w", err)
 	}
 	if config.Password == "" {
@@ -66,7 +70,7 @@ func (config *Config) Validate() error {
 	if config.FleetPrefix == "" {
 		return fmt.Errorf("bootstrap config: fleet_prefix is required")
 	}
-	if _, err := ref.ParseFleet(config.FleetPrefix, config.ServerName); err != nil {
+	if _, err := ref.ParseFleet(config.FleetPrefix, serverName); err != nil {
 		return fmt.Errorf("bootstrap config: invalid fleet_prefix: %w", err)
 	}
 	return nil

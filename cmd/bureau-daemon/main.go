@@ -88,7 +88,11 @@ func run() error {
 	if machineName == "" {
 		return fmt.Errorf("--machine-name is required")
 	}
-	machine, err := ref.ParseMachine(machineName, serverName)
+	parsedServerName, err := ref.ParseServerName(serverName)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+	machine, err := ref.ParseMachine(machineName, parsedServerName)
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}

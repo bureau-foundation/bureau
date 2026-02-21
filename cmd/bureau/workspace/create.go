@@ -122,7 +122,12 @@ All worktrees in a project share a single bare git object store at
 	}
 }
 
-func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverName string, agentCount int, jsonOutput *cli.JSONOutput) error {
+func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
+	serverName, err := ref.ParseServerName(serverNameString)
+	if err != nil {
+		return fmt.Errorf("invalid --server-name: %w", err)
+	}
+
 	// Validate the workspace alias.
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid workspace alias: %w", err)
@@ -300,7 +305,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // the Bureau space. Handles the M_ROOM_IN_USE race condition (resolve alias →
 // create → retry resolve if someone else created it between our check and
 // create).
-func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string, adminUserID, machineUserID ref.UserID, spaceRoomID ref.RoomID) (ref.RoomID, error) {
+func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias string, serverName ref.ServerName, adminUserID, machineUserID ref.UserID, spaceRoomID ref.RoomID) (ref.RoomID, error) {
 	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
 	if err != nil {
 		return ref.RoomID{}, cli.Validation("invalid workspace alias %q: %w", alias, err)
@@ -341,7 +346,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 	// string per the Matrix m.space.child spec.
 	_, err = session.SendStateEvent(ctx, spaceRoomID, "m.space.child", response.RoomID.String(),
 		map[string]any{
-			"via": []string{serverName},
+			"via": []string{serverName.String()},
 		})
 	if err != nil {
 		return ref.RoomID{}, cli.Internal("adding workspace room as child of Bureau space: %w", err)
@@ -360,7 +365,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 // every reconcile cycle, so when status changes from "active" to "teardown",
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
-func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName string, machineRef ref.Machine, workspaceRoomID ref.RoomID, params map[string]string) ([]schema.PrincipalAssignment, error) {
+func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName ref.ServerName, machineRef ref.Machine, workspaceRoomID ref.RoomID, params map[string]string) ([]schema.PrincipalAssignment, error) {
 	workspaceRoomAlias := schema.FullRoomAlias(alias, serverName)
 	fleet := machineRef.Fleet()
 

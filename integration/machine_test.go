@@ -396,7 +396,7 @@ func loginPrincipal(t *testing.T, localpart, password string) principalAccount {
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    ref.MatrixUserID(localpart, testServerName),
+		UserID:    ref.MatrixUserID(localpart, testServer),
 		Token:     token,
 	}
 }
@@ -480,7 +480,7 @@ func registerPrincipal(t *testing.T, localpart, password string) principalAccoun
 
 	return principalAccount{
 		Localpart: localpart,
-		UserID:    ref.MatrixUserID(localpart, testServerName),
+		UserID:    ref.MatrixUserID(localpart, testServer),
 		Token:     token,
 	}
 }
@@ -816,7 +816,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
 	_, err = template.Push(ctx, admin, templateRef,
-		agentTemplateContent(options.Binary, options), testServerName)
+		agentTemplateContent(options.Binary, options), testServer)
 	if err != nil {
 		t.Fatalf("push agent template %q: %v", templateName, err)
 	}
@@ -848,7 +848,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		Machine:     machine.Ref,
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
-		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName string) error {
+		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName ref.ServerName) error {
 			_, err := template.Fetch(ctx, admin, ref, serverName)
 			return err
 		},
@@ -928,7 +928,7 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, mach
 
 	_, err = template.Push(t.Context(), admin, ref,
 		agentTemplateContent(testAgentBinary, agentOptions{TemplateName: templateName}),
-		testServerName)
+		testServer)
 	if err != nil {
 		t.Fatalf("push test agent template %q: %v", templateName, err)
 	}

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
@@ -1592,24 +1593,24 @@ func TestServiceDirectory(t *testing.T) {
 	directory := []ServiceDirectoryEntry{
 		{
 			Localpart:    "service/stt/whisper",
-			Principal:    "@service/stt/whisper:bureau.local",
-			Machine:      "@machine/gpu-1:bureau.local",
+			Principal:    ref.MustParseUserID("@service/stt/whisper:bureau.local"),
+			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
 			Protocol:     "http",
 			Description:  "Speech-to-text via Whisper",
 			Capabilities: []string{"streaming", "speaker-diarization"},
 		},
 		{
 			Localpart:    "service/tts/piper",
-			Principal:    "@service/tts/piper:bureau.local",
-			Machine:      "@machine/gpu-1:bureau.local",
+			Principal:    ref.MustParseUserID("@service/tts/piper:bureau.local"),
+			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
 			Protocol:     "http",
 			Description:  "Text-to-speech via Piper",
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart:   "service/embedding/e5",
-			Principal:   "@service/embedding/e5:bureau.local",
-			Machine:     "@machine/cpu-1:bureau.local",
+			Principal:   ref.MustParseUserID("@service/embedding/e5:bureau.local"),
+			Machine:     ref.MustParseUserID("@machine/cpu-1:bureau.local"),
 			Protocol:    "grpc",
 			Description: "Text embeddings via E5",
 			Metadata:    map[string]any{"max_tokens": float64(512)},
@@ -1796,8 +1797,8 @@ func TestServiceDirectory(t *testing.T) {
 		newDirectory := []ServiceDirectoryEntry{
 			{
 				Localpart: "service/llm/claude",
-				Principal: "@service/llm/claude:bureau.local",
-				Machine:   "@machine/cpu-1:bureau.local",
+				Principal: ref.MustParseUserID("@service/llm/claude:bureau.local"),
+				Machine:   ref.MustParseUserID("@machine/cpu-1:bureau.local"),
 				Protocol:  "http",
 			},
 		}
@@ -1848,8 +1849,8 @@ func TestServiceDirectory(t *testing.T) {
 		server.SetServiceDirectory([]ServiceDirectoryEntry{
 			{
 				Localpart: "service/test",
-				Principal: "@service/test:bureau.local",
-				Machine:   "@machine/dev:bureau.local",
+				Principal: ref.MustParseUserID("@service/test:bureau.local"),
+				Machine:   ref.MustParseUserID("@machine/dev:bureau.local"),
 				Protocol:  "http",
 			},
 		})
@@ -1911,28 +1912,28 @@ func TestServiceVisibility(t *testing.T) {
 	directory := []ServiceDirectoryEntry{
 		{
 			Localpart:    "service/stt/whisper",
-			Principal:    "@service/stt/whisper:bureau.local",
-			Machine:      "@machine/gpu-1:bureau.local",
+			Principal:    ref.MustParseUserID("@service/stt/whisper:bureau.local"),
+			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
 			Protocol:     "http",
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart: "service/stt/deepgram",
-			Principal: "@service/stt/deepgram:bureau.local",
-			Machine:   "@machine/gpu-1:bureau.local",
+			Principal: ref.MustParseUserID("@service/stt/deepgram:bureau.local"),
+			Machine:   ref.MustParseUserID("@machine/gpu-1:bureau.local"),
 			Protocol:  "http",
 		},
 		{
 			Localpart:    "service/tts/piper",
-			Principal:    "@service/tts/piper:bureau.local",
-			Machine:      "@machine/gpu-1:bureau.local",
+			Principal:    ref.MustParseUserID("@service/tts/piper:bureau.local"),
+			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
 			Protocol:     "http",
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart: "service/embedding/e5",
-			Principal: "@service/embedding/e5:bureau.local",
-			Machine:   "@machine/cpu-1:bureau.local",
+			Principal: ref.MustParseUserID("@service/embedding/e5:bureau.local"),
+			Machine:   ref.MustParseUserID("@machine/cpu-1:bureau.local"),
 			Protocol:  "grpc",
 		},
 	}
@@ -2388,10 +2389,10 @@ func TestGrantsBasedServiceDiscovery(t *testing.T) {
 
 	// Push a service directory.
 	directory := []ServiceDirectoryEntry{
-		{Localpart: "service/stt/whisper", Principal: "@service/stt/whisper:bureau.local", Machine: "@m:b", Protocol: "http"},
-		{Localpart: "service/stt/deepgram", Principal: "@service/stt/deepgram:bureau.local", Machine: "@m:b", Protocol: "http"},
-		{Localpart: "service/tts/piper", Principal: "@service/tts/piper:bureau.local", Machine: "@m:b", Protocol: "http"},
-		{Localpart: "service/embedding/e5", Principal: "@service/embedding/e5:bureau.local", Machine: "@m:b", Protocol: "grpc"},
+		{Localpart: "service/stt/whisper", Principal: ref.MustParseUserID("@service/stt/whisper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
+		{Localpart: "service/stt/deepgram", Principal: ref.MustParseUserID("@service/stt/deepgram:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
+		{Localpart: "service/tts/piper", Principal: ref.MustParseUserID("@service/tts/piper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
+		{Localpart: "service/embedding/e5", Principal: ref.MustParseUserID("@service/embedding/e5:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "grpc"},
 	}
 	body, _ := json.Marshal(directory)
 	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))

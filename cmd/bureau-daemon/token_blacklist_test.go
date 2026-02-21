@@ -309,7 +309,7 @@ func TestTokenTrackingThroughMintAndRefresh(t *testing.T) {
 
 	daemon, fakeClock, _ := newTokenBlacklistDaemon(t)
 
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/**"}},
 		},
@@ -377,7 +377,7 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 	daemon, _, publicKey := newTokenBlacklistDaemon(t)
 
 	// Set up authorization and mint tokens.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/**"}},
 		},

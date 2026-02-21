@@ -297,11 +297,11 @@ func runProvision(args []string) error {
 	principalUserID := principalEntity.UserID()
 	credEvent := schema.Credentials{
 		Version:       1,
-		Principal:     principalUserID.String(),
+		Principal:     principalUserID,
 		EncryptedFor:  encryptedFor,
 		Keys:          credentialKeys,
 		Ciphertext:    ciphertext,
-		ProvisionedBy: matrixConf.AdminUserID,
+		ProvisionedBy: session.UserID(),
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 

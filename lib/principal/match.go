@@ -163,3 +163,76 @@ func MatchAnyPattern(patterns []string, localpart string) bool {
 	}
 	return false
 }
+
+// MatchUserID checks whether a Matrix user ID matches a user ID pattern.
+// This is the server-aware counterpart to MatchPattern: patterns match
+// both the localpart hierarchy and the homeserver name, preventing
+// cross-server identity confusion.
+//
+// Pattern format: "localpart_pattern:server_pattern"
+//
+//   - The localpart component uses the same glob syntax as MatchPattern
+//     (*, **, ?, and exact segments separated by /)
+//   - The server component uses path.Match glob syntax (* and ? only;
+//     server names are flat, not hierarchical)
+//   - Both components must match for the overall pattern to match
+//
+// The user ID argument should be a full Matrix user ID. The leading "@"
+// sigil is stripped before matching.
+//
+// Patterns without a ":" separator are rejected (return false). This is
+// a deliberate safety measure: bare localpart patterns could silently
+// match principals across servers, which is a federation security
+// violation. Every identity pattern must be explicit about which
+// servers it applies to.
+//
+// Examples:
+//
+//	"bureau/fleet/prod/agent/**:bureau.local"  — any agent in this fleet
+//	"**:bureau.local"                          — any entity on bureau.local
+//	"**:**"                                    — any entity on any server
+//	"bureau/fleet/*/agent/**:*"                — agents in any fleet on any server
+//	"bureau/fleet/prod/agent/pm:bureau.local"  — exact match
+func MatchUserID(pattern, userID string) bool {
+	// Split pattern into localpart pattern and server pattern.
+	colonIndex := strings.LastIndex(pattern, ":")
+	if colonIndex < 0 {
+		// No ":" in pattern — reject. Bare localpart patterns are a
+		// security hazard in a federated system.
+		return false
+	}
+	localpartPattern := pattern[:colonIndex]
+	serverPattern := pattern[colonIndex+1:]
+
+	// Strip leading "@" from the user ID if present.
+	if len(userID) > 0 && userID[0] == '@' {
+		userID = userID[1:]
+	}
+
+	// Split user ID into localpart and server.
+	userColonIndex := strings.LastIndex(userID, ":")
+	if userColonIndex < 0 {
+		// Not a valid Matrix user ID — no server component.
+		return false
+	}
+	localpart := userID[:userColonIndex]
+	server := userID[userColonIndex+1:]
+
+	// Both components must match.
+	if !MatchPattern(localpartPattern, localpart) {
+		return false
+	}
+	return matchGlob(serverPattern, server)
+}
+
+// MatchAnyUserID checks whether a Matrix user ID matches any of the
+// given user ID patterns. Returns true on the first match. Returns
+// false if the patterns slice is empty (default-deny).
+func MatchAnyUserID(patterns []string, userID string) bool {
+	for _, pattern := range patterns {
+		if MatchUserID(pattern, userID) {
+			return true
+		}
+	}
+	return false
+}

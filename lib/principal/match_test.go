@@ -117,6 +117,130 @@ func TestMatchPattern(t *testing.T) {
 	}
 }
 
+func TestMatchUserID(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		userID  string
+		want    bool
+	}{
+		// Exact match.
+		{"exact match", "bureau/fleet/prod/agent/pm:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"exact mismatch localpart", "bureau/fleet/prod/agent/pm:bureau.local", "@bureau/fleet/prod/agent/coder:bureau.local", false},
+		{"exact mismatch server", "bureau/fleet/prod/agent/pm:bureau.local", "@bureau/fleet/prod/agent/pm:other.local", false},
+
+		// Without @ sigil on user ID.
+		{"no sigil", "bureau/fleet/prod/agent/pm:bureau.local", "bureau/fleet/prod/agent/pm:bureau.local", true},
+
+		// Wildcard server.
+		{"any server", "bureau/fleet/prod/agent/pm:*", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"any server other", "bureau/fleet/prod/agent/pm:*", "@bureau/fleet/prod/agent/pm:other.host", true},
+
+		// Wildcard localpart with fixed server.
+		{"agent wildcard", "bureau/fleet/prod/agent/**:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"agent wildcard deep", "bureau/fleet/prod/agent/**:bureau.local", "@bureau/fleet/prod/agent/sub/deep:bureau.local", true},
+		{"agent wildcard wrong server", "bureau/fleet/prod/agent/**:bureau.local", "@bureau/fleet/prod/agent/pm:other.local", false},
+		{"agent wildcard wrong prefix", "bureau/fleet/prod/agent/**:bureau.local", "@bureau/fleet/test/agent/pm:bureau.local", false},
+
+		// Universal match.
+		{"universal", "**:**", "@anything/at/all:any.server", true},
+		{"universal single segment", "**:**", "@simple:server", true},
+
+		// Single-segment wildcard in localpart.
+		{"single segment wildcard", "bureau/fleet/*/agent/pm:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"single segment wildcard other fleet", "bureau/fleet/*/agent/pm:bureau.local", "@bureau/fleet/test/agent/pm:bureau.local", true},
+		{"single segment wildcard too deep", "bureau/fleet/*/agent/pm:bureau.local", "@bureau/fleet/a/b/agent/pm:bureau.local", false},
+
+		// Server subdomain pattern.
+		{"server subdomain", "**:*.bureau.local", "@bureau/fleet/prod/agent/pm:prod.bureau.local", true},
+		{"server subdomain mismatch", "**:*.bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", false},
+
+		// Bare localpart patterns rejected (no colon = security hazard).
+		{"bare pattern rejected", "bureau/fleet/prod/agent/**", "@bureau/fleet/prod/agent/pm:bureau.local", false},
+		{"bare universal rejected", "**", "@anything:server", false},
+
+		// Invalid user IDs.
+		{"no server in user ID", "**:**", "just-a-localpart", false},
+		{"empty user ID", "**:**", "", false},
+
+		// Empty pattern components.
+		{"empty localpart pattern", ":bureau.local", "@:bureau.local", true},
+		{"empty server pattern rejected", "bureau/fleet/prod/agent/pm:", "@bureau/fleet/prod/agent/pm:", true},
+
+		// Question mark in localpart.
+		{"question mark", "bureau/fleet/prod/agent/p?:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"question mark mismatch", "bureau/fleet/prod/agent/p?:bureau.local", "@bureau/fleet/prod/agent/pmx:bureau.local", false},
+
+		// Prefix double star.
+		{"prefix doublestar", "**/pm:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"prefix doublestar exact", "**/pm:bureau.local", "@pm:bureau.local", true},
+
+		// Interior double star.
+		{"interior doublestar", "bureau/**/pm:bureau.local", "@bureau/fleet/prod/agent/pm:bureau.local", true},
+		{"interior doublestar zero segments", "bureau/**/pm:bureau.local", "@bureau/pm:bureau.local", true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := MatchUserID(test.pattern, test.userID)
+			if got != test.want {
+				t.Errorf("MatchUserID(%q, %q) = %v, want %v",
+					test.pattern, test.userID, got, test.want)
+			}
+		})
+	}
+}
+
+func TestMatchAnyUserID(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		userID   string
+		want     bool
+	}{
+		{
+			"empty patterns denies",
+			nil,
+			"@bureau/fleet/prod/agent/pm:bureau.local",
+			false,
+		},
+		{
+			"single exact match",
+			[]string{"bureau/fleet/prod/agent/pm:bureau.local"},
+			"@bureau/fleet/prod/agent/pm:bureau.local",
+			true,
+		},
+		{
+			"no match in list",
+			[]string{"bureau/fleet/prod/agent/pm:bureau.local", "iree/**:bureau.local"},
+			"@other/thing:bureau.local",
+			false,
+		},
+		{
+			"second pattern matches",
+			[]string{"bureau/fleet/prod/agent/pm:bureau.local", "iree/**:bureau.local"},
+			"@iree/amdgpu/pm:bureau.local",
+			true,
+		},
+		{
+			"cross-server rejected by pattern",
+			[]string{"iree/**:bureau.local"},
+			"@iree/amdgpu/pm:other.server",
+			false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := MatchAnyUserID(test.patterns, test.userID)
+			if got != test.want {
+				t.Errorf("MatchAnyUserID(%v, %q) = %v, want %v",
+					test.patterns, test.userID, got, test.want)
+			}
+		})
+	}
+}
+
 func TestMatchAnyPattern(t *testing.T) {
 	tests := []struct {
 		name      string

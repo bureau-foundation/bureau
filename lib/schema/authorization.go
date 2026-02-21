@@ -3,6 +3,8 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // Bureau authorization event type constants. These are state event types
 // used by the authorization framework to store grants, allowances, and
 // token signing keys in Matrix rooms.
@@ -29,7 +31,7 @@ const (
 	// key so that services can discover it for token verification. The
 	// daemon publishes this at startup if the key has changed.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: full machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/system
 	EventTypeTokenSigningKey = "m.bureau.token_signing_key"
 
@@ -75,15 +77,20 @@ func SourceRoom(roomID string) string {
 // not on another principal.
 //
 // For cross-principal actions (observing, interrupting, provisioning
-// credentials), Targets contains localpart patterns identifying which
-// principals or resources the grant applies to.
+// credentials), Targets contains user ID patterns identifying which
+// principals or resources the grant applies to. Patterns use the
+// format "localpart_pattern:server_pattern" (e.g.,
+// "bureau/fleet/prod/agent/**:bureau.local"). Bare localpart patterns
+// (without a server component) are rejected by the matching engine to
+// prevent cross-server identity confusion.
 type Grant struct {
 	// Actions is a list of action patterns (glob syntax). The principal
 	// can perform any action matching any pattern in this list.
 	Actions []string `json:"actions" cbor:"1,keyasint"`
 
-	// Targets is a list of localpart patterns (glob syntax) identifying
-	// which principals or resources this grant applies to. Empty means
+	// Targets is a list of user ID patterns (glob syntax) identifying
+	// which principals or resources this grant applies to. Each pattern
+	// has the format "localpart_pattern:server_pattern". Empty means
 	// the grant applies to non-targeted actions only (self-service ops
 	// like matrix/join, service/discover, command/*).
 	Targets []string `json:"targets,omitempty" cbor:"2,keyasint,omitempty"`
@@ -127,8 +134,9 @@ type Denial struct {
 	// Actions is a list of action patterns to deny.
 	Actions []string `json:"actions" cbor:"1,keyasint"`
 
-	// Targets is a list of localpart patterns to deny the action
-	// against. Empty means deny self-service actions.
+	// Targets is a list of user ID patterns to deny the action against.
+	// Each pattern has the format "localpart_pattern:server_pattern".
+	// Empty means deny self-service actions.
 	Targets []string `json:"targets,omitempty" cbor:"2,keyasint,omitempty"`
 
 	// Source identifies where this denial came from. See Grant.Source.
@@ -144,9 +152,10 @@ type Allowance struct {
 	// principal.
 	Actions []string `json:"actions" cbor:"1,keyasint"`
 
-	// Actors is a list of localpart patterns (glob syntax) identifying
-	// who can perform the allowed actions. The acting principal's
-	// localpart must match at least one pattern.
+	// Actors is a list of user ID patterns (glob syntax) identifying
+	// who can perform the allowed actions. Each pattern has the format
+	// "localpart_pattern:server_pattern". The acting principal's full
+	// Matrix user ID must match at least one pattern.
 	Actors []string `json:"actors" cbor:"2,keyasint"`
 
 	// Source identifies where this allowance came from. See Grant.Source.
@@ -159,7 +168,8 @@ type AllowanceDenial struct {
 	// Actions is a list of action patterns to deny.
 	Actions []string `json:"actions" cbor:"1,keyasint"`
 
-	// Actors is a list of localpart patterns to deny.
+	// Actors is a list of user ID patterns to deny. Each pattern has
+	// the format "localpart_pattern:server_pattern".
 	Actors []string `json:"actors" cbor:"2,keyasint"`
 
 	// Source identifies where this allowance denial came from. See
@@ -223,10 +233,10 @@ type TemporalGrantContent struct {
 	// set to bound the grant's lifetime.
 	Grant Grant `json:"grant"`
 
-	// Principal is the localpart of the principal receiving this grant.
-	// The daemon uses this to merge the grant into the correct
-	// principal's resolved policy.
-	Principal string `json:"principal"`
+	// Principal is the full Matrix user ID of the principal receiving
+	// this grant. The daemon uses this to merge the grant into the
+	// correct principal's resolved policy.
+	Principal ref.UserID `json:"principal"`
 }
 
 // TokenSigningKeyContent is the content of an EventTypeTokenSigningKey
@@ -236,8 +246,9 @@ type TokenSigningKeyContent struct {
 	// PublicKey is the Ed25519 public key bytes (32 bytes), hex-encoded.
 	PublicKey string `json:"public_key"`
 
-	// Machine is the machine localpart that owns this signing key.
-	Machine string `json:"machine"`
+	// Machine is the full Matrix user ID of the machine that owns this
+	// signing key (e.g., "@bureau/fleet/prod/machine/workstation:server").
+	Machine ref.UserID `json:"machine"`
 }
 
 // AuditDecision identifies what happened in an audit event.
@@ -267,16 +278,17 @@ type AuditEventContent struct {
 	// Decision is what happened: allow, deny, or a grant lifecycle event.
 	Decision AuditDecision `json:"decision"`
 
-	// Actor is the localpart of the principal that attempted the action.
-	Actor string `json:"actor"`
+	// Actor is the full Matrix user ID of the principal that attempted
+	// the action.
+	Actor ref.UserID `json:"actor"`
 
 	// Action is the authorization action that was checked (e.g.,
 	// "observe/read-write", "credential/provision/key/FORGEJO_TOKEN").
 	Action string `json:"action"`
 
-	// Target is the localpart of the principal or resource being acted
-	// on. Empty for self-service actions.
-	Target string `json:"target,omitempty"`
+	// Target is the full Matrix user ID of the principal or resource
+	// being acted on. Zero value for self-service actions.
+	Target ref.UserID `json:"target,omitempty"`
 
 	// Reason describes why the check was denied. Empty for allow
 	// decisions and grant lifecycle events.
@@ -286,8 +298,9 @@ type AuditEventContent struct {
 	// "daemon/observe", "daemon/temporal_grant").
 	EnforcementPoint string `json:"enforcement_point"`
 
-	// Machine is the machine localpart where the check occurred.
-	Machine string `json:"machine"`
+	// Machine is the full Matrix user ID of the machine where the
+	// check occurred.
+	Machine ref.UserID `json:"machine"`
 
 	// MatchedGrant is the grant that matched, if any.
 	MatchedGrant *Grant `json:"matched_grant,omitempty"`

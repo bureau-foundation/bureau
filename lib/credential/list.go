@@ -21,7 +21,7 @@ type Bundle struct {
 	StateKey string
 
 	// Principal is the full Matrix user ID of the credential target.
-	Principal string
+	Principal ref.UserID
 
 	// EncryptedFor lists who can decrypt the bundle.
 	EncryptedFor []string
@@ -30,7 +30,7 @@ type Bundle struct {
 	Keys []string
 
 	// ProvisionedBy is the Matrix user ID of the provisioner.
-	ProvisionedBy string
+	ProvisionedBy ref.UserID
 
 	// ProvisionedAt is the ISO 8601 timestamp.
 	ProvisionedAt string

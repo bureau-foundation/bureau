@@ -135,7 +135,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 
 	// Verify session state: no active session, latest session recorded.
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeAgentSession, agent.Account.Localpart)
+		schema.EventTypeAgentSession, agent.Account.UserID.Localpart())
 	if err != nil {
 		t.Fatalf("get agent session state: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// Verify metrics: one session counted, non-zero token counts from
 	// the mock driver's metric event (input_tokens: 100, output_tokens: 50).
 	metricsRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeAgentMetrics, agent.Account.Localpart)
+		schema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
 	if err != nil {
 		t.Fatalf("get agent metrics state: %v", err)
 	}

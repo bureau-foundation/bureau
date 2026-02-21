@@ -395,7 +395,7 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	// Authorization index uses bare account localparts, matching the
 	// production rebuildAuthorizationIndex (reconcile.go).
 	for _, accountLocalpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/compiler", "service/stt/whisper"} {
-		daemon.authorizationIndex.SetPrincipal(accountLocalpart, permissiveObserveAllowances)
+		daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, accountLocalpart).UserID(), permissiveObserveAllowances)
 	}
 
 	channelAlias := "#iree/amdgpu/general:bureau.local"
@@ -474,7 +474,7 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 	// Authorization index uses bare account localparts, matching
 	// production rebuildAuthorizationIndex (reconcile.go).
 	for _, accountLocalpart := range []string{"iree/amdgpu/pm", "infra/ci/runner", "service/stt/whisper"} {
-		daemon.authorizationIndex.SetPrincipal(accountLocalpart, permissiveObserveAllowances)
+		daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, accountLocalpart).UserID(), permissiveObserveAllowances)
 	}
 
 	channelAlias := "#all:bureau.local"
@@ -537,8 +537,8 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 	}
 	// Authorization index uses bare account localparts, matching
 	// production rebuildAuthorizationIndex (reconcile.go).
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", permissiveObserveAllowances)
-	daemon.authorizationIndex.SetPrincipal("remote/agent", permissiveObserveAllowances)
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), permissiveObserveAllowances)
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "remote/agent").UserID(), permissiveObserveAllowances)
 
 	channelAlias := "#cross:bureau.local"
 	channelRoomID := "!cross-room:bureau.local"

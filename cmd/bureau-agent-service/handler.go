@@ -87,7 +87,7 @@ type principalReadRequest struct {
 // principal's data. Self-reads are always allowed. Cross-principal reads
 // require an agent/read grant with the target as a grant target.
 func authorizeRead(token *servicetoken.Token, principalLocal string) error {
-	if principalLocal != token.Subject {
+	if principalLocal != token.Subject.Localpart() {
 		if !servicetoken.GrantsAllow(token.Grants, "agent/read", principalLocal) {
 			return fmt.Errorf("access denied: no agent/read grant for %s", principalLocal)
 		}
@@ -107,7 +107,7 @@ func resolvePrincipalForRead(token *servicetoken.Token, raw []byte) (string, err
 
 	principalLocal := request.PrincipalLocal
 	if principalLocal == "" {
-		principalLocal = token.Subject
+		principalLocal = token.Subject.Localpart()
 	}
 
 	if err := authorizeRead(token, principalLocal); err != nil {
@@ -156,7 +156,7 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	principalLocal := token.Subject
+	principalLocal := token.Subject.Localpart()
 
 	// Read current state, apply mutation, write back.
 	current, err := agentService.readSessionState(ctx, principalLocal)
@@ -227,7 +227,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	principalLocal := token.Subject
+	principalLocal := token.Subject.Localpart()
 
 	// Update session state.
 	sessionContent, err := agentService.readSessionState(ctx, principalLocal)
@@ -374,7 +374,7 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 		return nil, fmt.Errorf("content_type is required")
 	}
 
-	principalLocal := token.Subject
+	principalLocal := token.Subject.Localpart()
 
 	current, err := agentService.readContextState(ctx, principalLocal)
 	if err != nil {
@@ -443,7 +443,7 @@ func (agentService *AgentService) handleGetContext(ctx context.Context, token *s
 
 	principalLocal := request.PrincipalLocal
 	if principalLocal == "" {
-		principalLocal = token.Subject
+		principalLocal = token.Subject.Localpart()
 	}
 
 	if err := authorizeRead(token, principalLocal); err != nil {
@@ -483,7 +483,7 @@ func (agentService *AgentService) handleDeleteContext(ctx context.Context, token
 		return nil, fmt.Errorf("key is required")
 	}
 
-	principalLocal := token.Subject
+	principalLocal := token.Subject.Localpart()
 
 	current, err := agentService.readContextState(ctx, principalLocal)
 	if err != nil {
@@ -545,7 +545,7 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 
 	principalLocal := request.PrincipalLocal
 	if principalLocal == "" {
-		principalLocal = token.Subject
+		principalLocal = token.Subject.Localpart()
 	}
 
 	if err := authorizeRead(token, principalLocal); err != nil {

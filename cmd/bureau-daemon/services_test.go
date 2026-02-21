@@ -613,8 +613,8 @@ func TestBuildServiceDirectory(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing %s in directory", sttLocalpart)
 	}
-	if whisper.Principal != sttService.Principal.UserID().String() {
-		t.Errorf("whisper principal = %q, want %q", whisper.Principal, sttService.Principal.UserID().String())
+	if whisper.Principal != sttService.Principal.UserID() {
+		t.Errorf("whisper principal = %q, want %q", whisper.Principal, sttService.Principal.UserID())
 	}
 	if whisper.Protocol != "http" {
 		t.Errorf("whisper protocol = %q, want http", whisper.Protocol)
@@ -711,16 +711,16 @@ func TestPushDirectoryToProxy(t *testing.T) {
 	directory := []adminDirectoryEntry{
 		{
 			Localpart:    sttLocalpart,
-			Principal:    sttService.Principal.UserID().String(),
-			Machine:      gpuMachine.UserID().String(),
+			Principal:    sttService.Principal.UserID(),
+			Machine:      gpuMachine.UserID(),
 			Protocol:     "http",
 			Description:  "Speech-to-text",
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart:   e5Localpart,
-			Principal:   e5Service.Principal.UserID().String(),
-			Machine:     cpuMachine.UserID().String(),
+			Principal:   e5Service.Principal.UserID(),
+			Machine:     cpuMachine.UserID(),
 			Protocol:    "grpc",
 			Description: "Text embeddings",
 			Metadata:    map[string]any{"max_tokens": float64(512)},

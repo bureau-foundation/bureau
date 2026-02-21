@@ -78,16 +78,14 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 		)
 
 		// Force re-mint for affected principals so their tokens
-		// no longer carry the expired grants. SweepExpired returns
-		// account localparts (strings); match them against the
-		// Entity-keyed d.running map.
-		affectedSet := make(map[string]bool, len(affected))
-		for _, localpart := range affected {
-			affectedSet[localpart] = true
+		// no longer carry the expired grants.
+		affectedSet := make(map[ref.UserID]bool, len(affected))
+		for _, userID := range affected {
+			affectedSet[userID] = true
 		}
 		d.reconcileMu.Lock()
 		for principal := range d.running {
-			if affectedSet[principal.AccountLocalpart()] {
+			if affectedSet[principal.UserID()] {
 				d.lastTokenMint[principal] = time.Time{}
 			}
 		}

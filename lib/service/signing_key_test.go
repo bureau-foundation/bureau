@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -21,7 +22,7 @@ func TestParseTokenSigningKeyValid(t *testing.T) {
 
 	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
 		PublicKey: hex.EncodeToString(publicKey),
-		Machine:   "machine/test",
+		Machine:   ref.MustParseUserID("@machine/test:test.local"),
 	})
 
 	result, err := parseTokenSigningKey(raw, "machine/test")
@@ -37,7 +38,7 @@ func TestParseTokenSigningKeyValid(t *testing.T) {
 func TestParseTokenSigningKeyEmptyPublicKey(t *testing.T) {
 	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
 		PublicKey: "",
-		Machine:   "machine/test",
+		Machine:   ref.MustParseUserID("@machine/test:test.local"),
 	})
 
 	_, err := parseTokenSigningKey(raw, "machine/test")
@@ -48,14 +49,14 @@ func TestParseTokenSigningKeyEmptyPublicKey(t *testing.T) {
 		t.Errorf("error should mention empty field, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "machine/test") {
-		t.Errorf("error should include machine localpart, got: %v", err)
+		t.Errorf("error should include machine identifier, got: %v", err)
 	}
 }
 
 func TestParseTokenSigningKeyInvalidHex(t *testing.T) {
 	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
 		PublicKey: "zzzz-not-hex",
-		Machine:   "machine/test",
+		Machine:   ref.MustParseUserID("@machine/test:test.local"),
 	})
 
 	_, err := parseTokenSigningKey(raw, "machine/test")
@@ -72,7 +73,7 @@ func TestParseTokenSigningKeyWrongLength(t *testing.T) {
 	shortKey := hex.EncodeToString(make([]byte, 16))
 	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
 		PublicKey: shortKey,
-		Machine:   "machine/test",
+		Machine:   ref.MustParseUserID("@machine/test:test.local"),
 	})
 
 	_, err := parseTokenSigningKey(raw, "machine/test")
@@ -102,7 +103,7 @@ func TestParseTokenSigningKeyTooLong(t *testing.T) {
 	longKey := hex.EncodeToString(make([]byte, 64))
 	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
 		PublicKey: longKey,
-		Machine:   "machine/test",
+		Machine:   ref.MustParseUserID("@machine/test:test.local"),
 	})
 
 	_, err := parseTokenSigningKey(raw, "machine/test")

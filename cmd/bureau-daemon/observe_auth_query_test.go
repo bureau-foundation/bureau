@@ -128,19 +128,21 @@ func TestQueryAuthorizationAllow(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
 	// Set up actor with observe grant and target with observe allowance.
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}},
+			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/*/*:**"}},
 		},
 	})
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/compiler", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"iree/**"}},
+			{Actions: []string{"observe/**"}, Actors: []string{"**/iree/*/*:**"}},
 		},
 	})
 
+	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
+	targetUserID := testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		"iree/amdgpu/pm", "observe", "iree/amdgpu/compiler")
+		actorUserID, "observe", targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -166,10 +168,12 @@ func TestQueryAuthorizationDenyNoGrant(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
 	// Actor has no grants at all.
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{})
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{})
 
+	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
+	targetUserID := testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		"iree/amdgpu/pm", "observe", "iree/amdgpu/compiler")
+		actorUserID, "observe", targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -189,17 +193,19 @@ func TestQueryAuthorizationDenyExplicitDenial(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
 	// Actor has a broad grant but also an explicit denial for the action.
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"**"}, Targets: []string{"**"}},
+			{Actions: []string{"**"}, Targets: []string{"**:**"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{"observe/read-write"}, Targets: []string{"secret/**"}},
+			{Actions: []string{"observe/read-write"}, Targets: []string{"**/secret/*:**"}},
 		},
 	})
 
+	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
+	targetUserID := testEntity(t, daemon.fleet, "secret/database").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		"iree/amdgpu/pm", "observe/read-write", "secret/database")
+		actorUserID, "observe/read-write", targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -224,15 +230,16 @@ func TestQueryAuthorizationDenyExplicitDenial(t *testing.T) {
 func TestQueryAuthorizationSelfService(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"command/pipeline/list"}},
 		},
 	})
 
 	// Self-service action: no target.
+	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		"iree/amdgpu/pm", "command/pipeline/list", "")
+		actorUserID, "command/pipeline/list", "")
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -284,9 +291,9 @@ func TestQueryAuthorizationMissingActor(t *testing.T) {
 func TestQueryGrantsReturnsPolicy(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}},
+			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/**:**"}},
 			{Actions: []string{"command/pipeline/list"}},
 		},
 		Denials: []schema.Denial{
@@ -294,13 +301,14 @@ func TestQueryGrantsReturnsPolicy(t *testing.T) {
 		},
 	})
 
-	response := sendGrantsQuery(t, daemon.observeSocketPath, "iree/amdgpu/pm")
+	pmUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
+	response := sendGrantsQuery(t, daemon.observeSocketPath, pmUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
 	}
-	if response.Principal != "iree/amdgpu/pm" {
-		t.Errorf("principal = %q, want iree/amdgpu/pm", response.Principal)
+	if response.Principal != pmUserID {
+		t.Errorf("principal = %q, want %q", response.Principal, pmUserID)
 	}
 	if len(response.Grants) != 2 {
 		t.Errorf("grants = %d, want 2", len(response.Grants))
@@ -315,9 +323,9 @@ func TestQueryGrantsReturnsPolicy(t *testing.T) {
 func TestQueryGrantsSourceProvenance(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/pm", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}, Source: schema.SourceMachineDefault},
+			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/**:**"}, Source: schema.SourceMachineDefault},
 			{Actions: []string{"command/pipeline/list"}, Source: schema.SourcePrincipal},
 		},
 		Denials: []schema.Denial{
@@ -325,7 +333,8 @@ func TestQueryGrantsSourceProvenance(t *testing.T) {
 		},
 	})
 
-	response := sendGrantsQuery(t, daemon.observeSocketPath, "iree/amdgpu/pm")
+	pmUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
+	response := sendGrantsQuery(t, daemon.observeSocketPath, pmUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -351,7 +360,8 @@ func TestQueryGrantsEmptyPrincipal(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
 	// Principal not in index — should return empty lists, not error.
-	response := sendGrantsQuery(t, daemon.observeSocketPath, "nonexistent/agent")
+	nonexistentUserID := testEntity(t, daemon.fleet, "nonexistent/agent").UserID().String()
+	response := sendGrantsQuery(t, daemon.observeSocketPath, nonexistentUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -401,23 +411,24 @@ func TestQueryGrantsMissingPrincipal(t *testing.T) {
 func TestQueryAllowancesReturnsPolicy(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 
-	daemon.authorizationIndex.SetPrincipal("iree/amdgpu/compiler", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"iree/**"}},
-			{Actions: []string{"interrupt"}, Actors: []string{"iree/amdgpu/pm"}},
+			{Actions: []string{"observe/**"}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{"interrupt"}, Actors: []string{"iree/amdgpu/pm:**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**"}},
+			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**:**"}},
 		},
 	})
 
-	response := sendAllowancesQuery(t, daemon.observeSocketPath, "iree/amdgpu/compiler")
+	principalUserID := testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID().String()
+	response := sendAllowancesQuery(t, daemon.observeSocketPath, principalUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
 	}
-	if response.Principal != "iree/amdgpu/compiler" {
-		t.Errorf("principal = %q, want iree/amdgpu/compiler", response.Principal)
+	if response.Principal != principalUserID {
+		t.Errorf("principal = %q, want %q", response.Principal, principalUserID)
 	}
 	if len(response.Allowances) != 2 {
 		t.Errorf("allowances = %d, want 2", len(response.Allowances))

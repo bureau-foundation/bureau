@@ -63,8 +63,8 @@ type observeRequest struct {
 	// to only currently-observable targets.
 	Observable bool `json:"observable,omitempty"`
 
-	// Actor is the localpart of the acting principal for authorization
-	// queries. Used when Action is "query_authorization".
+	// Actor is the full Matrix user ID of the acting principal for
+	// authorization queries. Used when Action is "query_authorization".
 	Actor string `json:"actor,omitempty"`
 
 	// AuthAction is the action to check for authorization queries
@@ -73,8 +73,8 @@ type observeRequest struct {
 	// Used when Action is "query_authorization".
 	AuthAction string `json:"auth_action,omitempty"`
 
-	// Target is the localpart of the target principal for authorization
-	// queries. Empty for self-service actions.
+	// Target is the full Matrix user ID of the target principal for
+	// authorization queries. Empty for self-service actions.
 	// Used when Action is "query_authorization".
 	Target string `json:"target,omitempty"`
 
@@ -114,8 +114,8 @@ type observeResponse struct {
 // changes: when observation allowances tighten, sessions that no longer
 // pass authorization are terminated by closing their client connection.
 type activeObserveSession struct {
-	principal   string
-	observer    string
+	principal   ref.UserID
+	observer    ref.UserID
 	grantedMode string
 	clientConn  net.Conn
 }
@@ -146,12 +146,12 @@ func (d *Daemon) unregisterObserveSession(session *activeObserveSession) {
 // index. Sessions that no longer pass authorization are terminated by
 // closing the client connection, which unblocks bridgeConnections and
 // triggers relay cleanup.
-func (d *Daemon) enforceObserveAllowanceChange(principalLocalpart string) {
+func (d *Daemon) enforceObserveAllowanceChange(principalUserID ref.UserID) {
 	d.observeSessionsMu.Lock()
 	defer d.observeSessionsMu.Unlock()
 
 	for _, session := range d.observeSessions {
-		if session.principal != principalLocalpart {
+		if session.principal != principalUserID {
 			continue
 		}
 
@@ -254,7 +254,7 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	observerUserID, err := d.authenticateObserver(ctx, request.Token)
+	observer, err := d.authenticateObserver(ctx, request.Token)
 	if err != nil {
 		d.logger.Warn("observe authentication failed",
 			"asserted_observer", request.Observer,
@@ -268,9 +268,9 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 	// Replace the observer field with the verified identity. The client
 	// may have sent a user ID, but the daemon trusts only the token
 	// verification result.
-	request.Observer = observerUserID
+	request.Observer = observer.String()
 
-	d.logger.Debug("observer authenticated", "observer", observerUserID)
+	d.logger.Debug("observer authenticated", "observer", observer)
 
 	switch request.Action {
 	case "", "observe":
@@ -334,10 +334,18 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 	d.reconcileMu.RUnlock()
 
 	if isLocallyRunning {
+		// Parse the verified observer identity for authorization checks.
+		observer, parseErr := ref.ParseUserID(request.Observer)
+		if parseErr != nil {
+			d.sendObserveError(clientConnection,
+				fmt.Sprintf("invalid observer identity %q: %v", request.Observer, parseErr))
+			return
+		}
+
 		// Authorize the observer against the principal's allowances.
 		// Only the hosting machine authorizes — this IS the host.
 		requestedMode := request.Mode
-		authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
+		authz := d.authorizeObserve(observer, principalEntity.UserID(), requestedMode)
 		if !authz.Allowed {
 			d.logger.Warn("observation denied",
 				"observer", request.Observer,
@@ -525,12 +533,19 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 	// goroutines that modify the map.
 	runningSnapshot := d.runningConsumers()
 
+	// Parse the verified observer identity for authorization checks.
+	observer, parseErr := ref.ParseUserID(request.Observer)
+	if parseErr != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid observer identity %q: %v", request.Observer, parseErr))
+		return
+	}
+
 	// Collect running principals that the observer is authorized to see.
 	var authorizedPrincipals []string
 	for _, principal := range runningSnapshot {
-		accountLocalpart := principal.AccountLocalpart()
-		if d.authorizeList(request.Observer, accountLocalpart) {
-			authorizedPrincipals = append(authorizedPrincipals, accountLocalpart)
+		if d.authorizeList(observer, principal.UserID()) {
+			authorizedPrincipals = append(authorizedPrincipals, principal.AccountLocalpart())
 		}
 	}
 
@@ -593,11 +608,24 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 	seen := make(map[string]bool)
 	var principals []observe.ListPrincipal
 
+	// Parse the verified observer identity for authorization checks.
+	observer, parseErr := ref.ParseUserID(request.Observer)
+	if parseErr != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid observer identity %q: %v", request.Observer, parseErr))
+		return
+	}
+
 	// Locally running principals — filtered by authorization.
 	for accountLocalpart := range runningSet {
 		seen[accountLocalpart] = true
 
-		if !d.authorizeList(request.Observer, accountLocalpart) {
+		// Construct a typed user ID for the authorization check.
+		principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(d.fleet, accountLocalpart)
+		if entityErr != nil {
+			continue
+		}
+		if !d.authorizeList(observer, principalEntity.UserID()) {
 			continue
 		}
 
@@ -723,9 +751,14 @@ func (d *Daemon) handleLocalObserve(clientConnection net.Conn, request observeRe
 
 	// Register the session so enforceObserveAllowanceChange can terminate
 	// it if the observation allowances tighten while the session is active.
+	// Parse the observer and principal strings into typed IDs. These were
+	// validated earlier in the request pipeline (authenticateObserver and
+	// NewEntityFromAccountLocalpart).
+	observerID, _ := ref.ParseUserID(request.Observer)
+	principalEntity, _ := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
 	observeSession := &activeObserveSession{
-		principal:   request.Principal,
-		observer:    request.Observer,
+		principal:   principalEntity.UserID(),
+		observer:    observerID,
 		grantedMode: grantedMode,
 		clientConn:  clientConnection,
 	}
@@ -939,9 +972,20 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Parse the observer identity forwarded from the originating daemon.
+	observer, observerParseErr := ref.ParseUserID(request.Observer)
+	if observerParseErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(observeResponse{
+			Error: fmt.Sprintf("invalid observer identity %q: %v", request.Observer, observerParseErr),
+		})
+		return
+	}
+
 	// Check local authorization for the forwarded observer identity.
 	requestedMode := request.Mode
-	authz := d.authorizeObserve(request.Observer, request.Principal, requestedMode)
+	authz := d.authorizeObserve(observer, transportEntity.UserID(), requestedMode)
 	if !authz.Allowed {
 		d.logger.Warn("transport observation denied",
 			"observer", request.Observer,

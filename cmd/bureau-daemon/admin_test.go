@@ -107,11 +107,14 @@ func newCredentialTestDaemon(t *testing.T) (
 	t.Cleanup(func() { listener.Close() })
 
 	// Token helper: mints a signed service token with the given grants.
+	// The subject is an account localpart (e.g. "connector/github"),
+	// expanded to a full user ID via the daemon's fleet.
 	// Timestamps are relative to the daemon's fake clock epoch.
 	mintToken := func(subject string, grants []servicetoken.Grant) []byte {
+		subjectEntity := testEntity(t, daemon.fleet, subject)
 		token := &servicetoken.Token{
-			Subject:   subject,
-			Machine:   daemon.machine.Localpart(),
+			Subject:   subjectEntity.UserID(),
+			Machine:   daemon.machine,
 			Audience:  credentialServiceRole,
 			Grants:    grants,
 			ID:        "test-token-id",
@@ -242,7 +245,7 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 	state := newMockMatrixState()
 	state.setStateEvent(daemon.configRoomID.String(), schema.EventTypeCredentials, fleetScopedPrincipal, schema.Credentials{
 		Version:    1,
-		Principal:  "agent/builder",
+		Principal:  testEntity(t, daemon.fleet, "agent/builder").UserID(),
 		Keys:       []string{"OPENAI_API_KEY"},
 		Ciphertext: existingCiphertext,
 	})
@@ -530,7 +533,7 @@ func TestHasCredentialGrants(t *testing.T) {
 		{
 			name: "unrelated grants",
 			grants: []schema.Grant{
-				{Actions: []string{"ticket/create"}, Targets: []string{"**"}},
+				{Actions: []string{"ticket/create"}, Targets: []string{"**:**"}},
 			},
 			expected: false,
 		},
@@ -544,14 +547,14 @@ func TestHasCredentialGrants(t *testing.T) {
 		{
 			name: "broad credential grant",
 			grants: []schema.Grant{
-				{Actions: []string{"credential/**"}, Targets: []string{"**"}},
+				{Actions: []string{"credential/**"}, Targets: []string{"**:**"}},
 			},
 			expected: true,
 		},
 		{
 			name: "wildcard grant matches credential",
 			grants: []schema.Grant{
-				{Actions: []string{"**"}, Targets: []string{"**"}},
+				{Actions: []string{"**"}, Targets: []string{"**:**"}},
 			},
 			expected: true,
 		},
@@ -561,7 +564,7 @@ func TestHasCredentialGrants(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			index := authorization.NewIndex()
 			if len(test.grants) > 0 {
-				index.SetPrincipal("connector/test", schema.AuthorizationPolicy{
+				index.SetPrincipal(testEntity(t, daemon.fleet, "connector/test").UserID(), schema.AuthorizationPolicy{
 					Grants: test.grants,
 				})
 			}
@@ -591,9 +594,9 @@ func TestAppendCredentialServiceMount(t *testing.T) {
 	}
 
 	// Principal with credential grants: mount added.
-	daemon.authorizationIndex.SetPrincipal("connector/github", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "connector/github").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"agent/**"}},
+			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
 		},
 	})
 	result = daemon.appendCredentialServiceMount(testEntity(t, daemon.fleet, "connector/github"), existing)
@@ -622,9 +625,9 @@ func TestCredentialServiceRoles(t *testing.T) {
 	}
 
 	// With credential grants → ["credential"].
-	daemon.authorizationIndex.SetPrincipal("connector/github", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "connector/github").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"agent/**"}},
+			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
 		},
 	})
 	roles = daemon.credentialServiceRoles(testEntity(t, daemon.fleet, "connector/github"))

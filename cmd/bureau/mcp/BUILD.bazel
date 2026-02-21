@@ -19,6 +19,7 @@ go_library(
         "//cmd/bureau/cli",
         "//lib/authorization",
         "//lib/bm25",
+        "//lib/ref",
         "//lib/schema",
         "//lib/toolsearch",
         "//lib/toolserver",

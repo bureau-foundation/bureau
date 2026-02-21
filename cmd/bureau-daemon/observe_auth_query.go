@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -34,7 +35,22 @@ func (d *Daemon) handleQueryAuthorization(clientConnection net.Conn, request obs
 		"target", request.Target,
 	)
 
-	result := authorization.Authorized(d.authorizationIndex, request.Actor, request.AuthAction, request.Target)
+	actor, err := ref.ParseUserID(request.Actor)
+	if err != nil {
+		d.sendObserveError(clientConnection, "invalid actor user ID: "+err.Error())
+		return
+	}
+
+	var target ref.UserID
+	if request.Target != "" {
+		target, err = ref.ParseUserID(request.Target)
+		if err != nil {
+			d.sendObserveError(clientConnection, "invalid target user ID: "+err.Error())
+			return
+		}
+	}
+
+	result := authorization.Authorized(d.authorizationIndex, actor, request.AuthAction, target)
 
 	response := observe.AuthorizationResponse{
 		OK:       true,
@@ -52,22 +68,22 @@ func (d *Daemon) handleQueryAuthorization(clientConnection net.Conn, request obs
 	response.MatchedAllowanceDenial = result.MatchedAllowanceDenial
 
 	// Full policy context for the actor.
-	response.ActorGrants = d.authorizationIndex.Grants(request.Actor)
+	response.ActorGrants = d.authorizationIndex.Grants(actor)
 	if response.ActorGrants == nil {
 		response.ActorGrants = []schema.Grant{}
 	}
-	response.ActorDenials = d.authorizationIndex.Denials(request.Actor)
+	response.ActorDenials = d.authorizationIndex.Denials(actor)
 	if response.ActorDenials == nil {
 		response.ActorDenials = []schema.Denial{}
 	}
 
 	// Full policy context for the target (cross-principal actions only).
-	if request.Target != "" {
-		response.TargetAllowances = d.authorizationIndex.Allowances(request.Target)
+	if !target.IsZero() {
+		response.TargetAllowances = d.authorizationIndex.Allowances(target)
 		if response.TargetAllowances == nil {
 			response.TargetAllowances = []schema.Allowance{}
 		}
-		response.TargetAllowanceDenials = d.authorizationIndex.AllowanceDenials(request.Target)
+		response.TargetAllowanceDenials = d.authorizationIndex.AllowanceDenials(target)
 		if response.TargetAllowanceDenials == nil {
 			response.TargetAllowanceDenials = []schema.AllowanceDenial{}
 		}
@@ -94,13 +110,19 @@ func (d *Daemon) handleQueryPrincipalPolicy(clientConnection net.Conn, request o
 		"principal", request.Principal,
 	)
 
+	principalUserID, err := ref.ParseUserID(request.Principal)
+	if err != nil {
+		d.sendObserveError(clientConnection, "invalid principal user ID: "+err.Error())
+		return
+	}
+
 	switch request.Action {
 	case "query_grants":
-		grants := d.authorizationIndex.Grants(request.Principal)
+		grants := d.authorizationIndex.Grants(principalUserID)
 		if grants == nil {
 			grants = []schema.Grant{}
 		}
-		denials := d.authorizationIndex.Denials(request.Principal)
+		denials := d.authorizationIndex.Denials(principalUserID)
 		if denials == nil {
 			denials = []schema.Denial{}
 		}
@@ -112,11 +134,11 @@ func (d *Daemon) handleQueryPrincipalPolicy(clientConnection net.Conn, request o
 		})
 
 	case "query_allowances":
-		allowances := d.authorizationIndex.Allowances(request.Principal)
+		allowances := d.authorizationIndex.Allowances(principalUserID)
 		if allowances == nil {
 			allowances = []schema.Allowance{}
 		}
-		allowanceDenials := d.authorizationIndex.AllowanceDenials(request.Principal)
+		allowanceDenials := d.authorizationIndex.AllowanceDenials(principalUserID)
 		if allowanceDenials == nil {
 			allowanceDenials = []schema.AllowanceDenial{}
 		}

@@ -467,10 +467,10 @@ func TestProvision_HappyPath(t *testing.T) {
 	if credentials.Version != schema.CredentialsVersion {
 		t.Errorf("Credentials.Version = %d, want %d", credentials.Version, schema.CredentialsVersion)
 	}
-	if credentials.Principal != entity.UserID().String() {
+	if credentials.Principal != entity.UserID() {
 		t.Errorf("Credentials.Principal = %q, want %q", credentials.Principal, entity.UserID())
 	}
-	if credentials.ProvisionedBy != "@operator:bureau.local" {
+	if credentials.ProvisionedBy.String() != "@operator:bureau.local" {
 		t.Errorf("Credentials.ProvisionedBy = %q, want %q", credentials.ProvisionedBy, "@operator:bureau.local")
 	}
 	if credentials.Ciphertext == "" {
@@ -664,20 +664,20 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 
 	credentialsAlpha := schema.Credentials{
 		Version:       1,
-		Principal:     "@iree/amdgpu/pm:bureau.local",
+		Principal:     mustUserID("@iree/amdgpu/pm:bureau.local"),
 		EncryptedFor:  []string{machine.UserID().String()},
 		Keys:          []string{"MATRIX_TOKEN"},
 		Ciphertext:    "encrypted-alpha",
-		ProvisionedBy: "@operator:bureau.local",
+		ProvisionedBy: mustUserID("@operator:bureau.local"),
 		ProvisionedAt: "2026-02-19T10:00:00Z",
 	}
 	credentialsBeta := schema.Credentials{
 		Version:       1,
-		Principal:     "@sysadmin:bureau.local",
+		Principal:     mustUserID("@sysadmin:bureau.local"),
 		EncryptedFor:  []string{machine.UserID().String(), "escrow:operator"},
 		Keys:          []string{"API_KEY", "SECRET"},
 		Ciphertext:    "encrypted-beta",
-		ProvisionedBy: "@admin:bureau.local",
+		ProvisionedBy: mustUserID("@admin:bureau.local"),
 		ProvisionedAt: "2026-02-19T11:00:00Z",
 	}
 
@@ -748,7 +748,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	if bundleAlpha.StateKey != "iree/amdgpu/pm" {
 		t.Errorf("Bundles[0].StateKey = %q, want %q", bundleAlpha.StateKey, "iree/amdgpu/pm")
 	}
-	if bundleAlpha.Principal != "@iree/amdgpu/pm:bureau.local" {
+	if bundleAlpha.Principal.String() != "@iree/amdgpu/pm:bureau.local" {
 		t.Errorf("Bundles[0].Principal = %q, want %q", bundleAlpha.Principal, "@iree/amdgpu/pm:bureau.local")
 	}
 	if len(bundleAlpha.EncryptedFor) != 1 || bundleAlpha.EncryptedFor[0] != machine.UserID().String() {
@@ -757,7 +757,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	if len(bundleAlpha.Keys) != 1 || bundleAlpha.Keys[0] != "MATRIX_TOKEN" {
 		t.Errorf("Bundles[0].Keys = %v, want [MATRIX_TOKEN]", bundleAlpha.Keys)
 	}
-	if bundleAlpha.ProvisionedBy != "@operator:bureau.local" {
+	if bundleAlpha.ProvisionedBy.String() != "@operator:bureau.local" {
 		t.Errorf("Bundles[0].ProvisionedBy = %q, want %q", bundleAlpha.ProvisionedBy, "@operator:bureau.local")
 	}
 	if bundleAlpha.ProvisionedAt != "2026-02-19T10:00:00Z" {
@@ -769,7 +769,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	if bundleBeta.StateKey != "sysadmin" {
 		t.Errorf("Bundles[1].StateKey = %q, want %q", bundleBeta.StateKey, "sysadmin")
 	}
-	if bundleBeta.Principal != "@sysadmin:bureau.local" {
+	if bundleBeta.Principal.String() != "@sysadmin:bureau.local" {
 		t.Errorf("Bundles[1].Principal = %q, want %q", bundleBeta.Principal, "@sysadmin:bureau.local")
 	}
 	if len(bundleBeta.EncryptedFor) != 2 {
@@ -781,7 +781,7 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 	if len(bundleBeta.Keys) != 2 {
 		t.Fatalf("Bundles[1].Keys length = %d, want 2", len(bundleBeta.Keys))
 	}
-	if bundleBeta.ProvisionedBy != "@admin:bureau.local" {
+	if bundleBeta.ProvisionedBy.String() != "@admin:bureau.local" {
 		t.Errorf("Bundles[1].ProvisionedBy = %q, want %q", bundleBeta.ProvisionedBy, "@admin:bureau.local")
 	}
 }

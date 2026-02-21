@@ -164,8 +164,8 @@ func (d *Daemon) executePipeline(
 	var artifactSocketPath, artifactTokenPath string
 	if socketPath := d.findLocalArtifactSocket(); socketPath != "" {
 		token := &servicetoken.Token{
-			Subject:   localpart,
-			Machine:   d.machine.Localpart(),
+			Subject:   pipelineEntity.UserID(),
+			Machine:   d.machine,
 			Audience:  "artifact",
 			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
 			IssuedAt:  d.clock.Now().Unix(),

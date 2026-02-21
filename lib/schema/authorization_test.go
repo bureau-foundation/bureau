@@ -6,6 +6,8 @@ package schema
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestGrantJSONRoundTrip(t *testing.T) {
@@ -237,17 +239,27 @@ func TestRoomAuthorizationPolicyJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func testUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
+}
+
 func TestTemporalGrantContentJSONRoundTrip(t *testing.T) {
+	principalID := testUserID(t, "@bureau/fleet/test/agent/coder:bureau.local")
 	original := TemporalGrantContent{
 		Grant: Grant{
 			Actions:   []string{"observe"},
-			Targets:   []string{"service/db/postgres"},
+			Targets:   []string{"service/db/postgres:bureau.local"},
 			ExpiresAt: "2026-02-11T18:30:00Z",
 			Ticket:    "tkt-c4d1",
 			GrantedBy: "@bureau/dev/workspace/tpm:bureau.local",
 			GrantedAt: "2026-02-11T16:30:00Z",
 		},
-		Principal: "bureau/dev/workspace/coder/0",
+		Principal: principalID,
 	}
 
 	data, err := json.Marshal(original)
@@ -260,8 +272,8 @@ func TestTemporalGrantContentJSONRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if decoded.Principal != "bureau/dev/workspace/coder/0" {
-		t.Errorf("Principal = %q, want bureau/dev/workspace/coder/0", decoded.Principal)
+	if decoded.Principal != principalID {
+		t.Errorf("Principal = %v, want %v", decoded.Principal, principalID)
 	}
 	if decoded.Grant.Ticket != "tkt-c4d1" {
 		t.Errorf("Grant.Ticket = %q, want tkt-c4d1", decoded.Grant.Ticket)
@@ -272,9 +284,10 @@ func TestTemporalGrantContentJSONRoundTrip(t *testing.T) {
 }
 
 func TestTokenSigningKeyContentJSON(t *testing.T) {
+	machineID := testUserID(t, "@bureau/fleet/prod/machine/workstation:bureau.local")
 	original := TokenSigningKeyContent{
 		PublicKey: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b7e8c3f1b2e0",
-		Machine:   "machine/workstation",
+		Machine:   machineID,
 	}
 
 	data, err := json.Marshal(original)
@@ -290,8 +303,8 @@ func TestTokenSigningKeyContentJSON(t *testing.T) {
 	if decoded.PublicKey != original.PublicKey {
 		t.Errorf("PublicKey = %q, want %q", decoded.PublicKey, original.PublicKey)
 	}
-	if decoded.Machine != "machine/workstation" {
-		t.Errorf("Machine = %q, want machine/workstation", decoded.Machine)
+	if decoded.Machine != machineID {
+		t.Errorf("Machine = %v, want %v", decoded.Machine, machineID)
 	}
 }
 

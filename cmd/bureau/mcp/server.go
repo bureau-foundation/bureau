@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/bm25"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/toolsearch"
 	"github.com/bureau-foundation/bureau/lib/toolserver"
@@ -385,7 +386,7 @@ func (s *Server) toolAuthorized(t *tool) bool {
 		return false
 	}
 	for _, action := range t.command.RequiredGrants {
-		if !authorization.GrantsAllow(s.grants, action, "") {
+		if !authorization.GrantsAllow(s.grants, action, ref.UserID{}) {
 			return false
 		}
 	}

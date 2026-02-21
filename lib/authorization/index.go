@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -18,8 +19,9 @@ type temporalEntry struct {
 	// expiresAt is the parsed expiry time of the grant.
 	expiresAt time.Time
 
-	// principal is the localpart of the principal who holds this grant.
-	principal string
+	// principal is the full Matrix user ID of the principal who holds
+	// this grant.
+	principal ref.UserID
 
 	// grant is the temporal grant itself.
 	grant schema.Grant
@@ -29,6 +31,10 @@ type temporalEntry struct {
 // concurrent read access with single-writer updates. The daemon builds
 // the index from machine config, room authorization policies, and
 // per-principal assignments.
+//
+// Principals are identified by their full Matrix user ID (ref.UserID).
+// This is critical for federation safety: @agent/pm:server-a and
+// @agent/pm:server-b are different entities with independent policies.
 //
 // Read operations (Authorized, Grants, Allowances) acquire a read lock.
 // Write operations (SetPrincipal, RemovePrincipal, AddTemporalGrant,
@@ -40,10 +46,11 @@ type Index struct {
 	mu sync.RWMutex
 
 	// Per-principal resolved policy (merged from all sources).
-	grants           map[string][]schema.Grant
-	denials          map[string][]schema.Denial
-	allowances       map[string][]schema.Allowance
-	allowanceDenials map[string][]schema.AllowanceDenial
+	// Keyed by full Matrix user ID (ref.UserID).
+	grants           map[ref.UserID][]schema.Grant
+	denials          map[ref.UserID][]schema.Denial
+	allowances       map[ref.UserID][]schema.Allowance
+	allowanceDenials map[ref.UserID][]schema.AllowanceDenial
 
 	// Temporal grants indexed by expiry for efficient GC.
 	temporalGrants []temporalEntry
@@ -52,10 +59,10 @@ type Index struct {
 // NewIndex creates an empty authorization index.
 func NewIndex() *Index {
 	return &Index{
-		grants:           make(map[string][]schema.Grant),
-		denials:          make(map[string][]schema.Denial),
-		allowances:       make(map[string][]schema.Allowance),
-		allowanceDenials: make(map[string][]schema.AllowanceDenial),
+		grants:           make(map[ref.UserID][]schema.Grant),
+		denials:          make(map[ref.UserID][]schema.Denial),
+		allowances:       make(map[ref.UserID][]schema.Allowance),
+		allowanceDenials: make(map[ref.UserID][]schema.AllowanceDenial),
 	}
 }
 
@@ -64,7 +71,7 @@ func NewIndex() *Index {
 // per-principal policies before calling this. Temporal grants for this
 // principal are preserved — they are managed separately via
 // AddTemporalGrant/RevokeTemporalGrant.
-func (idx *Index) SetPrincipal(localpart string, policy schema.AuthorizationPolicy) {
+func (idx *Index) SetPrincipal(userID ref.UserID, policy schema.AuthorizationPolicy) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -72,32 +79,32 @@ func (idx *Index) SetPrincipal(localpart string, policy schema.AuthorizationPoli
 	grants := make([]schema.Grant, len(policy.Grants))
 	copy(grants, policy.Grants)
 	for _, entry := range idx.temporalGrants {
-		if entry.principal == localpart {
+		if entry.principal == userID {
 			grants = append(grants, entry.grant)
 		}
 	}
 
-	idx.grants[localpart] = grants
-	idx.denials[localpart] = policy.Denials
-	idx.allowances[localpart] = policy.Allowances
-	idx.allowanceDenials[localpart] = policy.AllowanceDenials
+	idx.grants[userID] = grants
+	idx.denials[userID] = policy.Denials
+	idx.allowances[userID] = policy.Allowances
+	idx.allowanceDenials[userID] = policy.AllowanceDenials
 }
 
 // RemovePrincipal removes all policy for a principal. Also removes any
 // temporal grants held by this principal.
-func (idx *Index) RemovePrincipal(localpart string) {
+func (idx *Index) RemovePrincipal(userID ref.UserID) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	delete(idx.grants, localpart)
-	delete(idx.denials, localpart)
-	delete(idx.allowances, localpart)
-	delete(idx.allowanceDenials, localpart)
+	delete(idx.grants, userID)
+	delete(idx.denials, userID)
+	delete(idx.allowances, userID)
+	delete(idx.allowanceDenials, userID)
 
 	// Remove temporal grants for this principal.
 	filtered := idx.temporalGrants[:0]
 	for _, entry := range idx.temporalGrants {
-		if entry.principal != localpart {
+		if entry.principal != userID {
 			filtered = append(filtered, entry)
 		}
 	}
@@ -109,7 +116,7 @@ func (idx *Index) RemovePrincipal(localpart string) {
 // false if the grant has no ExpiresAt, no Ticket, or the expiry cannot
 // be parsed. The Ticket field is required because SweepExpired and
 // RevokeTemporalGrant use it to identify which grants to remove.
-func (idx *Index) AddTemporalGrant(localpart string, grant schema.Grant) bool {
+func (idx *Index) AddTemporalGrant(userID ref.UserID, grant schema.Grant) bool {
 	if grant.ExpiresAt == "" {
 		return false
 	}
@@ -126,7 +133,7 @@ func (idx *Index) AddTemporalGrant(localpart string, grant schema.Grant) bool {
 
 	entry := temporalEntry{
 		expiresAt: expiresAt,
-		principal: localpart,
+		principal: userID,
 		grant:     grant,
 	}
 
@@ -139,14 +146,14 @@ func (idx *Index) AddTemporalGrant(localpart string, grant schema.Grant) bool {
 	idx.temporalGrants[position] = entry
 
 	// Add to the principal's grant list.
-	idx.grants[localpart] = append(idx.grants[localpart], grant)
+	idx.grants[userID] = append(idx.grants[userID], grant)
 
 	return true
 }
 
 // RevokeTemporalGrant removes all temporal grants for a principal that
 // are linked to a specific ticket. Returns the number of grants removed.
-func (idx *Index) RevokeTemporalGrant(localpart, ticket string) int {
+func (idx *Index) RevokeTemporalGrant(userID ref.UserID, ticket string) int {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -155,7 +162,7 @@ func (idx *Index) RevokeTemporalGrant(localpart, ticket string) int {
 	// Remove from temporal grant tracking.
 	filtered := idx.temporalGrants[:0]
 	for _, entry := range idx.temporalGrants {
-		if entry.principal == localpart && entry.grant.Ticket == ticket {
+		if entry.principal == userID && entry.grant.Ticket == ticket {
 			removed++
 			continue
 		}
@@ -165,7 +172,7 @@ func (idx *Index) RevokeTemporalGrant(localpart, ticket string) int {
 
 	// Rebuild the principal's grant list without the revoked grants.
 	if removed > 0 {
-		grants := idx.grants[localpart]
+		grants := idx.grants[userID]
 		rebuilt := make([]schema.Grant, 0, len(grants))
 		for _, grant := range grants {
 			if grant.Ticket == ticket {
@@ -173,15 +180,15 @@ func (idx *Index) RevokeTemporalGrant(localpart, ticket string) int {
 			}
 			rebuilt = append(rebuilt, grant)
 		}
-		idx.grants[localpart] = rebuilt
+		idx.grants[userID] = rebuilt
 	}
 
 	return removed
 }
 
 // SweepExpired removes temporal grants that have expired as of the
-// given time. Returns the localparts of principals whose grants changed.
-func (idx *Index) SweepExpired(now time.Time) []string {
+// given time. Returns the user IDs of principals whose grants changed.
+func (idx *Index) SweepExpired(now time.Time) []ref.UserID {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -207,8 +214,8 @@ func (idx *Index) SweepExpired(now time.Time) []string {
 	// references. We match by Ticket (not ExpiresAt) to avoid
 	// accidentally removing static grants that happen to share an
 	// expiry timestamp.
-	affectedSet := make(map[string]bool)
-	expiredTickets := make(map[string]map[string]bool) // principal → set of Ticket values
+	affectedSet := make(map[ref.UserID]bool)
+	expiredTickets := make(map[ref.UserID]map[string]bool) // principal → set of Ticket values
 	for i := 0; i < expiredCount; i++ {
 		entry := idx.temporalGrants[i]
 		affectedSet[entry.principal] = true
@@ -223,8 +230,8 @@ func (idx *Index) SweepExpired(now time.Time) []string {
 
 	// Rebuild grant lists for affected principals, removing only
 	// grants whose Ticket matches an expired temporal entry.
-	for localpart, ticketSet := range expiredTickets {
-		grants := idx.grants[localpart]
+	for userID, ticketSet := range expiredTickets {
+		grants := idx.grants[userID]
 		rebuilt := make([]schema.Grant, 0, len(grants))
 		for _, grant := range grants {
 			if grant.Ticket != "" && ticketSet[grant.Ticket] {
@@ -232,37 +239,39 @@ func (idx *Index) SweepExpired(now time.Time) []string {
 			}
 			rebuilt = append(rebuilt, grant)
 		}
-		idx.grants[localpart] = rebuilt
+		idx.grants[userID] = rebuilt
 	}
 
-	affected := make([]string, 0, len(affectedSet))
-	for localpart := range affectedSet {
-		affected = append(affected, localpart)
+	affected := make([]ref.UserID, 0, len(affectedSet))
+	for userID := range affectedSet {
+		affected = append(affected, userID)
 	}
-	sort.Strings(affected)
+	sort.Slice(affected, func(i, j int) bool {
+		return affected[i].String() < affected[j].String()
+	})
 	return affected
 }
 
-// Principals returns the localparts of all principals in the index.
+// Principals returns the user IDs of all principals in the index.
 // The order is not guaranteed.
-func (idx *Index) Principals() []string {
+func (idx *Index) Principals() []ref.UserID {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	result := make([]string, 0, len(idx.grants))
-	for localpart := range idx.grants {
-		result = append(result, localpart)
+	result := make([]ref.UserID, 0, len(idx.grants))
+	for userID := range idx.grants {
+		result = append(result, userID)
 	}
 	return result
 }
 
 // Grants returns a deep copy of the resolved grants for a principal.
 // Returns nil if the principal is not in the index.
-func (idx *Index) Grants(localpart string) []schema.Grant {
+func (idx *Index) Grants(userID ref.UserID) []schema.Grant {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	grants := idx.grants[localpart]
+	grants := idx.grants[userID]
 	if grants == nil {
 		return nil
 	}
@@ -271,11 +280,11 @@ func (idx *Index) Grants(localpart string) []schema.Grant {
 
 // Allowances returns a deep copy of the resolved allowances for a
 // principal. Returns nil if the principal is not in the index.
-func (idx *Index) Allowances(localpart string) []schema.Allowance {
+func (idx *Index) Allowances(userID ref.UserID) []schema.Allowance {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	allowances := idx.allowances[localpart]
+	allowances := idx.allowances[userID]
 	if allowances == nil {
 		return nil
 	}
@@ -284,11 +293,11 @@ func (idx *Index) Allowances(localpart string) []schema.Allowance {
 
 // Denials returns a deep copy of the resolved denials for a principal.
 // Returns nil if the principal is not in the index.
-func (idx *Index) Denials(localpart string) []schema.Denial {
+func (idx *Index) Denials(userID ref.UserID) []schema.Denial {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	denials := idx.denials[localpart]
+	denials := idx.denials[userID]
 	if denials == nil {
 		return nil
 	}
@@ -297,11 +306,11 @@ func (idx *Index) Denials(localpart string) []schema.Denial {
 
 // AllowanceDenials returns a deep copy of the resolved allowance denials
 // for a principal. Returns nil if the principal is not in the index.
-func (idx *Index) AllowanceDenials(localpart string) []schema.AllowanceDenial {
+func (idx *Index) AllowanceDenials(userID ref.UserID) []schema.AllowanceDenial {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	allowanceDenials := idx.allowanceDenials[localpart]
+	allowanceDenials := idx.allowanceDenials[userID]
 	if allowanceDenials == nil {
 		return nil
 	}

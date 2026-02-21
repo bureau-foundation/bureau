@@ -53,6 +53,7 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 		privateKey:   d.tokenSigningPrivateKey,
 		session:      d.session,
 		systemRoomID: d.systemRoomID,
+		serverName:   d.machine.Server(),
 	}
 
 	// Create the WebRTC transport (implements both Listener and Dialer).
@@ -628,8 +629,8 @@ func (d *Daemon) bridgeWithTokenInjection(transportConn, serviceConn net.Conn) e
 
 	now := d.clock.Now()
 	token := &servicetoken.Token{
-		Subject:   "tunnel",
-		Machine:   d.machine.Localpart(),
+		Subject:   d.machine.UserID(),
+		Machine:   d.machine,
 		Audience:  "artifact",
 		Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 		ID:        tokenID,
@@ -849,6 +850,7 @@ type peerAuthenticator struct {
 	privateKey   ed25519.PrivateKey
 	session      peerAuthSession
 	systemRoomID ref.RoomID
+	serverName   string
 }
 
 // peerAuthSession is the subset of messaging.Session needed by
@@ -866,8 +868,13 @@ func (a *peerAuthenticator) VerifyPeer(peerLocalpart string, message, signature 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Token signing keys are published with the machine's full user ID
+	// (e.g., "@bureau/fleet/prod/machine/box:server") as the state key.
+	// The transport layer identifies peers by localpart, so we construct
+	// the full user ID here.
+	stateKey := "@" + peerLocalpart + ":" + a.serverName
 	rawContent, err := a.session.GetStateEvent(ctx, a.systemRoomID,
-		schema.EventTypeTokenSigningKey, peerLocalpart)
+		schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
 		return fmt.Errorf("fetching token signing key for %s: %w", peerLocalpart, err)
 	}

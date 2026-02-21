@@ -24,14 +24,14 @@ func ResolveSystemRoom(ctx context.Context, session *messaging.DirectSession, na
 
 // LoadTokenSigningKey fetches the daemon's Ed25519 token signing
 // public key from the system room. The daemon publishes the key as an
-// m.bureau.token_signing_key state event with the machine's fleet-scoped
-// localpart (e.g., "bureau/fleet/prod/machine/workstation") as the state key.
+// m.bureau.token_signing_key state event with the machine's full user ID
+// (e.g., "@bureau/fleet/prod/machine/workstation:server") as the state key.
 //
 // Returns the decoded public key suitable for use in AuthConfig. Fails
 // if the state event doesn't exist, the public key field is empty, or
 // the hex decoding produces a key of the wrong length.
 func LoadTokenSigningKey(ctx context.Context, session *messaging.DirectSession, systemRoomID ref.RoomID, machine ref.Machine) (ed25519.PublicKey, error) {
-	stateKey := machine.Localpart()
+	stateKey := machine.UserID().String()
 	raw, err := session.GetStateEvent(ctx, systemRoomID, schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
 		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", stateKey, systemRoomID, err)

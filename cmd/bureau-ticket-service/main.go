@@ -57,9 +57,8 @@ func run() error {
 		writer:        boot.Session,
 		resolver:      boot.Session,
 		clock:         boot.Clock,
-		principalName: boot.PrincipalName,
-		machineName:   boot.MachineName,
-		serverName:    boot.ServerName,
+		service:       boot.Service,
+		machine:       boot.Machine,
 		runDir:        boot.RunDir,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
@@ -138,9 +137,8 @@ type TicketService struct {
 	resolver aliasResolver
 	clock    clock.Clock
 
-	principalName string
-	machineName   string
-	serverName    string
+	service       ref.Service
+	machine       ref.Machine
 	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time

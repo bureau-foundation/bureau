@@ -6,6 +6,8 @@ package authorization
 import (
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -98,8 +100,11 @@ type Result struct {
 // Authorized checks whether actor can perform action on target. Returns
 // a Result containing the decision and the evaluation trace.
 //
-// For self-service actions (empty target), only the subject side
-// (grants, denials) is checked — steps 4-5 are skipped.
+// Actor and target are full Matrix user IDs (ref.UserID). For
+// self-service actions (no target), pass a zero-value ref.UserID.
+// Grant/denial/allowance patterns use "localpart:server" format and
+// are matched against the full user ID — this prevents cross-server
+// identity confusion in federated deployments.
 //
 // Evaluation:
 //  1. Find matching grant (action + target) → no match = DENY
@@ -108,22 +113,25 @@ type Result struct {
 //  4. For cross-principal: find matching allowance (action + actor)
 //  5. Check allowance denials → match = DENY
 //  6. All checks pass = ALLOW
-func Authorized(index *Index, actor, action, target string) Result {
+func Authorized(index *Index, actor ref.UserID, action string, target ref.UserID) Result {
 	return AuthorizedAt(index, actor, action, target, time.Now())
 }
 
 // AuthorizedAt is like Authorized but accepts an explicit time for
 // grant expiry checks. This supports deterministic testing.
-func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Result {
+func AuthorizedAt(index *Index, actor ref.UserID, action string, target ref.UserID, now time.Time) Result {
 	index.mu.RLock()
 	defer index.mu.RUnlock()
+
+	targetStr := target.String()
+	selfService := target.IsZero()
 
 	// Step 1-2: Find a non-expired matching grant.
 	grants := index.grants[actor]
 	var matchedGrant *schema.Grant
 	for i := range grants {
 		grant := &grants[i]
-		if !grantMatches(*grant, action, target) {
+		if !grantMatchesUserID(*grant, action, targetStr, selfService) {
 			continue
 		}
 		// Check expiry.
@@ -148,7 +156,7 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	denials := index.denials[actor]
 	for i := range denials {
 		denial := &denials[i]
-		if denialMatches(*denial, action, target) {
+		if denialMatchesUserID(*denial, action, targetStr, selfService) {
 			return Result{
 				Decision:      Deny,
 				Reason:        ReasonDenied,
@@ -159,7 +167,7 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	}
 
 	// Self-service actions: no target-side check needed.
-	if target == "" {
+	if selfService {
 		return Result{
 			Decision:     Allow,
 			MatchedGrant: matchedGrant,
@@ -167,11 +175,12 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	}
 
 	// Step 4: Find matching allowance on the target.
+	actorStr := actor.String()
 	allowances := index.allowances[target]
 	var matchedAllowance *schema.Allowance
 	for i := range allowances {
 		allowance := &allowances[i]
-		if allowanceMatches(*allowance, action, actor) {
+		if allowanceMatchesUserID(*allowance, action, actorStr) {
 			matchedAllowance = allowance
 			break
 		}
@@ -189,7 +198,7 @@ func AuthorizedAt(index *Index, actor, action, target string, now time.Time) Res
 	allowanceDenials := index.allowanceDenials[target]
 	for i := range allowanceDenials {
 		denial := &allowanceDenials[i]
-		if allowanceDenialMatches(*denial, action, actor) {
+		if allowanceDenialMatchesUserID(*denial, action, actorStr) {
 			return Result{
 				Decision:               Deny,
 				Reason:                 ReasonAllowanceDenied,
@@ -230,20 +239,20 @@ type TargetResult struct {
 // perform an action, returning the full evaluation trace. This is the
 // result-returning variant of TargetAllows — use it when the deny
 // reason and matched rules are needed for audit logging.
-func TargetCheck(index *Index, actor, action, target string) TargetResult {
+func TargetCheck(index *Index, actor ref.UserID, action string, target ref.UserID) TargetResult {
 	index.mu.RLock()
 	defer index.mu.RUnlock()
-	return targetCheckLocked(index, actor, action, target)
+	return targetCheckLocked(index, actor.String(), action, target)
 }
 
 // targetCheckLocked is the lock-free implementation of TargetCheck.
 // Caller must hold index.mu.RLock.
-func targetCheckLocked(index *Index, actor, action, target string) TargetResult {
+func targetCheckLocked(index *Index, actorStr, action string, target ref.UserID) TargetResult {
 	// Find a matching allowance on the target.
 	allowances := index.allowances[target]
 	var matchedAllowance *schema.Allowance
 	for i := range allowances {
-		if allowanceMatches(allowances[i], action, actor) {
+		if allowanceMatchesUserID(allowances[i], action, actorStr) {
 			matchedAllowance = &allowances[i]
 			break
 		}
@@ -259,7 +268,7 @@ func targetCheckLocked(index *Index, actor, action, target string) TargetResult 
 	// Check target allowance denials.
 	for i := range index.allowanceDenials[target] {
 		denial := &index.allowanceDenials[target][i]
-		if allowanceDenialMatches(*denial, action, actor) {
+		if allowanceDenialMatchesUserID(*denial, action, actorStr) {
 			return TargetResult{
 				Allowed:                false,
 				Reason:                 ReasonAllowanceDenied,
@@ -290,7 +299,7 @@ func targetCheckLocked(index *Index, actor, action, target string) TargetResult 
 // Returns false if the target has no matching allowance, or if a
 // matching allowance denial overrides it. Use TargetCheck when the
 // deny reason and matched rules are needed for audit logging.
-func TargetAllows(index *Index, actor, action, target string) bool {
+func TargetAllows(index *Index, actor ref.UserID, action string, target ref.UserID) bool {
 	return TargetCheck(index, actor, action, target).Allowed
 }
 
@@ -309,17 +318,22 @@ type GrantsResult struct {
 // the result-returning variant of GrantsAllow — use it when the
 // matched grant is needed for audit logging.
 //
+// The target is a full Matrix user ID. For self-service actions (no
+// target), pass a zero-value ref.UserID.
+//
 // Same matching semantics as GrantsAllow: no denials, no allowances.
-func GrantsCheck(grants []schema.Grant, action, target string) GrantsResult {
+func GrantsCheck(grants []schema.Grant, action string, target ref.UserID) GrantsResult {
 	return GrantsCheckAt(grants, action, target, time.Now())
 }
 
 // GrantsCheckAt is like GrantsCheck but accepts an explicit time for
 // expiry checks.
-func GrantsCheckAt(grants []schema.Grant, action, target string, now time.Time) GrantsResult {
+func GrantsCheckAt(grants []schema.Grant, action string, target ref.UserID, now time.Time) GrantsResult {
+	targetStr := target.String()
+	selfService := target.IsZero()
 	for i := range grants {
 		grant := &grants[i]
-		if !grantMatches(*grant, action, target) {
+		if !grantMatchesUserID(*grant, action, targetStr, selfService) {
 			continue
 		}
 		if grant.ExpiresAt != "" {
@@ -346,12 +360,41 @@ func GrantsCheckAt(grants []schema.Grant, action, target string, now time.Time) 
 // the embedded grants cover the requested operation.
 //
 // Use GrantsCheck when the matched grant is needed for audit logging.
-func GrantsAllow(grants []schema.Grant, action, target string) bool {
+func GrantsAllow(grants []schema.Grant, action string, target ref.UserID) bool {
 	return GrantsCheck(grants, action, target).Allowed
 }
 
 // GrantsAllowAt is like GrantsAllow but accepts an explicit time for
 // expiry checks.
-func GrantsAllowAt(grants []schema.Grant, action, target string, now time.Time) bool {
+func GrantsAllowAt(grants []schema.Grant, action string, target ref.UserID, now time.Time) bool {
 	return GrantsCheckAt(grants, action, target, now).Allowed
+}
+
+// GrantsAllowServiceType checks whether a slice of grants authorizes
+// discovering a service with the given type localpart. Unlike GrantsAllow
+// which matches targets as full Matrix user IDs (localpart:server),
+// this matches targets as localpart-level glob patterns.
+//
+// Service discovery targets are service TYPE localparts (e.g.,
+// "service/stt/test"), not entity user IDs. The ServiceVisibility
+// field on PrincipalAssignment defines localpart patterns like
+// "service/stt/*" that match these type localparts. The proxy's
+// HandleServiceDirectory uses this function to filter the service
+// directory by the principal's grants.
+func GrantsAllowServiceType(grants []schema.Grant, action, serviceLocalpart string) bool {
+	for i := range grants {
+		grant := &grants[i]
+		if !matchAnyAction(grant.Actions, action) {
+			continue
+		}
+		if len(grant.Targets) == 0 {
+			continue
+		}
+		for _, target := range grant.Targets {
+			if principal.MatchPattern(target, serviceLocalpart) {
+				return true
+			}
+		}
+	}
+	return false
 }

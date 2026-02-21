@@ -19,6 +19,7 @@ go_library(
     deps = [
         "//lib/codec",
         "//lib/principal",
+        "//lib/ref",
     ],
 )
 
@@ -33,4 +34,5 @@ go_test(
         "upstream_test.go",
     ],
     embed = [":servicetoken"],
+    deps = ["//lib/ref"],
 )

@@ -59,68 +59,68 @@ func TestMatchAction(t *testing.T) {
 
 func TestGrantMatches(t *testing.T) {
 	tests := []struct {
-		name   string
-		grant  schema.Grant
-		action string
-		target string
-		want   bool
+		name     string
+		grant    schema.Grant
+		action   string
+		targetID string
+		want     bool
 	}{
 		{
-			name:   "self-service action matches",
-			grant:  schema.Grant{Actions: []string{"matrix/join"}},
-			action: "matrix/join",
-			target: "",
-			want:   true,
+			name:     "self-service action matches",
+			grant:    schema.Grant{Actions: []string{"matrix/join"}},
+			action:   "matrix/join",
+			targetID: "",
+			want:     true,
 		},
 		{
-			name:   "self-service action no match",
-			grant:  schema.Grant{Actions: []string{"matrix/join"}},
-			action: "matrix/invite",
-			target: "",
-			want:   false,
+			name:     "self-service action no match",
+			grant:    schema.Grant{Actions: []string{"matrix/join"}},
+			action:   "matrix/invite",
+			targetID: "",
+			want:     false,
 		},
 		{
-			name:   "cross-principal action matches",
-			grant:  schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**"}},
-			action: "observe/read-write",
-			target: "bureau/dev/workspace/coder/0",
-			want:   true,
+			name:     "cross-principal action matches",
+			grant:    schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   "observe/read-write",
+			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
+			want:     true,
 		},
 		{
-			name:   "cross-principal target no match",
-			grant:  schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**"}},
-			action: "observe",
-			target: "service/db/postgres",
-			want:   false,
+			name:     "cross-principal target no match",
+			grant:    schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   "observe",
+			targetID: "@service/db/postgres:bureau.local",
+			want:     false,
 		},
 		{
-			name:   "cross-principal grant without targets rejects",
-			grant:  schema.Grant{Actions: []string{"observe/**"}},
-			action: "observe",
-			target: "bureau/dev/coder/0",
-			want:   false,
+			name:     "cross-principal grant without targets rejects",
+			grant:    schema.Grant{Actions: []string{"observe/**"}},
+			action:   "observe",
+			targetID: "@bureau/dev/coder/0:bureau.local",
+			want:     false,
 		},
 		{
-			name:   "targeted grant still matches self-service",
-			grant:  schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**"}},
-			action: "observe",
-			target: "",
-			want:   true,
+			name:     "targeted grant still matches self-service",
+			grant:    schema.Grant{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   "observe",
+			targetID: "",
+			want:     true,
 		},
 		{
-			name:   "wildcard action and target",
-			grant:  schema.Grant{Actions: []string{"**"}, Targets: []string{"**"}},
-			action: "fleet/provision",
-			target: "machine/gpu-01",
-			want:   true,
+			name:     "wildcard action and target",
+			grant:    schema.Grant{Actions: []string{"**"}, Targets: []string{"**:**"}},
+			action:   "fleet/provision",
+			targetID: "@machine/gpu-01:bureau.local",
+			want:     true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := grantMatches(tt.grant, tt.action, tt.target)
+			got := grantMatchesUserID(tt.grant, tt.action, tt.targetID, tt.targetID == "")
 			if got != tt.want {
-				t.Errorf("grantMatches() = %v, want %v", got, tt.want)
+				t.Errorf("grantMatchesUserID() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -128,47 +128,47 @@ func TestGrantMatches(t *testing.T) {
 
 func TestDenialMatches(t *testing.T) {
 	tests := []struct {
-		name   string
-		denial schema.Denial
-		action string
-		target string
-		want   bool
+		name     string
+		denial   schema.Denial
+		action   string
+		targetID string
+		want     bool
 	}{
 		{
-			name:   "self-service denial matches",
-			denial: schema.Denial{Actions: []string{"fleet/**"}},
-			action: "fleet/assign",
-			target: "",
-			want:   true,
+			name:     "self-service denial matches",
+			denial:   schema.Denial{Actions: []string{"fleet/**"}},
+			action:   "fleet/assign",
+			targetID: "",
+			want:     true,
 		},
 		{
-			name:   "targeted denial matches",
-			denial: schema.Denial{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/**"}},
-			action: "ticket/close",
-			target: "bureau/dev/workspace/coder/0",
-			want:   true,
+			name:     "targeted denial matches",
+			denial:   schema.Denial{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   "ticket/close",
+			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
+			want:     true,
 		},
 		{
-			name:   "targeted denial wrong target",
-			denial: schema.Denial{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/**"}},
-			action: "ticket/close",
-			target: "iree/amdgpu/pm",
-			want:   false,
+			name:     "targeted denial wrong target",
+			denial:   schema.Denial{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   "ticket/close",
+			targetID: "@iree/amdgpu/pm:bureau.local",
+			want:     false,
 		},
 		{
-			name:   "denial without targets does not match cross-principal",
-			denial: schema.Denial{Actions: []string{"ticket/close"}},
-			action: "ticket/close",
-			target: "bureau/dev/workspace/coder/0",
-			want:   false,
+			name:     "denial without targets does not match cross-principal",
+			denial:   schema.Denial{Actions: []string{"ticket/close"}},
+			action:   "ticket/close",
+			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
+			want:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := denialMatches(tt.denial, tt.action, tt.target)
+			got := denialMatchesUserID(tt.denial, tt.action, tt.targetID, tt.targetID == "")
 			if got != tt.want {
-				t.Errorf("denialMatches() = %v, want %v", got, tt.want)
+				t.Errorf("denialMatchesUserID() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -179,44 +179,44 @@ func TestAllowanceMatches(t *testing.T) {
 		name      string
 		allowance schema.Allowance
 		action    string
-		actor     string
+		actorID   string
 		want      bool
 	}{
 		{
 			name:      "exact match",
-			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"bureau/dev/pm"}},
+			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"bureau/dev/pm:bureau.local"}},
 			action:    "observe",
-			actor:     "bureau/dev/pm",
+			actorID:   "@bureau/dev/pm:bureau.local",
 			want:      true,
 		},
 		{
 			name:      "glob actor match",
-			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**"}},
+			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**:bureau.local"}},
 			action:    "observe",
-			actor:     "iree/amdgpu/pm",
+			actorID:   "@iree/amdgpu/pm:bureau.local",
 			want:      true,
 		},
 		{
 			name:      "wrong action",
-			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**"}},
+			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**:bureau.local"}},
 			action:    "interrupt",
-			actor:     "iree/amdgpu/pm",
+			actorID:   "@iree/amdgpu/pm:bureau.local",
 			want:      false,
 		},
 		{
 			name:      "wrong actor",
-			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**"}},
+			allowance: schema.Allowance{Actions: []string{"observe"}, Actors: []string{"iree/**:bureau.local"}},
 			action:    "observe",
-			actor:     "bureau/dev/coder/0",
+			actorID:   "@bureau/dev/coder/0:bureau.local",
 			want:      false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := allowanceMatches(tt.allowance, tt.action, tt.actor)
+			got := allowanceMatchesUserID(tt.allowance, tt.action, tt.actorID)
 			if got != tt.want {
-				t.Errorf("allowanceMatches() = %v, want %v", got, tt.want)
+				t.Errorf("allowanceMatchesUserID() = %v, want %v", got, tt.want)
 			}
 		})
 	}

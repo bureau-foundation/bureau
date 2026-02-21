@@ -98,7 +98,9 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 	}
 
 	// Check that the caller's grants authorize provisioning this
-	// specific key for this specific principal.
+	// specific key for this specific principal. The target is the
+	// bare account localpart because service token grants use
+	// localpart-level matching (tokens are daemon-scoped via audience).
 	action := "credential/provision/key/" + request.Key
 	if !servicetoken.GrantsAllow(token.Grants, action, request.Principal) {
 		d.logger.Warn("credential provision denied",
@@ -164,7 +166,7 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 	now := d.clock.Now()
 	updatedCredentials := schema.Credentials{
 		Version:       1,
-		Principal:     request.Principal,
+		Principal:     principalEntity.UserID(),
 		Keys:          response.UpdatedKeys,
 		Ciphertext:    response.UpdatedCiphertext,
 		ProvisionedBy: token.Subject,
@@ -237,7 +239,7 @@ func isAgePublicKey(s string) bool {
 // grants in the authorization index. Used to determine whether to
 // mount the daemon's credential service socket into a sandbox.
 func (d *Daemon) hasCredentialGrants(principal ref.Entity) bool {
-	grants := d.authorizationIndex.Grants(principal.AccountLocalpart())
+	grants := d.authorizationIndex.Grants(principal.UserID())
 	for _, grant := range grants {
 		filtered := filterGrantsForService([]schema.Grant{grant}, credentialServiceRole)
 		if len(filtered) > 0 {

@@ -336,7 +336,7 @@ type Credentials struct {
 
 	// Principal is the full Matrix user ID of the principal these
 	// credentials are for (e.g., "@iree/amdgpu/pm:bureau.local").
-	Principal string `json:"principal"`
+	Principal ref.UserID `json:"principal"`
 
 	// EncryptedFor lists the Matrix user IDs (machines) and key
 	// identifiers (e.g., "yubikey:operator-escrow") that can decrypt
@@ -354,7 +354,7 @@ type Credentials struct {
 
 	// ProvisionedBy is the Matrix user ID of whoever provisioned these
 	// credentials (e.g., "@bureau/operator:bureau.local").
-	ProvisionedBy string `json:"provisioned_by"`
+	ProvisionedBy ref.UserID `json:"provisioned_by"`
 
 	// ProvisionedAt is the ISO 8601 timestamp of when the credentials
 	// were provisioned.

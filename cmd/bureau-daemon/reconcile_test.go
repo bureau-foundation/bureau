@@ -1073,7 +1073,7 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 			defaultPolicy: nil,
 			principalPolicy: &schema.AuthorizationPolicy{
 				Grants:     []schema.Grant{{Actions: []string{"service/discover"}}},
-				Allowances: []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"admin/**"}}},
+				Allowances: []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"admin/**:**"}}},
 			},
 			wantGrants:     1,
 			wantAllowances: 1,
@@ -1083,14 +1083,14 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 			defaultPolicy: &schema.AuthorizationPolicy{
 				Grants:           []schema.Grant{{Actions: []string{"observe/*"}}},
 				Denials:          []schema.Denial{{Actions: []string{"admin/*"}}},
-				Allowances:       []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/resize"}, Actors: []string{"untrusted/**"}}},
+				Allowances:       []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/resize"}, Actors: []string{"untrusted/**:**"}}},
 			},
 			principalPolicy: &schema.AuthorizationPolicy{
 				Grants:           []schema.Grant{{Actions: []string{"service/discover"}}, {Actions: []string{"matrix/join"}}},
 				Denials:          []schema.Denial{{Actions: []string{"service/register"}}},
-				Allowances:       []schema.Allowance{{Actions: []string{"observe/input"}, Actors: []string{"admin/**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/input"}, Actors: []string{"untrusted/**"}}},
+				Allowances:       []schema.Allowance{{Actions: []string{"observe/input"}, Actors: []string{"admin/**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/input"}, Actors: []string{"untrusted/**:**"}}},
 			},
 			wantGrants:       3,
 			wantDenials:      2,
@@ -1164,14 +1164,14 @@ func TestMergeAuthorizationPolicy_SourceProvenance(t *testing.T) {
 		&schema.AuthorizationPolicy{
 			Grants:           []schema.Grant{{Actions: []string{"default-grant"}}},
 			Denials:          []schema.Denial{{Actions: []string{"default-denial"}}},
-			Allowances:       []schema.Allowance{{Actions: []string{"default-allowance"}, Actors: []string{"**"}}},
-			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"default-allow-denial"}, Actors: []string{"bad/**"}}},
+			Allowances:       []schema.Allowance{{Actions: []string{"default-allowance"}, Actors: []string{"**:**"}}},
+			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"default-allow-denial"}, Actors: []string{"bad/**:**"}}},
 		},
 		&schema.AuthorizationPolicy{
 			Grants:           []schema.Grant{{Actions: []string{"principal-grant"}}},
 			Denials:          []schema.Denial{{Actions: []string{"principal-denial"}}},
-			Allowances:       []schema.Allowance{{Actions: []string{"principal-allowance"}, Actors: []string{"admin/**"}}},
-			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"principal-allow-denial"}, Actors: []string{"evil/**"}}},
+			Allowances:       []schema.Allowance{{Actions: []string{"principal-allowance"}, Actors: []string{"admin/**:**"}}},
+			AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"principal-allow-denial"}, Actors: []string{"evil/**:**"}}},
 		},
 	)
 
@@ -1258,8 +1258,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 	}
 
 	// agent/alpha should have 2 grants (1 default + 1 per-principal).
-	// The authorization index is keyed by bare account localpart.
-	alphaGrants := daemon.authorizationIndex.Grants("agent/alpha")
+	alphaGrants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/alpha").UserID())
 	if len(alphaGrants) != 2 {
 		t.Fatalf("agent/alpha grants = %d, want 2", len(alphaGrants))
 	}
@@ -1271,7 +1270,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 	}
 
 	// agent/beta should have 1 grant (default only).
-	betaGrants := daemon.authorizationIndex.Grants("agent/beta")
+	betaGrants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/beta").UserID())
 	if len(betaGrants) != 1 {
 		t.Fatalf("agent/beta grants = %d, want 1", len(betaGrants))
 	}
@@ -1310,13 +1309,13 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 	if len(principals) != 1 {
 		t.Fatalf("after second rebuild: principals = %d, want 1", len(principals))
 	}
-	expectedPrincipal := "agent/alpha"
+	expectedPrincipal := testEntity(t, daemon.fleet, "agent/alpha").UserID()
 	if principals[0] != expectedPrincipal {
 		t.Errorf("remaining principal = %q, want %q", principals[0], expectedPrincipal)
 	}
 
 	// agent/beta should have no grants (fully removed).
-	if grants := daemon.authorizationIndex.Grants("agent/beta"); grants != nil {
+	if grants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/beta").UserID()); grants != nil {
 		t.Errorf("agent/beta grants should be nil, got %d entries", len(grants))
 	}
 }
@@ -1345,12 +1344,13 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "test-temporal-grant",
 	}
-	if !daemon.authorizationIndex.AddTemporalGrant("agent/alpha", temporalGrant) {
+	alphaUserID := testEntity(t, daemon.fleet, "agent/alpha").UserID()
+	if !daemon.authorizationIndex.AddTemporalGrant(alphaUserID, temporalGrant) {
 		t.Fatal("AddTemporalGrant returned false")
 	}
 
 	// Verify it's there.
-	if grants := daemon.authorizationIndex.Grants("agent/alpha"); len(grants) != 1 {
+	if grants := daemon.authorizationIndex.Grants(alphaUserID); len(grants) != 1 {
 		t.Fatalf("before rebuild: grants = %d, want 1 (temporal)", len(grants))
 	}
 
@@ -1358,7 +1358,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	// because SetPrincipal preserves existing temporal entries.
 	daemon.rebuildAuthorizationIndex(config)
 
-	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	grants := daemon.authorizationIndex.Grants(alphaUserID)
 	if len(grants) != 1 {
 		t.Fatalf("after rebuild: grants = %d, want 1 (temporal preserved)", len(grants))
 	}
@@ -1372,10 +1372,10 @@ func TestFilterGrantsForService(t *testing.T) {
 
 	grants := []schema.Grant{
 		{Actions: []string{"ticket/create", "ticket/assign"}},
-		{Actions: []string{"observe/*"}, Targets: []string{"**"}},
+		{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		{Actions: []string{"**"}},
 		{Actions: []string{"artifact/fetch"}},
-		{Actions: []string{"ticket/*"}, Targets: []string{"iree/**"}},
+		{Actions: []string{"ticket/*"}, Targets: []string{"**/iree/**:**"}},
 	}
 
 	tests := []struct {
@@ -1454,15 +1454,14 @@ func TestMintServiceTokens(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
 	daemon.stateDir = stateDir
 	daemon.tokenSigningPrivateKey = privateKey
 
 	// Set up the principal with grants covering the ticket namespace.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/create", "ticket/assign"}},
-			{Actions: []string{"observe/*"}, Targets: []string{"**"}},
+			{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		},
 	})
 
@@ -1505,11 +1504,12 @@ func TestMintServiceTokens(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 
-	if token.Subject != "agent/alpha" {
-		t.Errorf("Subject = %q, want %q", token.Subject, "agent/alpha")
+	wantSubject := testEntity(t, daemon.fleet, "agent/alpha").UserID()
+	if token.Subject != wantSubject {
+		t.Errorf("Subject = %q, want %q", token.Subject, wantSubject)
 	}
-	if token.Machine != machineName {
-		t.Errorf("Machine = %q, want %q", token.Machine, machineName)
+	if token.Machine != daemon.machine {
+		t.Errorf("Machine = %q, want %q", token.Machine, daemon.machine)
 	}
 	if token.Audience != "ticket" {
 		t.Errorf("Audience = %q, want %q", token.Audience, "ticket")
@@ -1547,7 +1547,7 @@ func TestMintServiceTokens_MissingPrivateKey(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.stateDir = t.TempDir()
 
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{})
 
 	_, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
 	if err == nil {
@@ -1573,7 +1573,7 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 	daemon.stateDir = stateDir
 	daemon.tokenSigningPrivateKey = privateKey
 
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/**"}},
 			{Actions: []string{"artifact/fetch"}},
@@ -1656,18 +1656,18 @@ func TestSynthesizeGrants(t *testing.T) {
 		},
 		{
 			name:       "visibility only",
-			visibility: []string{"service/stt/*", "service/embedding/**"},
+			visibility: []string{"service/stt/*:**", "service/embedding/**:**"},
 			expected: []schema.Grant{
-				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/*", "service/embedding/**"}},
+				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/*:**", "service/embedding/**:**"}},
 			},
 		},
 		{
 			name:       "policy and visibility combined",
 			policy:     &schema.MatrixPolicy{AllowJoin: true},
-			visibility: []string{"service/**"},
+			visibility: []string{"service/**:**"},
 			expected: []schema.Grant{
 				{Actions: []string{"matrix/join"}},
-				{Actions: []string{"service/discover"}, Targets: []string{"service/**"}},
+				{Actions: []string{"service/discover"}, Targets: []string{"service/**:**"}},
 			},
 		},
 		{

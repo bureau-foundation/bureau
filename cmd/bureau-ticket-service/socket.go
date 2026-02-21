@@ -252,7 +252,7 @@ func (ts *TicketService) resolveRoomString(room string) (ref.RoomID, bool) {
 // server's name. Returns empty string if no match is found.
 func (ts *TicketService) matchRoomAlias(localpart, serverName string) (ref.RoomID, bool) {
 	if serverName == "" {
-		serverName = ts.serverName
+		serverName = ts.service.Server()
 	}
 	// Build the expected canonical alias: "#localpart:server"
 	expectedAlias := schema.FullRoomAlias(localpart, serverName)

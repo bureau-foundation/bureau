@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -67,11 +68,11 @@ type ServiceDirectoryEntry struct {
 
 	// Principal is the full Matrix user ID of the service provider,
 	// e.g., "@service/stt/whisper:bureau.local".
-	Principal string `json:"principal"`
+	Principal ref.UserID `json:"principal"`
 
 	// Machine is the full Matrix user ID of the machine running this
 	// service instance, e.g., "@machine/cloud-gpu-1:bureau.local".
-	Machine string `json:"machine"`
+	Machine ref.UserID `json:"machine"`
 
 	// Protocol is the wire protocol spoken by the service
 	// (e.g., "http", "grpc", "raw-frames").
@@ -475,7 +476,7 @@ func (h *Handler) requireGrant(w http.ResponseWriter, action string) bool {
 	grants := h.grants
 	h.mu.RUnlock()
 
-	result := authorization.GrantsCheck(grants, action, "")
+	result := authorization.GrantsCheck(grants, action, ref.UserID{})
 	if result.Allowed {
 		return true
 	}
@@ -531,7 +532,7 @@ func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason s
 
 	// Matrix operations are self-service (empty target) — the principal
 	// is acting on infrastructure, not on another principal.
-	result := authorization.GrantsCheck(grants, action, "")
+	result := authorization.GrantsCheck(grants, action, ref.UserID{})
 	if result.Allowed {
 		return false, ""
 	}
@@ -718,9 +719,13 @@ func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request)
 	// Stage 1: authorization filtering. Each service entry is checked
 	// against the agent's grants for the service/discover action.
 	// Default-deny: if no grants match, the service is not visible.
+	//
+	// Service discovery uses localpart-level matching (GrantsAllowServiceType)
+	// because ServiceVisibility patterns match service TYPE localparts
+	// (e.g., "service/stt/*" matches "service/stt/test"), not full user IDs.
 	visible := make([]ServiceDirectoryEntry, 0, len(directory))
 	for _, entry := range directory {
-		if authorization.GrantsAllow(grants, "service/discover", entry.Localpart) {
+		if authorization.GrantsAllowServiceType(grants, "service/discover", entry.Localpart) {
 			visible = append(visible, entry)
 		}
 	}

@@ -153,7 +153,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if !d.running[principal] {
 			continue
 		}
-		newGrants := d.resolveGrantsForProxy(principal.AccountLocalpart(), assignment, config)
+		newGrants := d.resolveGrantsForProxy(principal.UserID(), assignment, config)
 		oldGrants := d.lastGrants[principal]
 		if !reflect.DeepEqual(oldGrants, newGrants) {
 			d.logger.Info("authorization grants changed, updating proxy",
@@ -189,11 +189,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if !d.running[principal] {
 			continue
 		}
-		newAllowances := d.authorizationIndex.Allowances(principal.AccountLocalpart())
+		newAllowances := d.authorizationIndex.Allowances(principal.UserID())
 		oldAllowances := d.lastObserveAllowances[principal]
 		if !reflect.DeepEqual(oldAllowances, newAllowances) {
 			d.lastObserveAllowances[principal] = newAllowances
-			d.enforceObserveAllowanceChange(principal.AccountLocalpart())
+			d.enforceObserveAllowanceChange(principal.UserID())
 		}
 	}
 
@@ -453,7 +453,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Resolve authorization grants before sandbox creation so the
 		// proxy starts with enforcement from the first request. The
 		// launcher pipes these to the proxy's stdin alongside credentials.
-		grants := d.resolveGrantsForProxy(principal.AccountLocalpart(), assignment, config)
+		grants := d.resolveGrantsForProxy(principal.UserID(), assignment, config)
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
@@ -480,7 +480,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.clearStartFailure(principal)
 		d.running[principal] = true
 		d.lastCredentials[principal] = credentials.Ciphertext
-		d.lastObserveAllowances[principal] = d.authorizationIndex.Allowances(principal.AccountLocalpart())
+		d.lastObserveAllowances[principal] = d.authorizationIndex.Allowances(principal.UserID())
 		d.lastSpecs[principal] = sandboxSpec
 		d.lastTemplates[principal] = resolvedTemplate
 		d.lastGrants[principal] = grants
@@ -1015,27 +1015,27 @@ func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
 
 	// Track which principals are in the current config so we can clean
 	// up stale entries afterwards.
-	currentPrincipals := make(map[string]bool, len(config.Principals))
+	currentPrincipals := make(map[ref.UserID]bool, len(config.Principals))
 
 	for _, assignment := range config.Principals {
-		accountLocalpart := assignment.Principal.AccountLocalpart()
-		currentPrincipals[accountLocalpart] = true
+		userID := assignment.Principal.UserID()
+		currentPrincipals[userID] = true
 
 		// Merge machine defaults with per-principal policy. Per-principal
 		// policy is additive: grants, denials, allowances, and allowance
 		// denials are appended to the machine defaults. A principal cannot
 		// have fewer permissions than the machine default.
 		merged := mergeAuthorizationPolicy(config.DefaultPolicy, assignment.Authorization)
-		d.authorizationIndex.SetPrincipal(accountLocalpart, merged)
+		d.authorizationIndex.SetPrincipal(userID, merged)
 	}
 
 	// Remove principals that are no longer in config. This also clears
 	// their temporal grants.
-	for _, localpart := range d.authorizationIndex.Principals() {
-		if !currentPrincipals[localpart] {
-			d.authorizationIndex.RemovePrincipal(localpart)
+	for _, userID := range d.authorizationIndex.Principals() {
+		if !currentPrincipals[userID] {
+			d.authorizationIndex.RemovePrincipal(userID)
 			d.logger.Info("removed principal from authorization index",
-				"principal", localpart)
+				"principal", userID)
 		}
 	}
 }
@@ -1244,7 +1244,7 @@ func (d *Daemon) mintServiceTokens(principal ref.Entity, requiredServices []stri
 	}
 
 	// Get the principal's resolved grants from the authorization index.
-	grants := d.authorizationIndex.Grants(principal.AccountLocalpart())
+	grants := d.authorizationIndex.Grants(principal.UserID())
 
 	now := d.clock.Now()
 	var minted []activeToken
@@ -1278,8 +1278,8 @@ func (d *Daemon) mintServiceTokens(principal ref.Entity, requiredServices []stri
 		}
 
 		token := &servicetoken.Token{
-			Subject:   principal.AccountLocalpart(),
-			Machine:   d.machine.Localpart(),
+			Subject:   principal.UserID(),
+			Machine:   d.machine,
 			Audience:  role,
 			Grants:    tokenGrants,
 			ID:        tokenID,

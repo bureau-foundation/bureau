@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/principal",
+        "//lib/ref",
         "//lib/schema",
     ],
 )
@@ -27,5 +28,8 @@ go_test(
         "match_test.go",
     ],
     embed = [":authorization"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )

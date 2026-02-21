@@ -816,7 +816,7 @@ func (ts *TicketService) fireDeadlineLocked(ctx context.Context, entry timerHeap
 
 	content.Notes = append(content.Notes, schema.TicketNote{
 		ID:        noteID,
-		Author:    ref.MatrixUserID(ts.principalName, ts.serverName).String(),
+		Author:    ts.service.UserID().String(),
 		CreatedAt: now,
 		Body:      fmt.Sprintf("Deadline passed: %s", content.Deadline),
 	})

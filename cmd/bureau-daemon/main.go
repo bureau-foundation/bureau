@@ -1121,7 +1121,7 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 	if !keyWasGenerated {
 		// Check whether the current state event already has our key.
 		existing, err := d.session.GetStateEvent(ctx, d.systemRoomID,
-			schema.EventTypeTokenSigningKey, d.machine.Localpart())
+			schema.EventTypeTokenSigningKey, d.machine.UserID().String())
 		if err == nil {
 			var content schema.TokenSigningKeyContent
 			if parseErr := json.Unmarshal(existing, &content); parseErr == nil {
@@ -1139,10 +1139,10 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 
 	content := schema.TokenSigningKeyContent{
 		PublicKey: publicKeyHex,
-		Machine:   d.machine.Localpart(),
+		Machine:   d.machine.UserID(),
 	}
 	_, err := d.session.SendStateEvent(ctx, d.systemRoomID,
-		schema.EventTypeTokenSigningKey, d.machine.Localpart(), content)
+		schema.EventTypeTokenSigningKey, d.machine.UserID().String(), content)
 	if err != nil {
 		d.logger.Error("publishing token signing key", "error", err)
 		return

@@ -8,20 +8,25 @@ import (
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
-	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // authenticateObserver verifies a Matrix access token and returns the
 // authenticated user ID. Returns a user-facing error message (no internal
 // details) if authentication fails.
-func (d *Daemon) authenticateObserver(ctx context.Context, token string) (string, error) {
+func (d *Daemon) authenticateObserver(ctx context.Context, token string) (ref.UserID, error) {
 	if token == "" {
-		return "", fmt.Errorf("authentication required: provide an access token (run \"bureau login\" first)")
+		return ref.UserID{}, fmt.Errorf("authentication required: provide an access token (run \"bureau login\" first)")
 	}
 
-	userID, err := d.tokenVerifier.Verify(ctx, token)
+	userIDStr, err := d.tokenVerifier.Verify(ctx, token)
 	if err != nil {
-		return "", fmt.Errorf("authentication failed: invalid or expired token (run \"bureau login\" to refresh)")
+		return ref.UserID{}, fmt.Errorf("authentication failed: invalid or expired token (run \"bureau login\" to refresh)")
+	}
+
+	userID, err := ref.ParseUserID(userIDStr)
+	if err != nil {
+		return ref.UserID{}, fmt.Errorf("authentication failed: verified token has invalid user ID %q", userIDStr)
 	}
 
 	return userID, nil
@@ -46,20 +51,11 @@ type observeAuthorization struct {
 // Default-deny: if the target has no matching allowance, observation is
 // rejected. The requestedMode is "readwrite" or "readonly"; the granted
 // mode may be downgraded from readwrite to readonly based on allowances.
-func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedMode string) observeAuthorization {
-	observerLocalpart, err := principal.LocalpartFromMatrixID(observerUserID)
-	if err != nil {
-		// The observer's Matrix user ID doesn't follow Bureau naming
-		// conventions (e.g., "@admin:bureau.local" without a hierarchical
-		// localpart). Fall back to matching against the full user ID.
-		// This allows allowance actor patterns like "@admin:bureau.local".
-		observerLocalpart = observerUserID
-	}
-
+func (d *Daemon) authorizeObserve(observer ref.UserID, principal ref.UserID, requestedMode string) observeAuthorization {
 	// All observation requires an "observe" allowance on the target.
-	observeResult := authorization.TargetCheck(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart)
+	observeResult := authorization.TargetCheck(d.authorizationIndex, observer, "observe", principal)
 	if !observeResult.Allowed {
-		d.postAuditDeny(observerLocalpart, "observe", principalLocalpart,
+		d.postAuditDeny(observer, "observe", principal,
 			"daemon/observe", observeResult.Reason,
 			observeResult.MatchedAllowance, observeResult.MatchedAllowanceDenial)
 		return observeAuthorization{Allowed: false}
@@ -68,12 +64,12 @@ func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedM
 	// Determine the granted mode.
 	grantedMode := requestedMode
 	if requestedMode == "readwrite" {
-		rwResult := authorization.TargetCheck(d.authorizationIndex, observerLocalpart, "observe/read-write", principalLocalpart)
+		rwResult := authorization.TargetCheck(d.authorizationIndex, observer, "observe/read-write", principal)
 		if !rwResult.Allowed {
 			grantedMode = "readonly"
 		} else {
 			// observe/read-write is a sensitive action — log the grant.
-			d.postAuditAllow(observerLocalpart, "observe/read-write", principalLocalpart,
+			d.postAuditAllow(observer, "observe/read-write", principal,
 				"daemon/observe", rwResult.MatchedAllowance)
 		}
 	}
@@ -88,10 +84,6 @@ func (d *Daemon) authorizeObserve(observerUserID, principalLocalpart, requestedM
 // principal in a list response. Uses the same authorization index check
 // as authorizeObserve — if the target's allowances permit the observer
 // for the "observe" action, the principal appears in the list.
-func (d *Daemon) authorizeList(observerUserID, principalLocalpart string) bool {
-	observerLocalpart, err := principal.LocalpartFromMatrixID(observerUserID)
-	if err != nil {
-		observerLocalpart = observerUserID
-	}
-	return authorization.TargetAllows(d.authorizationIndex, observerLocalpart, "observe", principalLocalpart)
+func (d *Daemon) authorizeList(observer ref.UserID, principal ref.UserID) bool {
+	return authorization.TargetAllows(d.authorizationIndex, observer, "observe", principal)
 }

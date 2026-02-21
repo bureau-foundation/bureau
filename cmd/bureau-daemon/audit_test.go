@@ -3,7 +3,11 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 func TestIsSensitiveAction(t *testing.T) {
 	t.Parallel()
@@ -45,7 +49,7 @@ func TestPostAuditDeny_NoSession(t *testing.T) {
 
 	// Verify postAuditDeny does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditDeny("test/actor", "observe", "test/target",
+	daemon.postAuditDeny(ref.MustParseUserID("@test/actor:bureau.local"), "observe", ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", 0, nil, nil)
 }
 
@@ -54,6 +58,6 @@ func TestPostAuditAllow_NoSession(t *testing.T) {
 
 	// Verify postAuditAllow does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditAllow("test/actor", "observe/read-write", "test/target",
+	daemon.postAuditAllow(ref.MustParseUserID("@test/actor:bureau.local"), "observe/read-write", ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", nil)
 }

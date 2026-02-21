@@ -473,14 +473,14 @@ func TestBureauVersionOmittedWhenNil(t *testing.T) {
 func TestCredentialsRoundTrip(t *testing.T) {
 	original := Credentials{
 		Version:   1,
-		Principal: "@iree/amdgpu/pm:bureau.local",
+		Principal: mustUserID(t, "@iree/amdgpu/pm:bureau.local"),
 		EncryptedFor: []string{
 			"@machine/workstation:bureau.local",
 			"yubikey:operator-escrow",
 		},
 		Keys:          []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"},
 		Ciphertext:    "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA...",
-		ProvisionedBy: "@bureau/operator:bureau.local",
+		ProvisionedBy: mustUserID(t, "@bureau/operator:bureau.local"),
 		ProvisionedAt: "2026-02-09T18:30:00Z",
 		Signature:     "base64signature==",
 		ExpiresAt:     "2026-08-09T18:30:00Z",
@@ -521,11 +521,11 @@ func TestCredentialsRoundTrip(t *testing.T) {
 func TestCredentialsOmitsEmptyExpiry(t *testing.T) {
 	credentials := Credentials{
 		Version:       1,
-		Principal:     "@iree/amdgpu/pm:bureau.local",
+		Principal:     mustUserID(t, "@iree/amdgpu/pm:bureau.local"),
 		EncryptedFor:  []string{"@machine/workstation:bureau.local"},
 		Keys:          []string{"OPENAI_API_KEY"},
 		Ciphertext:    "encrypted",
-		ProvisionedBy: "@bureau/operator:bureau.local",
+		ProvisionedBy: mustUserID(t, "@bureau/operator:bureau.local"),
 		ProvisionedAt: "2026-02-09T18:30:00Z",
 		Signature:     "sig",
 		// ExpiresAt deliberately empty.

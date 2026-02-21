@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -40,7 +41,7 @@ func isSensitiveAction(action string) bool {
 // The event is posted asynchronously — the authorization decision is
 // never delayed by Matrix availability.
 func (d *Daemon) postAuditDeny(
-	actor, action, target, enforcementPoint string,
+	actor ref.UserID, action string, target ref.UserID, enforcementPoint string,
 	reason authorization.DenyReason,
 	matchedAllowance *schema.Allowance,
 	matchedAllowanceDenial *schema.AllowanceDenial,
@@ -60,7 +61,7 @@ func (d *Daemon) postAuditDeny(
 		Target:                 target,
 		Reason:                 reason.String(),
 		EnforcementPoint:       enforcementPoint,
-		Machine:                d.machine.Localpart(),
+		Machine:                d.machine.UserID(),
 		MatchedAllowance:       matchedAllowance,
 		MatchedAllowanceDenial: matchedAllowanceDenial,
 	}
@@ -70,7 +71,7 @@ func (d *Daemon) postAuditDeny(
 // postAuditAllow posts an audit event for a successful sensitive
 // authorization check. Only called for actions in the sensitive set.
 func (d *Daemon) postAuditAllow(
-	actor, action, target, enforcementPoint string,
+	actor ref.UserID, action string, target ref.UserID, enforcementPoint string,
 	matchedAllowance *schema.Allowance,
 ) {
 	d.logger.Info("authorization allowed (sensitive)",
@@ -86,7 +87,7 @@ func (d *Daemon) postAuditAllow(
 		Action:           action,
 		Target:           target,
 		EnforcementPoint: enforcementPoint,
-		Machine:          d.machine.Localpart(),
+		Machine:          d.machine.UserID(),
 		MatchedAllowance: matchedAllowance,
 	}
 	d.postAuditEventAsync(content)

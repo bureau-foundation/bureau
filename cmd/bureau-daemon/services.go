@@ -566,8 +566,8 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 	for localpart, service := range d.services {
 		entries = append(entries, adminDirectoryEntry{
 			Localpart:    localpart,
-			Principal:    service.Principal.UserID().String(),
-			Machine:      service.Machine.UserID().String(),
+			Principal:    service.Principal.UserID(),
+			Machine:      service.Machine.UserID(),
 			Protocol:     service.Protocol,
 			Description:  service.Description,
 			Capabilities: service.Capabilities,
@@ -583,8 +583,8 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 // decoupled from the proxy library.
 type adminDirectoryEntry struct {
 	Localpart    string         `json:"localpart"`
-	Principal    string         `json:"principal"`
-	Machine      string         `json:"machine"`
+	Principal    ref.UserID     `json:"principal"`
+	Machine      ref.UserID     `json:"machine"`
 	Protocol     string         `json:"protocol"`
 	Description  string         `json:"description,omitempty"`
 	Capabilities []string       `json:"capabilities,omitempty"`
@@ -633,9 +633,9 @@ func synthesizeGrants(policy *schema.MatrixPolicy, visibility []string) []schema
 // Authorization), the grants come from the pre-merged authorization index.
 // Otherwise, grants are synthesized from the shorthand MatrixPolicy and
 // ServiceVisibility fields.
-func (d *Daemon) resolveGrantsForProxy(localpart string, assignment schema.PrincipalAssignment, config *schema.MachineConfig) []schema.Grant {
+func (d *Daemon) resolveGrantsForProxy(userID ref.UserID, assignment schema.PrincipalAssignment, config *schema.MachineConfig) []schema.Grant {
 	if config.DefaultPolicy != nil || assignment.Authorization != nil {
-		return d.authorizationIndex.Grants(localpart)
+		return d.authorizationIndex.Grants(userID)
 	}
 	return synthesizeGrants(assignment.MatrixPolicy, assignment.ServiceVisibility)
 }
@@ -800,8 +800,8 @@ func (d *Daemon) pushUpstreamConfig(ctx context.Context, socketPath string) {
 
 		now := d.clock.Now()
 		token := &servicetoken.Token{
-			Subject:   d.machine.Localpart(),
-			Machine:   d.machine.Localpart(),
+			Subject:   d.machine.UserID(),
+			Machine:   d.machine,
 			Audience:  "artifact",
 			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 			ID:        tokenID,

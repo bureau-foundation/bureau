@@ -19,6 +19,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
@@ -104,14 +105,37 @@ func testAuthConfig(t *testing.T) (*AuthConfig, ed25519.PrivateKey) {
 	}, private
 }
 
-// mintTestToken creates a signed test token with the given subject.
-// Timestamps are relative to testClockEpoch: issued 5 minutes before
-// the epoch, expires 5 minutes after.
+// testUserID parses a raw Matrix user ID string for test use. Panics
+// on invalid input — test-only, avoids per-call error handling.
+func testUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
+}
+
+// testMachine parses a raw machine Matrix user ID for test use.
+func testMachine(t *testing.T, raw string) ref.Machine {
+	t.Helper()
+	machine, err := ref.ParseMachineUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseMachineUserID(%q): %v", raw, err)
+	}
+	return machine
+}
+
+// mintTestToken creates a signed test token with the given subject
+// localpart. The subject is expanded to a full Matrix user ID under
+// the bureau/fleet/test namespace on test.local. Timestamps are
+// relative to testClockEpoch: issued 5 minutes before the epoch,
+// expires 5 minutes after.
 func mintTestToken(t *testing.T, privateKey ed25519.PrivateKey, subject string) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
-		Subject:  subject,
-		Machine:  "machine/test",
+		Subject:  testUserID(t, "@bureau/fleet/test/"+subject+":test.local"),
+		Machine:  testMachine(t, "@bureau/fleet/test/machine/test:test.local"),
 		Audience: "test-service",
 		Grants: []servicetoken.Grant{
 			{Actions: []string{"test/read", "test/write"}},
@@ -465,8 +489,8 @@ func TestSocketServerHandleAuth(t *testing.T) {
 	server := NewSocketServer(socketPath, testLogger(), authConfig)
 
 	// Track what the handler receives.
-	var receivedSubject string
-	var receivedMachine string
+	var receivedSubject ref.UserID
+	var receivedMachine ref.Machine
 	var receivedGrantCount int
 	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 		receivedSubject = token.Subject
@@ -504,11 +528,13 @@ func TestSocketServerHandleAuth(t *testing.T) {
 		t.Errorf("expected created=true, got %v", data["created"])
 	}
 
-	if receivedSubject != "iree/amdgpu/pm" {
-		t.Errorf("handler received subject %q, want iree/amdgpu/pm", receivedSubject)
+	wantSubject := testUserID(t, "@bureau/fleet/test/iree/amdgpu/pm:test.local")
+	if receivedSubject != wantSubject {
+		t.Errorf("handler received subject %q, want %q", receivedSubject, wantSubject)
 	}
-	if receivedMachine != "machine/test" {
-		t.Errorf("handler received machine %q, want machine/test", receivedMachine)
+	wantMachine := testMachine(t, "@bureau/fleet/test/machine/test:test.local")
+	if receivedMachine != wantMachine {
+		t.Errorf("handler received machine %q, want %q", receivedMachine, wantMachine)
 	}
 	if receivedGrantCount != 1 {
 		t.Errorf("handler received %d grants, want 1", receivedGrantCount)
@@ -578,8 +604,8 @@ func TestSocketServerAuthExpiredToken(t *testing.T) {
 
 	// Mint an already-expired token using fixed past timestamps.
 	token := &servicetoken.Token{
-		Subject:   "agent/test",
-		Machine:   "machine/test",
+		Subject:   testUserID(t, "@bureau/fleet/test/agent/test:test.local"),
+		Machine:   testMachine(t, "@bureau/fleet/test/machine/test:test.local"),
 		Audience:  "test-service",
 		ID:        "expired-token",
 		IssuedAt:  1577836800, // 2020-01-01T00:00:00Z
@@ -780,7 +806,7 @@ func TestSocketServerMixedHandlers(t *testing.T) {
 
 	// Authenticated mutation.
 	server.HandleAuth("create", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-		return map[string]any{"subject": token.Subject}, nil
+		return map[string]any{"subject": token.Subject.String()}, nil
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -817,8 +843,9 @@ func TestSocketServerMixedHandlers(t *testing.T) {
 	}
 	var createData map[string]any
 	decodeData(t, createResponse, &createData)
-	if createData["subject"] != "agent/coder" {
-		t.Errorf("create: expected subject=agent/coder, got %v", createData["subject"])
+	wantCoderSubject := "@bureau/fleet/test/agent/coder:test.local"
+	if createData["subject"] != wantCoderSubject {
+		t.Errorf("create: expected subject=%s, got %v", wantCoderSubject, createData["subject"])
 	}
 
 	// Authenticated endpoint without a token should fail.
@@ -855,8 +882,8 @@ func TestSocketServerAuthWrongAudience(t *testing.T) {
 
 	// Mint a token for a different service.
 	token := &servicetoken.Token{
-		Subject:   "agent/test",
-		Machine:   "machine/test",
+		Subject:   testUserID(t, "@bureau/fleet/test/agent/test:test.local"),
+		Machine:   testMachine(t, "@bureau/fleet/test/machine/test:test.local"),
 		Audience:  "wrong-service",
 		ID:        "wrong-audience-token",
 		IssuedAt:  testClockEpoch.Add(-5 * time.Minute).Unix(),

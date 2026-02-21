@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -131,13 +132,21 @@ func testServerNoGrants(t *testing.T, fc *FleetController) (*service.ServiceClie
 	return client, cleanup
 }
 
-// mintToken creates a signed test token with specific grants.
+// mintToken creates a signed test token with specific grants. The
+// subject is an account localpart (e.g. "agent/tester"), expanded
+// to a full user ID under the standard test fleet.
 // Timestamps are relative to testClockEpoch.
 func mintToken(t *testing.T, privateKey ed25519.PrivateKey, subject string, grants []servicetoken.Grant) []byte {
 	t.Helper()
+	fleet := testFleet(t)
+	subjectEntity := testEntity(t, subject)
+	machine, err := ref.NewMachine(fleet, "test")
+	if err != nil {
+		t.Fatalf("NewMachine: %v", err)
+	}
 	token := &servicetoken.Token{
-		Subject:   subject,
-		Machine:   "machine/test",
+		Subject:   subjectEntity.UserID(),
+		Machine:   machine,
 		Audience:  "fleet",
 		Grants:    grants,
 		ID:        "test-token",

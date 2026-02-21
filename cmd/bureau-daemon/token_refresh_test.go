@@ -42,22 +42,24 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 	daemon, fakeClock, publicKey := newTokenRefreshDaemon(t)
 
 	// Set up a running principal with required services and grants.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/create", "ticket/read"}},
 		},
 	})
-	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
-	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
+	daemon.running[alpha] = true
+	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(alpha, []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
+	daemon.lastTokenMint[alpha] = fakeClock.Now()
 
 	// Read the initial token to get its expiry.
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
@@ -96,8 +98,8 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 	}
 
 	// lastTokenMint should be updated.
-	if daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] != fakeClock.Now() {
-		t.Errorf("lastTokenMint = %v, want %v", daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")], fakeClock.Now())
+	if daemon.lastTokenMint[alpha] != fakeClock.Now() {
+		t.Errorf("lastTokenMint = %v, want %v", daemon.lastTokenMint[alpha], fakeClock.Now())
 	}
 }
 
@@ -107,8 +109,10 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 	daemon, fakeClock, publicKey := newTokenRefreshDaemon(t)
 	startTime := fakeClock.Now()
 
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
 	// Set up a running principal with a static grant and a temporal grant.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/read"}},
 		},
@@ -121,27 +125,27 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 		ExpiresAt: temporalExpiry.Format(time.RFC3339),
 		Ticket:    "tkt-test-temporal",
 	}
-	if !daemon.authorizationIndex.AddTemporalGrant("agent/alpha", temporalGrant) {
+	if !daemon.authorizationIndex.AddTemporalGrant(alpha.UserID(), temporalGrant) {
 		t.Fatal("AddTemporalGrant returned false")
 	}
 
 	// Principal should now have 2 grants: 1 static + 1 temporal.
-	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	grants := daemon.authorizationIndex.Grants(alpha.UserID())
 	if len(grants) != 2 {
 		t.Fatalf("expected 2 grants before sweep, got %d", len(grants))
 	}
 
-	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
-	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
+	daemon.running[alpha] = true
+	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens (with both grants).
-	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(alpha, []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
+	daemon.lastTokenMint[alpha] = fakeClock.Now()
 
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
 	if len(initialToken.Grants) != 2 {
@@ -155,7 +159,7 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 	daemon.refreshTokens(context.Background())
 
 	// The authorization index should now have only 1 grant.
-	grantsAfter := daemon.authorizationIndex.Grants("agent/alpha")
+	grantsAfter := daemon.authorizationIndex.Grants(alpha.UserID())
 	if len(grantsAfter) != 1 {
 		t.Errorf("expected 1 grant after sweep, got %d", len(grantsAfter))
 	}
@@ -199,15 +203,17 @@ func TestRefreshTokens_InitialSweepMintsForAdoptedPrincipals(t *testing.T) {
 
 	daemon, fakeClock, publicKey := newTokenRefreshDaemon(t)
 
+	adopted := testEntity(t, daemon.fleet, "agent/adopted")
+
 	// Simulate an adopted principal: running with a spec but no
 	// lastTokenMint entry (zero time — daemon restarted).
-	daemon.authorizationIndex.SetPrincipal("agent/adopted", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(adopted.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"artifact/read"}},
 		},
 	})
-	daemon.running[testEntity(t, daemon.fleet, "agent/adopted")] = true
-	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/adopted")] = &schema.SandboxSpec{
+	daemon.running[adopted] = true
+	daemon.lastSpecs[adopted] = &schema.SandboxSpec{
 		RequiredServices: []string{"artifact"},
 	}
 	// lastTokenMint intentionally NOT set — zero value.
@@ -219,15 +225,16 @@ func TestRefreshTokens_InitialSweepMintsForAdoptedPrincipals(t *testing.T) {
 	tokenDirectory := filepath.Join(daemon.stateDir, "tokens", "agent/adopted")
 	token := readAndVerifyToken(t, tokenDirectory, "artifact", publicKey, fakeClock.Now())
 
-	if token.Subject != "agent/adopted" {
-		t.Errorf("Subject = %q, want %q", token.Subject, "agent/adopted")
+	wantSubject := adopted.UserID()
+	if token.Subject != wantSubject {
+		t.Errorf("Subject = %q, want %q", token.Subject, wantSubject)
 	}
 	if token.Audience != "artifact" {
 		t.Errorf("Audience = %q, want %q", token.Audience, "artifact")
 	}
 
 	// lastTokenMint should now be set.
-	if daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/adopted")].IsZero() {
+	if daemon.lastTokenMint[adopted].IsZero() {
 		t.Error("lastTokenMint should be set after initial sweep")
 	}
 }
@@ -237,23 +244,25 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 
 	daemon, fakeClock, publicKey := newTokenRefreshDaemon(t)
 
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
 	// Set up a running principal with an initial grant.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/read"}},
 		},
 	})
-	daemon.running[testEntity(t, daemon.fleet, "agent/alpha")] = true
-	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/alpha")] = &schema.SandboxSpec{
+	daemon.running[alpha] = true
+	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 
 	// Mint initial tokens.
-	tokenDirectory, _, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"ticket"})
+	tokenDirectory, _, err := daemon.mintServiceTokens(alpha, []string{"ticket"})
 	if err != nil {
 		t.Fatalf("initial mint: %v", err)
 	}
-	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = fakeClock.Now()
+	daemon.lastTokenMint[alpha] = fakeClock.Now()
 
 	initialToken := readAndVerifyToken(t, tokenDirectory, "ticket", publicKey, fakeClock.Now())
 	if len(initialToken.Grants) != 1 {
@@ -262,13 +271,13 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 
 	// Simulate a grant change (what reconcile does when grants update):
 	// update the index and reset lastTokenMint.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{
+	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/read"}},
 			{Actions: []string{"ticket/create", "ticket/close"}},
 		},
 	})
-	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/alpha")] = time.Time{} // force re-mint
+	daemon.lastTokenMint[alpha] = time.Time{} // force re-mint
 
 	// Advance only 1 second (well before the normal 4-minute threshold).
 	fakeClock.Advance(1 * time.Second)

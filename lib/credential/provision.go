@@ -154,11 +154,11 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	principalUserID := params.Principal.UserID()
 	credentialEvent := schema.Credentials{
 		Version:       schema.CredentialsVersion,
-		Principal:     principalUserID.String(),
+		Principal:     principalUserID,
 		EncryptedFor:  encryptedFor,
 		Keys:          credentialKeys,
 		Ciphertext:    ciphertext,
-		ProvisionedBy: session.UserID().String(),
+		ProvisionedBy: session.UserID(),
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 

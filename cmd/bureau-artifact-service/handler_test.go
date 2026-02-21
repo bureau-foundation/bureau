@@ -1733,13 +1733,33 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 	return as, privateKey
 }
 
+// mustParseUserID parses a raw Matrix user ID for test use.
+func mustParseUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
+}
+
+// mustParseMachine parses a raw machine Matrix user ID for test use.
+func mustParseMachine(t *testing.T, raw string) ref.Machine {
+	t.Helper()
+	machine, err := ref.ParseMachineUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseMachineUserID(%q): %v", raw, err)
+	}
+	return machine
+}
+
 // mintArtifactToken creates a signed test token with specific grants
 // and audience "artifact". Timestamps are relative to testClockEpoch.
 func mintArtifactToken(t *testing.T, privateKey ed25519.PrivateKey, grants []servicetoken.Grant) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
-		Subject:   "agent/tester",
-		Machine:   "machine/test",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local"),
 		Audience:  "artifact",
 		Grants:    grants,
 		ID:        "test-token",
@@ -1758,8 +1778,8 @@ func mintArtifactToken(t *testing.T, privateKey ed25519.PrivateKey, grants []ser
 func mintExpiredArtifactToken(t *testing.T, privateKey ed25519.PrivateKey) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
-		Subject:   "agent/tester",
-		Machine:   "machine/test",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local"),
 		Audience:  "artifact",
 		Grants:    []servicetoken.Grant{{Actions: []string{"artifact/*"}}},
 		ID:        "expired-token",

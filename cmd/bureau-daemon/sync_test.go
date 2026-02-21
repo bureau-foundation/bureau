@@ -968,7 +968,8 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	// Initialize the index with a principal so temporal grants can attach.
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+	agentAlpha := testEntity(t, daemon.fleet, "agent/alpha")
+	daemon.authorizationIndex.SetPrincipal(agentAlpha.UserID(), schema.AuthorizationPolicy{})
 
 	stateKey := "test-grant-ticket"
 	response := &messaging.SyncResponse{
@@ -982,7 +983,7 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 								Type:     schema.EventTypeTemporalGrant,
 								StateKey: &stateKey,
 								Content: map[string]any{
-									"principal": "agent/alpha",
+									"principal": agentAlpha.UserID().String(),
 									"grant": map[string]any{
 										"actions":    []any{"service/register"},
 										"expires_at": "2099-01-01T00:00:00Z",
@@ -999,7 +1000,7 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 
 	daemon.processTemporalGrantEvents(response)
 
-	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	grants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/alpha").UserID())
 	if len(grants) != 1 {
 		t.Fatalf("grants = %d, want 1", len(grants))
 	}
@@ -1024,10 +1025,10 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{})
 
 	// Pre-add a temporal grant.
-	added := daemon.authorizationIndex.AddTemporalGrant("agent/alpha", schema.Grant{
+	added := daemon.authorizationIndex.AddTemporalGrant(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.Grant{
 		Actions:   []string{"service/register"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "revoke-grant-ticket",
@@ -1037,7 +1038,7 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 	}
 
 	// Verify it's there.
-	if grants := daemon.authorizationIndex.Grants("agent/alpha"); len(grants) != 1 {
+	if grants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/alpha").UserID()); len(grants) != 1 {
 		t.Fatalf("before revoke: grants = %d, want 1", len(grants))
 	}
 
@@ -1064,7 +1065,7 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 
 	daemon.processTemporalGrantEvents(response)
 
-	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	grants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/alpha").UserID())
 	if len(grants) != 0 {
 		t.Errorf("after revoke: grants = %d, want 0", len(grants))
 	}
@@ -1078,7 +1079,8 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	daemon.authorizationIndex.SetPrincipal("agent/alpha", schema.AuthorizationPolicy{})
+	agentAlpha := testEntity(t, daemon.fleet, "agent/alpha")
+	daemon.authorizationIndex.SetPrincipal(agentAlpha.UserID(), schema.AuthorizationPolicy{})
 
 	stateKey := "statekey-grant-ticket"
 	response := &messaging.SyncResponse{
@@ -1092,7 +1094,7 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 								Type:     schema.EventTypeTemporalGrant,
 								StateKey: &stateKey,
 								Content: map[string]any{
-									"principal": "agent/alpha",
+									"principal": agentAlpha.UserID().String(),
 									"grant": map[string]any{
 										"actions":    []any{"service/register"},
 										"expires_at": "2099-01-01T00:00:00Z",
@@ -1109,7 +1111,7 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 
 	daemon.processTemporalGrantEvents(response)
 
-	grants := daemon.authorizationIndex.Grants("agent/alpha")
+	grants := daemon.authorizationIndex.Grants(testEntity(t, daemon.fleet, "agent/alpha").UserID())
 	if len(grants) != 1 {
 		t.Fatalf("grants = %d, want 1", len(grants))
 	}

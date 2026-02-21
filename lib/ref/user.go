@@ -70,6 +70,16 @@ func (u UserID) Server() string {
 	return server
 }
 
+// MustParseUserID is like ParseUserID but panics on error. Use in
+// tests and static initialization where the input is known-valid.
+func MustParseUserID(raw string) UserID {
+	u, err := ParseUserID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("ref.MustParseUserID(%q): %v", raw, err))
+	}
+	return u
+}
+
 // MarshalText implements encoding.TextMarshaler for JSON and other
 // text-based serialization formats.
 func (u UserID) MarshalText() ([]byte, error) {

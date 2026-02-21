@@ -26,12 +26,12 @@ type credentialListParams struct {
 
 // credentialListEntry is a single entry in the JSON output.
 type credentialListEntry struct {
-	StateKey      string   `json:"state_key"       desc:"principal localpart"`
-	Principal     string   `json:"principal"       desc:"full Matrix user ID"`
-	EncryptedFor  []string `json:"encrypted_for"   desc:"identities that can decrypt"`
-	Keys          []string `json:"keys"            desc:"credential names"`
-	ProvisionedBy string   `json:"provisioned_by"  desc:"who provisioned"`
-	ProvisionedAt string   `json:"provisioned_at"  desc:"when provisioned"`
+	StateKey      string     `json:"state_key"       desc:"principal localpart"`
+	Principal     ref.UserID `json:"principal"       desc:"full Matrix user ID"`
+	EncryptedFor  []string   `json:"encrypted_for"   desc:"identities that can decrypt"`
+	Keys          []string   `json:"keys"            desc:"credential names"`
+	ProvisionedBy ref.UserID `json:"provisioned_by"  desc:"who provisioned"`
+	ProvisionedAt string     `json:"provisioned_at"  desc:"when provisioned"`
 }
 
 func listCommand() *cli.Command {

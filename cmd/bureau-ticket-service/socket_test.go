@@ -78,14 +78,16 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 		writer = &fakeWriter{notify: make(chan struct{}, 64)}
 	}
 
+	testServiceRef := mustParseService(t, "@bureau/fleet/prod/service/ticket/test:bureau.local")
+	testMachineRef := mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local")
 	ts := &TicketService{
-		writer:        writer,
-		clock:         testClock,
-		startedAt:     time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		principalName: "service/ticket/test",
-		serverName:    "bureau.local",
-		rooms:         rooms,
-		logger:        logger,
+		writer:    writer,
+		clock:     testClock,
+		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		service:   testServiceRef,
+		machine:   testMachineRef,
+		rooms:     rooms,
+		logger:    logger,
 	}
 	if opts.withTimers {
 		ts.timerNotify = make(chan struct{}, 1)
@@ -129,8 +131,8 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 	var tokenBytes []byte
 	if opts.withTimers {
 		token := &servicetoken.Token{
-			Subject:   subject,
-			Machine:   "machine/test",
+			Subject:   mustParseUserID(t, "@bureau/fleet/prod/"+subject+":bureau.local"),
+			Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local"),
 			Audience:  "ticket",
 			Grants:    grants,
 			ID:        "test-token-long",
@@ -185,13 +187,45 @@ func testMutationServerWithGrants(t *testing.T, rooms map[ref.RoomID]*roomState,
 	return newTestServer(t, rooms, testServerOpts{grants: grants})
 }
 
-// mintToken creates a signed test token with specific grants.
+// mustParseUserID parses a raw Matrix user ID for test use.
+func mustParseUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
+}
+
+// mustParseMachine parses a raw machine Matrix user ID for test use.
+func mustParseMachine(t *testing.T, raw string) ref.Machine {
+	t.Helper()
+	machine, err := ref.ParseMachineUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseMachineUserID(%q): %v", raw, err)
+	}
+	return machine
+}
+
+// mustParseService parses a raw service Matrix user ID for test use.
+func mustParseService(t *testing.T, raw string) ref.Service {
+	t.Helper()
+	service, err := ref.ParseServiceUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseServiceUserID(%q): %v", raw, err)
+	}
+	return service
+}
+
+// mintToken creates a signed test token with specific grants. The
+// subject is an account localpart (e.g. "agent/tester"), expanded
+// to a full user ID under bureau/fleet/prod on bureau.local.
 // Timestamps are relative to testClockEpoch.
 func mintToken(t *testing.T, privateKey ed25519.PrivateKey, subject string, grants []servicetoken.Grant) []byte {
 	t.Helper()
 	token := &servicetoken.Token{
-		Subject:   subject,
-		Machine:   "machine/test",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/"+subject+":bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local"),
 		Audience:  "ticket",
 		Grants:    grants,
 		ID:        "test-token",
@@ -226,7 +260,7 @@ func ticketFixture(title, status string) schema.TicketContent {
 		Status:    status,
 		Priority:  2,
 		Type:      "task",
-		CreatedBy: "@agent/tester:bureau.local",
+		CreatedBy: "@bureau/fleet/prod/agent/tester:bureau.local",
 		CreatedAt: "2026-01-15T12:00:00Z",
 		UpdatedAt: "2026-01-15T12:00:00Z",
 	}
@@ -1311,8 +1345,8 @@ func TestHandleCreate(t *testing.T) {
 	if content.Status != "open" {
 		t.Errorf("status: got %q, want 'open'", content.Status)
 	}
-	if content.CreatedBy != "@agent/tester:bureau.local" {
-		t.Errorf("created_by: got %q, want '@agent/tester:bureau.local'", content.CreatedBy)
+	if content.CreatedBy != "@bureau/fleet/prod/agent/tester:bureau.local" {
+		t.Errorf("created_by: got %q, want '@bureau/fleet/prod/agent/tester:bureau.local'", content.CreatedBy)
 	}
 
 	// Verify state event was written to Matrix.
@@ -1441,7 +1475,7 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 		"ticket":   "tkt-open",
 		"room":     "!room:bureau.local",
 		"status":   "in_progress",
-		"assignee": "@agent/tester:bureau.local",
+		"assignee": "@bureau/fleet/prod/agent/tester:bureau.local",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1450,7 +1484,7 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 	if result.Content.Status != "in_progress" {
 		t.Errorf("status: got %q, want 'in_progress'", result.Content.Status)
 	}
-	if result.Content.Assignee != "@agent/tester:bureau.local" {
+	if result.Content.Assignee != "@bureau/fleet/prod/agent/tester:bureau.local" {
 		t.Errorf("assignee: got %q", result.Content.Assignee)
 	}
 }
@@ -1463,7 +1497,7 @@ func TestHandleUpdateContentionRejected(t *testing.T) {
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-inprog",
 		"status":   "in_progress",
-		"assignee": "@agent/tester:bureau.local",
+		"assignee": "@bureau/fleet/prod/agent/tester:bureau.local",
 	}, nil)
 	serviceErr := requireServiceError(t, err)
 	if serviceErr.Action != "update" {
@@ -1512,7 +1546,7 @@ func TestHandleUpdateAssigneeRequiresInProgress(t *testing.T) {
 	// Trying to set assignee on an open ticket without changing status.
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-open",
-		"assignee": "@agent/tester:bureau.local",
+		"assignee": "@bureau/fleet/prod/agent/tester:bureau.local",
 	}, nil)
 	requireServiceError(t, err)
 }
@@ -2052,7 +2086,7 @@ func TestHandleResolveGate(t *testing.T) {
 	if gate.Status != "satisfied" {
 		t.Errorf("gate status: got %q, want 'satisfied'", gate.Status)
 	}
-	if gate.SatisfiedBy != "@agent/tester:bureau.local" {
+	if gate.SatisfiedBy != "@bureau/fleet/prod/agent/tester:bureau.local" {
 		t.Errorf("satisfied_by: got %q", gate.SatisfiedBy)
 	}
 	if gate.SatisfiedAt == "" {

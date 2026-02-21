@@ -29,29 +29,31 @@ func matchAnyAction(patterns []string, action string) bool {
 	return principal.MatchAnyPattern(patterns, action)
 }
 
-// matchAnyTarget checks whether a target matches any pattern in the
-// list. Returns true on the first match.
+// matchAnyTarget checks whether a target user ID matches any user ID
+// pattern in the list. Returns true on the first match. Patterns use
+// the "localpart_pattern:server_pattern" format — bare localpart
+// patterns are rejected to prevent cross-server grants.
 func matchAnyTarget(patterns []string, target string) bool {
-	return principal.MatchAnyPattern(patterns, target)
+	return principal.MatchAnyUserID(patterns, target)
 }
 
-// matchAnyActor checks whether an actor matches any pattern in the
-// list. Returns true on the first match.
+// matchAnyActor checks whether an actor user ID matches any user ID
+// pattern in the list. Returns true on the first match. Patterns use
+// the "localpart_pattern:server_pattern" format.
 func matchAnyActor(patterns []string, actor string) bool {
-	return principal.MatchAnyPattern(patterns, actor)
+	return principal.MatchAnyUserID(patterns, actor)
 }
 
-// grantMatches checks whether a grant covers a specific action on a
-// specific target. For self-service actions (empty target), only the
-// action patterns are checked and the grant must also have empty
-// targets. For cross-principal actions, both action and target patterns
-// must match.
-func grantMatches(grant schema.Grant, action, target string) bool {
+// grantMatchesUserID checks whether a grant covers a specific action on
+// a specific target user ID. For self-service actions (selfService=true),
+// only the action patterns are checked. For cross-principal actions, both
+// action and target user ID patterns must match.
+func grantMatchesUserID(grant schema.Grant, action, targetStr string, selfService bool) bool {
 	if !matchAnyAction(grant.Actions, action) {
 		return false
 	}
 
-	if target == "" {
+	if selfService {
 		// Self-service action: grant applies regardless of targets.
 		// A grant with targets also matches self-service actions
 		// (the targets field restricts cross-principal use, not
@@ -63,40 +65,40 @@ func grantMatches(grant schema.Grant, action, target string) bool {
 	if len(grant.Targets) == 0 {
 		return false
 	}
-	return matchAnyTarget(grant.Targets, target)
+	return matchAnyTarget(grant.Targets, targetStr)
 }
 
-// denialMatches checks whether a denial covers a specific action on a
-// specific target.
-func denialMatches(denial schema.Denial, action, target string) bool {
+// denialMatchesUserID checks whether a denial covers a specific action on
+// a specific target user ID.
+func denialMatchesUserID(denial schema.Denial, action, targetStr string, selfService bool) bool {
 	if !matchAnyAction(denial.Actions, action) {
 		return false
 	}
 
-	if target == "" {
+	if selfService {
 		return true
 	}
 
 	if len(denial.Targets) == 0 {
 		return false
 	}
-	return matchAnyTarget(denial.Targets, target)
+	return matchAnyTarget(denial.Targets, targetStr)
 }
 
-// allowanceMatches checks whether an allowance covers a specific action
-// from a specific actor.
-func allowanceMatches(allowance schema.Allowance, action, actor string) bool {
+// allowanceMatchesUserID checks whether an allowance covers a specific
+// action from a specific actor user ID.
+func allowanceMatchesUserID(allowance schema.Allowance, action, actorStr string) bool {
 	if !matchAnyAction(allowance.Actions, action) {
 		return false
 	}
-	return matchAnyActor(allowance.Actors, actor)
+	return matchAnyActor(allowance.Actors, actorStr)
 }
 
-// allowanceDenialMatches checks whether an allowance denial covers a
-// specific action from a specific actor.
-func allowanceDenialMatches(denial schema.AllowanceDenial, action, actor string) bool {
+// allowanceDenialMatchesUserID checks whether an allowance denial covers
+// a specific action from a specific actor user ID.
+func allowanceDenialMatchesUserID(denial schema.AllowanceDenial, action, actorStr string) bool {
 	if !matchAnyAction(denial.Actions, action) {
 		return false
 	}
-	return matchAnyActor(denial.Actors, actor)
+	return matchAnyActor(denial.Actors, actorStr)
 }

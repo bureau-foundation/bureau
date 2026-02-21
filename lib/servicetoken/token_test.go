@@ -8,6 +8,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -19,18 +21,39 @@ func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return public, private
 }
 
+func mustParseUserID(t *testing.T, raw string) ref.UserID {
+	t.Helper()
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseUserID(%q): %v", raw, err)
+	}
+	return userID
+}
+
+func mustParseMachine(t *testing.T, raw string) ref.Machine {
+	t.Helper()
+	machine, err := ref.ParseMachineUserID(raw)
+	if err != nil {
+		t.Fatalf("ParseMachineUserID(%q): %v", raw, err)
+	}
+	return machine
+}
+
 func TestMintAndVerify(t *testing.T) {
 	public, private := testKeypair(t)
+
+	subject := mustParseUserID(t, "@bureau/fleet/prod/agent/pm:bureau.local")
+	machine := mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local")
 
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:  "iree/amdgpu/pm",
-		Machine:  "machine/workstation",
+		Subject:  subject,
+		Machine:  machine,
 		Audience: "ticket",
 		Grants: []Grant{
 			{Actions: []string{"ticket/create", "ticket/assign"}},
-			{Actions: []string{"ticket/close"}, Targets: []string{"iree/**"}},
+			{Actions: []string{"ticket/close"}, Targets: []string{"iree/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f6",
 		IssuedAt:  issuedAt,
@@ -53,11 +76,11 @@ func TestMintAndVerify(t *testing.T) {
 		t.Fatalf("VerifyAt: %v", err)
 	}
 
-	if verified.Subject != "iree/amdgpu/pm" {
-		t.Errorf("Subject = %q, want iree/amdgpu/pm", verified.Subject)
+	if verified.Subject != subject {
+		t.Errorf("Subject = %v, want %v", verified.Subject, subject)
 	}
-	if verified.Machine != "machine/workstation" {
-		t.Errorf("Machine = %q, want machine/workstation", verified.Machine)
+	if verified.Machine != machine {
+		t.Errorf("Machine = %v, want %v", verified.Machine, machine)
 	}
 	if verified.Audience != "ticket" {
 		t.Errorf("Audience = %q, want ticket", verified.Audience)
@@ -79,8 +102,8 @@ func TestVerify_TamperedPayload(t *testing.T) {
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  issuedAt,
@@ -109,8 +132,8 @@ func TestVerify_WrongKey(t *testing.T) {
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  issuedAt,
@@ -135,8 +158,8 @@ func TestVerify_ExpiredToken(t *testing.T) {
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  issuedAt,
@@ -178,8 +201,8 @@ func TestVerifyAt_Deterministic(t *testing.T) {
 
 	expiresAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  expiresAt.Add(-5 * time.Minute).Unix(),
@@ -212,11 +235,13 @@ func TestVerifyAt_Deterministic(t *testing.T) {
 func TestVerifyForService(t *testing.T) {
 	public, private := testKeypair(t)
 
+	subject := mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local")
+
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   subject,
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  issuedAt,
@@ -235,8 +260,8 @@ func TestVerifyForService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyForServiceAt correct audience: %v", err)
 	}
-	if verified.Subject != "agent" {
-		t.Errorf("Subject = %q, want agent", verified.Subject)
+	if verified.Subject != subject {
+		t.Errorf("Subject = %v, want %v", verified.Subject, subject)
 	}
 
 	// Wrong audience.
@@ -315,8 +340,8 @@ func TestMintVerify_NoGrants(t *testing.T) {
 	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
 	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
 	token := &Token{
-		Subject:   "agent",
-		Machine:   "machine",
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
 		Audience:  "ticket",
 		ID:        "id1",
 		IssuedAt:  issuedAt,
@@ -342,14 +367,15 @@ func TestMintVerify_NoGrants(t *testing.T) {
 func TestTokenWireSize(t *testing.T) {
 	_, private := testKeypair(t)
 
-	// A typical token with a few grants.
+	// A typical token with a few grants. Full user IDs are longer
+	// than the old localparts, so the wire size is slightly larger.
 	token := &Token{
-		Subject:  "bureau/dev/workspace/coder/0",
-		Machine:  "machine/workstation",
+		Subject:  mustParseUserID(t, "@bureau/fleet/prod/agent/coder:bureau.local"),
+		Machine:  mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local"),
 		Audience: "ticket",
 		Grants: []Grant{
 			{Actions: []string{"ticket/create", "ticket/assign"}},
-			{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/workspace/**"}},
+			{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/workspace/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f67890",
 		IssuedAt:  1709251200,

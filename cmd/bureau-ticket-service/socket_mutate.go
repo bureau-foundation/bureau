@@ -13,7 +13,6 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/cron"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -422,7 +421,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	}
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	createdBy := ref.MatrixUserID(token.Subject, ts.serverName).String()
+	createdBy := token.Subject.String()
 
 	content := schema.TicketContent{
 		Version:   schema.TicketContentVersion,
@@ -890,7 +889,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 	}
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	createdBy := ref.MatrixUserID(token.Subject, ts.serverName).String()
+	createdBy := token.Subject.String()
 
 	type pendingTicket struct {
 		id      string
@@ -1118,7 +1117,7 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 	gate.Status = "satisfied"
 	gate.SatisfiedAt = now
-	gate.SatisfiedBy = ref.MatrixUserID(token.Subject, ts.serverName).String()
+	gate.SatisfiedBy = token.Subject.String()
 	content.UpdatedAt = now
 
 	if err := content.Validate(); err != nil {

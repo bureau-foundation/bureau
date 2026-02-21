@@ -174,8 +174,8 @@ func TestOperatorFlow(t *testing.T) {
 		Principals: []principalSpec{{Account: observed}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin"}},
+				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin:**"}},
 			},
 		},
 	})
@@ -459,8 +459,8 @@ func TestCrossMachineObservation(t *testing.T) {
 		Principals: []principalSpec{{Account: observed}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin"}},
+				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin:**"}},
 			},
 		},
 	})

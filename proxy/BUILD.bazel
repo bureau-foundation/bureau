@@ -49,6 +49,7 @@ go_test(
     deps = [
         "//lib/codec",
         "//lib/ipc",
+        "//lib/ref",
         "//lib/schema",
         "//lib/secret",
         "//lib/testutil",

@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // signatureSize is the fixed size of an Ed25519 signature.
@@ -33,11 +34,20 @@ type Grant struct {
 
 // Token is the CBOR-encoded payload of a service identity token.
 type Token struct {
-	// Subject is the principal's localpart (e.g., "iree/amdgpu/pm").
-	Subject string `cbor:"1,keyasint"`
+	// Subject is the full Matrix user ID of the principal
+	// (e.g., "@iree/fleet/prod/agent/pm:bureau.local"). This must
+	// be a complete, hermetic identity — never a bare localpart.
+	// User IDs from different homeservers are different entities;
+	// reconstructing a user ID by combining a localpart with a
+	// guessed server name is a security violation.
+	Subject ref.UserID `cbor:"1,keyasint"`
 
-	// Machine is the machine name where the principal is running.
-	Machine string `cbor:"2,keyasint"`
+	// Machine is the full identity of the machine where the
+	// principal is running. Serialized as the machine's Matrix
+	// user ID (e.g., "@bureau/fleet/prod/machine/gpu-box:server").
+	// Same hermetic identity rule as Subject: never a bare
+	// localpart, never reconstructed from parts.
+	Machine ref.Machine `cbor:"2,keyasint"`
 
 	// Audience is the service role this token is scoped to (e.g.,
 	// "ticket", "artifact"). A token for the ticket service cannot
@@ -154,13 +164,17 @@ func VerifyForServiceAt(publicKey ed25519.PublicKey, tokenBytes []byte, expected
 //
 // For self-service actions (empty target), only the action patterns
 // are checked. For cross-principal actions, both action and target
-// patterns must match.
+// patterns must match. Target matching uses localpart-level glob
+// patterns (MatchPattern, not MatchUserID) because service tokens
+// are daemon-scoped — the audience check prevents cross-server reuse,
+// so localpart matching is sufficient.
 func GrantsAllow(grants []Grant, action, target string) bool {
+	selfService := target == ""
 	for _, grant := range grants {
 		if !principal.MatchAnyPattern(grant.Actions, action) {
 			continue
 		}
-		if target == "" {
+		if selfService {
 			return true
 		}
 		if len(grant.Targets) == 0 {

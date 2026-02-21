@@ -132,8 +132,8 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 // observation tests: any observer can observe in any mode.
 var permissiveObserveAllowances = schema.AuthorizationPolicy{
 	Allowances: []schema.Allowance{
-		{Actions: []string{"observe"}, Actors: []string{"**"}},
-		{Actions: []string{"observe/read-write"}, Actors: []string{"**"}},
+		{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+		{Actions: []string{"observe/read-write"}, Actors: []string{"**:**"}},
 	},
 }
 
@@ -198,7 +198,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 	}
 	for _, localpart := range runningPrincipals {
 		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
-		daemon.authorizationIndex.SetPrincipal(localpart, permissiveObserveAllowances)
+		daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, localpart).UserID(), permissiveObserveAllowances)
 	}
 	daemon.observeSocketPath = observeSocketPath
 	daemon.tmuxServer = tmuxServer
@@ -304,7 +304,7 @@ func TestListWithRemoteServices(t *testing.T) {
 		Machine:   remoteMachine,
 		Protocol:  "http",
 	}
-	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "service/tts/piper").UserID(), permissiveObserveAllowances)
 	// Add the peer address so the remote service is reachable.
 	daemon.peerAddresses[remoteMachine.UserID().String()] = "192.168.1.100:9090"
 	daemon.transportDialer = &testTCPDialer{}
@@ -359,7 +359,7 @@ func TestListObservableFilter(t *testing.T) {
 		Machine:   remoteMachine,
 		Protocol:  "http",
 	}
-	daemon.authorizationIndex.SetPrincipal("service/tts/piper", permissiveObserveAllowances)
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "service/tts/piper").UserID(), permissiveObserveAllowances)
 	// No peer address and no transport dialer → not observable.
 
 	// Without filter: both principals appear.

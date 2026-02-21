@@ -417,7 +417,7 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 				continue
 			}
 
-			if content.Principal == "" {
+			if content.Principal.IsZero() {
 				d.logger.Warn("temporal grant has empty principal",
 					"room_id", roomID,
 					"state_key", stateKey,

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
@@ -170,7 +171,7 @@ func TestClientCallAuthenticated(t *testing.T) {
 	authConfig, privateKey := testAuthConfig(t)
 	server := NewSocketServer(socketPath, testLogger(), authConfig)
 
-	var receivedSubject string
+	var receivedSubject ref.UserID
 	server.HandleAuth("query", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 		receivedSubject = token.Subject
 		// Echo back the room field from the request.
@@ -209,8 +210,9 @@ func TestClientCallAuthenticated(t *testing.T) {
 	if result.Count != 5 {
 		t.Errorf("count: got %d, want 5", result.Count)
 	}
-	if receivedSubject != "iree/amdgpu/pm" {
-		t.Errorf("subject: got %q, want iree/amdgpu/pm", receivedSubject)
+	wantSubject := testUserID(t, "@bureau/fleet/test/iree/amdgpu/pm:test.local")
+	if receivedSubject != wantSubject {
+		t.Errorf("subject: got %q, want %q", receivedSubject, wantSubject)
 	}
 
 	cancel()
@@ -351,7 +353,7 @@ func TestClientCallWithTokenFromFile(t *testing.T) {
 	server := NewSocketServer(socketPath, testLogger(), authConfig)
 
 	server.HandleAuth("whoami", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-		return map[string]any{"subject": token.Subject}, nil
+		return map[string]any{"subject": token.Subject.String()}, nil
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -384,8 +386,9 @@ func TestClientCallWithTokenFromFile(t *testing.T) {
 	if err := client.Call(ctx, "whoami", nil, &result); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if result.Subject != "agent/coder" {
-		t.Errorf("subject: got %q, want agent/coder", result.Subject)
+	wantCoder := "@bureau/fleet/test/agent/coder:test.local"
+	if result.Subject != wantCoder {
+		t.Errorf("subject: got %q, want %s", result.Subject, wantCoder)
 	}
 
 	cancel()
@@ -469,8 +472,8 @@ func TestClientCallExpiredToken(t *testing.T) {
 	// past. The server verifies expiry against wall time, so any token
 	// with ExpiresAt in 2020 is unconditionally expired.
 	expiredToken := &servicetoken.Token{
-		Subject:   "agent/test",
-		Machine:   "machine/test",
+		Subject:   testUserID(t, "@bureau/fleet/test/agent/test:test.local"),
+		Machine:   testMachine(t, "@bureau/fleet/test/machine/test:test.local"),
 		Audience:  "test-service",
 		ID:        "expired-token",
 		IssuedAt:  1577836800, // 2020-01-01T00:00:00Z

@@ -391,7 +391,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID ref.Ro
 
 	// Configure power levels. Read-modify-write on the existing power levels
 	// to add the ticket service user and ticket event type requirements.
-	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID.String()); err != nil {
+	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID); err != nil {
 		return cli.Internal("configuring power levels: %w", err)
 	}
 
@@ -404,7 +404,7 @@ func configureRoom(ctx context.Context, session messaging.Session, roomID ref.Ro
 //   - m.bureau.ticket event type requires PL 10
 //   - m.bureau.ticket_config requires PL 100 (admin-only)
 //   - m.bureau.room_service requires PL 100 (admin-only)
-func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID string) error {
+func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID ref.UserID) error {
 	// Read current power levels.
 	content, err := session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
@@ -422,7 +422,7 @@ func configureTicketPowerLevels(ctx context.Context, session messaging.Session, 
 		users = make(map[string]any)
 		powerLevels["users"] = users
 	}
-	users[serviceUserID] = 10
+	users[serviceUserID.String()] = 10
 
 	// Ensure the events map exists and set ticket event type PLs.
 	events, _ := powerLevels["events"].(map[string]any)

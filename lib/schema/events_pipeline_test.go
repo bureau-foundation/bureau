@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestPipelineContentRoundTrip(t *testing.T) {
@@ -476,7 +478,7 @@ func TestPipelineLogOmittedWhenNil(t *testing.T) {
 }
 
 func TestPipelineRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:bureau.local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
 	levels := PipelineRoomPowerLevels(adminUserID)
 
 	// Admin should have power level 100.
@@ -484,8 +486,8 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	if !ok {
 		t.Fatal("power levels missing 'users' map")
 	}
-	if users[adminUserID] != 100 {
-		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
 	}
 	if len(users) != 1 {
 		t.Errorf("users map should have exactly 1 entry, got %d", len(users))

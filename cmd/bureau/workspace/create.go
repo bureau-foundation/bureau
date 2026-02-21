@@ -186,7 +186,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 
 	// Ensure the workspace room exists (idempotent).
-	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID.String(), machineUserID.String(), spaceRoomID)
+	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID, machineUserID, spaceRoomID)
 	if err != nil {
 		return cli.Internal("ensuring workspace room: %w", err)
 	}
@@ -297,7 +297,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // the Bureau space. Handles the M_ROOM_IN_USE race condition (resolve alias →
 // create → retry resolve if someone else created it between our check and
 // create).
-func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName, adminUserID, machineUserID string, spaceRoomID ref.RoomID) (ref.RoomID, error) {
+func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string, adminUserID, machineUserID ref.UserID, spaceRoomID ref.RoomID) (ref.RoomID, error) {
 	fullAlias := schema.FullRoomAlias(alias, serverName)
 
 	// Check if the room already exists.
@@ -315,7 +315,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, 
 		Alias:                     alias,
 		Topic:                     "Workspace: " + alias,
 		Preset:                    "private_chat",
-		Invite:                    []string{machineUserID},
+		Invite:                    []string{machineUserID.String()},
 		Visibility:                "private",
 		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineUserID),
 	})

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/template"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -73,14 +74,14 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Create workspace room ---
 	workspaceAlias := "testproj"
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
 	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
 
 	// Publish workspace state.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
@@ -348,14 +349,14 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 
 	// --- Create workspace room ---
 	workspaceAlias := "wtproj"
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
 	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
 
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", schema.WorkspaceState{

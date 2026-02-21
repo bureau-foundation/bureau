@@ -6,11 +6,13 @@ package schema
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestWorkspaceRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:bureau.local"
-	machineUserID := "@machine/workstation:bureau.local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
+	machineUserID := ref.MustParseUserID("@machine/workstation:bureau.local")
 	levels := WorkspaceRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.
@@ -18,14 +20,14 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	if !ok {
 		t.Fatal("power levels missing 'users' map")
 	}
-	if users[adminUserID] != 100 {
-		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
 	}
 
 	// Machine should have power level 50 (can invite principals into
 	// workspace rooms, but cannot modify power levels or project config).
-	if users[machineUserID] != 50 {
-		t.Errorf("machine power level = %v, want 50", users[machineUserID])
+	if users[machineUserID.String()] != 50 {
+		t.Errorf("machine power level = %v, want 50", users[machineUserID.String()])
 	}
 
 	// Default user power level should be 0.
@@ -101,7 +103,7 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 func TestWorkspaceRoomPowerLevelsSameUser(t *testing.T) {
 	// When admin and machine are the same user, the users map should
 	// have exactly one entry (no duplicate).
-	adminUserID := "@bureau-admin:bureau.local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
 	levels := WorkspaceRoomPowerLevels(adminUserID, adminUserID)
 
 	users, ok := levels["users"].(map[string]any)
@@ -111,15 +113,15 @@ func TestWorkspaceRoomPowerLevelsSameUser(t *testing.T) {
 	if len(users) != 1 {
 		t.Errorf("expected 1 user entry for same user, got %d", len(users))
 	}
-	if users[adminUserID] != 100 {
-		t.Errorf("admin power level = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
 	}
 }
 
 func TestWorkspaceRoomPowerLevelsEmptyMachine(t *testing.T) {
-	// When machine user ID is empty, the users map should have only the admin.
-	adminUserID := "@bureau-admin:bureau.local"
-	levels := WorkspaceRoomPowerLevels(adminUserID, "")
+	// When machine user ID is zero, the users map should have only the admin.
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
+	levels := WorkspaceRoomPowerLevels(adminUserID, ref.UserID{})
 
 	users, ok := levels["users"].(map[string]any)
 	if !ok {

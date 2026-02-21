@@ -63,14 +63,14 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// --- Create the workspace room ---
 	workspaceAlias := "wst/lifecycle"
 	workspaceRoomAlias := "#wst/lifecycle:" + testServerName
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
 	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID.String(), adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
 
 	// Publish initial workspace state (pending). This is the state the
 	// daemon sees when it first evaluates StartConditions. Setup (no
@@ -443,7 +443,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 // createTestWorkspaceRoom creates a workspace room for integration tests.
 // The room is created with WorkspaceRoomPowerLevels, the machine is invited,
 // and the room is added as a child of the Bureau space.
-func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias, machineUserID, adminUserID string, spaceRoomID ref.RoomID) ref.RoomID {
+func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias string, machineUserID, adminUserID ref.UserID, spaceRoomID ref.RoomID) ref.RoomID {
 	t.Helper()
 
 	ctx := t.Context()
@@ -453,7 +453,7 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias
 		Alias:                     alias,
 		Topic:                     "Workspace integration test: " + alias,
 		Preset:                    "private_chat",
-		Invite:                    []string{machineUserID},
+		Invite:                    []string{machineUserID.String()},
 		Visibility:                "private",
 		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineUserID),
 	})

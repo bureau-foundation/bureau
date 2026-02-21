@@ -3,6 +3,8 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // Matrix state event type constants. These are the "type" field in Matrix
 // state events. The state_key for each is the principal's localpart.
 const (
@@ -314,14 +316,14 @@ func roomPowerLevels(spec powerLevelSpec) map[string]any {
 }
 
 // adminMachineUsers returns a users power level map with admin at PL 100
-// and machine at PL 50. If machineUserID is empty or matches adminUserID,
+// and machine at PL 50. If machineUserID is zero or matches adminUserID,
 // only the admin entry is included.
-func adminMachineUsers(adminUserID, machineUserID string) map[string]any {
+func adminMachineUsers(adminUserID, machineUserID ref.UserID) map[string]any {
 	users := map[string]any{
-		adminUserID: 100,
+		adminUserID.String(): 100,
 	}
-	if machineUserID != "" && machineUserID != adminUserID {
-		users[machineUserID] = 50
+	if !machineUserID.IsZero() && machineUserID != adminUserID {
+		users[machineUserID.String()] = 50
 	}
 	return users
 }
@@ -349,7 +351,7 @@ func adminMachineUsers(adminUserID, machineUserID string) map[string]any {
 // The admin creates workspace rooms via "bureau workspace create", so using
 // this as PowerLevelContentOverride in CreateRoom is safe (the creator
 // already has PL 100 from the preset).
-func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
+func WorkspaceRoomPowerLevels(adminUserID, machineUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypeProject] = 100
 	events[EventTypeWorkspace] = 0
@@ -381,7 +383,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID string) map[string]any 
 // gets PL 100 from the private_chat preset, then applies this power level
 // structure as a state event. The machine joins via invite and operates at
 // PL 50.
-func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
+func ConfigRoomPowerLevels(adminUserID, machineUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypeMachineConfig] = 50 // machine and fleet controllers (PL 50) write placements
 	events[EventTypeCredentials] = 100  // admin only
@@ -406,13 +408,13 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID string) map[string]any {
 // rooms (machine at PL 50 for layouts), pipeline rooms are admin-only
 // for writes. No machine tier is needed — machines read pipelines via
 // their proxy, they don't write them.
-func PipelineRoomPowerLevels(adminUserID string) map[string]any {
+func PipelineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypePipeline] = 100
 
 	return roomPowerLevels(powerLevelSpec{
 		users: map[string]any{
-			adminUserID: 100,
+			adminUserID.String(): 100,
 		},
 		events:        events,
 		eventsDefault: 100,

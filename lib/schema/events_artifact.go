@@ -6,6 +6,8 @@ package schema
 import (
 	"errors"
 	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // ArtifactScopeVersion is the current schema version for
@@ -84,10 +86,10 @@ func (a *ArtifactScope) CanModify() error {
 //
 // Room membership is invite-only — the admin invites artifact service
 // principals and machine daemons during setup.
-func ArtifactRoomPowerLevels(adminUserID string) map[string]any {
+func ArtifactRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	return roomPowerLevels(powerLevelSpec{
 		users: map[string]any{
-			adminUserID: 100,
+			adminUserID.String(): 100,
 		},
 		events:        AdminProtectedEvents(),
 		eventsDefault: 100,

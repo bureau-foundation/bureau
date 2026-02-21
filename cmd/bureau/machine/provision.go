@@ -307,7 +307,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 		// MachineConfig, layouts, and invites but cannot modify
 		// credentials, power levels, or room metadata.
 		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
-			schema.ConfigRoomPowerLevels(adminUserID.String(), machineUserID.String()))
+			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 		if err != nil {
 			return cli.Internal("set config room power levels: %w", err)
 		}

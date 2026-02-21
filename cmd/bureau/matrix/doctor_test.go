@@ -43,7 +43,7 @@ func mustParseUserID(t *testing.T, raw string) ref.UserID {
 // Default (nil) field values represent a fully healthy Bureau deployment.
 // Override specific fields to simulate broken states.
 type mockDoctorServer struct {
-	adminUserID string
+	adminUserID ref.UserID
 
 	// Room IDs.
 	spaceID    string
@@ -70,7 +70,7 @@ type stateEventRecord struct {
 	stateKey  string
 }
 
-func newHealthyMock(adminUserID string) *mockDoctorServer {
+func newHealthyMock(adminUserID ref.UserID) *mockDoctorServer {
 	return &mockDoctorServer{
 		adminUserID: adminUserID,
 		spaceID:     "!space:local",
@@ -123,7 +123,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 		// WhoAmI.
 		if path == "/_matrix/client/v3/account/whoami" {
 			json.NewEncoder(writer).Encode(map[string]string{
-				"user_id": m.adminUserID,
+				"user_id": m.adminUserID.String(),
 			})
 			return
 		}
@@ -265,7 +265,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			if m.roomMembers != nil {
 				memberUserIDs = m.roomMembers[roomID]
 			} else {
-				memberUserIDs = []string{m.adminUserID}
+				memberUserIDs = []string{m.adminUserID.String()}
 			}
 			var chunk []messaging.RoomMemberEvent
 			for _, userID := range memberUserIDs {
@@ -321,7 +321,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 }
 
 // powerLevelsForRoom returns the expected power levels for a Bureau room.
-func powerLevelsForRoom(adminUserID, roomID, systemID, pipelineID, artifactID string) map[string]any {
+func powerLevelsForRoom(adminUserID ref.UserID, roomID, systemID, pipelineID, artifactID string) map[string]any {
 	if roomID == pipelineID {
 		return schema.PipelineRoomPowerLevels(adminUserID)
 	}
@@ -341,7 +341,7 @@ func powerLevelsForRoom(adminUserID, roomID, systemID, pipelineID, artifactID st
 	}
 
 	return map[string]any{
-		"users":          map[string]any{adminUserID: 100},
+		"users":          map[string]any{adminUserID.String(): 100},
 		"users_default":  0,
 		"state_default":  100,
 		"events_default": 0,
@@ -398,7 +398,7 @@ func extractRoomIDFromPath(path string) string {
 }
 
 // mockBureauServer creates a fully healthy mock for backward compatibility.
-func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
+func mockBureauServer(t *testing.T, adminUserID ref.UserID) *httptest.Server {
 	t.Helper()
 	return newHealthyMock(adminUserID).httpServer(t)
 }
@@ -406,7 +406,7 @@ func mockBureauServer(t *testing.T, adminUserID string) *httptest.Server {
 // --- Integration tests ---
 
 func TestRunDoctor_AllHealthy(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	server := mockBureauServer(t, adminUserID)
 	defer server.Close()
 
@@ -414,7 +414,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 }
 
 func TestRunDoctor_WithCredentials(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	server := mockBureauServer(t, adminUserID)
 	defer server.Close()
 
@@ -491,7 +491,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 }
 
 func TestRunDoctor_StaleCredentials(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	server := mockBureauServer(t, adminUserID)
 	defer server.Close()
 
@@ -523,7 +523,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 // --- Fix tests ---
 
 func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	mock := newHealthyMock(adminUserID)
 	mock.spaceChildren = map[string]bool{} // no children
 	server := mock.httpServer(t)
@@ -645,7 +645,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 }
 
 func TestRunDoctor_FixJoinRules(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	mock := newHealthyMock(adminUserID)
 	mock.joinRules = map[string]string{
 		"!system:local": "public",
@@ -705,7 +705,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -761,11 +761,11 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 }
 
 func TestRunDoctor_FixPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	mock := newHealthyMock(adminUserID)
 	mock.powerLevels = map[string]map[string]any{
 		"!system:local": {
-			"users":          map[string]any{adminUserID: float64(100)},
+			"users":          map[string]any{adminUserID.String(): float64(100)},
 			"users_default":  float64(0),
 			"state_default":  float64(50), // wrong
 			"events_default": float64(0),
@@ -779,7 +779,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 }
 
 func TestRunDoctor_FixCredentialFile(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	server := mockBureauServer(t, adminUserID)
 	defer server.Close()
 
@@ -829,7 +829,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	credentialFile := t.TempDir() + "/bureau-creds"
 	credentialContent := "# Bureau Matrix credentials\n" +
 		"MATRIX_HOMESERVER_URL=http://localhost:6167\n" +
-		"MATRIX_ADMIN_USER=" + adminUserID + "\n" +
+		"MATRIX_ADMIN_USER=" + adminUserID.String() + "\n" +
 		"MATRIX_ADMIN_TOKEN=test-token\n" +
 		"MATRIX_SPACE_ROOM=!space:local\n" +
 		"MATRIX_SYSTEM_ROOM=!wrong:local\n"
@@ -905,7 +905,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 }
 
 func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	server := mockBureauServer(t, adminUserID)
 	defer server.Close()
 
@@ -913,7 +913,7 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -937,7 +937,7 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 }
 
 func TestRunDoctor_DryRunNoMutations(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	mock := newHealthyMock(adminUserID)
 	mock.spaceChildren = map[string]bool{} // broken
 	server := mock.httpServer(t)
@@ -947,7 +947,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}
@@ -969,7 +969,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 }
 
 func TestRunDoctor_FixHintsPresent(t *testing.T) {
-	adminUserID := "@bureau-admin:local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
 	mock := newHealthyMock(adminUserID)
 	mock.spaceChildren = map[string]bool{}
 	mock.joinRules = map[string]string{"!space:local": "public"}
@@ -980,7 +980,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID(t, adminUserID), "test-token")
+	session, err := client.SessionFromToken(adminUserID, "test-token")
 	if err != nil {
 		t.Fatalf("SessionFromToken: %v", err)
 	}

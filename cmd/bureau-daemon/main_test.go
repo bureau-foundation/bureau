@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -57,9 +58,9 @@ func TestRoomAliasLocalpart(t *testing.T) {
 }
 
 func TestConfigRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau-admin:bureau.local"
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
 	machine, _ := testMachineSetup(t, "workstation", "bureau.local")
-	machineUserID := machine.UserID().String()
+	machineUserID := machine.UserID()
 	levels := schema.ConfigRoomPowerLevels(adminUserID, machineUserID)
 
 	// Admin should have power level 100.
@@ -67,7 +68,7 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	if !ok {
 		t.Fatal("power levels missing 'users' map")
 	}
-	adminLevel, ok := users[adminUserID]
+	adminLevel, ok := users[adminUserID.String()]
 	if !ok {
 		t.Fatalf("admin %q not in users map", adminUserID)
 	}
@@ -78,7 +79,7 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	// Machine should have power level 50 (operational writes: MachineConfig
 	// for HA hosting, layout publishes, invites). PL 50 cannot modify
 	// credentials, power levels, or room metadata (all PL 100).
-	machineLevel, ok := users[machineUserID]
+	machineLevel, ok := users[machineUserID.String()]
 	if !ok {
 		t.Fatalf("machine %q not in users map", machineUserID)
 	}

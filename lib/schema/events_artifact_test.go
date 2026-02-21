@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestArtifactScopeRoundTrip(t *testing.T) {
@@ -192,13 +194,13 @@ func TestArtifactScopeForwardCompatibility(t *testing.T) {
 }
 
 func TestArtifactRoomPowerLevels(t *testing.T) {
-	adminUserID := "@bureau/admin:bureau.local"
+	adminUserID := ref.MustParseUserID("@bureau/admin:bureau.local")
 	powerLevels := ArtifactRoomPowerLevels(adminUserID)
 
 	// Admin has PL 100.
 	users := powerLevels["users"].(map[string]any)
-	if users[adminUserID] != 100 {
-		t.Errorf("admin PL = %v, want 100", users[adminUserID])
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin PL = %v, want 100", users[adminUserID.String()])
 	}
 
 	// Default user PL is 0.

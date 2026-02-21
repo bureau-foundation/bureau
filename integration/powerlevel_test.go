@@ -6,6 +6,7 @@ package integration_test
 import (
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -24,7 +25,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
 	// Register test users. These get default power level 0 in any room they
 	// join. The machine user will be promoted to PL 50 via room power levels.
@@ -44,7 +45,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 		Name:                      "PL Test Config Room",
 		Preset:                    "private_chat",
 		Invite:                    []string{machineAccount.UserID.String(), agentAccount.UserID.String()},
-		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineAccount.UserID.String()),
+		PowerLevelContentOverride: schema.ConfigRoomPowerLevels(adminUserID, machineAccount.UserID),
 	})
 	if err != nil {
 		t.Fatalf("create config room: %v", err)
@@ -54,7 +55,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 		Name:                      "PL Test Workspace Room",
 		Preset:                    "private_chat",
 		Invite:                    []string{machineAccount.UserID.String(), agentAccount.UserID.String()},
-		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineAccount.UserID.String()),
+		PowerLevelContentOverride: schema.WorkspaceRoomPowerLevels(adminUserID, machineAccount.UserID),
 	})
 	if err != nil {
 		t.Fatalf("create workspace room: %v", err)

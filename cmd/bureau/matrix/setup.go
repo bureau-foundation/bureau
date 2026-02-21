@@ -175,7 +175,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	roomIDs := make(map[string]ref.RoomID, len(standardRooms))
 	for _, room := range standardRooms {
 		roomID, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-			spaceRoomID, config.serverName, room.powerLevels(session.UserID().String()), logger)
+			spaceRoomID, config.serverName, room.powerLevels(session.UserID()), logger)
 		if err != nil {
 			return cli.Internal("create %s: %w", room.name, err)
 		}
@@ -280,7 +280,7 @@ func ensureSpace(ctx context.Context, session messaging.Session, serverName stri
 		CreationContent: map[string]any{
 			"type": "m.space",
 		},
-		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID().String(), nil),
+		PowerLevelContentOverride: adminOnlyPowerLevels(session.UserID(), nil),
 	})
 	if err != nil {
 		return ref.RoomID{}, cli.Internal("create bureau space: %w", err)
@@ -485,7 +485,7 @@ func baseTemplates() []namedTemplate {
 // m.bureau.machine_status; daemons exchange WebRTC signaling
 // (m.bureau.webrtc_offer/answer); and service room members register via
 // m.bureau.service.
-func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string) map[string]any {
+func adminOnlyPowerLevels(adminUserID ref.UserID, memberSettableEventTypes []string) map[string]any {
 	events := schema.AdminProtectedEvents()
 	for _, eventType := range memberSettableEventTypes {
 		events[eventType] = 0
@@ -498,7 +498,7 @@ func adminOnlyPowerLevels(adminUserID string, memberSettableEventTypes []string)
 		"events_default": 0,
 		"state_default":  100,
 		"notifications":  map[string]any{"room": 50},
-		"users":          map[string]any{adminUserID: 100},
+		"users":          map[string]any{adminUserID.String(): 100},
 		"users_default":  0,
 		"events":         events,
 	}

@@ -238,11 +238,11 @@ type standardRoom struct {
 	// nil, powerLevels() returns adminOnlyPowerLevels with the room's
 	// memberSettableEventTypes. Set this for rooms that need a different
 	// power level structure (e.g., pipeline rooms use events_default: 100).
-	powerLevelsFunc func(adminUserID string) map[string]any
+	powerLevelsFunc func(adminUserID ref.UserID) map[string]any
 }
 
 // powerLevels returns the correct power level structure for this room.
-func (r standardRoom) powerLevels(adminUserID string) map[string]any {
+func (r standardRoom) powerLevels(adminUserID ref.UserID) map[string]any {
 	if r.powerLevelsFunc != nil {
 		return r.powerLevelsFunc(adminUserID)
 	}
@@ -343,7 +343,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 			result.FixHint = fmt.Sprintf("create %s", room.name)
 			result.fix = func(ctx context.Context, session messaging.Session) error {
 				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-					spaceRoomID, serverName, room.powerLevels(session.UserID().String()), logger)
+					spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
 				if err != nil {
 					return err
 				}
@@ -438,18 +438,18 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 5: Power levels.
-	adminUserIDString := session.UserID().String()
+	adminUserID := session.UserID()
 	if !spaceRoomID.IsZero() {
-		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserIDString,
-			nil, adminOnlyPowerLevels(adminUserIDString, nil))...)
+		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID,
+			nil, adminOnlyPowerLevels(adminUserID, nil))...)
 	}
 	for _, room := range standardRooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
 		}
-		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserIDString,
-			room.memberSettableEventTypes, room.powerLevels(adminUserIDString))...)
+		results = append(results, checkPowerLevels(ctx, session, room.name, roomID, adminUserID,
+			room.memberSettableEventTypes, room.powerLevels(adminUserID))...)
 	}
 
 	// Section 6: Join rules.
@@ -567,7 +567,7 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // event types at power level 0. The first failing sub-check gets a fix closure
 // that resets the entire power levels state to expectedPowerLevels; subsequent
 // sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID string, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
+func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID ref.UserID, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
 	var results []checkResult
 
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
@@ -599,7 +599,7 @@ func checkPowerLevels(ctx context.Context, session messaging.Session, name strin
 	}
 
 	// Check admin user power level.
-	adminLevel := getUserPowerLevel(powerLevels, adminUserID)
+	adminLevel := getUserPowerLevel(powerLevels, adminUserID.String())
 	if adminLevel == 100 {
 		results = append(results, pass(name+" admin power", fmt.Sprintf("%s has power level 100", adminUserID)))
 	} else {

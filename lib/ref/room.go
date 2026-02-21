@@ -50,6 +50,16 @@ func ParseRoomID(raw string) (RoomID, error) {
 	return RoomID{id: raw}, nil
 }
 
+// MustParseRoomID is like ParseRoomID but panics on error. Use in
+// tests and static initialization where the input is known-valid.
+func MustParseRoomID(raw string) RoomID {
+	r, err := ParseRoomID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("ref.MustParseRoomID(%q): %v", raw, err))
+	}
+	return r
+}
+
 // String returns the full room ID string (e.g., "!abc123:bureau.local").
 func (r RoomID) String() string { return r.id }
 

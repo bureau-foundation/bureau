@@ -163,8 +163,9 @@ func TestWhoami(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Whoami: %v", err)
 	}
-	if userID != "@agent/test:test.local" {
-		t.Errorf("UserID = %q, want @agent/test:test.local", userID)
+	expected := ref.MustParseUserID("@agent/test:test.local")
+	if userID != expected {
+		t.Errorf("UserID = %s, want %s", userID, expected)
 	}
 }
 
@@ -235,8 +236,9 @@ func TestResolveAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAlias: %v", err)
 	}
-	if roomID != "!config:test" {
-		t.Errorf("RoomID = %q, want !config:test", roomID)
+	expectedRoomID := ref.MustParseRoomID("!config:test")
+	if roomID != expectedRoomID {
+		t.Errorf("RoomID = %s, want %s", roomID, expectedRoomID)
 	}
 
 	_, err = client.ResolveAlias(context.Background(), "#nonexistent:test.local")
@@ -261,7 +263,7 @@ func TestGetState(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	content, err := client.GetState(context.Background(), "!room:test", "m.bureau.template", "base")
+	content, err := client.GetState(context.Background(), ref.MustParseRoomID("!room:test"), "m.bureau.template", "base")
 	if err != nil {
 		t.Fatalf("GetState: %v", err)
 	}
@@ -284,7 +286,7 @@ func TestPutState(t *testing.T) {
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if body.Room != "!room:test" || body.EventType != "m.bureau.test" {
+		if body.Room.String() != "!room:test" || body.EventType != "m.bureau.test" {
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -294,7 +296,7 @@ func TestPutState(t *testing.T) {
 
 	client := testServer(t, mux)
 	eventID, err := client.PutState(context.Background(), PutStateRequest{
-		Room:      "!room:test",
+		Room:      ref.MustParseRoomID("!room:test"),
 		EventType: "m.bureau.test",
 		StateKey:  "key",
 		Content:   map[string]string{"value": "test"},
@@ -326,7 +328,7 @@ func TestSendMessage(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	eventID, err := client.SendTextMessage(context.Background(), "!room:test", "hello")
+	eventID, err := client.SendTextMessage(context.Background(), ref.MustParseRoomID("!room:test"), "hello")
 	if err != nil {
 		t.Fatalf("SendTextMessage: %v", err)
 	}
@@ -488,8 +490,9 @@ func TestJoinedRooms(t *testing.T) {
 	if len(rooms) != 2 {
 		t.Fatalf("got %d rooms, want 2", len(rooms))
 	}
-	if rooms[0] != "!room1:test.local" {
-		t.Errorf("rooms[0] = %q, want !room1:test.local", rooms[0])
+	expectedRoom := ref.MustParseRoomID("!room1:test.local")
+	if rooms[0] != expectedRoom {
+		t.Errorf("rooms[0] = %s, want %s", rooms[0], expectedRoom)
 	}
 }
 
@@ -508,7 +511,7 @@ func TestGetRoomState(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	events, err := client.GetRoomState(context.Background(), "!room1:test.local")
+	events, err := client.GetRoomState(context.Background(), ref.MustParseRoomID("!room1:test.local"))
 	if err != nil {
 		t.Fatalf("GetRoomState: %v", err)
 	}
@@ -535,7 +538,7 @@ func TestGetRoomMembers(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	members, err := client.GetRoomMembers(context.Background(), "!room1:test.local")
+	members, err := client.GetRoomMembers(context.Background(), ref.MustParseRoomID("!room1:test.local"))
 	if err != nil {
 		t.Fatalf("GetRoomMembers: %v", err)
 	}
@@ -568,7 +571,7 @@ func TestRoomMessages(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	response, err := client.RoomMessages(context.Background(), "!room1:test.local", messaging.RoomMessagesOptions{
+	response, err := client.RoomMessages(context.Background(), ref.MustParseRoomID("!room1:test.local"), messaging.RoomMessagesOptions{
 		Direction: "b",
 		Limit:     10,
 	})
@@ -602,7 +605,7 @@ func TestThreadMessages(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	response, err := client.ThreadMessages(context.Background(), "!room1:test.local", "$root", messaging.ThreadMessagesOptions{
+	response, err := client.ThreadMessages(context.Background(), ref.MustParseRoomID("!room1:test.local"), "$root", messaging.ThreadMessagesOptions{
 		Limit: 25,
 	})
 	if err != nil {
@@ -631,7 +634,7 @@ func TestGetDisplayName(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	displayName, err := client.GetDisplayName(context.Background(), "@agent/test:test.local")
+	displayName, err := client.GetDisplayName(context.Background(), ref.MustParseUserID("@agent/test:test.local"))
 	if err != nil {
 		t.Fatalf("GetDisplayName: %v", err)
 	}
@@ -650,7 +653,7 @@ func TestGetDisplayNameNotFound(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	_, err := client.GetDisplayName(context.Background(), "@nonexistent:test.local")
+	_, err := client.GetDisplayName(context.Background(), ref.MustParseUserID("@nonexistent:test.local"))
 	if err == nil {
 		t.Fatal("expected error for 404 response")
 	}
@@ -699,12 +702,13 @@ func TestJoinRoom(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	roomID, err := client.JoinRoom(context.Background(), "!target:test.local")
+	expectedJoinID := ref.MustParseRoomID("!target:test.local")
+	roomID, err := client.JoinRoom(context.Background(), expectedJoinID)
 	if err != nil {
 		t.Fatalf("JoinRoom: %v", err)
 	}
-	if roomID != "!target:test.local" {
-		t.Errorf("RoomID = %q, want !target:test.local", roomID)
+	if roomID != expectedJoinID {
+		t.Errorf("RoomID = %s, want %s", roomID, expectedJoinID)
 	}
 }
 
@@ -730,7 +734,7 @@ func TestInviteUser(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	err := client.InviteUser(context.Background(), "!room1:test.local", "@other:test.local")
+	err := client.InviteUser(context.Background(), ref.MustParseRoomID("!room1:test.local"), ref.MustParseUserID("@other:test.local"))
 	if err != nil {
 		t.Fatalf("InviteUser: %v", err)
 	}
@@ -759,7 +763,7 @@ func TestSendEvent(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	eventID, err := client.SendEvent(context.Background(), "!room1:test.local", "m.bureau.test", map[string]string{"key": "value"})
+	eventID, err := client.SendEvent(context.Background(), ref.MustParseRoomID("!room1:test.local"), "m.bureau.test", map[string]string{"key": "value"})
 	if err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}

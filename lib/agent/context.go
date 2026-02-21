@@ -63,13 +63,9 @@ func BuildContext(ctx context.Context, proxy *proxyclient.Client, machine ref.Ma
 	payload := readPayload()
 
 	configRoomAlias := machine.RoomAlias()
-	configRoomIDString, err := proxy.ResolveAlias(ctx, configRoomAlias)
+	configRoomID, err := proxy.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config room %q: %w", configRoomAlias, err)
-	}
-	configRoomID, err := ref.ParseRoomID(configRoomIDString)
-	if err != nil {
-		return nil, fmt.Errorf("proxy returned invalid room ID %q for alias %q: %w", configRoomIDString, configRoomAlias, err)
 	}
 
 	return &AgentContext{

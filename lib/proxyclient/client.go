@@ -20,9 +20,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -147,27 +147,31 @@ func (client *Client) Services(ctx context.Context) ([]ServiceEntry, error) {
 }
 
 // Whoami returns the principal's full Matrix user ID.
-func (client *Client) Whoami(ctx context.Context) (string, error) {
+func (client *Client) Whoami(ctx context.Context) (ref.UserID, error) {
 	response, err := client.get(ctx, "/v1/matrix/whoami")
 	if err != nil {
-		return "", fmt.Errorf("whoami: %w", err)
+		return ref.UserID{}, fmt.Errorf("whoami: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("whoami: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return ref.UserID{}, fmt.Errorf("whoami: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
 		UserID string `json:"user_id"`
 	}
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
-		return "", fmt.Errorf("whoami: %w", err)
+		return ref.UserID{}, fmt.Errorf("whoami: %w", err)
 	}
 	if result.UserID == "" {
-		return "", fmt.Errorf("whoami: empty user_id in response")
+		return ref.UserID{}, fmt.Errorf("whoami: empty user_id in response")
 	}
-	return result.UserID, nil
+	userID, err := ref.ParseUserID(result.UserID)
+	if err != nil {
+		return ref.UserID{}, fmt.Errorf("whoami: invalid user_id %q: %w", result.UserID, err)
+	}
+	return userID, nil
 }
 
 // WhoamiServerName calls Whoami and extracts the server name from the
@@ -178,11 +182,7 @@ func (client *Client) WhoamiServerName(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	parts := strings.SplitN(userID, ":", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("whoami: user_id %q has no server component", userID)
-	}
-	return parts[1], nil
+	return userID.Server(), nil
 }
 
 // DiscoverServerName calls WhoamiServerName and stores the result so
@@ -199,40 +199,44 @@ func (client *Client) DiscoverServerName(ctx context.Context) (string, error) {
 }
 
 // ResolveAlias resolves a Matrix room alias to a room ID.
-func (client *Client) ResolveAlias(ctx context.Context, alias string) (string, error) {
+func (client *Client) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
 	response, err := client.get(ctx, "/v1/matrix/resolve?alias="+url.QueryEscape(alias))
 	if err != nil {
-		return "", fmt.Errorf("resolve alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %q: %w", alias, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolve alias %q: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
+		return ref.RoomID{}, fmt.Errorf("resolve alias %q: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
 		RoomID string `json:"room_id"`
 	}
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
-		return "", fmt.Errorf("resolve alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %q: %w", alias, err)
 	}
 	if result.RoomID == "" {
-		return "", fmt.Errorf("resolve alias %q: empty room_id in response", alias)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %q: empty room_id in response", alias)
 	}
-	return result.RoomID, nil
+	roomID, err := ref.ParseRoomID(result.RoomID)
+	if err != nil {
+		return ref.RoomID{}, fmt.Errorf("resolve alias %q: invalid room_id %q: %w", alias, result.RoomID, err)
+	}
+	return roomID, nil
 }
 
 // GetState retrieves a state event from a Matrix room. Returns the
 // event content as raw JSON.
-func (client *Client) GetState(ctx context.Context, room, eventType, stateKey string) (json.RawMessage, error) {
+func (client *Client) GetState(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
 	query := url.Values{
-		"room": {room},
+		"room": {roomID.String()},
 		"type": {eventType},
 		"key":  {stateKey},
 	}
 	response, err := client.get(ctx, "/v1/matrix/state?"+query.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("get state %s/%s in %s: %w", eventType, stateKey, room, err)
+		return nil, fmt.Errorf("get state %s/%s in %s: %w", eventType, stateKey, roomID, err)
 	}
 	defer response.Body.Close()
 
@@ -242,7 +246,7 @@ func (client *Client) GetState(ctx context.Context, room, eventType, stateKey st
 	}
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get state %s/%s in %s: HTTP %d: %s", eventType, stateKey, room, response.StatusCode, body)
+		return nil, fmt.Errorf("get state %s/%s in %s: HTTP %d: %s", eventType, stateKey, roomID, response.StatusCode, body)
 	}
 
 	return json.RawMessage(body), nil
@@ -250,10 +254,10 @@ func (client *Client) GetState(ctx context.Context, room, eventType, stateKey st
 
 // PutStateRequest is the JSON body for POST /v1/matrix/state.
 type PutStateRequest struct {
-	Room      string `json:"room"`
-	EventType string `json:"event_type"`
-	StateKey  string `json:"state_key"`
-	Content   any    `json:"content"`
+	Room      ref.RoomID `json:"room"`
+	EventType string     `json:"event_type"`
+	StateKey  string     `json:"state_key"`
+	Content   any        `json:"content"`
 }
 
 // PutState publishes a state event to a Matrix room. Returns the event ID.
@@ -279,24 +283,24 @@ func (client *Client) PutState(ctx context.Context, request PutStateRequest) (st
 }
 
 // SendMessage sends a message to a Matrix room. Returns the event ID.
-func (client *Client) SendMessage(ctx context.Context, room string, content any) (string, error) {
+func (client *Client) SendMessage(ctx context.Context, roomID ref.RoomID, content any) (string, error) {
 	request := struct {
-		Room    string `json:"room"`
-		Content any    `json:"content"`
+		Room    ref.RoomID `json:"room"`
+		Content any        `json:"content"`
 	}{
-		Room:    room,
+		Room:    roomID,
 		Content: content,
 	}
 
 	response, err := client.post(ctx, "/v1/matrix/message", request)
 	if err != nil {
-		return "", fmt.Errorf("send message to %s: %w", room, err)
+		return "", fmt.Errorf("send message to %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("send message to %s: HTTP %d: %s", room, response.StatusCode, body)
+		return "", fmt.Errorf("send message to %s: HTTP %d: %s", roomID, response.StatusCode, body)
 	}
 
 	var result struct {
@@ -309,15 +313,15 @@ func (client *Client) SendMessage(ctx context.Context, room string, content any)
 }
 
 // SendTextMessage is a convenience wrapper for plain text messages.
-func (client *Client) SendTextMessage(ctx context.Context, room, text string) (string, error) {
-	return client.SendMessage(ctx, room, map[string]string{
+func (client *Client) SendTextMessage(ctx context.Context, roomID ref.RoomID, text string) (string, error) {
+	return client.SendMessage(ctx, roomID, map[string]string{
 		"msgtype": "m.text",
 		"body":    text,
 	})
 }
 
 // JoinedRooms returns the list of room IDs the principal has joined.
-func (client *Client) JoinedRooms(ctx context.Context) ([]string, error) {
+func (client *Client) JoinedRooms(ctx context.Context) ([]ref.RoomID, error) {
 	response, err := client.get(ctx, "/v1/matrix/joined-rooms")
 	if err != nil {
 		return nil, fmt.Errorf("joined rooms: %w", err)
@@ -334,38 +338,45 @@ func (client *Client) JoinedRooms(ctx context.Context) ([]string, error) {
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
 		return nil, fmt.Errorf("joined rooms: %w", err)
 	}
-	return result.JoinedRooms, nil
+	roomIDs := make([]ref.RoomID, len(result.JoinedRooms))
+	for index, raw := range result.JoinedRooms {
+		roomIDs[index], err = ref.ParseRoomID(raw)
+		if err != nil {
+			return nil, fmt.Errorf("joined rooms: invalid room_id %q: %w", raw, err)
+		}
+	}
+	return roomIDs, nil
 }
 
 // GetRoomState returns all current state events from a room.
-func (client *Client) GetRoomState(ctx context.Context, room string) ([]messaging.Event, error) {
-	response, err := client.get(ctx, "/v1/matrix/room-state?room="+url.QueryEscape(room))
+func (client *Client) GetRoomState(ctx context.Context, roomID ref.RoomID) ([]messaging.Event, error) {
+	response, err := client.get(ctx, "/v1/matrix/room-state?room="+url.QueryEscape(roomID.String()))
 	if err != nil {
-		return nil, fmt.Errorf("get room state for %s: %w", room, err)
+		return nil, fmt.Errorf("get room state for %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get room state for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, fmt.Errorf("get room state for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var events []messaging.Event
 	if err := netutil.DecodeResponse(response.Body, &events); err != nil {
-		return nil, fmt.Errorf("get room state for %s: %w", room, err)
+		return nil, fmt.Errorf("get room state for %s: %w", roomID, err)
 	}
 	return events, nil
 }
 
 // GetRoomMembers returns the members of a room.
-func (client *Client) GetRoomMembers(ctx context.Context, room string) ([]messaging.RoomMember, error) {
-	response, err := client.get(ctx, "/v1/matrix/room-members?room="+url.QueryEscape(room))
+func (client *Client) GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]messaging.RoomMember, error) {
+	response, err := client.get(ctx, "/v1/matrix/room-members?room="+url.QueryEscape(roomID.String()))
 	if err != nil {
-		return nil, fmt.Errorf("get room members for %s: %w", room, err)
+		return nil, fmt.Errorf("get room members for %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get room members for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, fmt.Errorf("get room members for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	// The proxy forwards the homeserver's /members response, which contains
@@ -373,7 +384,7 @@ func (client *Client) GetRoomMembers(ctx context.Context, room string) ([]messag
 	// messaging.Session.GetRoomMembers returns.
 	var membersResponse messaging.RoomMembersResponse
 	if err := netutil.DecodeResponse(response.Body, &membersResponse); err != nil {
-		return nil, fmt.Errorf("get room members for %s: %w", room, err)
+		return nil, fmt.Errorf("get room members for %s: %w", roomID, err)
 	}
 
 	members := make([]messaging.RoomMember, len(membersResponse.Chunk))
@@ -389,8 +400,8 @@ func (client *Client) GetRoomMembers(ctx context.Context, room string) ([]messag
 }
 
 // RoomMessages fetches paginated messages from a room.
-func (client *Client) RoomMessages(ctx context.Context, room string, options messaging.RoomMessagesOptions) (*messaging.RoomMessagesResponse, error) {
-	query := url.Values{"room": {room}}
+func (client *Client) RoomMessages(ctx context.Context, roomID ref.RoomID, options messaging.RoomMessagesOptions) (*messaging.RoomMessagesResponse, error) {
+	query := url.Values{"room": {roomID.String()}}
 	if options.From != "" {
 		query.Set("from", options.From)
 	}
@@ -405,25 +416,25 @@ func (client *Client) RoomMessages(ctx context.Context, room string, options mes
 
 	response, err := client.get(ctx, "/v1/matrix/messages?"+query.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("room messages for %s: %w", room, err)
+		return nil, fmt.Errorf("room messages for %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("room messages for %s: HTTP %d: %s", room, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, fmt.Errorf("room messages for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result messaging.RoomMessagesResponse
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
-		return nil, fmt.Errorf("room messages for %s: %w", room, err)
+		return nil, fmt.Errorf("room messages for %s: %w", roomID, err)
 	}
 	return &result, nil
 }
 
 // ThreadMessages fetches messages in a thread.
-func (client *Client) ThreadMessages(ctx context.Context, room, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
+func (client *Client) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
 	query := url.Values{
-		"room":   {room},
+		"room":   {roomID.String()},
 		"thread": {threadRootID},
 	}
 	if options.From != "" {
@@ -435,24 +446,24 @@ func (client *Client) ThreadMessages(ctx context.Context, room, threadRootID str
 
 	response, err := client.get(ctx, "/v1/matrix/thread-messages?"+query.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, room, err)
+		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, roomID, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("thread messages for %s in %s: HTTP %d: %s", threadRootID, room, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, fmt.Errorf("thread messages for %s in %s: HTTP %d: %s", threadRootID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result messaging.ThreadMessagesResponse
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
-		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, room, err)
+		return nil, fmt.Errorf("thread messages for %s in %s: %w", threadRootID, roomID, err)
 	}
 	return &result, nil
 }
 
 // GetDisplayName fetches a user's display name.
-func (client *Client) GetDisplayName(ctx context.Context, userID string) (string, error) {
-	response, err := client.get(ctx, "/v1/matrix/display-name?user="+url.QueryEscape(userID))
+func (client *Client) GetDisplayName(ctx context.Context, userID ref.UserID) (string, error) {
+	response, err := client.get(ctx, "/v1/matrix/display-name?user="+url.QueryEscape(userID.String()))
 	if err != nil {
 		return "", fmt.Errorf("get display name for %s: %w", userID, err)
 	}
@@ -489,62 +500,66 @@ func (client *Client) CreateRoom(ctx context.Context, request messaging.CreateRo
 	return &result, nil
 }
 
-// JoinRoom joins a room by ID or alias. Returns the room ID.
-func (client *Client) JoinRoom(ctx context.Context, roomIDOrAlias string) (string, error) {
+// JoinRoom joins a room by ID. Returns the room ID.
+func (client *Client) JoinRoom(ctx context.Context, roomID ref.RoomID) (ref.RoomID, error) {
 	response, err := client.post(ctx, "/v1/matrix/join", struct {
-		Room string `json:"room"`
-	}{Room: roomIDOrAlias})
+		Room ref.RoomID `json:"room"`
+	}{Room: roomID})
 	if err != nil {
-		return "", fmt.Errorf("join room %q: %w", roomIDOrAlias, err)
+		return ref.RoomID{}, fmt.Errorf("join room %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("join room %q: HTTP %d: %s", roomIDOrAlias, response.StatusCode, body)
+		return ref.RoomID{}, fmt.Errorf("join room %s: HTTP %d: %s", roomID, response.StatusCode, body)
 	}
 
 	var result struct {
 		RoomID string `json:"room_id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("join room: parsing response: %w", err)
+		return ref.RoomID{}, fmt.Errorf("join room: parsing response: %w", err)
 	}
-	return result.RoomID, nil
+	joined, err := ref.ParseRoomID(result.RoomID)
+	if err != nil {
+		return ref.RoomID{}, fmt.Errorf("join room: invalid room_id %q: %w", result.RoomID, err)
+	}
+	return joined, nil
 }
 
 // InviteUser invites a user to a room.
-func (client *Client) InviteUser(ctx context.Context, roomID, userID string) error {
+func (client *Client) InviteUser(ctx context.Context, roomID ref.RoomID, userID ref.UserID) error {
 	response, err := client.post(ctx, "/v1/matrix/invite", struct {
-		Room   string `json:"room"`
-		UserID string `json:"user_id"`
+		Room   ref.RoomID `json:"room"`
+		UserID ref.UserID `json:"user_id"`
 	}{Room: roomID, UserID: userID})
 	if err != nil {
-		return fmt.Errorf("invite %q to %q: %w", userID, roomID, err)
+		return fmt.Errorf("invite %s to %s: %w", userID, roomID, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("invite %q to %q: HTTP %d: %s", userID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return fmt.Errorf("invite %s to %s: HTTP %d: %s", userID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 	return nil
 }
 
 // SendEvent sends an event of any type to a room. Returns the event ID.
-func (client *Client) SendEvent(ctx context.Context, room, eventType string, content any) (string, error) {
+func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
 	response, err := client.post(ctx, "/v1/matrix/event", struct {
-		Room      string `json:"room"`
-		EventType string `json:"event_type"`
-		Content   any    `json:"content"`
-	}{Room: room, EventType: eventType, Content: content})
+		Room      ref.RoomID `json:"room"`
+		EventType string     `json:"event_type"`
+		Content   any        `json:"content"`
+	}{Room: roomID, EventType: eventType, Content: content})
 	if err != nil {
-		return "", fmt.Errorf("send event %s to %s: %w", eventType, room, err)
+		return "", fmt.Errorf("send event %s to %s: %w", eventType, roomID, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, room, response.StatusCode, body)
+		return "", fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, roomID, response.StatusCode, body)
 	}
 
 	var result struct {

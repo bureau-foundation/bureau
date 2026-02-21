@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -627,7 +628,7 @@ func (b *testLogBuffer) contains(substring string) bool {
 }
 
 // makeEvent constructs a messaging.Event for testing.
-func makeEvent(eventType, stateKey string, content map[string]any) messaging.Event {
+func makeEvent(eventType ref.EventType, stateKey string, content map[string]any) messaging.Event {
 	return messaging.Event{
 		Type:     eventType,
 		StateKey: &stateKey,

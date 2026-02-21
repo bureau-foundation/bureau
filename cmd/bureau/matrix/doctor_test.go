@@ -270,7 +270,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			var chunk []messaging.RoomMemberEvent
 			for _, userID := range memberUserIDs {
 				chunk = append(chunk, messaging.RoomMemberEvent{
-					Type:     schema.MatrixEventTypeRoomMember,
+					Type:     schema.MatrixEventTypeRoomMember.String(),
 					StateKey: userID,
 					Content:  messaging.RoomMemberContent{Membership: "join"},
 				})
@@ -330,14 +330,14 @@ func powerLevelsForRoom(adminUserID ref.UserID, roomID, systemID, pipelineID, ar
 	}
 
 	events := map[string]any{
-		schema.MatrixEventTypeRoomName:    100,
-		schema.MatrixEventTypeRoomTopic:   100,
-		schema.MatrixEventTypePowerLevels: 100,
-		schema.MatrixEventTypeSpaceChild:  100,
+		schema.MatrixEventTypeRoomName.String():    100,
+		schema.MatrixEventTypeRoomTopic.String():   100,
+		schema.MatrixEventTypePowerLevels.String(): 100,
+		schema.MatrixEventTypeSpaceChild.String():  100,
 	}
 
 	if roomID == systemID {
-		events[schema.EventTypeTokenSigningKey] = 0
+		events[schema.EventTypeTokenSigningKey.String()] = 0
 	}
 
 	return map[string]any{
@@ -674,7 +674,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	spaceChildCount := 0
 	for _, event := range stateEvents {
-		if event.eventType == schema.MatrixEventTypeSpaceChild {
+		if event.eventType == schema.MatrixEventTypeSpaceChild.String() {
 			spaceChildCount++
 		}
 	}
@@ -748,7 +748,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	joinRulesFound := false
 	for _, event := range stateEvents {
-		if event.eventType == schema.MatrixEventTypeJoinRules && event.roomID == "!system:local" {
+		if event.eventType == schema.MatrixEventTypeJoinRules.String() && event.roomID == "!system:local" {
 			joinRulesFound = true
 		}
 	}
@@ -811,7 +811,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	stateEvents := mock.getStateEvents()
 	powerLevelsFound := false
 	for _, event := range stateEvents {
-		if event.eventType == schema.MatrixEventTypePowerLevels && event.roomID == "!system:local" {
+		if event.eventType == schema.MatrixEventTypePowerLevels.String() && event.roomID == "!system:local" {
 			powerLevelsFound = true
 		}
 	}
@@ -1068,7 +1068,7 @@ func TestGetUserPowerLevel(t *testing.T) {
 
 func TestGetStateEventPowerLevel(t *testing.T) {
 	powerLevels := map[string]any{
-		"events":         map[string]any{schema.MatrixEventTypeRoomName: float64(100), schema.EventTypeMachineKey: float64(0)},
+		"events":         map[string]any{schema.MatrixEventTypeRoomName.String(): float64(100), schema.EventTypeMachineKey.String(): float64(0)},
 		"events_default": float64(50),
 		"state_default":  float64(75),
 	}
@@ -1077,8 +1077,8 @@ func TestGetStateEventPowerLevel(t *testing.T) {
 		eventType string
 		expected  float64
 	}{
-		{schema.MatrixEventTypeRoomName, 100},
-		{schema.EventTypeMachineKey, 0},
+		{schema.MatrixEventTypeRoomName.String(), 100},
+		{schema.EventTypeMachineKey.String(), 0},
 		// Unlisted state events fall back to state_default (75), not
 		// events_default (50). The Matrix spec requires this: state events
 		// not in the events map use state_default.

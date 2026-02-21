@@ -228,10 +228,10 @@ func (client *Client) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (re
 
 // GetState retrieves a state event from a Matrix room. Returns the
 // event content as raw JSON.
-func (client *Client) GetState(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+func (client *Client) GetState(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 	query := url.Values{
 		"room": {roomID.String()},
-		"type": {eventType},
+		"type": {eventType.String()},
 		"key":  {stateKey},
 	}
 	response, err := client.get(ctx, "/v1/matrix/state?"+query.Encode())
@@ -254,10 +254,10 @@ func (client *Client) GetState(ctx context.Context, roomID ref.RoomID, eventType
 
 // PutStateRequest is the JSON body for POST /v1/matrix/state.
 type PutStateRequest struct {
-	Room      ref.RoomID `json:"room"`
-	EventType string     `json:"event_type"`
-	StateKey  string     `json:"state_key"`
-	Content   any        `json:"content"`
+	Room      ref.RoomID    `json:"room"`
+	EventType ref.EventType `json:"event_type"`
+	StateKey  string        `json:"state_key"`
+	Content   any           `json:"content"`
 }
 
 // PutState publishes a state event to a Matrix room. Returns the event ID.
@@ -546,11 +546,11 @@ func (client *Client) InviteUser(ctx context.Context, roomID ref.RoomID, userID 
 }
 
 // SendEvent sends an event of any type to a room. Returns the event ID.
-func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
+func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
 	response, err := client.post(ctx, "/v1/matrix/event", struct {
-		Room      ref.RoomID `json:"room"`
-		EventType string     `json:"event_type"`
-		Content   any        `json:"content"`
+		Room      ref.RoomID    `json:"room"`
+		EventType ref.EventType `json:"event_type"`
+		Content   any           `json:"content"`
 	}{Room: roomID, EventType: eventType, Content: content})
 	if err != nil {
 		return "", fmt.Errorf("send event %s to %s: %w", eventType, roomID, err)

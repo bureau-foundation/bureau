@@ -21,7 +21,7 @@ const (
 	//
 	// State key: service localpart (e.g., "service/stt/whisper")
 	// Room: #bureau/fleet:<server>
-	EventTypeFleetService = "m.bureau.fleet_service"
+	EventTypeFleetService ref.EventType = "m.bureau.fleet_service"
 
 	// EventTypeMachineDefinition defines a provisionable machine or
 	// machine pool. The fleet controller reads these to determine what
@@ -32,14 +32,14 @@ const (
 	// State key: pool name or machine localpart (e.g., "gpu-cloud-pool"
 	// or "machine/spare-workstation")
 	// Room: #bureau/fleet:<server>
-	EventTypeMachineDefinition = "m.bureau.machine_definition"
+	EventTypeMachineDefinition ref.EventType = "m.bureau.machine_definition"
 
 	// EventTypeFleetConfig defines global settings for a fleet controller.
 	// Each fleet controller has its own config keyed by its localpart.
 	//
 	// State key: fleet controller localpart (e.g., "service/fleet/prod")
 	// Room: #bureau/fleet:<server>
-	EventTypeFleetConfig = "m.bureau.fleet_config"
+	EventTypeFleetConfig ref.EventType = "m.bureau.fleet_config"
 
 	// EventTypeHALease represents a lease held by a machine for hosting
 	// a critical service. Daemons compete to acquire this lease when the
@@ -48,7 +48,7 @@ const (
 	//
 	// State key: service localpart (e.g., "service/fleet/prod")
 	// Room: #bureau/fleet:<server>
-	EventTypeHALease = "m.bureau.ha_lease"
+	EventTypeHALease ref.EventType = "m.bureau.ha_lease"
 
 	// EventTypeServiceStatus contains application-level metrics published
 	// by a service through its proxy. The fleet controller uses these for
@@ -56,7 +56,7 @@ const (
 	//
 	// State key: service localpart
 	// Room: #bureau/service:<server>
-	EventTypeServiceStatus = "m.bureau.service_status"
+	EventTypeServiceStatus ref.EventType = "m.bureau.service_status"
 
 	// EventTypeFleetAlert is published by the fleet controller for events
 	// requiring attention: failover alerts, rebalancing proposals, capacity
@@ -65,7 +65,7 @@ const (
 	//
 	// State key: alert ID (unique per alert)
 	// Room: #bureau/fleet:<server>
-	EventTypeFleetAlert = "m.bureau.fleet_alert"
+	EventTypeFleetAlert ref.EventType = "m.bureau.fleet_alert"
 )
 
 // Fleet controller notification msgtype constants. These are posted as
@@ -682,7 +682,7 @@ type ProposedAction struct {
 // signaling. Administrative room events remain locked to admin (PL 100).
 func MachineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
-	for _, eventType := range []string{
+	for _, eventType := range []ref.EventType{
 		EventTypeMachineKey,
 		EventTypeMachineInfo,
 		EventTypeMachineStatus,
@@ -740,7 +740,7 @@ func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 // levels) remain locked to admin (PL 100).
 func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
-	for _, eventType := range []string{
+	for _, eventType := range []ref.EventType{
 		EventTypeFleetService,
 		EventTypeMachineDefinition,
 		EventTypeFleetConfig,

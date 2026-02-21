@@ -94,7 +94,7 @@ func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]S
 // pollSignals fetches room state and returns signal messages matching the
 // given event type whose state keys pass the matcher. The matcher extracts
 // the peer localpart from each state key.
-func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart, eventType string, match signalKeyMatcher) ([]SignalMessage, error) {
+func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart string, eventType ref.EventType, match signalKeyMatcher) ([]SignalMessage, error) {
 	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching room state: %w", err)

@@ -232,12 +232,12 @@ func skip(name, message string) checkResult {
 
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
 type standardRoom struct {
-	alias                    string   // local alias (e.g., "bureau/system")
-	displayName              string   // room name for CreateRoom (e.g., "Bureau Machine")
-	topic                    string   // room topic for CreateRoom
-	name                     string   // human name for check output
-	credentialKey            string   // key in credential file (e.g., "MATRIX_SYSTEM_ROOM")
-	memberSettableEventTypes []string // event types that members should be able to set
+	alias                    string          // local alias (e.g., "bureau/system")
+	displayName              string          // room name for CreateRoom (e.g., "Bureau Machine")
+	topic                    string          // room topic for CreateRoom
+	name                     string          // human name for check output
+	credentialKey            string          // key in credential file (e.g., "MATRIX_SYSTEM_ROOM")
+	memberSettableEventTypes []ref.EventType // event types that members should be able to set
 
 	// powerLevelsFunc overrides the default power level generation. When
 	// nil, powerLevels() returns adminOnlyPowerLevels with the room's
@@ -261,7 +261,7 @@ var standardRooms = []standardRoom{
 		topic:         "Operational messages",
 		name:          "system room",
 		credentialKey: "MATRIX_SYSTEM_ROOM",
-		memberSettableEventTypes: []string{
+		memberSettableEventTypes: []ref.EventType{
 			schema.EventTypeTokenSigningKey,
 		},
 	},
@@ -572,7 +572,7 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // event types at power level 0. The first failing sub-check gets a fix closure
 // that resets the entire power levels state to expectedPowerLevels; subsequent
 // sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID ref.UserID, memberSettableEventTypes []string, expectedPowerLevels map[string]any) []checkResult {
+func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID ref.UserID, memberSettableEventTypes []ref.EventType, expectedPowerLevels map[string]any) []checkResult {
 	var results []checkResult
 
 	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
@@ -625,11 +625,12 @@ func checkPowerLevels(ctx context.Context, session messaging.Session, name strin
 
 	// Check that each member-settable event type is at power level 0.
 	for _, eventType := range memberSettableEventTypes {
-		level := getStateEventPowerLevel(powerLevels, eventType)
+		eventTypeString := eventType.String()
+		level := getStateEventPowerLevel(powerLevels, eventTypeString)
 		if level == 0 {
-			results = append(results, pass(name+" "+eventType, fmt.Sprintf("members can set %s (level 0)", eventType)))
+			results = append(results, pass(name+" "+eventTypeString, fmt.Sprintf("members can set %s (level 0)", eventType)))
 		} else {
-			result := fail(name+" "+eventType, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level))
+			result := fail(name+" "+eventTypeString, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level))
 			attachFix(&result)
 			results = append(results, result)
 		}
@@ -818,10 +819,10 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 // in a Matrix room. Used by checkPublishedStateEvents to verify presence
 // and offer a fix action if missing.
 type stateEventItem struct {
-	label     string // human-readable label (e.g., "template", "pipeline")
-	name      string // state key
-	eventType string // Matrix event type
-	content   any    // value to publish on fix
+	label     string        // human-readable label (e.g., "template", "pipeline")
+	name      string        // state key
+	eventType ref.EventType // Matrix event type
+	content   any           // value to publish on fix
 }
 
 // checkPublishedStateEvents verifies that each item in the list is present

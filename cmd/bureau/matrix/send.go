@@ -106,7 +106,7 @@ Bureau protocol events).`,
 				// Custom event type: send raw content. The message body is
 				// expected to be JSON, but we send it as a text message
 				// content structure for consistency.
-				eventID, err = matrixSession.SendEvent(ctx, roomID, params.EventType, messaging.NewTextMessage(messageBody))
+				eventID, err = matrixSession.SendEvent(ctx, roomID, ref.EventType(params.EventType), messaging.NewTextMessage(messageBody))
 			} else if params.ThreadID != "" {
 				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(params.ThreadID, messageBody))
 			} else {

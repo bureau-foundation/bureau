@@ -3,7 +3,11 @@
 
 package schema
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 func TestEventTypeConstants(t *testing.T) {
 	// Verify the event type strings match the Matrix convention (m.bureau.*).
@@ -11,7 +15,7 @@ func TestEventTypeConstants(t *testing.T) {
 	// coordinated migration.
 	tests := []struct {
 		name     string
-		constant string
+		constant ref.EventType
 		want     string
 	}{
 		{"machine_key", EventTypeMachineKey, "m.bureau.machine_key"},
@@ -33,7 +37,7 @@ func TestEventTypeConstants(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.constant != test.want {
+			if string(test.constant) != test.want {
 				t.Errorf("%s = %q, want %q", test.name, test.constant, test.want)
 			}
 		})
@@ -46,7 +50,7 @@ func TestMatrixEventTypeConstants(t *testing.T) {
 	// identifiers defined by the Matrix protocol and must never change.
 	tests := []struct {
 		name     string
-		constant string
+		constant ref.EventType
 		want     string
 	}{
 		{"message", MatrixEventTypeMessage, "m.room.message"},
@@ -66,7 +70,7 @@ func TestMatrixEventTypeConstants(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if test.constant != test.want {
+			if string(test.constant) != test.want {
 				t.Errorf("%s = %q, want %q", test.name, test.constant, test.want)
 			}
 		})
@@ -91,7 +95,7 @@ func TestAdminProtectedEventsUsesConstants(t *testing.T) {
 	events := AdminProtectedEvents()
 
 	// Every entry should map to power level 100.
-	expectedTypes := []string{
+	expectedTypes := []ref.EventType{
 		MatrixEventTypeRoomAvatar,
 		MatrixEventTypeCanonicalAlias,
 		MatrixEventTypeEncryption,

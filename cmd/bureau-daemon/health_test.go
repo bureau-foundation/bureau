@@ -312,7 +312,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -521,7 +521,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -670,7 +670,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -826,7 +826,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -1100,7 +1100,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -1247,7 +1247,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -1373,7 +1373,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return

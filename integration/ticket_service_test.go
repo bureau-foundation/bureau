@@ -737,9 +737,9 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name 
 				ticketServiceUserID: 10,
 			},
 			"events": map[string]any{
-				schema.EventTypeTicket:       10,
-				schema.EventTypeTicketConfig: 100,
-				schema.EventTypeRoomService:  100,
+				string(schema.EventTypeTicket):       10,
+				string(schema.EventTypeTicketConfig): 100,
+				string(schema.EventTypeRoomService):  100,
 			},
 		},
 	})

@@ -147,7 +147,7 @@ func buildCommandEvent(eventID, sender, command, workspace, requestID string) me
 // pattern for m.room.message.
 func isSendMessagePath(path string) bool {
 	// Pattern: /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}
-	return strings.Contains(path, "/send/"+schema.MatrixEventTypeMessage+"/")
+	return strings.Contains(path, "/send/"+string(schema.MatrixEventTypeMessage)+"/")
 }
 
 // extractRoomIDFromSendPath extracts the room ID from a send event path.

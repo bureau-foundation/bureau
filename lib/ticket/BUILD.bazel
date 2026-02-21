@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/bm25",
+        "//lib/ref",
         "//lib/schema",
     ],
 )

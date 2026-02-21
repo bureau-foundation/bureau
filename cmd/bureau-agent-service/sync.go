@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -19,7 +20,7 @@ import (
 var syncFilter = buildSyncFilter()
 
 func buildSyncFilter() string {
-	stateEventTypes := []string{
+	stateEventTypes := []ref.EventType{
 		schema.EventTypeAgentSession,
 		schema.EventTypeAgentContext,
 		schema.EventTypeAgentMetrics,
@@ -27,7 +28,7 @@ func buildSyncFilter() string {
 
 	// Timeline includes the same state event types — state events
 	// appear as timeline events during incremental /sync.
-	timelineEventTypes := make([]string, len(stateEventTypes))
+	timelineEventTypes := make([]ref.EventType, len(stateEventTypes))
 	copy(timelineEventTypes, stateEventTypes)
 
 	emptyTypes := []string{}

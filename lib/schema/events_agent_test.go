@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // --- AgentSessionContent ---
@@ -664,13 +666,13 @@ func TestAgentEventTypeConstants(t *testing.T) {
 	// Verify event type constants use the m.bureau.* namespace.
 	for _, eventType := range []struct {
 		name     string
-		constant string
+		constant ref.EventType
 	}{
 		{"AgentSession", EventTypeAgentSession},
 		{"AgentContext", EventTypeAgentContext},
 		{"AgentMetrics", EventTypeAgentMetrics},
 	} {
-		if !strings.HasPrefix(eventType.constant, "m.bureau.") {
+		if !strings.HasPrefix(string(eventType.constant), "m.bureau.") {
 			t.Errorf("%s = %q, must start with m.bureau.", eventType.name, eventType.constant)
 		}
 	}

@@ -737,6 +737,6 @@ type fakeWriterForEchoTest struct {
 	nextEventID string
 }
 
-func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
+func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
 	return f.nextEventID, nil
 }

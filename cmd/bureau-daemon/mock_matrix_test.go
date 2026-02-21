@@ -70,7 +70,7 @@ type mockRoomMember struct {
 // The Content field uses map[string]any because that's what the messaging
 // library's Event type uses after JSON unmarshaling.
 type mockRoomStateEvent struct {
-	Type     string         `json:"type"`
+	Type     ref.EventType  `json:"type"`
 	StateKey *string        `json:"state_key"`
 	Content  map[string]any `json:"content"`
 }
@@ -105,11 +105,11 @@ func (m *mockMatrixState) addInvite(roomID string) {
 	m.invites[roomID] = true
 }
 
-func (m *mockMatrixState) setStateEvent(roomID, eventType, stateKey string, content any) {
+func (m *mockMatrixState) setStateEvent(roomID string, eventType ref.EventType, stateKey string, content any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	data, _ := json.Marshal(content)
-	key := roomID + "\x00" + eventType + "\x00" + stateKey
+	key := roomID + "\x00" + string(eventType) + "\x00" + stateKey
 	m.stateEvents[key] = data
 }
 

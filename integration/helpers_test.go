@@ -951,7 +951,7 @@ func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) 
 
 // WaitForStateEvent blocks until a state event with the given type and
 // state_key arrives in the watched room. Returns the raw JSON content.
-func (w *roomWatch) WaitForStateEvent(t *testing.T, eventType, stateKey string) json.RawMessage {
+func (w *roomWatch) WaitForStateEvent(t *testing.T, eventType ref.EventType, stateKey string) json.RawMessage {
 	t.Helper()
 	event := w.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != eventType {

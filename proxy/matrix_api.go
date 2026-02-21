@@ -54,7 +54,7 @@ type MatrixStateRequest struct {
 	Room string `json:"room"`
 
 	// EventType is the Matrix state event type (e.g., "m.bureau.pipeline").
-	EventType string `json:"event_type"`
+	EventType ref.EventType `json:"event_type"`
 
 	// StateKey is the state key for the event (e.g., "dev-workspace-init").
 	StateKey string `json:"state_key"`
@@ -332,7 +332,7 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/state/" + url.PathEscape(request.EventType) + "/" + url.PathEscape(request.StateKey)
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/state/" + url.PathEscape(request.EventType.String()) + "/" + url.PathEscape(request.StateKey)
 
 	h.logger.Info("matrix put state",
 		"room", roomID,
@@ -754,7 +754,7 @@ type MatrixSendEventRequest struct {
 	Room string `json:"room"`
 	// EventType is the Matrix event type (e.g., "m.room.message",
 	// "m.bureau.pipeline_request").
-	EventType string `json:"event_type"`
+	EventType ref.EventType `json:"event_type"`
 	// Content is the event content, forwarded as-is to the homeserver.
 	Content any `json:"content"`
 }
@@ -793,7 +793,7 @@ func (h *Handler) HandleMatrixSendEvent(w http.ResponseWriter, r *http.Request) 
 	}
 
 	transactionID := fmt.Sprintf("bureau_%d_%d", time.Now().UnixMilli(), matrixTransactionCounter.Add(1))
-	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/send/" + url.PathEscape(request.EventType) + "/" + url.PathEscape(transactionID)
+	path := "/_matrix/client/v3/rooms/" + url.PathEscape(roomID) + "/send/" + url.PathEscape(request.EventType.String()) + "/" + url.PathEscape(transactionID)
 
 	h.logger.Info("matrix send event",
 		"room", roomID,

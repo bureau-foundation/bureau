@@ -108,7 +108,7 @@ func stringPtr(s string) *string { return &s }
 func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 	filter := buildSyncFilter()
 
-	expectedTypes := []string{
+	expectedTypes := []ref.EventType{
 		schema.EventTypeFleetService,
 		schema.EventTypeMachineDefinition,
 		schema.EventTypeFleetConfig,
@@ -122,7 +122,7 @@ func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 	}
 
 	for _, eventType := range expectedTypes {
-		if !strings.Contains(filter, eventType) {
+		if !strings.Contains(filter, string(eventType)) {
 			t.Errorf("sync filter missing event type %q", eventType)
 		}
 	}

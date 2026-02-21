@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/bm25"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -166,7 +167,7 @@ type RankedEntry struct {
 type gateWatchKey struct {
 	// eventType is the Matrix event type the gate watches
 	// (e.g., EventTypePipelineResult, EventTypeTicket).
-	eventType string
+	eventType ref.EventType
 
 	// stateKey is the Matrix state key the gate watches. Empty means
 	// "match any state key for this event type" — used by pipeline
@@ -469,7 +470,7 @@ func (idx *Index) PendingGates() []Entry {
 //
 // The returned slice is a snapshot: modifying the index (via Put after
 // gate satisfaction) does not affect an in-progress iteration.
-func (idx *Index) WatchedGates(eventType, stateKey string) []GateWatch {
+func (idx *Index) WatchedGates(eventType ref.EventType, stateKey string) []GateWatch {
 	var result []GateWatch
 
 	// Exact match: gates watching for this specific (eventType, stateKey).

@@ -238,13 +238,14 @@ func buildInspectResult(ctx context.Context, session messaging.Session, roomID r
 				Content:  event.Content,
 			}
 
+			eventTypeString := event.Type.String()
 			switch {
-			case strings.HasPrefix(event.Type, "m.bureau."):
-				bureauGroups[event.Type] = append(bureauGroups[event.Type], entry)
-			case strings.HasPrefix(event.Type, "m."):
-				matrixGroups[event.Type] = append(matrixGroups[event.Type], entry)
+			case strings.HasPrefix(eventTypeString, "m.bureau."):
+				bureauGroups[eventTypeString] = append(bureauGroups[eventTypeString], entry)
+			case strings.HasPrefix(eventTypeString, "m."):
+				matrixGroups[eventTypeString] = append(matrixGroups[eventTypeString], entry)
 			default:
-				otherGroups[event.Type] = append(otherGroups[event.Type], entry)
+				otherGroups[eventTypeString] = append(otherGroups[eventTypeString], entry)
 			}
 		}
 	}

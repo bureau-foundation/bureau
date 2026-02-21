@@ -16,7 +16,7 @@ const (
 	//
 	// State key: "" (singleton per room)
 	// Room: any room (workspace rooms, project rooms, etc.)
-	EventTypeAuthorization = "m.bureau.authorization"
+	EventTypeAuthorization ref.EventType = "m.bureau.authorization"
 
 	// EventTypeTemporalGrant is a time-bounded grant added at runtime,
 	// typically through a ticket-backed access request workflow. The
@@ -25,7 +25,7 @@ const (
 	//
 	// State key: ticket reference or grant ID (e.g., "tkt-c4d1")
 	// Room: the principal's room
-	EventTypeTemporalGrant = "m.bureau.temporal_grant"
+	EventTypeTemporalGrant ref.EventType = "m.bureau.temporal_grant"
 
 	// EventTypeTokenSigningKey publishes the daemon's Ed25519 public
 	// key so that services can discover it for token verification. The
@@ -33,7 +33,7 @@ const (
 	//
 	// State key: full machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/system
-	EventTypeTokenSigningKey = "m.bureau.token_signing_key"
+	EventTypeTokenSigningKey ref.EventType = "m.bureau.token_signing_key"
 
 	// EventTypeAudit is a timeline event recording an authorization
 	// decision. Posted by the daemon to the per-machine config room
@@ -41,7 +41,7 @@ const (
 	// each decision is a distinct occurrence, not a replacement.
 	//
 	// Room: #<machine-localpart>:<server>
-	EventTypeAudit = "m.bureau.audit"
+	EventTypeAudit ref.EventType = "m.bureau.audit"
 )
 
 // Authorization source constants identify where a policy entry came from

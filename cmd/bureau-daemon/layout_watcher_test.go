@@ -140,7 +140,7 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 
 	// Verify the layout was published to the mock Matrix. The state key
 	// is the account localpart (entityType/entityName).
-	key := "!config:test\x00" + schema.EventTypeLayout + "\x00" + entity.AccountLocalpart()
+	key := "!config:test\x00" + string(schema.EventTypeLayout) + "\x00" + entity.AccountLocalpart()
 	matrixState.mu.Lock()
 	raw, ok := matrixState.stateEvents[key]
 	matrixState.mu.Unlock()

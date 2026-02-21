@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // StateCommand returns the "state" subcommand group for reading and writing
@@ -116,7 +117,7 @@ or machine ID as the state key.`,
 			}
 
 			// Specific event type with optional --key.
-			content, err := matrixSession.GetStateEvent(ctx, roomID, params.EventType, params.StateKey)
+			content, err := matrixSession.GetStateEvent(ctx, roomID, ref.EventType(params.EventType), params.StateKey)
 			if err != nil {
 				return cli.Internal("get state event: %w", err)
 			}
@@ -234,7 +235,7 @@ specific state key.`,
 				return err
 			}
 
-			eventID, err := matrixSession.SendStateEvent(ctx, roomID, params.EventType, params.StateKey, content)
+			eventID, err := matrixSession.SendStateEvent(ctx, roomID, ref.EventType(params.EventType), params.StateKey, content)
 			if err != nil {
 				return cli.Internal("set state event: %w", err)
 			}

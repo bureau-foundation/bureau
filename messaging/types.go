@@ -101,7 +101,7 @@ func NewThreadReply(threadRootID, body string) MessageContent {
 // Event represents a Matrix event from the server.
 type Event struct {
 	EventID        string         `json:"event_id"`
-	Type           string         `json:"type"`
+	Type           ref.EventType  `json:"type"`
 	Sender         string         `json:"sender"`
 	OriginServerTS int64          `json:"origin_server_ts"`
 	Content        map[string]any `json:"content"`

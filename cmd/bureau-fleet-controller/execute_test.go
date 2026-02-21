@@ -28,7 +28,7 @@ type fakeConfigStore struct {
 // configWrite records a single SendStateEvent call for test assertions.
 type configWrite struct {
 	RoomID    string
-	EventType string
+	EventType ref.EventType
 	StateKey  string
 	Content   any
 }
@@ -44,7 +44,7 @@ func storeKey(roomID, stateKey string) string {
 	return roomID + "|" + stateKey
 }
 
-func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	raw, exists := f.configs[storeKey(roomID.String(), stateKey)]
@@ -58,7 +58,7 @@ func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID ref.RoomID, ev
 	return raw, nil
 }
 
-func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

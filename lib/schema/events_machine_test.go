@@ -670,18 +670,18 @@ func mustParseMachine(t *testing.T, userID string) ref.Machine {
 func TestAdminProtectedEvents(t *testing.T) {
 	events := AdminProtectedEvents()
 
-	expectedEvents := []string{
-		"m.room.avatar",
-		"m.room.canonical_alias",
-		"m.room.encryption",
-		"m.room.history_visibility",
-		"m.room.join_rules",
-		"m.room.name",
-		"m.room.power_levels",
-		"m.room.server_acl",
-		"m.room.tombstone",
-		"m.room.topic",
-		"m.space.child",
+	expectedEvents := []ref.EventType{
+		ref.EventType("m.room.avatar"),
+		ref.EventType("m.room.canonical_alias"),
+		ref.EventType("m.room.encryption"),
+		ref.EventType("m.room.history_visibility"),
+		ref.EventType("m.room.join_rules"),
+		ref.EventType("m.room.name"),
+		ref.EventType("m.room.power_levels"),
+		ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"),
+		ref.EventType("m.room.topic"),
+		ref.EventType("m.space.child"),
 	}
 
 	for _, eventType := range expectedEvents {
@@ -701,9 +701,9 @@ func TestAdminProtectedEvents(t *testing.T) {
 
 	// Verify the function returns a fresh map each call (callers may modify it).
 	first := AdminProtectedEvents()
-	first["m.room.test"] = 42
+	first[ref.EventType("m.room.test")] = 42
 	second := AdminProtectedEvents()
-	if _, ok := second["m.room.test"]; ok {
+	if _, ok := second[ref.EventType("m.room.test")]; ok {
 		t.Error("AdminProtectedEvents returned a shared map instead of a fresh copy")
 	}
 }
@@ -749,7 +749,7 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 
 	// MachineConfig requires PL 50 (machine and fleet controllers can write placements).
 	// Credentials require PL 100 (admin only).
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
@@ -768,8 +768,8 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 
 	// Messages are writable by anyone in the room (power level 0) so the
 	// daemon can post command results and pipeline results.
-	if events["m.room.message"] != 0 {
-		t.Errorf("m.room.message power level = %v, want 0", events["m.room.message"])
+	if events[ref.EventType("m.room.message")] != 0 {
+		t.Errorf("m.room.message power level = %v, want 0", events[ref.EventType("m.room.message")])
 	}
 
 	// Default event power level should be 100 (admin-only room).
@@ -778,9 +778,9 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 	}
 
 	// Room metadata events from AdminProtectedEvents should all be PL 100.
-	for _, eventType := range []string{
-		"m.room.encryption", "m.room.server_acl",
-		"m.room.tombstone", "m.space.child",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"), ref.EventType("m.space.child"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])

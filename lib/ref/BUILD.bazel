@@ -10,6 +10,7 @@ go_library(
         "device.go",
         "doc.go",
         "entity.go",
+        "event_type.go",
         "fleet.go",
         "machine.go",
         "namespace.go",

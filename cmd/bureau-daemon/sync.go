@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -59,7 +60,7 @@ var syncFilter = buildSyncFilter()
 // schema constants. Using constants instead of raw strings ensures that
 // event type renames are caught at compile time.
 func buildSyncFilter() string {
-	stateEventTypes := []string{
+	stateEventTypes := []ref.EventType{
 		schema.EventTypeMachineConfig,
 		schema.EventTypeCredentials,
 		schema.EventTypeMachineStatus,
@@ -75,11 +76,11 @@ func buildSyncFilter() string {
 		schema.MatrixEventTypeRoomMember, // detect fleet controllers joining fleet room
 	}
 
-	timelineEventTypes := make([]string, len(stateEventTypes)+1)
+	timelineEventTypes := make([]ref.EventType, len(stateEventTypes)+1)
 	copy(timelineEventTypes, stateEventTypes)
 	timelineEventTypes[len(stateEventTypes)] = schema.MatrixEventTypeMessage
 
-	emptyTypes := []string{}
+	emptyTypes := []ref.EventType{}
 
 	filter := map[string]any{
 		"room": map[string]any{

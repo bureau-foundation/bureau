@@ -42,7 +42,7 @@ func (state *templateTestState) setTemplate(roomID, templateName string, content
 	if err != nil {
 		panic(fmt.Sprintf("marshaling template content: %v", err))
 	}
-	key := roomID + "\x00" + schema.EventTypeTemplate + "\x00" + templateName
+	key := roomID + "\x00" + string(schema.EventTypeTemplate) + "\x00" + templateName
 	state.stateEvents[key] = data
 }
 

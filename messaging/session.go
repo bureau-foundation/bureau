@@ -38,16 +38,16 @@ type Session interface {
 
 	// GetStateEvent fetches a specific state event's content from a room.
 	// Returns the raw JSON content for the caller to unmarshal.
-	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
+	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
 
 	// GetRoomState fetches all current state events from a room.
 	GetRoomState(ctx context.Context, roomID ref.RoomID) ([]Event, error)
 
 	// SendStateEvent sends a state event to a room. Returns the event ID.
-	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
 
 	// SendEvent sends an event of any type to a room. Returns the event ID.
-	SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error)
+	SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error)
 
 	// SendMessage sends a message to a room. Returns the event ID.
 	SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (string, error)

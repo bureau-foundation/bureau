@@ -2749,12 +2749,12 @@ type fakeWriterForGates struct {
 
 type writtenEventForGates struct {
 	RoomID    string
-	EventType string
+	EventType ref.EventType
 	StateKey  string
 	Content   any
 }
 
-func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	f.events = append(f.events, writtenEventForGates{
 		RoomID:    roomID.String(),
 		EventType: eventType,

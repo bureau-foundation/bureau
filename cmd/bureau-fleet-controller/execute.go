@@ -17,8 +17,8 @@ import (
 // configStore is the subset of *messaging.DirectSession needed for reading
 // and writing machine config state events. Tests substitute a fake.
 type configStore interface {
-	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
-	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
+	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
 }
 
 // readMachineConfig reads the current MachineConfig from a machine's

@@ -490,7 +490,7 @@ func baseTemplates() []namedTemplate {
 // m.bureau.machine_status; daemons exchange WebRTC signaling
 // (m.bureau.webrtc_offer/answer); and service room members register via
 // m.bureau.service.
-func adminOnlyPowerLevels(adminUserID ref.UserID, memberSettableEventTypes []string) map[string]any {
+func adminOnlyPowerLevels(adminUserID ref.UserID, memberSettableEventTypes []ref.EventType) map[string]any {
 	events := schema.AdminProtectedEvents()
 	for _, eventType := range memberSettableEventTypes {
 		events[eventType] = 0

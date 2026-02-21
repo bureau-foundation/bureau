@@ -94,7 +94,7 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 
 	// MachineConfig requires PL 50 (machine and fleet controllers can write placements).
 	// Credentials require PL 100 (admin only).
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}

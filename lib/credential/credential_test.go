@@ -41,7 +41,7 @@ type mockSession struct {
 	userID ref.UserID
 
 	// getStateEvent is called by Provision to fetch the machine's public key.
-	getStateEvent func(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error)
+	getStateEvent func(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
 
 	// getRoomState is called by List to enumerate credential events.
 	getRoomState func(ctx context.Context, roomID ref.RoomID) ([]messaging.Event, error)
@@ -50,13 +50,13 @@ type mockSession struct {
 	resolveAlias func(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 
 	// sendStateEvent is called by Provision to publish the credential event.
-	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
+	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
 }
 
 func (m *mockSession) UserID() ref.UserID { return m.userID }
 func (m *mockSession) Close() error       { return nil }
 
-func (m *mockSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+func (m *mockSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 	if m.getStateEvent == nil {
 		panic("GetStateEvent not implemented")
 	}
@@ -77,7 +77,7 @@ func (m *mockSession) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (re
 	return m.resolveAlias(ctx, alias)
 }
 
-func (m *mockSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (m *mockSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	if m.sendStateEvent == nil {
 		panic("SendStateEvent not implemented")
 	}
@@ -88,7 +88,7 @@ func (m *mockSession) WhoAmI(ctx context.Context) (ref.UserID, error) {
 	panic("WhoAmI not implemented")
 }
 
-func (m *mockSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
+func (m *mockSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
 	panic("SendEvent not implemented")
 }
 
@@ -263,7 +263,7 @@ func TestProvision_MachineKeyFetchFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return nil, fmt.Errorf("homeserver unreachable")
 		},
 	}
@@ -287,7 +287,7 @@ func TestProvision_WrongKeyAlgorithm(t *testing.T) {
 	keypair := testKeypair(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("rsa-4096", keypair.PublicKey), nil
 		},
 	}
@@ -310,7 +310,7 @@ func TestProvision_InvalidPublicKey(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", "not-a-real-age-key"), nil
 		},
 	}
@@ -330,7 +330,7 @@ func TestProvision_ConfigRoomResolveFails(t *testing.T) {
 	keypair := testKeypair(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
@@ -357,13 +357,13 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 	keypair := testKeypair(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
 			return "", fmt.Errorf("permission denied")
 		},
 	}
@@ -388,12 +388,13 @@ func TestProvision_HappyPath(t *testing.T) {
 	keypair := testKeypair(t)
 
 	var capturedRoomID ref.RoomID
-	var capturedEventType, capturedStateKey string
+	var capturedEventType ref.EventType
+	var capturedStateKey string
 	var capturedContent any
 
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 			if roomID.String() != "!machine-room:bureau.local" {
 				t.Errorf("GetStateEvent roomID = %q, want %q", roomID, "!machine-room:bureau.local")
 			}
@@ -411,7 +412,7 @@ func TestProvision_HappyPath(t *testing.T) {
 			}
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 			capturedRoomID = roomID
 			capturedEventType = eventType
 			capturedStateKey = stateKey
@@ -488,13 +489,13 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", machineKeypair.PublicKey), nil
 		},
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
 			return "$event456", nil
 		},
 	}
@@ -526,7 +527,7 @@ func TestProvision_InvalidEscrowKey(t *testing.T) {
 	keypair := testKeypair(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
 	}
@@ -794,13 +795,13 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
 			return "$event789", nil
 		},
 	}
@@ -826,7 +827,7 @@ func TestAsProvisionFunc_PropagatesError(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
+		getStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string) (json.RawMessage, error) {
 			return nil, fmt.Errorf("fetch failed")
 		},
 	}

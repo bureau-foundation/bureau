@@ -31,7 +31,7 @@ var syncFilter = buildSyncFilter()
 // buildSyncFilter constructs the Matrix /sync filter JSON from typed
 // schema constants.
 func buildSyncFilter() string {
-	stateEventTypes := []string{
+	stateEventTypes := []ref.EventType{
 		schema.EventTypeTicket,
 		schema.EventTypeTicketConfig,
 		schema.EventTypeRoomService,
@@ -42,7 +42,7 @@ func buildSyncFilter() string {
 	// Timeline includes the same state event types (state events can
 	// appear as timeline events with a non-nil state_key during
 	// incremental sync).
-	timelineEventTypes := make([]string, len(stateEventTypes))
+	timelineEventTypes := make([]ref.EventType, len(stateEventTypes))
 	copy(timelineEventTypes, stateEventTypes)
 
 	emptyTypes := []string{}

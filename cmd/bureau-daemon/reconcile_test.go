@@ -531,7 +531,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -672,7 +672,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}
@@ -820,7 +820,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	})
 
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
 			return
@@ -2328,7 +2328,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 		messages   []string
 	)
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}

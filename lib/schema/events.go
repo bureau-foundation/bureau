@@ -14,7 +14,7 @@ const (
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #bureau/machine:<server>
-	EventTypeMachineKey = "m.bureau.machine_key"
+	EventTypeMachineKey ref.EventType = "m.bureau.machine_key"
 
 	// EventTypeMachineInfo is published to #bureau/machine when a
 	// machine's daemon starts (or when hardware configuration changes).
@@ -25,21 +25,21 @@ const (
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #bureau/machine:<server>
-	EventTypeMachineInfo = "m.bureau.machine_info"
+	EventTypeMachineInfo ref.EventType = "m.bureau.machine_info"
 
 	// EventTypeMachineStatus is published to #bureau/machine by each
 	// machine's daemon as a periodic heartbeat with resource stats.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #bureau/machine:<server>
-	EventTypeMachineStatus = "m.bureau.machine_status"
+	EventTypeMachineStatus ref.EventType = "m.bureau.machine_status"
 
 	// EventTypeMachineConfig is published to a per-machine config room
 	// and defines which principals should run on that machine.
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #<machine-localpart>:<server>
-	EventTypeMachineConfig = "m.bureau.machine_config"
+	EventTypeMachineConfig ref.EventType = "m.bureau.machine_config"
 
 	// EventTypeCredentials is published to a per-machine config room
 	// and contains age-encrypted credential bundles for a specific
@@ -47,14 +47,14 @@ const (
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
 	// Room: #<machine-localpart>:<server>
-	EventTypeCredentials = "m.bureau.credentials"
+	EventTypeCredentials ref.EventType = "m.bureau.credentials"
 
 	// EventTypeService is published to #bureau/service when a principal
 	// starts providing a service. Used for service discovery.
 	//
 	// State key: principal localpart (e.g., "service/stt/whisper")
 	// Room: #bureau/service:<server>
-	EventTypeService = "m.bureau.service"
+	EventTypeService ref.EventType = "m.bureau.service"
 
 	// EventTypeWebRTCOffer is published to #bureau/machine when a daemon
 	// wants to establish a WebRTC PeerConnection to another daemon. The
@@ -67,7 +67,7 @@ const (
 	// unambiguously separates the two machine identities.
 	//
 	// Room: #bureau/machine:<server>
-	EventTypeWebRTCOffer = "m.bureau.webrtc_offer"
+	EventTypeWebRTCOffer ref.EventType = "m.bureau.webrtc_offer"
 
 	// EventTypeWebRTCAnswer is published by the target daemon in response
 	// to a WebRTC offer. Uses the same state key format as the offer so
@@ -75,7 +75,7 @@ const (
 	//
 	// State key: "<offerer-localpart>|<target-localpart>"
 	// Room: #bureau/machine:<server>
-	EventTypeWebRTCAnswer = "m.bureau.webrtc_answer"
+	EventTypeWebRTCAnswer ref.EventType = "m.bureau.webrtc_answer"
 
 	// EventTypeLayout describes the tmux session structure for an
 	// observation target. Published to the room associated with the
@@ -89,7 +89,7 @@ const (
 	// The daemon reads these events to create and reconcile tmux sessions.
 	// Changes to the live tmux session are synced back as state event
 	// updates. See OBSERVATION.md for the full bidirectional sync design.
-	EventTypeLayout = "m.bureau.layout"
+	EventTypeLayout ref.EventType = "m.bureau.layout"
 
 	// EventTypeTemplate defines a sandbox template — the complete
 	// specification for how to create a sandboxed environment. Templates
@@ -103,7 +103,7 @@ const (
 	// Templates can inherit from other templates across rooms. The daemon
 	// resolves the full inheritance chain and merges fields before sending
 	// a fully-resolved SandboxSpec to the launcher via IPC.
-	EventTypeTemplate = "m.bureau.template"
+	EventTypeTemplate ref.EventType = "m.bureau.template"
 
 	// EventTypeProject declares a workspace project — the top-level
 	// organizational unit in /var/bureau/workspace/. Contains the git
@@ -113,7 +113,7 @@ const (
 	//
 	// State key: project name (e.g., "iree", "lore", "bureau")
 	// Room: the project's workspace room
-	EventTypeProject = "m.bureau.project"
+	EventTypeProject ref.EventType = "m.bureau.project"
 
 	// EventTypeWorkspace tracks the lifecycle of a workspace. Published
 	// to the workspace room with an empty state key (one workspace per
@@ -131,7 +131,7 @@ const (
 	//
 	// State key: "" (singleton per room)
 	// Room: the workspace room
-	EventTypeWorkspace = "m.bureau.workspace"
+	EventTypeWorkspace ref.EventType = "m.bureau.workspace"
 
 	// EventTypeWorktree tracks individual git worktree lifecycle within
 	// a workspace. Published to the workspace room with state key = the
@@ -153,7 +153,7 @@ const (
 	//
 	// State key: worktree path relative to project root
 	// Room: the workspace room
-	EventTypeWorktree = "m.bureau.worktree"
+	EventTypeWorktree ref.EventType = "m.bureau.worktree"
 
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
@@ -163,7 +163,7 @@ const (
 	//
 	// State key: pipeline name (e.g., "dev-workspace-init", "dev-worktree-teardown")
 	// Room: pipeline room (e.g., #bureau/pipeline:<server>)
-	EventTypePipeline = "m.bureau.pipeline"
+	EventTypePipeline ref.EventType = "m.bureau.pipeline"
 
 	// EventTypePipelineResult is published by the pipeline executor when
 	// a pipeline completes (successfully, with failure, or by abort). The
@@ -177,7 +177,7 @@ const (
 	//
 	// State key: pipeline name/ref (e.g., "dev-workspace-init")
 	// Room: the pipeline's log room
-	EventTypePipelineResult = "m.bureau.pipeline_result"
+	EventTypePipelineResult ref.EventType = "m.bureau.pipeline_result"
 
 	// EventTypeRoomService declares which service principal handles a
 	// given service role in a room. This is a general mechanism for
@@ -190,7 +190,7 @@ const (
 	//
 	// State key: service role name (e.g., "ticket", "rag", "ci")
 	// Room: any room that uses the service
-	EventTypeRoomService = "m.bureau.room_service"
+	EventTypeRoomService ref.EventType = "m.bureau.room_service"
 
 	// EventTypeTicket is a work item tracked in a room by the ticket
 	// service. Each ticket is a state event whose state key is the
@@ -200,7 +200,7 @@ const (
 	//
 	// State key: ticket ID (e.g., "tkt-a3f9")
 	// Room: any room with ticket management enabled (has EventTypeTicketConfig)
-	EventTypeTicket = "m.bureau.ticket"
+	EventTypeTicket ref.EventType = "m.bureau.ticket"
 
 	// EventTypeTicketConfig enables and configures ticket management
 	// for a room. Rooms without this event do not accept ticket
@@ -210,7 +210,7 @@ const (
 	//
 	// State key: "" (singleton per room)
 	// Room: any room that wants ticket management
-	EventTypeTicketConfig = "m.bureau.ticket_config"
+	EventTypeTicketConfig ref.EventType = "m.bureau.ticket_config"
 
 	// EventTypeArtifactScope configures artifact integration for a
 	// room. Declares which artifact service principal manages this
@@ -221,26 +221,26 @@ const (
 	//
 	// State key: "" (singleton per room)
 	// Room: any room that works with artifacts
-	EventTypeArtifactScope = "m.bureau.artifact_scope"
+	EventTypeArtifactScope ref.EventType = "m.bureau.artifact_scope"
 )
 
 // Standard Matrix event type constants. These are Matrix spec types
 // (not Bureau-specific) that Bureau code references frequently. Defined
 // here so that callers avoid hardcoding matrix protocol strings.
 const (
-	MatrixEventTypeMessage           = "m.room.message"
-	MatrixEventTypePowerLevels       = "m.room.power_levels"
-	MatrixEventTypeJoinRules         = "m.room.join_rules"
-	MatrixEventTypeRoomName          = "m.room.name"
-	MatrixEventTypeRoomTopic         = "m.room.topic"
-	MatrixEventTypeSpaceChild        = "m.space.child"
-	MatrixEventTypeCanonicalAlias    = "m.room.canonical_alias"
-	MatrixEventTypeEncryption        = "m.room.encryption"
-	MatrixEventTypeServerACL         = "m.room.server_acl"
-	MatrixEventTypeTombstone         = "m.room.tombstone"
-	MatrixEventTypeRoomAvatar        = "m.room.avatar"
-	MatrixEventTypeHistoryVisibility = "m.room.history_visibility"
-	MatrixEventTypeRoomMember        = "m.room.member"
+	MatrixEventTypeMessage           ref.EventType = "m.room.message"
+	MatrixEventTypePowerLevels       ref.EventType = "m.room.power_levels"
+	MatrixEventTypeJoinRules         ref.EventType = "m.room.join_rules"
+	MatrixEventTypeRoomName          ref.EventType = "m.room.name"
+	MatrixEventTypeRoomTopic         ref.EventType = "m.room.topic"
+	MatrixEventTypeSpaceChild        ref.EventType = "m.space.child"
+	MatrixEventTypeCanonicalAlias    ref.EventType = "m.room.canonical_alias"
+	MatrixEventTypeEncryption        ref.EventType = "m.room.encryption"
+	MatrixEventTypeServerACL         ref.EventType = "m.room.server_acl"
+	MatrixEventTypeTombstone         ref.EventType = "m.room.tombstone"
+	MatrixEventTypeRoomAvatar        ref.EventType = "m.room.avatar"
+	MatrixEventTypeHistoryVisibility ref.EventType = "m.room.history_visibility"
+	MatrixEventTypeRoomMember        ref.EventType = "m.room.member"
 )
 
 // Power level tiers for command authorization. The daemon checks the
@@ -267,8 +267,8 @@ const (
 // power level function uses this as its base events map, adding
 // Bureau-specific overrides on top. Returns a fresh map each call so
 // callers can safely merge their own entries.
-func AdminProtectedEvents() map[string]any {
-	return map[string]any{
+func AdminProtectedEvents() map[ref.EventType]any {
+	return map[ref.EventType]any{
 		MatrixEventTypeRoomAvatar:        100,
 		MatrixEventTypeCanonicalAlias:    100,
 		MatrixEventTypeEncryption:        100,
@@ -289,7 +289,7 @@ func AdminProtectedEvents() map[string]any {
 // captures only the fields that vary between room types.
 type powerLevelSpec struct {
 	users         map[string]any
-	events        map[string]any
+	events        map[ref.EventType]any
 	eventsDefault int
 	stateDefault  int
 	invite        int

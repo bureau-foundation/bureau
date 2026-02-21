@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -153,8 +154,10 @@ func ExpandStep(step schema.PipelineStep, variables map[string]string) (schema.P
 	// Expand publish fields if present.
 	if step.Publish != nil {
 		expanded := *step.Publish
-		if expanded.EventType, err = Expand(expanded.EventType, merged); err != nil {
-			return schema.PipelineStep{}, fmt.Errorf("step %q publish.event_type: %w", step.Name, err)
+		if expandedEventType, expandErr := Expand(string(expanded.EventType), merged); expandErr != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q publish.event_type: %w", step.Name, expandErr)
+		} else {
+			expanded.EventType = ref.EventType(expandedEventType)
 		}
 		if expanded.Room, err = Expand(expanded.Room, merged); err != nil {
 			return schema.PipelineStep{}, fmt.Errorf("step %q publish.room: %w", step.Name, err)
@@ -174,8 +177,10 @@ func ExpandStep(step schema.PipelineStep, variables map[string]string) (schema.P
 		if expanded.Room, err = Expand(expanded.Room, merged); err != nil {
 			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.room: %w", step.Name, err)
 		}
-		if expanded.EventType, err = Expand(expanded.EventType, merged); err != nil {
-			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.event_type: %w", step.Name, err)
+		if expandedEventType, expandErr := Expand(string(expanded.EventType), merged); expandErr != nil {
+			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.event_type: %w", step.Name, expandErr)
+		} else {
+			expanded.EventType = ref.EventType(expandedEventType)
 		}
 		if expanded.StateKey, err = Expand(expanded.StateKey, merged); err != nil {
 			return schema.PipelineStep{}, fmt.Errorf("step %q assert_state.state_key: %w", step.Name, err)

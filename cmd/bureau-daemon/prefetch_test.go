@@ -261,7 +261,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Intercept message sends to the config room. SendEvent uses
 		// PUT with url.PathEscape on room ID and event type.
-		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+schema.MatrixEventTypeMessage+"/") {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
 			var content struct {
 				Body string `json:"body"`
 			}

@@ -31,12 +31,12 @@ func mustRoomID(raw string) ref.RoomID {
 // back via GET /state and PUT /state/{type}/{key}.
 type mockSignalingServer struct {
 	mu     sync.Mutex
-	events map[string]map[string]json.RawMessage // event_type → state_key → content
+	events map[ref.EventType]map[string]json.RawMessage // event_type → state_key → content
 }
 
 func newMockSignalingServer() *mockSignalingServer {
 	return &mockSignalingServer{
-		events: make(map[string]map[string]json.RawMessage),
+		events: make(map[ref.EventType]map[string]json.RawMessage),
 	}
 }
 
@@ -87,10 +87,11 @@ func (m *mockSignalingServer) ServeHTTP(writer http.ResponseWriter, request *htt
 			return
 		}
 
-		if m.events[eventType] == nil {
-			m.events[eventType] = make(map[string]json.RawMessage)
+		eventTypeKey := ref.EventType(eventType)
+		if m.events[eventTypeKey] == nil {
+			m.events[eventTypeKey] = make(map[string]json.RawMessage)
 		}
-		m.events[eventType][stateKey] = content
+		m.events[eventTypeKey][stateKey] = content
 
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Write([]byte(`{"event_id":"$test"}`))
@@ -110,7 +111,7 @@ func (m *mockSignalingServer) ServeHTTP(writer http.ResponseWriter, request *htt
 			for stateKey, content := range stateKeys {
 				keyCopy := stateKey
 				allEvents = append(allEvents, stateEvent{
-					Type:     eventType,
+					Type:     string(eventType),
 					StateKey: &keyCopy,
 					Content:  content,
 				})

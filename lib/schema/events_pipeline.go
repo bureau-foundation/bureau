@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // PipelineResultContentVersion is the current schema version for
@@ -301,7 +303,7 @@ func parseOneStepOutput(name string, raw json.RawMessage) (PipelineStepOutput, e
 type PipelinePublish struct {
 	// EventType is the Matrix state event type (e.g.,
 	// "m.bureau.workspace").
-	EventType string `json:"event_type"`
+	EventType ref.EventType `json:"event_type"`
 
 	// Room is the target room alias or ID. Supports variable
 	// substitution (e.g., "${WORKSPACE_ROOM_ID}").
@@ -331,7 +333,7 @@ type PipelineAssertState struct {
 
 	// EventType is the Matrix state event type to read (e.g.,
 	// "m.bureau.worktree", "m.bureau.workspace").
-	EventType string `json:"event_type"`
+	EventType ref.EventType `json:"event_type"`
 
 	// StateKey is the state key for the event. Empty string is valid
 	// (for singleton events like m.bureau.workspace).

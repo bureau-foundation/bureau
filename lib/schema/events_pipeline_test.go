@@ -499,7 +499,7 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	}
 
 	// Pipeline events require power level 100 (admin-only writes).
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
@@ -508,9 +508,9 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	}
 
 	// Room metadata events from AdminProtectedEvents should all be PL 100.
-	for _, eventType := range []string{
-		"m.room.encryption", "m.room.server_acl",
-		"m.room.tombstone", "m.space.child",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"), ref.EventType("m.space.child"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])

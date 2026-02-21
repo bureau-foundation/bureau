@@ -159,7 +159,7 @@ func runWatchLoop(ctx context.Context, session messaging.Session, roomID ref.Roo
 
 		// Timeline events (messages, commands, etc.).
 		for _, event := range joinedRoom.Timeline.Events {
-			if matchesTypeFilter(event.Type, params.EventTypes) {
+			if matchesTypeFilter(event.Type.String(), params.EventTypes) {
 				emitWatchEvent(event, params, encoder)
 			}
 		}
@@ -167,7 +167,7 @@ func runWatchLoop(ctx context.Context, session messaging.Session, roomID ref.Roo
 		// State events (only if --state is set).
 		if params.ShowState {
 			for _, event := range joinedRoom.State.Events {
-				if matchesTypeFilter(event.Type, params.EventTypes) {
+				if matchesTypeFilter(event.Type.String(), params.EventTypes) {
 					emitWatchEvent(event, params, encoder)
 				}
 			}
@@ -197,7 +197,7 @@ func printWatchHistory(ctx context.Context, session messaging.Session, roomID re
 	}
 
 	for _, event := range events {
-		if matchesTypeFilter(event.Type, params.EventTypes) {
+		if matchesTypeFilter(event.Type.String(), params.EventTypes) {
 			emitWatchEvent(event, params, encoder)
 		}
 	}

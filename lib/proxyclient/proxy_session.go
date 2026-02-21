@@ -61,7 +61,7 @@ func (session *ProxySession) ResolveAlias(ctx context.Context, alias ref.RoomAli
 	return session.client.ResolveAlias(ctx, alias)
 }
 
-func (session *ProxySession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+func (session *ProxySession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 	return session.client.GetState(ctx, roomID, eventType, stateKey)
 }
 
@@ -69,7 +69,7 @@ func (session *ProxySession) GetRoomState(ctx context.Context, roomID ref.RoomID
 	return session.client.GetRoomState(ctx, roomID)
 }
 
-func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	return session.client.PutState(ctx, PutStateRequest{
 		Room:      roomID,
 		EventType: eventType,
@@ -78,7 +78,7 @@ func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.Room
 	})
 }
 
-func (session *ProxySession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
+func (session *ProxySession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
 	return session.client.SendEvent(ctx, roomID, eventType, content)
 }
 

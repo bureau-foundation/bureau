@@ -1183,12 +1183,12 @@ type fakeWriter struct {
 
 type writtenEvent struct {
 	RoomID    string
-	EventType string
+	EventType ref.EventType
 	StateKey  string
 	Content   any
 }
 
-func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	f.mu.Lock()
 	f.events = append(f.events, writtenEvent{
 		RoomID:    roomID.String(),

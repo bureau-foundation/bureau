@@ -435,9 +435,9 @@ func configureTicketPowerLevels(ctx context.Context, session messaging.Session, 
 		events = make(map[string]any)
 		powerLevels["events"] = events
 	}
-	events[schema.EventTypeTicket] = 10
-	events[schema.EventTypeTicketConfig] = 100
-	events[schema.EventTypeRoomService] = 100
+	events[string(schema.EventTypeTicket)] = 10
+	events[string(schema.EventTypeTicketConfig)] = 100
+	events[string(schema.EventTypeRoomService)] = 100
 
 	// Write back the updated power levels.
 	_, err = session.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels)

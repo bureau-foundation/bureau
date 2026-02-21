@@ -44,7 +44,7 @@ func TestPushPipeline(t *testing.T) {
 	if event.RoomID != "!pipeline:test" {
 		t.Errorf("RoomID = %q, want %q", event.RoomID, "!pipeline:test")
 	}
-	if event.Type != schema.EventTypePipeline {
+	if event.Type != string(schema.EventTypePipeline) {
 		t.Errorf("Type = %q, want %q", event.Type, schema.EventTypePipeline)
 	}
 	if event.StateKey != "deploy" {

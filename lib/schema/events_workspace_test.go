@@ -43,13 +43,13 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	}
 
 	// Event-specific power levels.
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
 
 	// Admin-only events (PL 100).
-	for _, eventType := range []string{EventTypeProject} {
+	for _, eventType := range []ref.EventType{EventTypeProject} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
 		}
@@ -58,23 +58,23 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	// Admin-only power level management (PL 100). Continuwuity validates
 	// all fields in m.room.power_levels against sender PL (not just changed
 	// ones), so only admin can modify power levels.
-	if events["m.room.power_levels"] != 100 {
-		t.Errorf("m.room.power_levels power level = %v, want 100", events["m.room.power_levels"])
+	if events[ref.EventType("m.room.power_levels")] != 100 {
+		t.Errorf("m.room.power_levels power level = %v, want 100", events[ref.EventType("m.room.power_levels")])
 	}
 
 	// Default-level events (PL 0): workspace state, worktree lifecycle, and
 	// layout. Room membership is the authorization boundary — the room is
 	// invite-only.
-	for _, eventType := range []string{EventTypeWorkspace, EventTypeWorktree, EventTypeLayout} {
+	for _, eventType := range []ref.EventType{EventTypeWorkspace, EventTypeWorktree, EventTypeLayout} {
 		if events[eventType] != 0 {
 			t.Errorf("%s power level = %v, want 0", eventType, events[eventType])
 		}
 	}
 
 	// Room metadata events from AdminProtectedEvents should all be PL 100.
-	for _, eventType := range []string{
-		"m.room.encryption", "m.room.server_acl",
-		"m.room.tombstone", "m.space.child",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"), ref.EventType("m.space.child"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])

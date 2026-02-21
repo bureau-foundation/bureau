@@ -141,11 +141,11 @@ func (s *DirectSession) SendMessage(ctx context.Context, roomID ref.RoomID, cont
 // SendEvent sends an event of any type to a room.
 // Uses Matrix's idempotent PUT with a transaction ID.
 // Returns the event ID.
-func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType string, content any) (string, error) {
+func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
 	transactionID := s.nextTransactionID()
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/%s/%s",
 		url.PathEscape(roomID.String()),
-		url.PathEscape(eventType),
+		url.PathEscape(eventType.String()),
 		url.PathEscape(transactionID),
 	)
 
@@ -164,10 +164,10 @@ func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventT
 // SendStateEvent sends a state event to a room.
 // State events use PUT with the event type and state key in the path.
 // Returns the event ID.
-func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error) {
+func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
 		url.PathEscape(roomID.String()),
-		url.PathEscape(eventType),
+		url.PathEscape(eventType.String()),
 		url.PathEscape(stateKey),
 	)
 
@@ -188,10 +188,10 @@ func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, e
 // into the appropriate type (e.g., schema.MachineConfig).
 //
 // If the state event does not exist, returns a *MatrixError with code M_NOT_FOUND.
-func (s *DirectSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType, stateKey string) (json.RawMessage, error) {
+func (s *DirectSession) GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
 		url.PathEscape(roomID.String()),
-		url.PathEscape(eventType),
+		url.PathEscape(eventType.String()),
 		url.PathEscape(stateKey),
 	)
 

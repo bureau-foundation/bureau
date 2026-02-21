@@ -91,7 +91,7 @@ func (s *pipelineTestState) addPipelineRoom(roomAlias, roomID string, pipelines 
 		})
 
 		// Also register for individual state event fetches.
-		key := roomID + "\x00" + schema.EventTypePipeline + "\x00" + name
+		key := roomID + "\x00" + string(schema.EventTypePipeline) + "\x00" + name
 		s.stateEvents[key] = contentJSON
 	}
 

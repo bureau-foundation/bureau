@@ -125,7 +125,11 @@ such as m.bureau.machine_key or m.bureau.service.`,
 
 			// Build power levels. Admin-only by default, with optional
 			// member-settable Bureau event types.
-			powerLevels := adminOnlyPowerLevels(sess.UserID(), params.MemberStateEvents)
+			memberEventTypes := make([]ref.EventType, len(params.MemberStateEvents))
+			for i, eventType := range params.MemberStateEvents {
+				memberEventTypes[i] = ref.EventType(eventType)
+			}
+			powerLevels := adminOnlyPowerLevels(sess.UserID(), memberEventTypes)
 
 			// Create the room.
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{

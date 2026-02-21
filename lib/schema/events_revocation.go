@@ -3,6 +3,8 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // Credential revocation event type constants. These are state event types
 // used by the emergency revocation workflow to record that a machine's
 // credentials have been revoked.
@@ -19,7 +21,7 @@ const (
 	//
 	// State key: machine localpart (e.g., "machine/workstation")
 	// Room: #bureau/machine:<server>
-	EventTypeCredentialRevocation = "m.bureau.credential_revocation"
+	EventTypeCredentialRevocation ref.EventType = "m.bureau.credential_revocation"
 )
 
 // CredentialRevocationContent is the content of an

@@ -141,7 +141,7 @@ type PrincipalAssignment struct {
 type StartCondition struct {
 	// EventType is the Matrix state event type to check for (e.g.,
 	// "m.bureau.workspace"). Must be a valid Matrix event type.
-	EventType string `json:"event_type"`
+	EventType ref.EventType `json:"event_type"`
 
 	// StateKey is the state key to look up. Empty string is valid and
 	// common — it means the singleton instance of that event type.

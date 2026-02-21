@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/cron"
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 const (
@@ -308,7 +309,7 @@ type TicketGate struct {
 
 	// EventType is the Matrix state event type to watch (type
 	// "state_event"). Same semantics as StartCondition.EventType.
-	EventType string `json:"event_type,omitempty"`
+	EventType ref.EventType `json:"event_type,omitempty"`
 
 	// StateKey is the state key to match (type "state_event").
 	StateKey string `json:"state_key,omitempty"`

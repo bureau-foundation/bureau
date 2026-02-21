@@ -6,6 +6,8 @@ package schema
 import (
 	"errors"
 	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // Schema version constants for agent service events. CanModify methods
@@ -49,7 +51,7 @@ const (
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
 	// Room: #<machine-localpart>:<server>
-	EventTypeAgentSession = "m.bureau.agent_session"
+	EventTypeAgentSession ref.EventType = "m.bureau.agent_session"
 
 	// EventTypeAgentContext tracks the LLM conversation context for
 	// session resumption. Contains an artifact ref to the serialized
@@ -59,7 +61,7 @@ const (
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
 	// Room: #<machine-localpart>:<server>
-	EventTypeAgentContext = "m.bureau.agent_context"
+	EventTypeAgentContext ref.EventType = "m.bureau.agent_context"
 
 	// EventTypeAgentMetrics tracks aggregated metrics across all
 	// sessions for a principal. Running totals for tokens, cost,
@@ -69,7 +71,7 @@ const (
 	//
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
 	// Room: #<machine-localpart>:<server>
-	EventTypeAgentMetrics = "m.bureau.agent_metrics"
+	EventTypeAgentMetrics ref.EventType = "m.bureau.agent_metrics"
 )
 
 // AgentSessionContent is the content of an EventTypeAgentSession state

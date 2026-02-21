@@ -210,7 +210,7 @@ func TestArtifactRoomPowerLevels(t *testing.T) {
 
 	// No member-writable event types: all artifact metadata lives in
 	// the artifact service, not Matrix state events.
-	events := powerLevels["events"].(map[string]any)
+	events := powerLevels["events"].(map[ref.EventType]any)
 
 	// Default event PL is 100 (unknown event types require admin).
 	if powerLevels["events_default"] != 100 {
@@ -223,9 +223,9 @@ func TestArtifactRoomPowerLevels(t *testing.T) {
 	}
 
 	// Admin-protected Matrix events are all PL 100.
-	for _, eventType := range []string{
-		"m.room.power_levels", "m.room.name", "m.room.topic",
-		"m.room.canonical_alias", "m.room.join_rules",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.power_levels"), ref.EventType("m.room.name"), ref.EventType("m.room.topic"),
+		ref.EventType("m.room.canonical_alias"), ref.EventType("m.room.join_rules"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s PL = %v, want 100", eventType, events[eventType])

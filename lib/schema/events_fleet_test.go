@@ -1018,13 +1018,13 @@ func TestMachineRoomPowerLevels(t *testing.T) {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])
 	}
 
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
 
 	// Members must be able to write machine presence events.
-	for _, eventType := range []string{
+	for _, eventType := range []ref.EventType{
 		EventTypeMachineKey,
 		EventTypeMachineInfo,
 		EventTypeMachineStatus,
@@ -1037,9 +1037,9 @@ func TestMachineRoomPowerLevels(t *testing.T) {
 	}
 
 	// Admin-protected events must require PL 100.
-	for _, eventType := range []string{
-		"m.room.encryption", "m.room.server_acl",
-		"m.room.tombstone", "m.space.child",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"), ref.EventType("m.space.child"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
@@ -1069,7 +1069,7 @@ func TestServiceRoomPowerLevels(t *testing.T) {
 		t.Errorf("users_default = %v, want 0", levels["users_default"])
 	}
 
-	events, ok := levels["events"].(map[string]any)
+	events, ok := levels["events"].(map[ref.EventType]any)
 	if !ok {
 		t.Fatal("power levels missing 'events' map")
 	}
@@ -1080,9 +1080,9 @@ func TestServiceRoomPowerLevels(t *testing.T) {
 	}
 
 	// Admin-protected events must require PL 100.
-	for _, eventType := range []string{
-		"m.room.encryption", "m.room.server_acl",
-		"m.room.tombstone", "m.space.child",
+	for _, eventType := range []ref.EventType{
+		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
+		ref.EventType("m.room.tombstone"), ref.EventType("m.space.child"),
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])

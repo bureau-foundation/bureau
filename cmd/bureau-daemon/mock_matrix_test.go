@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -118,10 +119,10 @@ func (m *mockMatrixState) setRoomState(roomID string, events []mockRoomStateEven
 	m.roomStates[roomID] = events
 }
 
-func (m *mockMatrixState) setRoomAlias(alias, roomID string) {
+func (m *mockMatrixState) setRoomAlias(alias ref.RoomAlias, roomID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.roomAliases[alias] = roomID
+	m.roomAliases[alias.String()] = roomID
 }
 
 func (m *mockMatrixState) setRoomMembers(roomID string, members []mockRoomMember) {

@@ -35,7 +35,10 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias,
 		return ref.RoomID{}, cli.Validation("invalid alias %q: %w", alias, err)
 	}
 
-	fullAlias := schema.FullRoomAlias(alias, serverName)
+	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
+	if err != nil {
+		return ref.RoomID{}, cli.Validation("invalid room alias %q: %w", alias, err)
+	}
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
 		return ref.RoomID{}, cli.NotFound("resolving room %s: %w", fullAlias, err)
@@ -62,7 +65,10 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias, 
 		candidate := remaining[:lastSlash]
 		remaining = candidate
 
-		fullAlias := schema.FullRoomAlias(candidate, serverName)
+		fullAlias, parseError := ref.ParseRoomAlias(schema.FullRoomAlias(candidate, serverName))
+		if parseError != nil {
+			return ref.RoomID{}, nil, "", cli.Internal("invalid room alias for %q: %w", candidate, parseError)
+		}
 		roomID, err := session.ResolveAlias(ctx, fullAlias)
 		if err != nil {
 			// Room doesn't exist at this level — keep walking up.

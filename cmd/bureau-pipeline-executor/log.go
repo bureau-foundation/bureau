@@ -36,7 +36,11 @@ type threadLogger struct {
 func newThreadLogger(ctx context.Context, session messaging.Session, room string, pipelineName string, stepCount int) (*threadLogger, error) {
 	var roomID ref.RoomID
 	if len(room) > 0 && room[0] == '#' {
-		resolved, err := session.ResolveAlias(ctx, room)
+		alias, err := ref.ParseRoomAlias(room)
+		if err != nil {
+			return nil, fmt.Errorf("invalid log room alias %q: %w", room, err)
+		}
+		resolved, err := session.ResolveAlias(ctx, alias)
 		if err != nil {
 			return nil, fmt.Errorf("resolving log room %q: %w", room, err)
 		}

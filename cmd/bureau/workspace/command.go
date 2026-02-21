@@ -155,7 +155,10 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverName strin
 	defer sess.Close()
 
 	// Resolve the workspace room.
-	fullAlias := schema.FullRoomAlias(alias, serverName)
+	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
+	if err != nil {
+		return cli.Validation("invalid room alias %q: %w", alias, err)
+	}
 	workspaceRoomID, err := sess.ResolveAlias(ctx, fullAlias)
 	if err != nil {
 		return cli.NotFound("resolve workspace room %s: %w", fullAlias, err)

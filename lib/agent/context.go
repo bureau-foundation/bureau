@@ -35,7 +35,7 @@ type AgentContext struct {
 	Payload map[string]any
 
 	// ConfigRoomAlias is the Matrix room alias for this agent's config room.
-	ConfigRoomAlias string
+	ConfigRoomAlias ref.RoomAlias
 
 	// ConfigRoomID is the resolved Matrix room ID for the config room.
 	ConfigRoomID ref.RoomID

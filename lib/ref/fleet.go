@@ -84,18 +84,18 @@ func (f Fleet) String() string { return f.localpart }
 func (f Fleet) IsZero() bool { return f.localpart == "" }
 
 // RoomAlias returns the fleet config room alias: #localpart:server.
-func (f Fleet) RoomAlias() string {
-	return "#" + f.localpart + ":" + f.ns.server
+func (f Fleet) RoomAlias() RoomAlias {
+	return newRoomAlias(f.localpart, f.ns.server)
 }
 
 // MachineRoomAlias returns the fleet's machine presence room alias.
-func (f Fleet) MachineRoomAlias() string {
-	return "#" + f.localpart + "/machine:" + f.ns.server
+func (f Fleet) MachineRoomAlias() RoomAlias {
+	return newRoomAlias(f.localpart+"/machine", f.ns.server)
 }
 
 // ServiceRoomAlias returns the fleet's service directory room alias.
-func (f Fleet) ServiceRoomAlias() string {
-	return "#" + f.localpart + "/service:" + f.ns.server
+func (f Fleet) ServiceRoomAlias() RoomAlias {
+	return newRoomAlias(f.localpart+"/service", f.ns.server)
 }
 
 // MachineRoomAliasLocalpart returns the localpart of the machine room alias.
@@ -120,7 +120,7 @@ func (f Fleet) MarshalText() ([]byte, error) {
 	if f.IsZero() {
 		return nil, fmt.Errorf("cannot marshal zero-value Fleet")
 	}
-	return []byte(f.RoomAlias()), nil
+	return []byte(f.RoomAlias().String()), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler. Parses the

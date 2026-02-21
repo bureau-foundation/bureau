@@ -45,7 +45,7 @@ func TestSystemPrompt(t *testing.T) {
 			"prompt":  "Fix the failing test",
 			"project": "bureau",
 		},
-		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:bureau.local",
+		ConfigRoomAlias: ref.MustParseRoomAlias("#bureau/fleet/prod/machine/ws:bureau.local"),
 		ConfigRoomID:    mustRoomID("!config:bureau.local"),
 	}
 
@@ -104,7 +104,7 @@ func TestSystemPromptMinimal(t *testing.T) {
 			UserID:     "@agent/test:test.local",
 			ServerName: "test.local",
 		},
-		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:test.local",
+		ConfigRoomAlias: ref.MustParseRoomAlias("#bureau/fleet/prod/machine/ws:test.local"),
 	}
 
 	prompt := agentContext.SystemPrompt()
@@ -129,7 +129,7 @@ func TestWriteSystemPromptFile(t *testing.T) {
 			UserID:     "@agent/test:test.local",
 			ServerName: "test.local",
 		},
-		ConfigRoomAlias: "#bureau/fleet/prod/machine/ws:test.local",
+		ConfigRoomAlias: ref.MustParseRoomAlias("#bureau/fleet/prod/machine/ws:test.local"),
 	}
 
 	path, err := agentContext.WriteSystemPromptFile()

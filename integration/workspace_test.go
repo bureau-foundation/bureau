@@ -65,7 +65,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	workspaceRoomAlias := "#wst/lifecycle:" + testServerName
 	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
+	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	// Resolve the workspace room created by the CLI so we can watch its
 	// status transitions.
-	workspaceRoomID, err := admin.ResolveAlias(ctx, "#wscli/main:"+testServerName)
+	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wscli/main:"+testServerName))
 	if err != nil {
 		t.Fatalf("resolve workspace room created by CLI: %v", err)
 	}

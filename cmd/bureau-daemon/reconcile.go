@@ -825,7 +825,16 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 	roomID := d.configRoomID
 	conditionRoomID := ref.RoomID{} // Only set when RoomAlias is used (workspace rooms).
 	if condition.RoomAlias != "" {
-		resolved, err := d.session.ResolveAlias(ctx, condition.RoomAlias)
+		conditionAlias, err := ref.ParseRoomAlias(condition.RoomAlias)
+		if err != nil {
+			d.logger.Error("invalid start condition room alias",
+				"principal", principal,
+				"room_alias", condition.RoomAlias,
+				"error", err,
+			)
+			return false, nil, ref.RoomID{}
+		}
+		resolved, err := d.session.ResolveAlias(ctx, conditionAlias)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				d.logger.Info("start condition room alias not found, deferring principal",

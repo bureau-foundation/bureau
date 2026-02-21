@@ -192,7 +192,7 @@ func runEnable(params *enableParams) error {
 		ServicePrincipal: servicePrincipal,
 		ServiceUserID:    serviceUserID.String(),
 		Machine:          host,
-		SpaceAlias:       spaceAlias,
+		SpaceAlias:       spaceAlias.String(),
 		SpaceRoomID:      spaceRoomID.String(),
 		RoomsConfigured:  configuredRooms,
 	}); done {

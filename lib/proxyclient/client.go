@@ -199,29 +199,29 @@ func (client *Client) DiscoverServerName(ctx context.Context) (string, error) {
 }
 
 // ResolveAlias resolves a Matrix room alias to a room ID.
-func (client *Client) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
-	response, err := client.get(ctx, "/v1/matrix/resolve?alias="+url.QueryEscape(alias))
+func (client *Client) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
+	response, err := client.get(ctx, "/v1/matrix/resolve?alias="+url.QueryEscape(alias.String()))
 	if err != nil {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %s: %w", alias, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %q: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
+		return ref.RoomID{}, fmt.Errorf("resolve alias %s: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
 	}
 
 	var result struct {
 		RoomID string `json:"room_id"`
 	}
 	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %q: %w", alias, err)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %s: %w", alias, err)
 	}
 	if result.RoomID == "" {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %q: empty room_id in response", alias)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %s: empty room_id in response", alias)
 	}
 	roomID, err := ref.ParseRoomID(result.RoomID)
 	if err != nil {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %q: invalid room_id %q: %w", alias, result.RoomID, err)
+		return ref.RoomID{}, fmt.Errorf("resolve alias %s: invalid room_id %q: %w", alias, result.RoomID, err)
 	}
 	return roomID, nil
 }

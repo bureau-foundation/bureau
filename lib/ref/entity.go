@@ -21,9 +21,9 @@ type entity struct {
 	fleet      Fleet
 	name       string
 	entityType string
-	localpart  string // pre-computed: "my_bureau/fleet/prod/machine/gpu-box"
-	userID     UserID // pre-computed: "@my_bureau/fleet/prod/machine/gpu-box:server"
-	roomAlias  string // pre-computed: "#my_bureau/fleet/prod/machine/gpu-box:server"
+	localpart  string    // pre-computed: "my_bureau/fleet/prod/machine/gpu-box"
+	userID     UserID    // pre-computed: "@my_bureau/fleet/prod/machine/gpu-box:server"
+	roomAlias  RoomAlias // pre-computed: "#my_bureau/fleet/prod/machine/gpu-box:server"
 }
 
 // newEntity constructs a validated entity. The name may contain slashes
@@ -51,7 +51,7 @@ func newEntity(fleet Fleet, entityType, name string) (entity, error) {
 		entityType: entityType,
 		localpart:  localpart,
 		userID:     MatrixUserID(localpart, server),
-		roomAlias:  "#" + localpart + ":" + server,
+		roomAlias:  newRoomAlias(localpart, server),
 	}, nil
 }
 
@@ -103,7 +103,7 @@ func (e entity) UserID() UserID { return e.userID }
 
 // RoomAlias returns the entity's config room alias: #localpart:server.
 // This is the @ -> # rule: swap the sigil to get the room.
-func (e entity) RoomAlias() string { return e.roomAlias }
+func (e entity) RoomAlias() RoomAlias { return e.roomAlias }
 
 // Server returns the Matrix homeserver name.
 func (e entity) Server() string { return e.fleet.ns.server }

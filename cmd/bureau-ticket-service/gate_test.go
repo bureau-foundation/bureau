@@ -2724,9 +2724,9 @@ type fakeAliasResolver struct {
 	callCount int
 }
 
-func (f *fakeAliasResolver) ResolveAlias(_ context.Context, alias string) (ref.RoomID, error) {
+func (f *fakeAliasResolver) ResolveAlias(_ context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
 	f.callCount++
-	raw, exists := f.aliases[alias]
+	raw, exists := f.aliases[alias.String()]
 	if !exists {
 		return ref.RoomID{}, fmt.Errorf("alias not found: %s", alias)
 	}

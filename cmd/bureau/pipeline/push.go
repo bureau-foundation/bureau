@@ -26,13 +26,13 @@ type pipelinePushParams struct {
 
 // pushResult is the JSON output for pipeline push.
 type pushResult struct {
-	Ref          string     `json:"ref"                    desc:"pipeline reference (state key)"`
-	File         string     `json:"file"                   desc:"source pipeline file path"`
-	RoomAlias    string     `json:"room_alias"             desc:"target room alias"`
-	RoomID       ref.RoomID `json:"room_id,omitempty"      desc:"target room Matrix ID"`
-	PipelineName string     `json:"pipeline_name"          desc:"pipeline name"`
-	EventID      string     `json:"event_id,omitempty"     desc:"created state event ID"`
-	DryRun       bool       `json:"dry_run"                desc:"true if push was simulated"`
+	Ref          string        `json:"ref"                    desc:"pipeline reference (state key)"`
+	File         string        `json:"file"                   desc:"source pipeline file path"`
+	RoomAlias    ref.RoomAlias `json:"room_alias"             desc:"target room alias"`
+	RoomID       ref.RoomID    `json:"room_id,omitempty"      desc:"target room Matrix ID"`
+	PipelineName string        `json:"pipeline_name"          desc:"pipeline name"`
+	EventID      string        `json:"event_id,omitempty"     desc:"created state event ID"`
+	DryRun       bool          `json:"dry_run"                desc:"true if push was simulated"`
 }
 
 // pushCommand returns the "push" subcommand for publishing a pipeline to Matrix.
@@ -87,7 +87,7 @@ without actually publishing.`,
 			filePath := params.File
 
 			// Parse the pipeline reference.
-			ref, err := schema.ParsePipelineRef(pipelineRefString)
+			pipelineRef, err := schema.ParsePipelineRef(pipelineRefString)
 			if err != nil {
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}
@@ -114,7 +114,7 @@ without actually publishing.`,
 			defer cancel()
 
 			// Verify the target room exists.
-			roomAlias := schema.FullRoomAlias(ref.Room, params.ServerName)
+			roomAlias := pipelineRef.RoomAlias(params.ServerName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
 				return cli.NotFound("resolving target room %q: %w", roomAlias, err)
@@ -122,40 +122,40 @@ without actually publishing.`,
 
 			if params.DryRun {
 				if done, err := params.EmitJSON(pushResult{
-					Ref:          ref.String(),
+					Ref:          pipelineRef.String(),
 					File:         filePath,
 					RoomAlias:    roomAlias,
 					RoomID:       roomID,
-					PipelineName: ref.Pipeline,
+					PipelineName: pipelineRef.Pipeline,
 					DryRun:       true,
 				}); done {
 					return err
 				}
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", filePath)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
-				fmt.Fprintf(os.Stdout, "  pipeline name: %s\n", ref.Pipeline)
+				fmt.Fprintf(os.Stdout, "  pipeline name: %s\n", pipelineRef.Pipeline)
 				return nil
 			}
 
 			// Publish the pipeline as a state event.
-			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipeline, ref.Pipeline, content)
+			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipeline, pipelineRef.Pipeline, content)
 			if err != nil {
 				return cli.Internal("publishing pipeline: %w", err)
 			}
 
 			if done, err := params.EmitJSON(pushResult{
-				Ref:          ref.String(),
+				Ref:          pipelineRef.String(),
 				File:         filePath,
 				RoomAlias:    roomAlias,
 				RoomID:       roomID,
-				PipelineName: ref.Pipeline,
+				PipelineName: pipelineRef.Pipeline,
 				EventID:      eventID,
 				DryRun:       false,
 			}); done {
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", ref.String(), roomAlias, eventID)
+			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", pipelineRef.String(), roomAlias, eventID)
 			return nil
 		},
 	}

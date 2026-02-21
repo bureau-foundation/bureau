@@ -1187,7 +1187,7 @@ func uptimeSeconds() int64 {
 // The config room must already exist (created by "bureau machine provision").
 // The daemon does not create config rooms — that is the admin's responsibility
 // during provisioning.
-func resolveConfigRoom(ctx context.Context, session *messaging.DirectSession, alias string, logger *slog.Logger) (ref.RoomID, error) {
+func resolveConfigRoom(ctx context.Context, session *messaging.DirectSession, alias ref.RoomAlias, logger *slog.Logger) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

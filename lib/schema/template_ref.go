@@ -6,6 +6,8 @@ package schema
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // TemplateRef is a parsed template reference identifying a specific template
@@ -114,12 +116,11 @@ func (ref TemplateRef) String() string {
 }
 
 // RoomAlias returns the full Matrix room alias for this template reference,
-// using defaultServer when the reference doesn't specify a server. The
-// returned alias has the format "#<room>:<server>".
-func (ref TemplateRef) RoomAlias(defaultServer string) string {
-	server := ref.Server
+// using defaultServer when the reference doesn't specify a server.
+func (templateRef TemplateRef) RoomAlias(defaultServer string) ref.RoomAlias {
+	server := templateRef.Server
 	if server == "" {
 		server = defaultServer
 	}
-	return "#" + ref.Room + ":" + server
+	return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + server)
 }

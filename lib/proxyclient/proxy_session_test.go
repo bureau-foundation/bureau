@@ -99,7 +99,7 @@ func TestProxySessionResolveAlias(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	roomID, err := session.ResolveAlias(context.Background(), "#test:test.local")
+	roomID, err := session.ResolveAlias(context.Background(), ref.MustParseRoomAlias("#test:test.local"))
 	if err != nil {
 		t.Fatalf("ResolveAlias: %v", err)
 	}

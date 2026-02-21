@@ -232,7 +232,7 @@ func TestResolveAlias(t *testing.T) {
 
 	client := testServer(t, mux)
 
-	roomID, err := client.ResolveAlias(context.Background(), "#bureau/fleet/prod/machine/ws:test.local")
+	roomID, err := client.ResolveAlias(context.Background(), ref.MustParseRoomAlias("#bureau/fleet/prod/machine/ws:test.local"))
 	if err != nil {
 		t.Fatalf("ResolveAlias: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestResolveAlias(t *testing.T) {
 		t.Errorf("RoomID = %s, want %s", roomID, expectedRoomID)
 	}
 
-	_, err = client.ResolveAlias(context.Background(), "#nonexistent:test.local")
+	_, err = client.ResolveAlias(context.Background(), ref.MustParseRoomAlias("#nonexistent:test.local"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent alias")
 	}

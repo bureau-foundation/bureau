@@ -47,7 +47,7 @@ type mockSession struct {
 	getRoomState func(ctx context.Context, roomID ref.RoomID) ([]messaging.Event, error)
 
 	// resolveAlias is called by both Provision and List to look up config rooms.
-	resolveAlias func(ctx context.Context, alias string) (ref.RoomID, error)
+	resolveAlias func(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 
 	// sendStateEvent is called by Provision to publish the credential event.
 	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType, stateKey string, content any) (string, error)
@@ -70,7 +70,7 @@ func (m *mockSession) GetRoomState(ctx context.Context, roomID ref.RoomID) ([]me
 	return m.getRoomState(ctx, roomID)
 }
 
-func (m *mockSession) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
+func (m *mockSession) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
 	if m.resolveAlias == nil {
 		panic("ResolveAlias not implemented")
 	}
@@ -333,7 +333,7 @@ func TestProvision_ConfigRoomResolveFails(t *testing.T) {
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return ref.RoomID{}, fmt.Errorf("alias not found")
 		},
 	}
@@ -360,7 +360,7 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
@@ -405,8 +405,8 @@ func TestProvision_HappyPath(t *testing.T) {
 			}
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
-		resolveAlias: func(_ context.Context, alias string) (ref.RoomID, error) {
-			if alias != machine.RoomAlias() {
+		resolveAlias: func(_ context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
+			if alias.String() != machine.RoomAlias().String() {
 				t.Errorf("ResolveAlias alias = %q, want %q", alias, machine.RoomAlias())
 			}
 			return mustRoomID("!config:bureau.local"), nil
@@ -491,7 +491,7 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", machineKeypair.PublicKey), nil
 		},
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {
@@ -564,7 +564,7 @@ func TestList_ConfigRoomResolveFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return ref.RoomID{}, fmt.Errorf("server error")
 		},
 	}
@@ -582,7 +582,7 @@ func TestList_ConfigRoomNotFound(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return ref.RoomID{}, &messaging.MatrixError{
 				Code:       messaging.ErrCodeNotFound,
 				Message:    "Room alias not found",
@@ -606,7 +606,7 @@ func TestList_RoomStateFetchFails(t *testing.T) {
 	machine := testMachine(t)
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
@@ -628,7 +628,7 @@ func TestList_NoCredentialEvents(t *testing.T) {
 	memberStateKey := "@someone:bureau.local"
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
@@ -689,8 +689,8 @@ func TestList_HappyPathMultipleBundles(t *testing.T) {
 
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
-		resolveAlias: func(_ context.Context, alias string) (ref.RoomID, error) {
-			if alias != machine.RoomAlias() {
+		resolveAlias: func(_ context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
+			if alias.String() != machine.RoomAlias().String() {
 				t.Errorf("ResolveAlias alias = %q, want %q", alias, machine.RoomAlias())
 			}
 			return mustRoomID("!config:bureau.local"), nil
@@ -797,7 +797,7 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 		getStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string) (json.RawMessage, error) {
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
-		resolveAlias: func(_ context.Context, _ string) (ref.RoomID, error) {
+		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _, _ string, _ any) (string, error) {

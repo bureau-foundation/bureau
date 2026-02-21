@@ -244,7 +244,7 @@ func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fl
 // space. The alias parameter is the full "#localpart:server" form used for
 // the resolve check; the CreateRoomRequest.Alias field is the localpart
 // used by the Matrix create-room API.
-func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias string, spaceRoomID ref.RoomID, server string, request messaging.CreateRoomRequest) (ref.RoomID, error) {
+func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias ref.RoomAlias, spaceRoomID ref.RoomID, server string, request messaging.CreateRoomRequest) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {
 		fmt.Fprintf(os.Stderr, "Room %s already exists (%s)\n", alias, roomID)

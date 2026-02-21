@@ -319,7 +319,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	}
 
 	// Section 2: Space and rooms exist.
-	spaceAlias := schema.FullRoomAlias("bureau", serverName)
+	spaceAlias := ref.MustParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
 	if spaceResult.Status == statusFail {
 		spaceResult.FixHint = "create Bureau space"
@@ -337,7 +337,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	roomIDs := make(map[string]ref.RoomID) // local alias → room ID
 	for _, room := range standardRooms {
 		room := room // capture for closure
-		fullAlias := schema.FullRoomAlias(room.alias, serverName)
+		fullAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(room.alias, serverName))
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
 		if result.Status == statusFail {
 			result.FixHint = fmt.Sprintf("create %s", room.name)
@@ -513,7 +513,7 @@ func checkAuth(ctx context.Context, session messaging.Session) checkResult {
 
 // checkRoomExists resolves a room alias and returns the result plus the room ID
 // (zero value if resolution failed).
-func checkRoomExists(ctx context.Context, session messaging.Session, name, alias string) (checkResult, ref.RoomID) {
+func checkRoomExists(ctx context.Context, session messaging.Session, name string, alias ref.RoomAlias) (checkResult, ref.RoomID) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

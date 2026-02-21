@@ -34,7 +34,7 @@ type Session interface {
 	WhoAmI(ctx context.Context) (ref.UserID, error)
 
 	// ResolveAlias resolves a room alias to a room ID.
-	ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error)
+	ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 
 	// GetStateEvent fetches a specific state event's content from a room.
 	// Returns the raw JSON content for the caller to unmarshal.

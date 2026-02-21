@@ -75,11 +75,11 @@ func TestNamespaceAliases(t *testing.T) {
 		want   string
 	}
 	tests := []aliasTest{
-		{"SpaceAlias", ns.SpaceAlias(), "#my_bureau:" + testServer},
-		{"SystemRoomAlias", ns.SystemRoomAlias(), "#my_bureau/system:" + testServer},
-		{"TemplateRoomAlias", ns.TemplateRoomAlias(), "#my_bureau/template:" + testServer},
-		{"PipelineRoomAlias", ns.PipelineRoomAlias(), "#my_bureau/pipeline:" + testServer},
-		{"ArtifactRoomAlias", ns.ArtifactRoomAlias(), "#my_bureau/artifact:" + testServer},
+		{"SpaceAlias", ns.SpaceAlias().String(), "#my_bureau:" + testServer},
+		{"SystemRoomAlias", ns.SystemRoomAlias().String(), "#my_bureau/system:" + testServer},
+		{"TemplateRoomAlias", ns.TemplateRoomAlias().String(), "#my_bureau/template:" + testServer},
+		{"PipelineRoomAlias", ns.PipelineRoomAlias().String(), "#my_bureau/pipeline:" + testServer},
+		{"ArtifactRoomAlias", ns.ArtifactRoomAlias().String(), "#my_bureau/artifact:" + testServer},
 		{"SpaceAliasLocalpart", ns.SpaceAliasLocalpart(), "my_bureau"},
 		{"SystemRoomAliasLocalpart", ns.SystemRoomAliasLocalpart(), "my_bureau/system"},
 		{"TemplateRoomAliasLocalpart", ns.TemplateRoomAliasLocalpart(), "my_bureau/template"},
@@ -168,9 +168,9 @@ func TestFleetAliases(t *testing.T) {
 		want   string
 	}
 	tests := []aliasTest{
-		{"RoomAlias", fleet.RoomAlias(), "#my_bureau/fleet/prod:" + testServer},
-		{"MachineRoomAlias", fleet.MachineRoomAlias(), "#my_bureau/fleet/prod/machine:" + testServer},
-		{"ServiceRoomAlias", fleet.ServiceRoomAlias(), "#my_bureau/fleet/prod/service:" + testServer},
+		{"RoomAlias", fleet.RoomAlias().String(), "#my_bureau/fleet/prod:" + testServer},
+		{"MachineRoomAlias", fleet.MachineRoomAlias().String(), "#my_bureau/fleet/prod/machine:" + testServer},
+		{"ServiceRoomAlias", fleet.ServiceRoomAlias().String(), "#my_bureau/fleet/prod/service:" + testServer},
 		{"MachineRoomAliasLocalpart", fleet.MachineRoomAliasLocalpart(), "my_bureau/fleet/prod/machine"},
 		{"ServiceRoomAliasLocalpart", fleet.ServiceRoomAliasLocalpart(), "my_bureau/fleet/prod/service"},
 		{"RunDir", fleet.RunDir("/run/bureau"), "/run/bureau/fleet/prod"},
@@ -309,7 +309,7 @@ func TestMachineConstruction(t *testing.T) {
 			if m.UserID().String() != tt.wantUID {
 				t.Errorf("UserID() = %q, want %q", m.UserID(), tt.wantUID)
 			}
-			if m.RoomAlias() != tt.wantRA {
+			if m.RoomAlias().String() != tt.wantRA {
 				t.Errorf("RoomAlias() = %q, want %q", m.RoomAlias(), tt.wantRA)
 			}
 			if m.Name() != tt.machine {
@@ -492,8 +492,8 @@ func TestAtToHashRule(t *testing.T) {
 	fleet, _ := ref.NewFleet(ns, "prod")
 	machine, _ := ref.NewMachine(fleet, "gpu-box")
 
-	userID := machine.UserID().String() // @localpart:server
-	roomAlias := machine.RoomAlias()    // #localpart:server
+	userID := machine.UserID().String()       // @localpart:server
+	roomAlias := machine.RoomAlias().String() // #localpart:server
 
 	// The @ -> # rule: swap the sigil and you get the room.
 	if "#"+userID[1:] != roomAlias {

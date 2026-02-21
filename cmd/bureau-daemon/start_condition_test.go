@@ -38,7 +38,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Set up the workspace room with an active workspace event (condition is met).
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
@@ -102,7 +102,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Set up the workspace room alias but do NOT publish the workspace event.
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -158,7 +158,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	fleetPrefix := fleet.Localpart() + "/"
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -391,7 +391,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace event exists but with "pending" status (not "active").
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "pending",
 		Project:   "iree",
@@ -475,7 +475,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket event with an array "labels" field containing "bug".
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-1", map[string]any{
 		"title":  "Fix the widget",
 		"labels": []any{"bug", "p1", "frontend"},
@@ -535,7 +535,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket with labels that do NOT include "security".
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-2", map[string]any{
 		"title":  "Improve performance",
 		"labels": []any{"enhancement", "backend"},
@@ -595,7 +595,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Array with non-string elements only.
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-3", map[string]any{
 		"title":  "Numeric labels",
 		"labels": []any{42, true, map[string]any{"nested": "value"}},
@@ -654,7 +654,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-4", map[string]any{
 		"title":  "Security bug",
 		"labels": []any{"bug", "security", "p0"},
@@ -713,7 +713,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-5", map[string]any{
 		"title":  "Feature request",
 		"labels": []any{"enhancement", "backend"},
@@ -772,7 +772,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-6", map[string]any{
 		"title":  "Unlabeled ticket",
 		"labels": []any{},
@@ -835,7 +835,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace is initially active — condition is met.
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
@@ -923,7 +923,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Workspace is initially active.
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
@@ -1027,7 +1027,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 
 	// Set up a workspace event with status "teardown" and a teardown_mode field.
 	// This is the event whose content should flow through as trigger content.
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
 		Status:       "teardown",
 		TeardownMode: "archive",
@@ -1262,7 +1262,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 
 	// Ticket event with an array field. The "labels" array contains "urgent"
 	// which will satisfy the ContentMatch condition.
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-100", map[string]any{
 		"title":    "Critical production issue",
 		"labels":   []any{"urgent", "production", "p0"},
@@ -1412,7 +1412,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Initial ticket has labels that do NOT include "reviewed".
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-200", map[string]any{
 		"title":  "Needs code review",
 		"labels": []any{"pending", "feature"},
@@ -1500,7 +1500,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket initially has "active" in its tags array.
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-300", map[string]any{
 		"title": "Active work item",
 		"tags":  []any{"active", "sprint-42"},
@@ -1586,7 +1586,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Ticket with labels containing "bug" and "frontend" but NOT "backend".
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-400", map[string]any{
 		"title":  "UI rendering glitch",
 		"labels": []any{"bug", "frontend", "p1"},
@@ -1705,7 +1705,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
 	// Start with "category" as a plain string value "infrastructure".
-	matrixState.setRoomAlias("#tickets:test.local", ticketRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#tickets:test.local"), ticketRoomID)
 	matrixState.setStateEvent(ticketRoomID, schema.EventTypeTicket, "TICKET-500", map[string]any{
 		"title":    "Server migration",
 		"category": "infrastructure",

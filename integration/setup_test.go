@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -41,7 +42,7 @@ func TestRoomsExistViaAPI(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	expectedAliases := []string{
+	expectedAliases := []ref.RoomAlias{
 		testNamespace.SpaceAlias(),
 		testNamespace.SystemRoomAlias(),
 		testNamespace.TemplateRoomAlias(),
@@ -82,7 +83,7 @@ func TestSpaceHierarchy(t *testing.T) {
 	}
 
 	// Verify each standard room is a child of the space.
-	childRooms := []string{
+	childRooms := []ref.RoomAlias{
 		testNamespace.SystemRoomAlias(),
 		testNamespace.TemplateRoomAlias(),
 	}
@@ -146,7 +147,7 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 	session := adminSession(t)
 	defer session.Close()
 
-	rooms := []string{
+	rooms := []ref.RoomAlias{
 		testNamespace.SpaceAlias(),
 		testNamespace.SystemRoomAlias(),
 		testNamespace.TemplateRoomAlias(),

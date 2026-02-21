@@ -15,7 +15,7 @@ import (
 // fleet config) from the fleet ref. Returns the resolved room IDs.
 func resolveFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet) (machineRoomID, serviceRoomID, fleetRoomID ref.RoomID, err error) {
 	aliases := []struct {
-		alias  string
+		alias  ref.RoomAlias
 		target *ref.RoomID
 		name   string
 	}{
@@ -44,7 +44,7 @@ type machineRoom struct {
 // resolvedRoom holds a resolved room (alias → room ID).
 type resolvedRoom struct {
 	machineRoom
-	alias  string // full alias for log messages (e.g., "#bureau/template:bureau.local")
+	alias  ref.RoomAlias // full alias for log messages (e.g., "#bureau/template:bureau.local")
 	roomID ref.RoomID
 }
 
@@ -56,7 +56,7 @@ type resolvedRoom struct {
 // vs decommissioning).
 func resolveGlobalRooms(ctx context.Context, session messaging.Session, namespace ref.Namespace) (resolved []resolvedRoom, failed []resolvedRoom, errors []error) {
 	rooms := []struct {
-		alias       string
+		alias       ref.RoomAlias
 		displayName string
 	}{
 		{namespace.TemplateRoomAlias(), "template room"},

@@ -57,7 +57,7 @@ func (session *ProxySession) WhoAmI(ctx context.Context) (ref.UserID, error) {
 	return session.client.Whoami(ctx)
 }
 
-func (session *ProxySession) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
+func (session *ProxySession) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
 	return session.client.ResolveAlias(ctx, alias)
 }
 

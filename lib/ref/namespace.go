@@ -49,28 +49,28 @@ func (n Namespace) String() string { return n.namespace }
 func (n Namespace) IsZero() bool { return n.server == "" && n.namespace == "" }
 
 // SpaceAlias returns the Matrix space alias: #namespace:server.
-func (n Namespace) SpaceAlias() string {
-	return "#" + n.namespace + ":" + n.server
+func (n Namespace) SpaceAlias() RoomAlias {
+	return newRoomAlias(n.namespace, n.server)
 }
 
 // SystemRoomAlias returns the operational messages room alias.
-func (n Namespace) SystemRoomAlias() string {
-	return "#" + n.namespace + "/system:" + n.server
+func (n Namespace) SystemRoomAlias() RoomAlias {
+	return newRoomAlias(n.namespace+"/system", n.server)
 }
 
 // TemplateRoomAlias returns the sandbox template definitions room alias.
-func (n Namespace) TemplateRoomAlias() string {
-	return "#" + n.namespace + "/template:" + n.server
+func (n Namespace) TemplateRoomAlias() RoomAlias {
+	return newRoomAlias(n.namespace+"/template", n.server)
 }
 
 // PipelineRoomAlias returns the pipeline definitions room alias.
-func (n Namespace) PipelineRoomAlias() string {
-	return "#" + n.namespace + "/pipeline:" + n.server
+func (n Namespace) PipelineRoomAlias() RoomAlias {
+	return newRoomAlias(n.namespace+"/pipeline", n.server)
 }
 
 // ArtifactRoomAlias returns the artifact metadata room alias.
-func (n Namespace) ArtifactRoomAlias() string {
-	return "#" + n.namespace + "/artifact:" + n.server
+func (n Namespace) ArtifactRoomAlias() RoomAlias {
+	return newRoomAlias(n.namespace+"/artifact", n.server)
 }
 
 // SpaceAliasLocalpart returns the localpart of the space alias
@@ -105,7 +105,7 @@ func (n Namespace) MarshalText() ([]byte, error) {
 	if n.IsZero() {
 		return nil, fmt.Errorf("cannot marshal zero-value Namespace")
 	}
-	return []byte(n.SpaceAlias()), nil
+	return []byte(n.SpaceAlias().String()), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler. Parses the

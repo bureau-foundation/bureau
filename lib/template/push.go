@@ -22,7 +22,7 @@ type PushResult struct {
 	RoomID ref.RoomID
 
 	// RoomAlias is the full room alias of the target room.
-	RoomAlias string
+	RoomAlias ref.RoomAlias
 }
 
 // Push publishes a template as an m.bureau.template state event. The template

@@ -37,8 +37,8 @@ func newTemplateTestState() *templateTestState {
 	}
 }
 
-func (state *templateTestState) setRoomAlias(alias, roomID string) {
-	state.roomAliases[alias] = roomID
+func (state *templateTestState) setRoomAlias(alias ref.RoomAlias, roomID string) {
+	state.roomAliases[alias.String()] = roomID
 }
 
 func (state *templateTestState) setTemplate(roomID, templateName string, content schema.TemplateContent) {
@@ -323,7 +323,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 
 	state := newTemplateTestState()
 	state.setRoomAlias(testTemplateNamespace.TemplateRoomAlias(), "!template:test")
-	state.setRoomAlias("#iree/template:test.local", "!iree-template:test")
+	state.setRoomAlias(ref.MustParseRoomAlias("#iree/template:test.local"), "!iree-template:test")
 
 	// Level 0 (root): base
 	state.setTemplate("!template:test", "base", schema.TemplateContent{

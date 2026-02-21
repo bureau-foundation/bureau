@@ -14,6 +14,7 @@ go_library(
         "machine.go",
         "namespace.go",
         "room.go",
+        "room_alias.go",
         "service.go",
         "user.go",
         "validate.go",

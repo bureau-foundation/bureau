@@ -131,7 +131,11 @@ Bureau protocol events).`,
 // parsed as a room ID (must start with !).
 func resolveRoom(ctx context.Context, session messaging.Session, target string) (ref.RoomID, error) {
 	if strings.HasPrefix(target, "#") {
-		roomID, err := session.ResolveAlias(ctx, target)
+		alias, err := ref.ParseRoomAlias(target)
+		if err != nil {
+			return ref.RoomID{}, cli.Validation("invalid room alias %q: %w", target, err)
+		}
+		roomID, err := session.ResolveAlias(ctx, alias)
 		if err != nil {
 			return ref.RoomID{}, cli.NotFound("resolve alias %q: %w", target, err)
 		}

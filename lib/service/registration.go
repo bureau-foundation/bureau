@@ -75,7 +75,7 @@ func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRo
 // discovering fleet-scoped and global rooms at startup. The alias
 // parameter is typically produced by a ref method (e.g.,
 // fleet.ServiceRoomAlias(), namespace.SystemRoomAlias()).
-func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias string) (ref.RoomID, error) {
+func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias ref.RoomAlias) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		return ref.RoomID{}, fmt.Errorf("resolving room alias %q: %w", alias, err)

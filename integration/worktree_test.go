@@ -76,7 +76,7 @@ func TestWorkspaceCommands(t *testing.T) {
 	workspaceAlias := "testproj"
 	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
+	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	workspaceAlias := "wtproj"
 	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, "#bureau:"+testServerName)
+	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
 	if err != nil {
 		t.Fatalf("resolve bureau space: %v", err)
 	}
@@ -697,7 +697,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 		"--server-name", testServerName,
 	)
 
-	workspaceRoomID, err := admin.ResolveAlias(ctx, "#wswt/main:"+testServerName)
+	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wswt/main:"+testServerName))
 	if err != nil {
 		t.Fatalf("resolve workspace room: %v", err)
 	}

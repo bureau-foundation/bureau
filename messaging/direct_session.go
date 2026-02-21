@@ -306,8 +306,8 @@ func (s *DirectSession) Sync(ctx context.Context, options SyncOptions) (*SyncRes
 }
 
 // ResolveAlias resolves a room alias (e.g., "#agents:bureau.local") to a room ID.
-func (s *DirectSession) ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error) {
-	path := "/_matrix/client/v3/directory/room/" + url.PathEscape(alias)
+func (s *DirectSession) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
+	path := "/_matrix/client/v3/directory/room/" + url.PathEscape(alias.String())
 	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
 	if err != nil {
 		return ref.RoomID{}, fmt.Errorf("messaging: resolve alias %q failed: %w", alias, err)

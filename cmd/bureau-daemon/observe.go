@@ -418,7 +418,13 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 	)
 
 	// Resolve the channel alias to a room ID.
-	roomID, err := d.session.ResolveAlias(ctx, request.Channel)
+	channelAlias, err := ref.ParseRoomAlias(request.Channel)
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("invalid channel alias %q: %v", request.Channel, err))
+		return
+	}
+	roomID, err := d.session.ResolveAlias(ctx, channelAlias)
 	if err != nil {
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("resolve channel %q: %v", request.Channel, err))

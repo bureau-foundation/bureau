@@ -498,7 +498,7 @@ func TestResolveAlias(t *testing.T) {
 			})
 		}))
 
-		roomID, err := session.ResolveAlias(context.Background(), "#test:local")
+		roomID, err := session.ResolveAlias(context.Background(), ref.MustParseRoomAlias("#test:local"))
 		if err != nil {
 			t.Fatalf("ResolveAlias failed: %v", err)
 		}
@@ -514,7 +514,7 @@ func TestResolveAlias(t *testing.T) {
 			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeNotFound, Message: "Room alias not found"})
 		}))
 
-		_, err := session.ResolveAlias(context.Background(), "#nonexistent:local")
+		_, err := session.ResolveAlias(context.Background(), ref.MustParseRoomAlias("#nonexistent:local"))
 		if err == nil {
 			t.Fatal("expected error for missing alias")
 		}

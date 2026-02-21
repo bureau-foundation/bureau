@@ -179,7 +179,10 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	machineUserID := machineRef.UserID()
 
 	// Resolve the Bureau space. The workspace room will be added as a child.
-	spaceAlias := schema.FullRoomAlias("bureau", serverName)
+	spaceAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
+	if err != nil {
+		return cli.Validation("invalid space alias: %w", err)
+	}
 	spaceRoomID, err := sess.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
 		return cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
@@ -298,7 +301,10 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 // create → retry resolve if someone else created it between our check and
 // create).
 func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias, serverName string, adminUserID, machineUserID ref.UserID, spaceRoomID ref.RoomID) (ref.RoomID, error) {
-	fullAlias := schema.FullRoomAlias(alias, serverName)
+	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
+	if err != nil {
+		return ref.RoomID{}, cli.Validation("invalid workspace alias %q: %w", alias, err)
+	}
 
 	// Check if the room already exists.
 	roomID, err := session.ResolveAlias(ctx, fullAlias)

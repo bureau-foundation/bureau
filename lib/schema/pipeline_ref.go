@@ -3,6 +3,8 @@
 
 package schema
 
+import "github.com/bureau-foundation/bureau/lib/ref"
+
 // PipelineRef is a parsed pipeline reference identifying a specific pipeline
 // in a specific room. The wire format is:
 //
@@ -66,12 +68,11 @@ func (ref PipelineRef) String() string {
 }
 
 // RoomAlias returns the full Matrix room alias for this pipeline reference,
-// using defaultServer when the reference doesn't specify a server. The
-// returned alias has the format "#<room>:<server>".
-func (ref PipelineRef) RoomAlias(defaultServer string) string {
-	server := ref.Server
+// using defaultServer when the reference doesn't specify a server.
+func (pipelineRef PipelineRef) RoomAlias(defaultServer string) ref.RoomAlias {
+	server := pipelineRef.Server
 	if server == "" {
 		server = defaultServer
 	}
-	return "#" + ref.Room + ":" + server
+	return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + server)
 }

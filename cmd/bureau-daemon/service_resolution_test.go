@@ -229,7 +229,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
-	matrixState.setRoomAlias("#iree/amdgpu/inference:test.local", workspaceRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "ws-consumer", schema.TemplateContent{
 		Command:          []string{"/bin/echo", "hello"},

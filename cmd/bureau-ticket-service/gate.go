@@ -222,7 +222,7 @@ func matchStateEventCondition(gate *schema.TicketGate, event messaging.Event) bo
 // *messaging.DirectSession implements this interface. Tests substitute a
 // fake implementation.
 type aliasResolver interface {
-	ResolveAlias(ctx context.Context, alias string) (ref.RoomID, error)
+	ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 }
 
 // evaluateCrossRoomGates checks events from non-ticket rooms against
@@ -347,9 +347,14 @@ func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
 // the result. Cache entries persist for the lifetime of the service.
 // Aliases that fail to resolve are not cached (the room may not exist
 // yet, and a future attempt should retry).
-func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string) (ref.RoomID, error) {
-	if roomID, cached := ts.aliasCache[alias]; cached {
+func (ts *TicketService) resolveAliasWithCache(ctx context.Context, aliasString string) (ref.RoomID, error) {
+	if roomID, cached := ts.aliasCache[aliasString]; cached {
 		return roomID, nil
+	}
+
+	alias, err := ref.ParseRoomAlias(aliasString)
+	if err != nil {
+		return ref.RoomID{}, fmt.Errorf("invalid room alias %q: %w", aliasString, err)
 	}
 
 	resolved, err := ts.resolver.ResolveAlias(ctx, alias)
@@ -357,7 +362,7 @@ func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias string
 		return ref.RoomID{}, err
 	}
 
-	ts.aliasCache[alias] = resolved
+	ts.aliasCache[aliasString] = resolved
 	return resolved, nil
 }
 

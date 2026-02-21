@@ -19,6 +19,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -141,7 +142,7 @@ func TestQueryLayoutChannelDashboard(t *testing.T) {
 	channelRoomID := "!channel-room:bureau.local"
 
 	// Set up mock data: alias → room ID, layout state event, members.
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
 		Windows: []schema.LayoutWindow{
@@ -215,7 +216,7 @@ func TestQueryLayoutStaticLayout(t *testing.T) {
 	channelAlias := "#static:bureau.local"
 	channelRoomID := "!static-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
 		Windows: []schema.LayoutWindow{
 			{
@@ -260,7 +261,7 @@ func TestQueryLayoutMissingLayoutEvent(t *testing.T) {
 	channelAlias := "#no-layout:bureau.local"
 	channelRoomID := "!no-layout-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 	// No layout state event set.
 
 	response := sendQueryLayout(t, daemon.observeSocketPath, channelAlias)
@@ -331,7 +332,7 @@ func TestQueryLayoutExcludesNonBureauMembers(t *testing.T) {
 	channelAlias := "#mixed:bureau.local"
 	channelRoomID := "!mixed-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
 		Windows: []schema.LayoutWindow{
 			{
@@ -401,7 +402,7 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	channelAlias := "#iree/amdgpu/general:bureau.local"
 	channelRoomID := "!label-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
 	// Layout filters to only agents.
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
@@ -480,7 +481,7 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 	channelAlias := "#all:bureau.local"
 	channelRoomID := "!multi-label-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
 		Windows: []schema.LayoutWindow{
 			{
@@ -543,7 +544,7 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 	channelAlias := "#cross:bureau.local"
 	channelRoomID := "!cross-room:bureau.local"
 
-	matrixState.setRoomAlias(channelAlias, channelRoomID)
+	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
 	// Two windows: one with label filter, one without.
 	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{

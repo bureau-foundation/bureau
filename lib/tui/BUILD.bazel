@@ -1,0 +1,36 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tui",
+    srcs = [
+        "animation.go",
+        "doc.go",
+        "dropdown.go",
+        "fuzzy.go",
+        "markdown.go",
+        "note_modal.go",
+        "overlay.go",
+        "scrollbar.go",
+        "search.go",
+        "theme.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/tui",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_alecthomas_chroma_v2//quick",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@com_github_charmbracelet_x_ansi//:ansi",
+        "@com_github_junegunn_fzf//src/algo",
+        "@com_github_junegunn_fzf//src/util",
+        "@com_github_muesli_termenv//:termenv",
+        "@com_github_yuin_goldmark//:goldmark",
+        "@com_github_yuin_goldmark//ast",
+        "@com_github_yuin_goldmark//extension",
+        "@com_github_yuin_goldmark//extension/ast",
+        "@com_github_yuin_goldmark//text",
+    ],
+)

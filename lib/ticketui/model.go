@@ -1753,7 +1753,7 @@ func (model Model) handleDropdownKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		selected := model.activeDropdown.Selected()
 		msg := dropdownSelectMsg{
 			field:    model.activeDropdown.Field,
-			ticketID: model.activeDropdown.TicketID,
+			ticketID: model.activeDropdown.ItemID,
 			value:    selected.Value,
 		}
 		model.dismissDropdown()
@@ -1796,23 +1796,23 @@ func (model *Model) handleHeaderClick(field string, screenX, screenY int) tea.Cm
 			return nil
 		}
 		model.activeDropdown = &DropdownOverlay{
-			Options:  options,
-			Cursor:   0,
-			AnchorX:  screenX,
-			AnchorY:  screenY + 1, // Below the clicked field.
-			Field:    "status",
-			TicketID: model.selectedID,
+			Options: options,
+			Cursor:  0,
+			AnchorX: screenX,
+			AnchorY: screenY + 1, // Below the clicked field.
+			Field:   "status",
+			ItemID:  model.selectedID,
 		}
 		model.focusRegion = FocusDropdown
 
 	case "priority":
 		model.activeDropdown = &DropdownOverlay{
-			Options:  PriorityOptions(),
-			Cursor:   content.Priority, // Pre-select current priority.
-			AnchorX:  screenX,
-			AnchorY:  screenY + 1,
-			Field:    "priority",
-			TicketID: model.selectedID,
+			Options: PriorityOptions(),
+			Cursor:  content.Priority, // Pre-select current priority.
+			AnchorX: screenX,
+			AnchorY: screenY + 1,
+			Field:   "priority",
+			ItemID:  model.selectedID,
 		}
 		model.focusRegion = FocusDropdown
 
@@ -1878,12 +1878,12 @@ func (model *Model) openAssigneeDropdown(screenX, screenY int) tea.Cmd {
 	}
 
 	model.activeDropdown = &DropdownOverlay{
-		Options:  options,
-		Cursor:   cursor,
-		AnchorX:  screenX,
-		AnchorY:  screenY + 1,
-		Field:    "assignee",
-		TicketID: model.selectedID,
+		Options: options,
+		Cursor:  cursor,
+		AnchorX: screenX,
+		AnchorY: screenY + 1,
+		Field:   "assignee",
+		ItemID:  model.selectedID,
 	}
 	model.focusRegion = FocusDropdown
 
@@ -2125,7 +2125,7 @@ func (model Model) handleNoteModalKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) 
 	case message.Type == tea.KeyCtrlD:
 		// Submit the note.
 		body := strings.TrimSpace(model.noteModal.Value())
-		ticketID := model.noteModal.TicketID
+		ticketID := model.noteModal.ContextLabel
 		model.noteModal = nil
 		model.focusRegion = FocusDetail
 

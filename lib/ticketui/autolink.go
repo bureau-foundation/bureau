@@ -8,8 +8,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/bureau-foundation/bureau/lib/tui"
 )
 
 // autolinkPattern matches candidate ticket IDs in visible text. The
@@ -33,7 +34,7 @@ func detectAutolinks(body string, existingTargets []BodyClickTarget, source Sour
 	var resultLines []string
 
 	// ANSI escapes for link styling: foreground color + underline.
-	linkOn := ansiForeground(theme.LinkForeground) + "\x1b[4m"
+	linkOn := tui.ANSIForeground(theme.LinkForeground) + "\x1b[4m"
 	linkOff := "\x1b[24m\x1b[39m" // underline off + default foreground
 
 	for lineNumber, line := range lines {
@@ -168,10 +169,4 @@ func styleAutolinks(line string, autolinks []autolinkMatch, linkOn, linkOff stri
 	}
 
 	return result.String()
-}
-
-// ansiForeground returns the ANSI escape sequence to set the
-// foreground to a 256-color palette index.
-func ansiForeground(color lipgloss.Color) string {
-	return "\x1b[38;5;" + string(color) + "m"
 }

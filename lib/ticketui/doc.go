@@ -6,11 +6,17 @@
 // a split-pane view with a grouped ticket list and a rich detail pane,
 // connected to a ticket data source via the [Source] interface.
 //
+// Generic UI components (theme, overlays, search, dropdowns, modals,
+// fuzzy matching, markdown rendering) live in [tui] and are re-exported
+// here for internal use. Ticket-specific logic (data sources, key
+// bindings, autolinks, filters, detail rendering) stays in this
+// package.
+//
 // The Source abstraction decouples the TUI from the data backend:
-// [IndexSource] wraps a local [ticket.Index] (used when loading from
-// beads JSONL files), while a future SocketSource will communicate
-// with the ticket service over CBOR/unix socket. The TUI code is
-// identical in both cases.
+// [IndexSource] wraps a local [ticketindex.Index] (used when loading
+// from beads JSONL files), while [ServiceSource] communicates with the
+// ticket service over CBOR/unix socket. The TUI code is identical in
+// both cases.
 //
 // Data flow:
 //

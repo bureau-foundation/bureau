@@ -582,16 +582,19 @@ the parent workspace automatically by walking up the alias path.`,
 type worktreeAddParams struct {
 	cli.JSONOutput
 	Branch     string `json:"branch"      flag:"branch"      desc:"git branch or commit to check out (empty for detached HEAD)"`
+	Wait       bool   `json:"wait"        flag:"wait"        desc:"wait for the setup pipeline to complete" default:"true"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
 // worktreeAddResult is the JSON output for workspace worktree add.
 type worktreeAddResult struct {
-	Alias         string `json:"alias"                      desc:"worktree alias"`
-	Workspace     string `json:"workspace"                  desc:"parent workspace alias"`
-	Subpath       string `json:"subpath"                    desc:"worktree subpath within workspace"`
-	Branch        string `json:"branch,omitempty"           desc:"git branch or commit checked out"`
-	PrincipalName string `json:"principal_name,omitempty"   desc:"executor principal name"`
+	Alias         string       `json:"alias"                      desc:"worktree alias"`
+	Workspace     string       `json:"workspace"                  desc:"parent workspace alias"`
+	Subpath       string       `json:"subpath"                    desc:"worktree subpath within workspace"`
+	Branch        string       `json:"branch,omitempty"           desc:"git branch or commit checked out"`
+	PrincipalName string       `json:"principal_name,omitempty"   desc:"executor principal name"`
+	TicketID      ref.TicketID `json:"ticket_id,omitempty"        desc:"pipeline ticket ID"`
+	Conclusion    string       `json:"conclusion,omitempty"       desc:"pipeline conclusion (when --wait)"`
 }
 
 func worktreeAddCommand() *cli.Command {
@@ -606,8 +609,8 @@ the parent workspace alias — for workspace "iree", creating worktree
 
 The daemon spawns a pipeline executor to perform the git operations
 (worktree creation, submodule init, project-level setup scripts).
-This is an async operation — the command returns immediately with
-an "accepted" status.`,
+By default, the command waits for the pipeline to complete, printing
+step progress. Use --no-wait to return immediately after acceptance.`,
 		Usage:          "bureau workspace worktree add <alias> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &worktreeAddResult{} },
@@ -624,12 +627,12 @@ an "accepted" status.`,
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
-			return runWorktreeAdd(args[0], params.Branch, serverName, &params.JSONOutput)
+			return runWorktreeAdd(args[0], params.Branch, params.Wait, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+func runWorktreeAdd(alias, branch string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
@@ -665,8 +668,6 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 		parameters["branch"] = branch
 	}
 
-	// Wait for the "accepted" ack from the daemon. The pipeline
-	// runs asynchronously — the CLI returns after acceptance.
 	future, err := command.Send(ctx, command.SendParams{
 		Session:    session,
 		RoomID:     workspaceRoomID,
@@ -687,23 +688,61 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 		return err
 	}
 
-	if done, err := jsonOutput.EmitJSON(worktreeAddResult{
+	// When --wait is set and the daemon returned a ticket, watch
+	// the pipeline until it completes. Use a 5-minute context —
+	// worktree setup pipelines run git clone + submodule init which
+	// can take a while for large repos.
+	conclusion := ""
+	if wait && !result.TicketID.IsZero() {
+		fmt.Fprintf(os.Stderr, "Worktree add accepted for %s, waiting for pipeline...\n", alias)
+
+		watchCtx, watchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer watchCancel()
+
+		final, watchError := command.WatchTicket(watchCtx, command.WatchTicketParams{
+			Session:    session,
+			RoomID:     result.TicketRoom,
+			TicketID:   result.TicketID,
+			OnProgress: command.StepProgressWriter(os.Stderr),
+		})
+		if watchError != nil {
+			return watchError
+		}
+		if final.Pipeline != nil {
+			conclusion = final.Pipeline.Conclusion
+		}
+	}
+
+	outputResult := worktreeAddResult{
 		Alias:         alias,
 		Workspace:     workspaceAlias,
 		Subpath:       worktreeSubpath,
 		Branch:        branch,
 		PrincipalName: result.Principal,
-	}); done {
+		TicketID:      result.TicketID,
+		Conclusion:    conclusion,
+	}
+	if done, err := jsonOutput.EmitJSON(outputResult); done {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Worktree add accepted for %s\n", alias)
-	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
-	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
-	if branch != "" {
-		fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
+	if conclusion != "" {
+		// Waited for completion — print the outcome.
+		fmt.Fprintf(os.Stderr, "Worktree %s %s\n", alias, conclusion)
+	} else {
+		// Fire-and-forget — print acceptance info with follow-up hint.
+		fmt.Fprintf(os.Stderr, "Worktree add accepted for %s\n", alias)
+		fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
+		fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
+		if branch != "" {
+			fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
+		}
+		result.WriteAcceptedHint(os.Stderr)
 	}
-	result.WriteAcceptedHint(os.Stderr)
+
+	if conclusion != "" && conclusion != "success" {
+		return &cli.ExitError{Code: 1}
+	}
 	return nil
 }
 
@@ -711,16 +750,19 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 type worktreeRemoveParams struct {
 	cli.JSONOutput
 	Mode       string `json:"mode"        flag:"mode"        desc:"removal mode: archive (preserve uncommitted work) or delete" default:"archive"`
+	Wait       bool   `json:"wait"        flag:"wait"        desc:"wait for the removal pipeline to complete" default:"true"`
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
 }
 
 // worktreeRemoveResult is the JSON output for workspace worktree remove.
 type worktreeRemoveResult struct {
-	Alias         string `json:"alias"                      desc:"worktree alias"`
-	Workspace     string `json:"workspace"                  desc:"parent workspace alias"`
-	Subpath       string `json:"subpath"                    desc:"worktree subpath within workspace"`
-	Mode          string `json:"mode"                       desc:"removal mode (archive or delete)"`
-	PrincipalName string `json:"principal_name,omitempty"   desc:"executor principal name"`
+	Alias         string       `json:"alias"                      desc:"worktree alias"`
+	Workspace     string       `json:"workspace"                  desc:"parent workspace alias"`
+	Subpath       string       `json:"subpath"                    desc:"worktree subpath within workspace"`
+	Mode          string       `json:"mode"                       desc:"removal mode (archive or delete)"`
+	PrincipalName string       `json:"principal_name,omitempty"   desc:"executor principal name"`
+	TicketID      ref.TicketID `json:"ticket_id,omitempty"        desc:"pipeline ticket ID"`
+	Conclusion    string       `json:"conclusion,omitempty"       desc:"pipeline conclusion (when --wait)"`
 }
 
 func worktreeRemoveCommand() *cli.Command {
@@ -734,8 +776,9 @@ func worktreeRemoveCommand() *cli.Command {
 archive branch before removal, preserving work-in-progress. In delete
 mode, the worktree is removed without preserving changes.
 
-The daemon spawns a pipeline executor to perform the removal. This is
-an async operation — the command returns immediately.`,
+The daemon spawns a pipeline executor to perform the removal. By
+default, the command waits for the pipeline to complete. Use --no-wait
+to return immediately after acceptance.`,
 		Usage:          "bureau workspace worktree remove <alias> [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &worktreeRemoveResult{} },
@@ -755,12 +798,12 @@ an async operation — the command returns immediately.`,
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
-			return runWorktreeRemove(args[0], params.Mode, serverName, &params.JSONOutput)
+			return runWorktreeRemove(args[0], params.Mode, params.Wait, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+func runWorktreeRemove(alias, mode string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
@@ -809,20 +852,54 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 		return err
 	}
 
-	if done, err := jsonOutput.EmitJSON(worktreeRemoveResult{
+	// When --wait is set and the daemon returned a ticket, watch
+	// the pipeline until it completes.
+	conclusion := ""
+	if wait && !result.TicketID.IsZero() {
+		fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s, waiting for pipeline...\n", alias)
+
+		watchCtx, watchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer watchCancel()
+
+		final, watchError := command.WatchTicket(watchCtx, command.WatchTicketParams{
+			Session:    session,
+			RoomID:     result.TicketRoom,
+			TicketID:   result.TicketID,
+			OnProgress: command.StepProgressWriter(os.Stderr),
+		})
+		if watchError != nil {
+			return watchError
+		}
+		if final.Pipeline != nil {
+			conclusion = final.Pipeline.Conclusion
+		}
+	}
+
+	outputResult := worktreeRemoveResult{
 		Alias:         alias,
 		Workspace:     workspaceAlias,
 		Subpath:       worktreeSubpath,
 		Mode:          mode,
 		PrincipalName: result.Principal,
-	}); done {
+		TicketID:      result.TicketID,
+		Conclusion:    conclusion,
+	}
+	if done, err := jsonOutput.EmitJSON(outputResult); done {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
-	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
-	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
-	result.WriteAcceptedHint(os.Stderr)
+	if conclusion != "" {
+		fmt.Fprintf(os.Stderr, "Worktree %s removed (%s)\n", alias, conclusion)
+	} else {
+		fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
+		fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
+		fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
+		result.WriteAcceptedHint(os.Stderr)
+	}
+
+	if conclusion != "" && conclusion != "success" {
+		return &cli.ExitError{Code: 1}
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ go_library(
         "future.go",
         "result.go",
         "send.go",
+        "ticket_watch.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/command",
     visibility = ["//visibility:public"],
@@ -17,6 +18,7 @@ go_library(
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/pipeline",
+        "//lib/schema/ticket",
         "//messaging",
     ],
 )

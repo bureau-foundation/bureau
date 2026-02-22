@@ -500,44 +500,6 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, room
 	}, fmt.Sprintf("workspace status %q in room %s", expectedStatus, roomID))
 }
 
-// waitForWorktreeStatus waits for a worktree state event
-// (m.bureau.worktree) in the workspace room to reach the expected status.
-// The state key matches the worktree path (e.g., "feature/test-branch").
-// Uses the same watch-then-check pattern as waitForWorkspaceStatus.
-func waitForWorktreeStatus(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID, worktreePath, expectedStatus string) {
-	t.Helper()
-
-	watch := watchRoom(t, session, roomID)
-
-	// Check whether the status already matches.
-	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorktree, worktreePath)
-	if err == nil {
-		var state workspace.WorktreeState
-		if json.Unmarshal(content, &state) == nil && state.Status == expectedStatus {
-			return
-		}
-	}
-
-	// Wait for the worktree status to transition via /sync.
-	watch.WaitForEvent(t, func(event messaging.Event) bool {
-		if event.Type != schema.EventTypeWorktree {
-			return false
-		}
-		if event.StateKey == nil || *event.StateKey != worktreePath {
-			return false
-		}
-		contentJSON, marshalError := json.Marshal(event.Content)
-		if marshalError != nil {
-			return false
-		}
-		var state workspace.WorktreeState
-		if json.Unmarshal(contentJSON, &state) != nil {
-			return false
-		}
-		return state.Status == expectedStatus
-	}, fmt.Sprintf("worktree %q status %q in room %s", worktreePath, expectedStatus, roomID))
-}
-
 // verifyPipelineResult waits for and verifies the m.bureau.pipeline_result
 // state event published by the pipeline executor. The result event is
 // published AFTER the pipeline's own publish steps (e.g., workspace status

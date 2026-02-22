@@ -4,9 +4,11 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/command"
@@ -23,6 +25,7 @@ type pipelineRunParams struct {
 	Machine     string   `json:"machine"      flag:"machine"     desc:"fleet-scoped machine localpart (required)" required:"true"`
 	Room        string   `json:"room"         flag:"room"        desc:"room ID where the pipeline ticket is created (required)" required:"true"`
 	Param       []string `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
+	Wait        bool     `json:"wait"         flag:"wait"        desc:"wait for the pipeline to complete after acceptance"`
 	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
 }
 
@@ -51,6 +54,10 @@ func runCommand() *cli.Command {
 the accepted acknowledgment. The daemon creates a pip- ticket and
 returns the ticket ID and room. The ticket watcher then spawns a
 sandboxed executor that runs the pipeline steps.
+
+With --wait, the command watches the pipeline ticket via Matrix /sync
+until the pipeline completes, printing step progress. Without --wait
+(the default), returns immediately after acceptance.
 
 The --room flag specifies where the pip- ticket is created. The room
 must have ticket management enabled with pipeline type allowed.
@@ -174,8 +181,28 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			fmt.Fprintf(os.Stderr, "Pipeline accepted on %s\n", params.Machine)
 			fmt.Fprintf(os.Stderr, "  pipeline:  %s\n", pipelineRefString)
-			result.WriteAcceptedHint(os.Stderr)
-			return nil
+
+			if !params.Wait || result.TicketID.IsZero() {
+				result.WriteAcceptedHint(os.Stderr)
+				return nil
+			}
+
+			// Watch the ticket until the pipeline finishes. Use a 10-minute
+			// context — pipelines can run long (build steps, large git clones).
+			watchCtx, watchCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer watchCancel()
+
+			final, err := command.WatchTicket(watchCtx, command.WatchTicketParams{
+				Session:    session,
+				RoomID:     result.TicketRoom,
+				TicketID:   result.TicketID,
+				OnProgress: command.StepProgressWriter(os.Stderr),
+			})
+			if err != nil {
+				return err
+			}
+
+			return emitWaitResult(pipelineWaitParams{JSONOutput: params.JSONOutput}, result.TicketID, *final)
 		},
 	}
 }

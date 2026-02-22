@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
@@ -702,41 +703,52 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	// --- Phase 4: Add worktree ---
 	t.Log("phase 4: adding worktree feature/test-branch")
-	addRequestID := "wt-add-lifecycle"
-	addWatch := watchRoom(t, admin, workspaceRoomID)
-
-	_, err = admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
-		schema.CommandMessage{
-			MsgType:   schema.MsgTypeCommand,
-			Body:      "workspace.worktree.add feature/test-branch",
-			Command:   "workspace.worktree.add",
-			Workspace: "wswt",
-			RequestID: addRequestID,
-			Parameters: map[string]any{
-				"path":   "feature/test-branch",
-				"branch": "main",
-			},
-		})
+	addFuture, err := command.Send(ctx, command.SendParams{
+		Session:   admin,
+		RoomID:    workspaceRoomID,
+		Command:   "workspace.worktree.add",
+		Workspace: "wswt/main",
+		Parameters: map[string]any{
+			"path":   "feature/test-branch",
+			"branch": "main",
+		},
+	})
 	if err != nil {
 		t.Fatalf("send workspace.worktree.add: %v", err)
 	}
+	defer addFuture.Discard()
 
-	// Wait for the accepted acknowledgment. The daemon creates a pip-
-	// ticket and returns immediately; the ticket watcher creates the
-	// executor sandbox from the next /sync.
-	addResults := addWatch.WaitForCommandResults(t, addRequestID, 1)
-	addAccepted := findAcceptedEvent(t, addResults)
-
-	addResult, _ := addAccepted["result"].(map[string]any)
-	addTicketID, _ := addResult["ticket_id"].(string)
-	if addTicketID == "" {
+	addResult, err := addFuture.Wait(ctx)
+	if err != nil {
+		t.Fatalf("wait for worktree.add acceptance: %v", err)
+	}
+	if err := addResult.Err(); err != nil {
+		t.Fatalf("worktree.add rejected: %v", err)
+	}
+	if addResult.TicketID.IsZero() {
 		t.Fatal("worktree.add accepted result has empty ticket_id")
 	}
-	t.Logf("worktree.add accepted, ticket: %s", addTicketID)
+	t.Logf("worktree.add accepted, ticket: %s", addResult.TicketID)
 
-	// Verify the worktree state event reached "active".
-	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "active")
-	t.Log("worktree state is 'active'")
+	// Watch the pipeline ticket to completion instead of watching
+	// worktree state events. The ticket closing is the authoritative
+	// signal that the pipeline finished.
+	addFinal, err := command.WatchTicket(ctx, command.WatchTicketParams{
+		Session:  admin,
+		RoomID:   addResult.TicketRoom,
+		TicketID: addResult.TicketID,
+	})
+	if err != nil {
+		t.Fatalf("watching worktree add ticket %s: %v", addResult.TicketID, err)
+	}
+	if addFinal.Pipeline == nil || addFinal.Pipeline.Conclusion != "success" {
+		conclusion := ""
+		if addFinal.Pipeline != nil {
+			conclusion = addFinal.Pipeline.Conclusion
+		}
+		t.Fatalf("worktree add pipeline conclusion = %q, want \"success\"", conclusion)
+	}
+	t.Logf("worktree add pipeline completed: %s", addFinal.Pipeline.Conclusion)
 
 	// --- Phase 5: Verify worktree on disk ---
 	worktreeDir := filepath.Join(machine.WorkspaceRoot, "wswt", "feature/test-branch")
@@ -752,39 +764,50 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	// --- Phase 6: Remove worktree ---
 	t.Log("phase 6: removing worktree feature/test-branch")
-	removeRequestID := "wt-remove-lifecycle"
-	removeWatch := watchRoom(t, admin, workspaceRoomID)
-
-	_, err = admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
-		schema.CommandMessage{
-			MsgType:   schema.MsgTypeCommand,
-			Body:      "workspace.worktree.remove feature/test-branch",
-			Command:   "workspace.worktree.remove",
-			Workspace: "wswt",
-			RequestID: removeRequestID,
-			Parameters: map[string]any{
-				"path": "feature/test-branch",
-				"mode": "delete",
-			},
-		})
+	removeFuture, err := command.Send(ctx, command.SendParams{
+		Session:   admin,
+		RoomID:    workspaceRoomID,
+		Command:   "workspace.worktree.remove",
+		Workspace: "wswt/main",
+		Parameters: map[string]any{
+			"path": "feature/test-branch",
+			"mode": "delete",
+		},
+	})
 	if err != nil {
 		t.Fatalf("send workspace.worktree.remove: %v", err)
 	}
+	defer removeFuture.Discard()
 
-	// Wait for the accepted acknowledgment.
-	removeResults := removeWatch.WaitForCommandResults(t, removeRequestID, 1)
-	removeAccepted := findAcceptedEvent(t, removeResults)
-
-	removeResult, _ := removeAccepted["result"].(map[string]any)
-	removeTicketID, _ := removeResult["ticket_id"].(string)
-	if removeTicketID == "" {
+	removeResult, err := removeFuture.Wait(ctx)
+	if err != nil {
+		t.Fatalf("wait for worktree.remove acceptance: %v", err)
+	}
+	if err := removeResult.Err(); err != nil {
+		t.Fatalf("worktree.remove rejected: %v", err)
+	}
+	if removeResult.TicketID.IsZero() {
 		t.Fatal("worktree.remove accepted result has empty ticket_id")
 	}
-	t.Logf("worktree.remove accepted, ticket: %s", removeTicketID)
+	t.Logf("worktree.remove accepted, ticket: %s", removeResult.TicketID)
 
-	// Verify the worktree state event reached "removed".
-	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "removed")
-	t.Log("worktree state is 'removed'")
+	// Watch the pipeline ticket to completion.
+	removeFinal, err := command.WatchTicket(ctx, command.WatchTicketParams{
+		Session:  admin,
+		RoomID:   removeResult.TicketRoom,
+		TicketID: removeResult.TicketID,
+	})
+	if err != nil {
+		t.Fatalf("watching worktree remove ticket %s: %v", removeResult.TicketID, err)
+	}
+	if removeFinal.Pipeline == nil || removeFinal.Pipeline.Conclusion != "success" {
+		conclusion := ""
+		if removeFinal.Pipeline != nil {
+			conclusion = removeFinal.Pipeline.Conclusion
+		}
+		t.Fatalf("worktree remove pipeline conclusion = %q, want \"success\"", conclusion)
+	}
+	t.Logf("worktree remove pipeline completed: %s", removeFinal.Pipeline.Conclusion)
 
 	// --- Phase 7: Verify worktree removed from disk ---
 	if _, err := os.Stat(worktreeDir); !os.IsNotExist(err) {

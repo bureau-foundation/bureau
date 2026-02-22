@@ -84,6 +84,7 @@ go_test(
         "//cmd/bureau/workspace",
         "//lib/bootstrap",
         "//lib/codec",
+        "//lib/command",
         "//lib/credential",
         "//lib/ipc",
         "//lib/principal",

@@ -1415,6 +1415,207 @@ func TestHandleBatchCreatePipelineTickets(t *testing.T) {
 	}
 }
 
+// --- Add-note tests ---
+
+// TestHandleAddNote verifies that adding a note produces the correct
+// note ID, author, body, and timestamps.
+func TestHandleAddNote(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"body":   "step 1/3: clone-repository... ok (2.1s)",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.ID != "tkt-open" {
+		t.Errorf("id: got %q, want 'tkt-open'", result.ID)
+	}
+	if len(result.Content.Notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(result.Content.Notes))
+	}
+
+	note := result.Content.Notes[0]
+	if note.ID != "n-1" {
+		t.Errorf("note id: got %q, want 'n-1'", note.ID)
+	}
+	if note.Author != ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local") {
+		t.Errorf("note author: got %q", note.Author)
+	}
+	if note.Body != "step 1/3: clone-repository... ok (2.1s)" {
+		t.Errorf("note body: got %q", note.Body)
+	}
+	if note.CreatedAt != "2026-01-15T12:00:00Z" {
+		t.Errorf("note created_at: got %q, want '2026-01-15T12:00:00Z'", note.CreatedAt)
+	}
+	if result.Content.UpdatedAt != "2026-01-15T12:00:00Z" {
+		t.Errorf("updated_at: got %q, want '2026-01-15T12:00:00Z'", result.Content.UpdatedAt)
+	}
+
+	// Verify state event was written to Matrix.
+	env.writer.mu.Lock()
+	defer env.writer.mu.Unlock()
+	if len(env.writer.events) != 1 {
+		t.Fatalf("expected 1 written event, got %d", len(env.writer.events))
+	}
+}
+
+// TestHandleAddNoteSequentialIDs verifies that successive notes on the
+// same ticket get sequential IDs (n-1, n-2).
+func TestHandleAddNoteSequentialIDs(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	ctx := context.Background()
+
+	var firstResult mutationResponse
+	err := env.client.Call(ctx, "add-note", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"body":   "first note",
+	}, &firstResult)
+	if err != nil {
+		t.Fatalf("first add-note: %v", err)
+	}
+
+	var secondResult mutationResponse
+	err = env.client.Call(ctx, "add-note", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"body":   "second note",
+	}, &secondResult)
+	if err != nil {
+		t.Fatalf("second add-note: %v", err)
+	}
+
+	if len(secondResult.Content.Notes) != 2 {
+		t.Fatalf("expected 2 notes, got %d", len(secondResult.Content.Notes))
+	}
+	if secondResult.Content.Notes[0].ID != "n-1" {
+		t.Errorf("first note id: got %q, want 'n-1'", secondResult.Content.Notes[0].ID)
+	}
+	if secondResult.Content.Notes[1].ID != "n-2" {
+		t.Errorf("second note id: got %q, want 'n-2'", secondResult.Content.Notes[1].ID)
+	}
+	if secondResult.Content.Notes[0].Body != "first note" {
+		t.Errorf("first note body: got %q", secondResult.Content.Notes[0].Body)
+	}
+	if secondResult.Content.Notes[1].Body != "second note" {
+		t.Errorf("second note body: got %q", secondResult.Content.Notes[1].Body)
+	}
+}
+
+// TestHandleAddNoteWithExistingNotes verifies that notes are appended
+// correctly when the ticket already has notes, with IDs continuing
+// from the existing count.
+func TestHandleAddNoteWithExistingNotes(t *testing.T) {
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"tkt-noted": {
+			Version:  1,
+			Title:    "ticket with notes",
+			Status:   "open",
+			Priority: 2,
+			Type:     "task",
+			Notes: []ticket.TicketNote{
+				{
+					ID:        "n-1",
+					Author:    ref.MustParseUserID("@agent/prior:bureau.local"),
+					Body:      "existing note",
+					CreatedAt: "2026-01-10T00:00:00Z",
+				},
+				{
+					ID:        "n-2",
+					Author:    ref.MustParseUserID("@agent/prior:bureau.local"),
+					Body:      "another existing note",
+					CreatedAt: "2026-01-11T00:00:00Z",
+				},
+			},
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-11T00:00:00Z",
+		},
+	})
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "tkt-noted",
+		"room":   "!room:bureau.local",
+		"body":   "new note after existing ones",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result.Content.Notes) != 3 {
+		t.Fatalf("expected 3 notes, got %d", len(result.Content.Notes))
+	}
+
+	newNote := result.Content.Notes[2]
+	if newNote.ID != "n-3" {
+		t.Errorf("new note id: got %q, want 'n-3'", newNote.ID)
+	}
+	if newNote.Body != "new note after existing ones" {
+		t.Errorf("new note body: got %q", newNote.Body)
+	}
+}
+
+// TestHandleAddNoteMissingBody verifies that an empty body is rejected.
+func TestHandleAddNoteMissingBody(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"body":   "",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "body") {
+		t.Errorf("expected error about body, got: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleAddNoteNotFound verifies that adding a note to a
+// nonexistent ticket returns an error.
+func TestHandleAddNoteNotFound(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "nonexistent",
+		"room":   "!room:bureau.local",
+		"body":   "orphan note",
+	}, nil)
+	requireServiceError(t, err)
+}
+
+// TestHandleAddNoteMissingTicket verifies that a missing ticket field
+// is rejected.
+func TestHandleAddNoteMissingTicket(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"room": "!room:bureau.local",
+		"body": "no ticket specified",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "ticket") {
+		t.Errorf("expected error about ticket, got: %s", serviceErr.Message)
+	}
+}
+
 // TestHandleBatchCreateAllowedTypesEnforced verifies that AllowedTypes
 // is checked per-entry in a batch create. If any entry has a
 // disallowed type, the entire batch is rejected.

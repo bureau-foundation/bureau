@@ -374,6 +374,15 @@ type updateGateRequest struct {
 	SatisfiedBy string `cbor:"satisfied_by,omitempty"`
 }
 
+// addNoteRequest is the input for the "add-note" action. Appends a
+// new note to an existing ticket. The note ID and timestamps are
+// assigned by the service; the caller provides only the body.
+type addNoteRequest struct {
+	Room   string `cbor:"room,omitempty"`
+	Ticket string `cbor:"ticket"`
+	Body   string `cbor:"body"`
+}
+
 // deferRequest is the input for the "defer" action. Exactly one of
 // Until or For must be set. If the ticket already has a gate with
 // ID "defer", its Target is updated. Otherwise a new timer gate is
@@ -1253,6 +1262,62 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 			gate.SatisfiedBy = request.SatisfiedBy
 		}
 	}
+	content.UpdatedAt = now
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	return mutationResponse{
+		ID:      ticketID,
+		Room:    roomID.String(),
+		Content: content,
+	}, nil
+}
+
+// handleAddNote appends a note to an existing ticket. Notes are
+// short annotations that travel with the ticket — step outcomes,
+// warnings, references. The note ID is assigned sequentially
+// ("n-1", "n-2", ...) and the author is taken from the token subject.
+func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/update"); err != nil {
+		return nil, err
+	}
+
+	var request addNoteRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+	if request.Body == "" {
+		return nil, errors.New("missing required field: body")
+	}
+
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	now := ts.clock.Now().UTC().Format(time.RFC3339)
+
+	noteID := fmt.Sprintf("n-%d", len(content.Notes)+1)
+	content.Notes = append(content.Notes, ticket.TicketNote{
+		ID:        noteID,
+		Author:    token.Subject,
+		CreatedAt: now,
+		Body:      request.Body,
+	})
 	content.UpdatedAt = now
 
 	if err := content.Validate(); err != nil {

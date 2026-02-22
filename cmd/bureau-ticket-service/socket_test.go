@@ -360,6 +360,7 @@ func TestQueryActionsRequireGrant(t *testing.T) {
 		{"close", map[string]any{"ticket": "tkt-1"}},
 		{"reopen", map[string]any{"ticket": "tkt-1"}},
 		{"batch-create", map[string]any{"room": "!roomA:local"}},
+		{"add-note", map[string]any{"ticket": "tkt-1"}},
 		{"resolve-gate", map[string]any{"ticket": "tkt-1"}},
 		{"update-gate", map[string]any{"ticket": "tkt-1"}},
 	}

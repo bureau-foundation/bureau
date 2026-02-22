@@ -519,7 +519,7 @@ versions.
 The pattern:
 
 - Each event type constant defines the current schema version
-  (e.g., `TicketContentVersion = 1`)
+  (e.g., `TicketContentVersion`, `ContextCommitVersion`)
 - Before modifying an event, callers invoke `CanModify()` which checks
   the event's version against the code's version
 - If the event was written by newer code (`event.Version > code version`),

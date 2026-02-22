@@ -31,6 +31,9 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 	server.HandleAuth("delete-context", agentService.withWriteLock(agentService.handleDeleteContext))
 	server.HandleAuth("list-context", agentService.withReadLock(agentService.handleListContext))
 
+	// Authenticated context commit actions.
+	server.HandleAuth("checkpoint-context", agentService.withWriteLock(agentService.handleCheckpointContext))
+
 	// Authenticated metrics actions.
 	server.HandleAuth("get-metrics", agentService.withReadLock(agentService.handleGetMetrics))
 }
@@ -579,6 +582,91 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 	}
 
 	return listContextResponse{Entries: filtered}, nil
+}
+
+// --- Context commit handlers ---
+
+// checkpointContextRequest is the wire format for the "checkpoint-context"
+// action. The caller must have already stored the delta artifact in the
+// artifact service before calling this — the agent service only records
+// the artifact ref and metadata in a Matrix state event (write-through
+// ordering: artifact exists before ref is recorded).
+//
+// Server-side fields (Principal, Machine, CreatedAt) are derived from
+// the service token and clock. The caller does not supply these.
+type checkpointContextRequest struct {
+	Action       string `cbor:"action"`
+	Parent       string `cbor:"parent,omitempty"`
+	CommitType   string `cbor:"commit_type"`
+	ArtifactRef  string `cbor:"artifact_ref"`
+	Format       string `cbor:"format"`
+	Template     string `cbor:"template,omitempty"`
+	SessionID    string `cbor:"session_id,omitempty"`
+	Checkpoint   string `cbor:"checkpoint"`
+	TicketID     string `cbor:"ticket_id,omitempty"`
+	ThreadID     string `cbor:"thread_id,omitempty"`
+	Summary      string `cbor:"summary,omitempty"`
+	MessageCount int    `cbor:"message_count,omitempty"`
+	TokenCount   int64  `cbor:"token_count,omitempty"`
+}
+
+// checkpointContextResponse is the wire format for the "checkpoint-context"
+// response. Returns the deterministic ctx-* identifier for the new commit.
+type checkpointContextResponse struct {
+	ID string `cbor:"id"`
+}
+
+func (agentService *AgentService) handleCheckpointContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request checkpointContextRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	createdAt := agentService.clock.Now().UTC().Format("2006-01-02T15:04:05Z")
+
+	content := agent.ContextCommitContent{
+		Version:      agent.ContextCommitVersion,
+		Parent:       request.Parent,
+		CommitType:   request.CommitType,
+		ArtifactRef:  request.ArtifactRef,
+		Format:       request.Format,
+		Template:     request.Template,
+		Principal:    token.Subject,
+		Machine:      token.Machine.UserID(),
+		SessionID:    request.SessionID,
+		Checkpoint:   request.Checkpoint,
+		TicketID:     request.TicketID,
+		ThreadID:     request.ThreadID,
+		Summary:      request.Summary,
+		MessageCount: request.MessageCount,
+		TokenCount:   request.TokenCount,
+		CreatedAt:    createdAt,
+	}
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid context commit: %w", err)
+	}
+
+	commitID := agent.GenerateContextCommitID(
+		request.Parent, request.ArtifactRef, createdAt, request.Template,
+	)
+
+	if _, err := agentService.session.SendStateEvent(
+		ctx, agentService.configRoomID,
+		agent.EventTypeAgentContextCommit, commitID, &content,
+	); err != nil {
+		return nil, fmt.Errorf("writing context commit state: %w", err)
+	}
+
+	agentService.logger.Info("context commit created",
+		"principal", token.Subject.Localpart(),
+		"commit_id", commitID,
+		"commit_type", request.CommitType,
+		"artifact_ref", request.ArtifactRef,
+		"checkpoint", request.Checkpoint,
+	)
+
+	return checkpointContextResponse{ID: commitID}, nil
 }
 
 // --- Matrix state helpers ---

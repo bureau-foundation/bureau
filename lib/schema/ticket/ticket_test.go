@@ -5,6 +5,7 @@ package ticket
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func assertField(t *testing.T, object map[string]any, key string, want any) {
 // set to valid values. Tests modify individual fields to test validation.
 func validTicketContent() TicketContent {
 	return TicketContent{
-		Version:   1,
+		Version:   TicketContentVersion,
 		Title:     "Fix authentication bug in login flow",
 		Status:    "open",
 		Priority:  2,
@@ -43,7 +44,7 @@ func validTicketContent() TicketContent {
 
 func TestTicketContentRoundTrip(t *testing.T) {
 	original := TicketContent{
-		Version:   1,
+		Version:   TicketContentVersion,
 		Title:     "Implement AMDGPU inference pipeline",
 		Body:      "Set up the full inference pipeline for AMDGPU targets.",
 		Status:    "in_progress",
@@ -97,6 +98,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		UpdatedAt:   "2026-02-12T11:00:00Z",
 		ClosedAt:    "",
 		CloseReason: "",
+		ContextID:   "ctx-a1b2c3d4",
 		Origin: &TicketOrigin{
 			Source:      "github",
 			ExternalRef: "GH-4201",
@@ -117,7 +119,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
-	assertField(t, raw, "version", float64(1))
+	assertField(t, raw, "version", float64(TicketContentVersion))
 	assertField(t, raw, "title", original.Title)
 	assertField(t, raw, "body", original.Body)
 	assertField(t, raw, "status", "in_progress")
@@ -128,6 +130,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 	assertField(t, raw, "created_by", "@bureau/admin:bureau.local")
 	assertField(t, raw, "created_at", "2026-02-12T09:00:00Z")
 	assertField(t, raw, "updated_at", "2026-02-12T11:00:00Z")
+	assertField(t, raw, "context_id", "ctx-a1b2c3d4")
 
 	// Labels: verify as JSON array.
 	labels, ok := raw["labels"].([]any)
@@ -245,7 +248,7 @@ func TestTicketContentOmitsEmptyOptionals(t *testing.T) {
 	optionalFields := []string{
 		"body", "labels", "parent", "blocked_by",
 		"gates", "notes", "attachments", "closed_at", "close_reason",
-		"origin", "pipeline", "extra",
+		"context_id", "origin", "pipeline", "extra",
 	}
 	// Assignee is ref.UserID which implements TextMarshaler — Go's
 	// encoding/json emits "" for the zero value even with omitempty.
@@ -310,12 +313,13 @@ func TestTicketContentExtraRoundTrip(t *testing.T) {
 }
 
 func TestTicketContentForwardCompatibility(t *testing.T) {
-	// Simulate a v2 event with an unknown top-level field. This
-	// documents the behavior that CanModify guards against: unknown
-	// fields are silently dropped on unmarshal, so a read-modify-write
-	// cycle through v1 code would lose the "new_v2_field".
-	v2JSON := `{
-		"version": 2,
+	// Simulate a future-version event with an unknown top-level field.
+	// This documents the behavior that CanModify guards against:
+	// unknown fields are silently dropped on unmarshal, so a
+	// read-modify-write cycle through current code would lose them.
+	futureVersion := TicketContentVersion + 1
+	futureJSON := fmt.Sprintf(`{
+		"version": %d,
 		"title": "Fix something",
 		"status": "open",
 		"priority": 2,
@@ -323,26 +327,26 @@ func TestTicketContentForwardCompatibility(t *testing.T) {
 		"created_by": "@bureau/admin:bureau.local",
 		"created_at": "2026-02-12T10:00:00Z",
 		"updated_at": "2026-02-12T10:00:00Z",
-		"new_v2_field": "this field does not exist in v1 TicketContent"
-	}`
+		"new_future_field": "this field does not exist in the current TicketContent"
+	}`, futureVersion)
 
-	// v1 code can unmarshal v2 events without error.
+	// Current code can unmarshal future-version events without error.
 	var content TicketContent
-	if err := json.Unmarshal([]byte(v2JSON), &content); err != nil {
-		t.Fatalf("Unmarshal v2 event: %v", err)
+	if err := json.Unmarshal([]byte(futureJSON), &content); err != nil {
+		t.Fatalf("Unmarshal future event: %v", err)
 	}
 
 	// Known fields are correctly populated.
-	if content.Version != 2 {
-		t.Errorf("Version = %d, want 2", content.Version)
+	if content.Version != futureVersion {
+		t.Errorf("Version = %d, want %d", content.Version, futureVersion)
 	}
 	if content.Title != "Fix something" {
 		t.Errorf("Title = %q, want %q", content.Title, "Fix something")
 	}
 
-	// CanModify rejects modification of v2 events from v1 code.
+	// CanModify rejects modification of future events from current code.
 	if err := content.CanModify(); err == nil {
-		t.Error("CanModify() should reject v2 events from v1 code")
+		t.Error("CanModify() should reject future-version events from current code")
 	}
 
 	// Re-marshaling drops the unknown field.
@@ -350,7 +354,7 @@ func TestTicketContentForwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Marshal: %v", err)
 	}
-	if strings.Contains(string(remarshaled), "new_v2_field") {
+	if strings.Contains(string(remarshaled), "new_future_field") {
 		t.Error("unknown field survived re-marshal; expected it to be dropped")
 	}
 }
@@ -568,6 +572,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Gates = []TicketGate{{ID: "g1", Type: "human", Status: "pending"}}
 				tc.Notes = []TicketNote{{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: "note"}}
 				tc.Attachments = []TicketAttachment{{Ref: "art-abc123"}}
+				tc.ContextID = "ctx-a1b2c3d4"
 				tc.Deadline = "2026-03-01T00:00:00Z"
 				tc.Origin = &TicketOrigin{Source: "github", ExternalRef: "GH-1234"}
 			},
@@ -1065,6 +1070,7 @@ func TestTicketNoteRoundTrip(t *testing.T) {
 		Author:    ref.MustParseUserID("@bureau/admin:bureau.local"),
 		CreatedAt: "2026-02-12T10:30:00Z",
 		Body:      "Security scanner found CVE-2026-1234 in this dependency.",
+		ContextID: "ctx-e5f6a7b8",
 	}
 
 	data, err := json.Marshal(original)
@@ -1080,6 +1086,7 @@ func TestTicketNoteRoundTrip(t *testing.T) {
 	assertField(t, raw, "author", "@bureau/admin:bureau.local")
 	assertField(t, raw, "created_at", "2026-02-12T10:30:00Z")
 	assertField(t, raw, "body", original.Body)
+	assertField(t, raw, "context_id", "ctx-e5f6a7b8")
 
 	var decoded TicketNote
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -1087,6 +1094,29 @@ func TestTicketNoteRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded, original) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestTicketNoteOmitsContextIDWhenEmpty(t *testing.T) {
+	note := TicketNote{
+		ID:        "n-1",
+		Author:    ref.MustParseUserID("@a:b.c"),
+		CreatedAt: "2026-02-12T10:00:00Z",
+		Body:      "note without context",
+	}
+
+	data, err := json.Marshal(note)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["context_id"]; exists {
+		t.Error("context_id should be omitted when empty")
 	}
 }
 

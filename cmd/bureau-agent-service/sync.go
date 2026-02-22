@@ -15,14 +15,15 @@ import (
 
 // syncFilter restricts the /sync response to event types the agent
 // service needs. The service watches the machine config room for agent
-// state events (session, context, metrics) to maintain awareness of
-// changes made by other instances or manual operator edits.
+// state events (session, context, context commits, metrics) to maintain
+// awareness of changes made by other instances or manual operator edits.
 var syncFilter = buildSyncFilter()
 
 func buildSyncFilter() string {
 	stateEventTypes := []ref.EventType{
 		agent.EventTypeAgentSession,
 		agent.EventTypeAgentContext,
+		agent.EventTypeAgentContextCommit,
 		agent.EventTypeAgentMetrics,
 	}
 
@@ -144,6 +145,11 @@ func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 			)
 		case agent.EventTypeAgentContext:
 			agentService.logger.Debug("observed agent context event",
+				"state_key", event.StateKey,
+				"sender", event.Sender,
+			)
+		case agent.EventTypeAgentContextCommit:
+			agentService.logger.Debug("observed context commit event",
 				"state_key", event.StateKey,
 				"sender", event.Sender,
 			)

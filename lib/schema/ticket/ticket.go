@@ -19,7 +19,7 @@ const (
 	// TicketContentVersion is the current schema version for
 	// TicketContent events. Increment when adding fields that
 	// existing code must not silently drop during read-modify-write.
-	TicketContentVersion = 1
+	TicketContentVersion = 2
 
 	// TicketConfigVersion is the current schema version for
 	// TicketConfigContent events.
@@ -136,6 +136,13 @@ type TicketContent struct {
 
 	// CloseReason explains why the ticket was closed.
 	CloseReason string `json:"close_reason,omitempty"`
+
+	// ContextID is the ctx-* identifier of the context commit that
+	// was active when the ticket was last worked on. Links the
+	// ticket to a point in an agent's understanding chain, enabling
+	// context restoration when resuming work. Set by the agent
+	// service or agent wrappers when updating ticket state.
+	ContextID string `json:"context_id,omitempty"`
 
 	// Deadline is the target completion time for this ticket
 	// (RFC 3339 UTC). The ticket service monitors deadlines and
@@ -547,6 +554,13 @@ type TicketNote struct {
 	// concise — for content that exceeds a few hundred bytes,
 	// store it as an artifact and reference it from a note.
 	Body string `json:"body"`
+
+	// ContextID is the ctx-* identifier of the context commit the
+	// agent was working from when it created this note. Ties the
+	// note to a specific point in the agent's understanding chain,
+	// enabling traceability from ticket annotations back to the
+	// conversation state that produced them.
+	ContextID string `json:"context_id,omitempty"`
 }
 
 // Validate checks that all required fields are present.

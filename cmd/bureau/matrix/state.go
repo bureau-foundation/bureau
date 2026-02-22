@@ -141,7 +141,7 @@ type stateSetParams struct {
 
 // stateSetResult is the JSON output for matrix state set.
 type stateSetResult struct {
-	EventID string `json:"event_id" desc:"created state event's Matrix ID"`
+	EventID ref.EventID `json:"event_id" desc:"created state event's Matrix ID"`
 }
 
 // stateSetCommand returns the "set" subcommand under "state".

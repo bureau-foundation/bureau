@@ -99,7 +99,7 @@ type machineState struct {
 	// events that are not the echo of that write, preventing stale
 	// sync data from overwriting optimistic local updates made by
 	// place() or unplace(). Cleared when the echo arrives.
-	pendingEchoEventID string
+	pendingEchoEventID ref.EventID
 
 	// lastHeartbeat is the time the fleet controller last received a
 	// MachineStatus event for this machine. Used for staleness
@@ -423,9 +423,9 @@ func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event me
 	// events to prevent overwriting optimistic local updates from
 	// place() or unplace(). Only the echo of our own write (matching
 	// event ID) clears the pending state and applies normally.
-	if machine.pendingEchoEventID != "" {
+	if !machine.pendingEchoEventID.IsZero() {
 		if event.EventID == machine.pendingEchoEventID {
-			machine.pendingEchoEventID = ""
+			machine.pendingEchoEventID = ref.EventID{}
 		} else {
 			return
 		}

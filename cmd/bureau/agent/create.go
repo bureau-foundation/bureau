@@ -34,11 +34,11 @@ type agentCreateParams struct {
 
 // agentCreateResult is the JSON output for agent create.
 type agentCreateResult struct {
-	PrincipalUserID string     `json:"principal_user_id" desc:"full Matrix user ID of the created agent"`
-	MachineName     string     `json:"machine"           desc:"machine the agent was assigned to"`
-	TemplateRef     string     `json:"template"          desc:"template reference used for the agent"`
-	ConfigRoomID    ref.RoomID `json:"config_room_id"    desc:"config room where the assignment was published"`
-	ConfigEventID   string     `json:"config_event_id"   desc:"event ID of the MachineConfig state event"`
+	PrincipalUserID string      `json:"principal_user_id" desc:"full Matrix user ID of the created agent"`
+	MachineName     string      `json:"machine"           desc:"machine the agent was assigned to"`
+	TemplateRef     string      `json:"template"          desc:"template reference used for the agent"`
+	ConfigRoomID    ref.RoomID  `json:"config_room_id"    desc:"config room where the assignment was published"`
+	ConfigEventID   ref.EventID `json:"config_event_id"   desc:"event ID of the MachineConfig state event"`
 }
 
 func createCommand() *cli.Command {

@@ -48,7 +48,7 @@ func newTrackedRoom(tickets map[string]schema.TicketContent) *roomState {
 	state := &roomState{
 		config:        &schema.TicketConfigContent{Version: 1},
 		index:         ticket.NewIndex(),
-		pendingEchoes: make(map[string]string),
+		pendingEchoes: make(map[string]ref.EventID),
 	}
 	for id, content := range tickets {
 		state.index.Put(id, content)
@@ -454,7 +454,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	}
-	state.pendingEchoes["tkt-1"] = "$mutation-event-id"
+	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$mutation-event-id")
 	state.index.Put("tkt-1", closedContent)
 
 	// Now simulate the sync loop delivering a stale event (from a
@@ -465,7 +465,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T12:00:00Z",
 	})
 	staleEvent := messaging.Event{
-		EventID:  "$stale-event-id", // Different from the pending echo
+		EventID:  ref.MustParseEventID("$stale-event-id"), // Different from the pending echo
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  staleContent,
@@ -500,7 +500,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	ts.rooms[testRoomID("!room:local")] = state
 
 	// Simulate a pending echo from a mutation handler.
-	state.pendingEchoes["tkt-1"] = "$echo-event-id"
+	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$echo-event-id")
 	state.index.Put("tkt-1", schema.TicketContent{
 		Version: 1, Title: "original", Status: "closed",
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
@@ -514,7 +514,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
 	echoEvent := messaging.Event{
-		EventID:  "$echo-event-id",
+		EventID:  ref.MustParseEventID("$echo-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  echoContent,
@@ -546,14 +546,14 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 	ts.rooms[testRoomID("!room:local")] = state
 
 	// Set up and clear a pending echo (simulating echo arrival).
-	state.pendingEchoes["tkt-1"] = "$echo-event-id"
+	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$echo-event-id")
 	echoContent := toContentMap(t, schema.TicketContent{
 		Version: 1, Title: "original", Status: "closed",
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
 	ts.indexTicketEvent(state, messaging.Event{
-		EventID:  "$echo-event-id",
+		EventID:  ref.MustParseEventID("$echo-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  echoContent,
@@ -567,7 +567,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 		UpdatedAt: "2026-01-03T00:00:00Z",
 	})
 	reopenEvent := messaging.Event{
-		EventID:  "$reopen-event-id",
+		EventID:  ref.MustParseEventID("$reopen-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  reopenContent,
@@ -593,7 +593,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	ts.rooms[testRoomID("!room:local")] = state
 
 	// First mutation: claim (in_progress).
-	state.pendingEchoes["tkt-1"] = "$claim-event-id"
+	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$claim-event-id")
 	state.index.Put("tkt-1", schema.TicketContent{
 		Version: 1, Title: "original", Status: "in_progress",
 		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
@@ -601,7 +601,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	})
 
 	// Second mutation: close (overwrites the pending echo).
-	state.pendingEchoes["tkt-1"] = "$close-event-id"
+	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$close-event-id")
 	state.index.Put("tkt-1", schema.TicketContent{
 		Version: 1, Title: "original", Status: "closed",
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
@@ -616,7 +616,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 	indexed := ts.indexTicketEvent(state, messaging.Event{
-		EventID:  "$claim-event-id",
+		EventID:  ref.MustParseEventID("$claim-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  claimEchoContent,
@@ -638,7 +638,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
 	})
 	indexed = ts.indexTicketEvent(state, messaging.Event{
-		EventID:  "$close-event-id",
+		EventID:  ref.MustParseEventID("$close-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  closeEchoContent,
@@ -668,7 +668,7 @@ func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 	})
 
 	indexed := ts.indexTicketEvent(state, messaging.Event{
-		EventID:  "$normal-event-id",
+		EventID:  ref.MustParseEventID("$normal-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
 		Content:  newContent,
@@ -705,7 +705,7 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
 
-	writer.nextEventID = "$returned-event-42"
+	writer.nextEventID = ref.MustParseEventID("$returned-event-42")
 
 	err := ts.putWithEcho(context.Background(), testRoomID("!room:local"), state, "tkt-1", content)
 	if err != nil {
@@ -717,7 +717,7 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 	if !pending {
 		t.Fatal("putWithEcho should record a pending echo")
 	}
-	if echoID != "$returned-event-42" {
+	if echoID != ref.MustParseEventID("$returned-event-42") {
 		t.Fatalf("pending echo should be '$returned-event-42', got %q", echoID)
 	}
 
@@ -734,9 +734,9 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 // fakeWriterForEchoTest is a minimal matrixWriter that returns a
 // configurable event ID.
 type fakeWriterForEchoTest struct {
-	nextEventID string
+	nextEventID ref.EventID
 }
 
-func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
+func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
 	return f.nextEventID, nil
 }

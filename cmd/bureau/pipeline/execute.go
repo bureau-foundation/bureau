@@ -30,7 +30,7 @@ type executeResult struct {
 	PipelineRef  string        `json:"pipeline_ref"   desc:"pipeline reference"`
 	ConfigRoom   ref.RoomAlias `json:"config_room"    desc:"configuration room alias"`
 	ConfigRoomID ref.RoomID    `json:"config_room_id" desc:"configuration room Matrix ID"`
-	EventID      string        `json:"event_id"       desc:"execution request event ID"`
+	EventID      ref.EventID   `json:"event_id"       desc:"execution request event ID"`
 	RequestID    string        `json:"request_id"     desc:"unique request identifier"`
 }
 

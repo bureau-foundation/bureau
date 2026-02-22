@@ -62,15 +62,15 @@ type MessageContent struct {
 // RelatesTo expresses relationships between events.
 // For threads, RelType is "m.thread" and EventID is the thread root.
 type RelatesTo struct {
-	RelType       string     `json:"rel_type"`
-	EventID       string     `json:"event_id"`
-	IsFallingBack bool       `json:"is_falling_back,omitempty"`
-	InReplyTo     *InReplyTo `json:"m.in_reply_to,omitempty"`
+	RelType       string      `json:"rel_type"`
+	EventID       ref.EventID `json:"event_id"`
+	IsFallingBack bool        `json:"is_falling_back,omitempty"`
+	InReplyTo     *InReplyTo  `json:"m.in_reply_to,omitempty"`
 }
 
 // InReplyTo references a specific event being replied to within a thread.
 type InReplyTo struct {
-	EventID string `json:"event_id"`
+	EventID ref.EventID `json:"event_id"`
 }
 
 // NewTextMessage creates a plain text message with no thread context.
@@ -83,7 +83,7 @@ func NewTextMessage(body string) MessageContent {
 
 // NewThreadReply creates a message that replies within an existing thread.
 // threadRootID is the event ID of the thread's root message.
-func NewThreadReply(threadRootID, body string) MessageContent {
+func NewThreadReply(threadRootID ref.EventID, body string) MessageContent {
 	return MessageContent{
 		MsgType: "m.text",
 		Body:    body,
@@ -100,7 +100,7 @@ func NewThreadReply(threadRootID, body string) MessageContent {
 
 // Event represents a Matrix event from the server.
 type Event struct {
-	EventID        string         `json:"event_id"`
+	EventID        ref.EventID    `json:"event_id"`
 	Type           ref.EventType  `json:"type"`
 	Sender         ref.UserID     `json:"sender"`
 	OriginServerTS int64          `json:"origin_server_ts"`
@@ -201,7 +201,7 @@ type InviteRequest struct {
 
 // SendEventResponse is returned by SendMessage, SendEvent, and SendStateEvent.
 type SendEventResponse struct {
-	EventID string `json:"event_id"`
+	EventID ref.EventID `json:"event_id"`
 }
 
 // WhoAmIResponse is returned by WhoAmI.

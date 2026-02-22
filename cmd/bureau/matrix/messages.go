@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -103,7 +104,11 @@ main room timeline.`,
 			var result messagesResult
 
 			if params.Thread != "" {
-				response, err := session.ThreadMessages(ctx, roomID, params.Thread, messaging.ThreadMessagesOptions{
+				threadRootID, err := ref.ParseEventID(params.Thread)
+				if err != nil {
+					return cli.Validation("invalid thread event ID %q: %w", params.Thread, err)
+				}
+				response, err := session.ThreadMessages(ctx, roomID, threadRootID, messaging.ThreadMessagesOptions{
 					From:  params.From,
 					Limit: params.Limit,
 				})

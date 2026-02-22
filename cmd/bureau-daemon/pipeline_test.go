@@ -118,7 +118,7 @@ func TestReadPipelineResultFile(t *testing.T) {
 		}
 
 		// Verify complete entry.
-		if entries[3].Type != "complete" || entries[3].LogEventID != "$abc123" {
+		if entries[3].Type != "complete" || entries[3].LogEventID != ref.MustParseEventID("$abc123") {
 			t.Errorf("complete entry: %+v", entries[3])
 		}
 	})
@@ -386,7 +386,7 @@ func TestHandlePipelineExecute_NoBinary(t *testing.T) {
 	})
 
 	// daemon has no pipelineExecutorBinary set.
-	event := buildPipelineCommandEvent("$pipe1", ref.MustParseUserID("@admin:bureau.local"),
+	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe1"), ref.MustParseUserID("@admin:bureau.local"),
 		"bureau/pipeline:test", "req-1")
 
 	ctx := context.Background()
@@ -428,7 +428,7 @@ func TestHandlePipelineExecute_MissingPipeline(t *testing.T) {
 
 	// Command has no pipeline, pipeline_ref, or pipeline_inline parameter.
 	event := messaging.Event{
-		EventID: "$pipe2",
+		EventID: ref.MustParseEventID("$pipe2"),
 		Type:    schema.MatrixEventTypeMessage,
 		Sender:  ref.MustParseUserID("@admin:bureau.local"),
 		Content: map[string]any{
@@ -484,7 +484,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 		},
 	})
 
-	event := buildPipelineCommandEvent("$pipe3", ref.MustParseUserID("@admin:bureau.local"),
+	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe3"), ref.MustParseUserID("@admin:bureau.local"),
 		"bureau/pipeline:dev-init", "req-accepted")
 
 	ctx := context.Background()
@@ -534,7 +534,7 @@ func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
 		},
 	})
 
-	event := buildPipelineCommandEvent("$pipe4", ref.MustParseUserID("@operator:bureau.local"),
+	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe4"), ref.MustParseUserID("@operator:bureau.local"),
 		"bureau/pipeline:test", "req-denied")
 
 	ctx := context.Background()
@@ -581,7 +581,7 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 
 	// No "pipeline" parameter, but pipeline_ref is present.
 	event := messaging.Event{
-		EventID: "$pipe5",
+		EventID: ref.MustParseEventID("$pipe5"),
 		Type:    schema.MatrixEventTypeMessage,
 		Sender:  ref.MustParseUserID("@admin:bureau.local"),
 		Content: map[string]any{
@@ -613,7 +613,7 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 
 // buildPipelineCommandEvent creates a messaging.Event for a
 // pipeline.execute command with a pipeline ref parameter.
-func buildPipelineCommandEvent(eventID string, sender ref.UserID, pipelineRef, requestID string) messaging.Event {
+func buildPipelineCommandEvent(eventID ref.EventID, sender ref.UserID, pipelineRef, requestID string) messaging.Event {
 	content := map[string]any{
 		"msgtype": schema.MsgTypeCommand,
 		"body":    "pipeline.execute " + pipelineRef,
@@ -644,7 +644,7 @@ func TestPostPipelineResult(t *testing.T) {
 			{Type: "start", Pipeline: "test", StepCount: 2},
 			{Type: "step", Index: 0, Name: "build", Status: "ok", DurationMS: 1000},
 			{Type: "step", Index: 1, Name: "test", Status: "ok", DurationMS: 2000},
-			{Type: "complete", Status: "ok", DurationMS: 3000, LogEventID: "$log1"},
+			{Type: "complete", Status: "ok", DurationMS: 3000, LogEventID: ref.MustParseEventID("$log1")},
 		}
 
 		command := schema.CommandMessage{
@@ -653,7 +653,7 @@ func TestPostPipelineResult(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd1",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd1"),
 			command, fixedTestTime, 0, "", "", entries)
 
 		messages := harness.getSentMessages()
@@ -695,7 +695,7 @@ func TestPostPipelineResult(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd2",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd2"),
 			schema.CommandMessage{Command: "pipeline.execute"},
 			fixedTestTime, 1, "exit status 1", "", entries)
 
@@ -720,7 +720,7 @@ func TestPostPipelineResult(t *testing.T) {
 		harness.sentMessagesMu.Unlock()
 
 		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), "$cmd3",
+		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd3"),
 			schema.CommandMessage{Command: "pipeline.execute"},
 			fixedTestTime, 137, "killed by signal 9", "", nil)
 

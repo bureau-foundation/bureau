@@ -10,6 +10,7 @@ go_library(
         "device.go",
         "doc.go",
         "entity.go",
+        "event_id.go",
         "event_type.go",
         "fleet.go",
         "machine.go",
@@ -28,6 +29,7 @@ go_library(
 go_test(
     name = "ref_test",
     srcs = [
+        "event_id_test.go",
         "ref_test.go",
         "room_test.go",
     ],

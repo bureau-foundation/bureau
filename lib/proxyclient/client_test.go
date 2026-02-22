@@ -304,7 +304,7 @@ func TestPutState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutState: %v", err)
 	}
-	if eventID != "$event123" {
+	if eventID != ref.MustParseEventID("$event123") {
 		t.Errorf("EventID = %q, want $event123", eventID)
 	}
 }
@@ -332,7 +332,7 @@ func TestSendMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTextMessage: %v", err)
 	}
-	if eventID != "$msg456" {
+	if eventID != ref.MustParseEventID("$msg456") {
 		t.Errorf("EventID = %q, want $msg456", eventID)
 	}
 }
@@ -605,7 +605,7 @@ func TestThreadMessages(t *testing.T) {
 	})
 
 	client := testServer(t, mux)
-	response, err := client.ThreadMessages(context.Background(), ref.MustParseRoomID("!room1:test.local"), "$root", messaging.ThreadMessagesOptions{
+	response, err := client.ThreadMessages(context.Background(), ref.MustParseRoomID("!room1:test.local"), ref.MustParseEventID("$root"), messaging.ThreadMessagesOptions{
 		Limit: 25,
 	})
 	if err != nil {
@@ -767,7 +767,7 @@ func TestSendEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}
-	if eventID != "$evt789" {
+	if eventID != ref.MustParseEventID("$evt789") {
 		t.Errorf("EventID = %q, want $evt789", eventID)
 	}
 }

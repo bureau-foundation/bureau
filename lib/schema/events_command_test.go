@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func TestMsgTypeConstants(t *testing.T) {
@@ -131,7 +133,7 @@ func TestCommandResultMessageSuccessRoundTrip(t *testing.T) {
 		Status:    "success",
 		Result:    resultPayload,
 		RequestID: "req-a7f3",
-		RelatesTo: NewThreadRelation("$command-event-id"),
+		RelatesTo: NewThreadRelation(ref.MustParseEventID("$command-event-id")),
 	}
 
 	data, err := json.Marshal(original)
@@ -186,7 +188,7 @@ func TestCommandResultMessageErrorRoundTrip(t *testing.T) {
 		Status:    "error",
 		Error:     "workspace not found",
 		RequestID: "req-b4c1",
-		RelatesTo: NewThreadRelation("$cmd-event"),
+		RelatesTo: NewThreadRelation(ref.MustParseEventID("$cmd-event")),
 	}
 
 	data, err := json.Marshal(original)
@@ -228,9 +230,9 @@ func TestCommandResultMessagePipelineRoundTrip(t *testing.T) {
 			{Name: "build", Status: "success", DurationMS: 5000},
 			{Name: "test", Status: "success", DurationMS: 7345},
 		},
-		LogEventID: "$log-thread-root",
+		LogEventID: ref.MustParseEventID("$log-thread-root"),
 		RequestID:  "req-pipe-1",
-		RelatesTo:  NewThreadRelation("$pipeline-cmd"),
+		RelatesTo:  NewThreadRelation(ref.MustParseEventID("$pipeline-cmd")),
 	}
 
 	data, err := json.Marshal(original)
@@ -277,7 +279,7 @@ func TestCommandResultMessageAccepted(t *testing.T) {
 		Status:    "accepted",
 		Principal: "pipeline/build-runner",
 		RequestID: "req-pipe-1",
-		RelatesTo: NewThreadRelation("$pipeline-cmd"),
+		RelatesTo: NewThreadRelation(ref.MustParseEventID("$pipeline-cmd")),
 	}
 
 	data, err := json.Marshal(original)
@@ -303,13 +305,14 @@ func TestCommandResultMessageAccepted(t *testing.T) {
 
 func TestNewThreadRelation(t *testing.T) {
 	t.Parallel()
-	relation := NewThreadRelation("$test-event-id")
+	testEventID := ref.MustParseEventID("$test-event-id")
+	relation := NewThreadRelation(testEventID)
 
 	if relation.RelType != "m.thread" {
 		t.Errorf("RelType = %q, want %q", relation.RelType, "m.thread")
 	}
-	if relation.EventID != "$test-event-id" {
-		t.Errorf("EventID = %q, want %q", relation.EventID, "$test-event-id")
+	if relation.EventID != testEventID {
+		t.Errorf("EventID = %q, want %q", relation.EventID, testEventID)
 	}
 	if !relation.IsFallingBack {
 		t.Error("IsFallingBack should be true")
@@ -317,8 +320,8 @@ func TestNewThreadRelation(t *testing.T) {
 	if relation.InReplyTo == nil {
 		t.Fatal("InReplyTo should not be nil")
 	}
-	if relation.InReplyTo.EventID != "$test-event-id" {
-		t.Errorf("InReplyTo.EventID = %q, want %q", relation.InReplyTo.EventID, "$test-event-id")
+	if relation.InReplyTo.EventID != testEventID {
+		t.Errorf("InReplyTo.EventID = %q, want %q", relation.InReplyTo.EventID, testEventID)
 	}
 
 	// Verify JSON serialization uses the correct Matrix field names.

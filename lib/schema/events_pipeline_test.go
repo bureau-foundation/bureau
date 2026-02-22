@@ -552,7 +552,7 @@ func validPipelineResultContent() PipelineResultContent {
 			{Name: "install-deps", Status: "ok", DurationMS: 45000},
 			{Name: "publish-ready", Status: "ok", DurationMS: 200},
 		},
-		LogEventID: "$abc123:bureau.local",
+		LogEventID: ref.MustParseEventID("$abc123:bureau.local"),
 	}
 }
 
@@ -657,7 +657,7 @@ func TestPipelineResultContentFailure(t *testing.T) {
 		},
 		FailedStep:   "test",
 		ErrorMessage: "exit code 1",
-		LogEventID:   "$log:bureau.local",
+		LogEventID:   ref.MustParseEventID("$log:bureau.local"),
 	}
 
 	data, err := json.Marshal(content)

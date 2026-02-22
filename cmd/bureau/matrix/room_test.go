@@ -110,7 +110,7 @@ func TestRoomCreate_Success(t *testing.T) {
 			if !ok || len(via) != 1 || via[0] != "bureau.local" {
 				t.Errorf("unexpected via: %v", content["via"])
 			}
-			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: "$evt1"})
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$evt1")})
 
 		default:
 			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -167,7 +167,7 @@ func TestRoomCreate_DefaultNameFromAlias(t *testing.T) {
 			return
 		}
 		if strings.Contains(request.URL.Path, "/state/m.space.child/") {
-			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: "$e1"})
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e1")})
 			return
 		}
 		http.Error(writer, `{"errcode":"M_UNKNOWN"}`, http.StatusNotFound)
@@ -208,7 +208,7 @@ func TestRoomCreate_SpaceResolvedByAlias(t *testing.T) {
 			return
 		}
 		if strings.Contains(request.URL.Path, "/state/m.space.child/") {
-			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: "$e1"})
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e1")})
 			return
 		}
 		http.Error(writer, `{"errcode":"M_UNKNOWN"}`, http.StatusNotFound)

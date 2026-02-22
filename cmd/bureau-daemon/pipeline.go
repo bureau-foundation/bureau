@@ -37,7 +37,7 @@ const maxUnixSocketPathLength = 107
 // an "accepted" result immediately. The goroutine handles sandbox
 // creation, waiting, result reading, threaded result posting, and
 // cleanup.
-func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID string, command schema.CommandMessage) (any, error) {
+func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}
@@ -102,7 +102,7 @@ func (d *Daemon) pipelineLocalpart() string {
 // threaded Matrix reply, and cleans up the sandbox.
 func (d *Daemon) executePipeline(
 	ctx context.Context,
-	roomID ref.RoomID, commandEventID string,
+	roomID ref.RoomID, commandEventID ref.EventID,
 	command schema.CommandMessage,
 	localpart, pipelineRef string,
 ) {
@@ -405,7 +405,7 @@ type pipelineResultEntry struct {
 	DurationMS int64             `json:"duration_ms,omitempty"`
 	Error      string            `json:"error,omitempty"`
 	FailedStep string            `json:"failed_step,omitempty"`
-	LogEventID string            `json:"log_event_id,omitempty"`
+	LogEventID ref.EventID       `json:"log_event_id,omitempty"`
 	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 
@@ -445,7 +445,7 @@ func readPipelineResultFile(path string) ([]pipelineResultEntry, error) {
 // detail from the JSONL result file when available.
 func (d *Daemon) postPipelineResult(
 	ctx context.Context,
-	roomID ref.RoomID, commandEventID string,
+	roomID ref.RoomID, commandEventID ref.EventID,
 	command schema.CommandMessage,
 	start time.Time,
 	exitCode int,
@@ -516,7 +516,7 @@ func (d *Daemon) postPipelineResult(
 	}
 
 	if terminalEntry != nil {
-		if terminalEntry.LogEventID != "" {
+		if !terminalEntry.LogEventID.IsZero() {
 			message.LogEventID = terminalEntry.LogEventID
 		}
 		if len(terminalEntry.Outputs) > 0 {
@@ -537,7 +537,7 @@ func (d *Daemon) postPipelineResult(
 // (sandbox creation failures, IPC errors, etc.).
 func (d *Daemon) postPipelineError(
 	ctx context.Context,
-	roomID ref.RoomID, commandEventID string,
+	roomID ref.RoomID, commandEventID ref.EventID,
 	command schema.CommandMessage,
 	start time.Time,
 	errorMessage string,
@@ -572,7 +572,7 @@ func (d *Daemon) postPipelineError(
 // Called by executePipeline before sandbox creation.
 func (d *Daemon) postPipelineAccepted(
 	ctx context.Context,
-	roomID ref.RoomID, commandEventID string,
+	roomID ref.RoomID, commandEventID ref.EventID,
 	command schema.CommandMessage,
 	localpart string,
 ) {

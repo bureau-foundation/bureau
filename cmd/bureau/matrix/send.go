@@ -29,7 +29,7 @@ type sendParams struct {
 
 // sendResult is the JSON output for matrix send.
 type sendResult struct {
-	EventID string `json:"event_id" desc:"sent event's Matrix ID"`
+	EventID ref.EventID `json:"event_id" desc:"sent event's Matrix ID"`
 }
 
 // SendCommand returns the "send" subcommand for sending messages to Matrix rooms.
@@ -101,14 +101,18 @@ Bureau protocol events).`,
 				return err
 			}
 
-			var eventID string
+			var eventID ref.EventID
 			if params.EventType != "" {
 				// Custom event type: send raw content. The message body is
 				// expected to be JSON, but we send it as a text message
 				// content structure for consistency.
 				eventID, err = matrixSession.SendEvent(ctx, roomID, ref.EventType(params.EventType), messaging.NewTextMessage(messageBody))
 			} else if params.ThreadID != "" {
-				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(params.ThreadID, messageBody))
+				threadRootID, parseErr := ref.ParseEventID(params.ThreadID)
+				if parseErr != nil {
+					return cli.Validation("invalid thread event ID %q: %w", params.ThreadID, parseErr)
+				}
+				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewThreadReply(threadRootID, messageBody))
 			} else {
 				eventID, err = matrixSession.SendMessage(ctx, roomID, messaging.NewTextMessage(messageBody))
 			}

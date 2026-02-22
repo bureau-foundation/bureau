@@ -1188,7 +1188,7 @@ type writtenEvent struct {
 	Content   any
 }
 
-func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	f.mu.Lock()
 	f.events = append(f.events, writtenEvent{
 		RoomID:    roomID.String(),
@@ -1203,7 +1203,7 @@ func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventT
 		default:
 		}
 	}
-	return "$event-" + stateKey, nil
+	return ref.MustParseEventID("$event-" + stateKey), nil
 }
 
 // testEnv holds the server, client, and writer for mutation tests.

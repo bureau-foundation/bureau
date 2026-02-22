@@ -106,7 +106,7 @@ type CreateResult struct {
 
 	// ConfigEventID is the event ID of the published MachineConfig state
 	// event that includes this principal's assignment.
-	ConfigEventID string
+	ConfigEventID ref.EventID
 
 	// AccessToken is the Matrix access token for the newly created
 	// principal account. This is the same token that was sealed into the
@@ -245,17 +245,17 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 // assignPrincipal reads the current MachineConfig, merges the new
 // PrincipalAssignment, and publishes the updated config. If the principal
 // is already assigned, its entry is updated in place.
-func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params CreateParams) (string, error) {
+func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params CreateParams) (ref.EventID, error) {
 	machineLocalpart := params.Machine.Localpart()
 
 	var config schema.MachineConfig
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
 	if err == nil {
 		if err := json.Unmarshal(existingContent, &config); err != nil {
-			return "", fmt.Errorf("parse existing machine config for %s: %w", machineLocalpart, err)
+			return ref.EventID{}, fmt.Errorf("parse existing machine config for %s: %w", machineLocalpart, err)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return "", fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
 	}
 
 	assignment := schema.PrincipalAssignment{
@@ -283,7 +283,7 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 
 	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
-		return "", fmt.Errorf("publish machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("publish machine config for %s: %w", machineLocalpart, err)
 	}
 
 	return eventID, nil

@@ -78,7 +78,7 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{
-										EventID:        "$ev1",
+										EventID:        ref.MustParseEventID("$ev1"),
 										Type:           "m.room.message",
 										Sender:         ref.MustParseUserID("@user:local"),
 										OriginServerTS: 1771200000000,
@@ -150,14 +150,14 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 							Timeline: messaging.TimelineSection{
 								Events: []messaging.Event{
 									{
-										EventID:        "$ev1",
+										EventID:        ref.MustParseEventID("$ev1"),
 										Type:           "m.room.message",
 										Sender:         ref.MustParseUserID("@user:local"),
 										OriginServerTS: 1771200000000,
 										Content:        map[string]any{"msgtype": "m.text", "body": "should be filtered out"},
 									},
 									{
-										EventID:        "$ev2",
+										EventID:        ref.MustParseEventID("$ev2"),
 										Type:           "m.bureau.machine_status",
 										Sender:         ref.MustParseUserID("@machine:local"),
 										OriginServerTS: 1771200001000,

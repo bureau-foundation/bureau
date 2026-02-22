@@ -400,7 +400,7 @@ func TestHumanGateNotAutoMatched(t *testing.T) {
 	// Send an event that matches nothing specific — human gates
 	// should never auto-satisfy regardless.
 	event := messaging.Event{
-		EventID:  "$ev1",
+		EventID:  ref.MustParseEventID("$ev1"),
 		Type:     "m.bureau.workspace",
 		StateKey: stringPtr(""),
 		Content:  map[string]any{"status": "active"},
@@ -1018,7 +1018,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 
 	events := []messaging.Event{
 		{
-			EventID:  "$pipeline-result-1",
+			EventID:  ref.MustParseEventID("$pipeline-result-1"),
 			Type:     schema.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
@@ -1076,7 +1076,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 	// Simulate tkt-1 being updated to closed (the event that arrived via /sync).
 	events := []messaging.Event{
 		{
-			EventID:  "$tkt1-closed",
+			EventID:  ref.MustParseEventID("$tkt1-closed"),
 			Type:     schema.EventTypeTicket,
 			StateKey: stringPtr("tkt-1"),
 			Content: map[string]any{
@@ -1130,7 +1130,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 	// Only the build-check event arrives. The lint-check gate should remain pending.
 	events := []messaging.Event{
 		{
-			EventID:  "$build-result",
+			EventID:  ref.MustParseEventID("$build-result"),
 			Type:     schema.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
@@ -1188,7 +1188,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 	// Both results arrive in the same sync batch.
 	events := []messaging.Event{
 		{
-			EventID:  "$build-result",
+			EventID:  ref.MustParseEventID("$build-result"),
 			Type:     schema.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
@@ -1197,7 +1197,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 			},
 		},
 		{
-			EventID:  "$lint-result",
+			EventID:  ref.MustParseEventID("$lint-result"),
 			Type:     schema.EventTypePipelineResult,
 			StateKey: stringPtr("lint-check"),
 			Content: map[string]any{
@@ -1252,7 +1252,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 
 	events := []messaging.Event{
 		{
-			EventID:  "$new-result",
+			EventID:  ref.MustParseEventID("$new-result"),
 			Type:     schema.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
@@ -1299,7 +1299,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 	// Unrelated event.
 	events := []messaging.Event{
 		{
-			EventID:  "$unrelated",
+			EventID:  ref.MustParseEventID("$unrelated"),
 			Type:     "m.bureau.workspace",
 			StateKey: stringPtr(""),
 			Content:  map[string]any{"status": "active"},
@@ -1351,7 +1351,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 		Timeline: messaging.TimelineSection{
 			Events: []messaging.Event{
 				{
-					EventID:  "$pipeline-done",
+					EventID:  ref.MustParseEventID("$pipeline-done"),
 					Type:     schema.EventTypePipelineResult,
 					StateKey: stringPtr("build-check"),
 					Content: map[string]any{
@@ -1421,7 +1421,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 		Timeline: messaging.TimelineSection{
 			Events: []messaging.Event{
 				{
-					EventID:  "$tkt1-close",
+					EventID:  ref.MustParseEventID("$tkt1-close"),
 					Type:     schema.EventTypeTicket,
 					StateKey: stringPtr("tkt-1"),
 					Content:  closedContent,
@@ -1562,7 +1562,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$ci-result-1",
+						EventID:  ref.MustParseEventID("$ci-result-1"),
 						Type:     schema.EventTypePipelineResult,
 						StateKey: stringPtr("build-check"),
 						Content: map[string]any{
@@ -1637,7 +1637,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$ev1",
+						EventID:  ref.MustParseEventID("$ev1"),
 						Type:     "m.room.topic",
 						StateKey: stringPtr(""),
 						Content:  map[string]any{"topic": "hello"},
@@ -1785,7 +1785,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$ev1",
+						EventID:  ref.MustParseEventID("$ev1"),
 						Type:     "m.bureau.workspace",
 						StateKey: stringPtr("ws-1"),
 						Content:  map[string]any{"status": "active"},
@@ -1852,7 +1852,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$ev1",
+						EventID:  ref.MustParseEventID("$ev1"),
 						Type:     schema.EventTypePipelineResult,
 						StateKey: stringPtr("build"),
 						Content: map[string]any{
@@ -1920,7 +1920,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$deploy-1",
+						EventID:  ref.MustParseEventID("$deploy-1"),
 						Type:     "m.bureau.deploy",
 						StateKey: stringPtr("staging"),
 						Content:  map[string]any{"status": "deploying"},
@@ -1942,7 +1942,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		State: messaging.StateSection{
 			Events: []messaging.Event{
 				{
-					EventID:  "$deploy-2",
+					EventID:  ref.MustParseEventID("$deploy-2"),
 					Type:     "m.bureau.deploy",
 					StateKey: stringPtr("staging"),
 					Content:  map[string]any{"status": "live"},
@@ -2009,7 +2009,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 			Timeline: messaging.TimelineSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$lint-result",
+						EventID:  ref.MustParseEventID("$lint-result"),
 						Type:     schema.EventTypePipelineResult,
 						StateKey: stringPtr("lint"),
 						Content: map[string]any{
@@ -2070,7 +2070,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 			State: messaging.StateSection{
 				Events: []messaging.Event{
 					{
-						EventID:  "$ev1",
+						EventID:  ref.MustParseEventID("$ev1"),
 						Type:     schema.EventTypePipelineResult,
 						StateKey: stringPtr("build"),
 						Content:  map[string]any{"pipeline_ref": "build"},
@@ -2093,14 +2093,14 @@ func TestCollectStateEvents(t *testing.T) {
 	room := messaging.JoinedRoom{
 		State: messaging.StateSection{
 			Events: []messaging.Event{
-				{EventID: "$s1", Type: "m.room.name", StateKey: stringPtr("")},
-				{EventID: "$s2", Type: "m.bureau.ticket", StateKey: stringPtr("tkt-1")},
+				{EventID: ref.MustParseEventID("$s1"), Type: "m.room.name", StateKey: stringPtr("")},
+				{EventID: ref.MustParseEventID("$s2"), Type: "m.bureau.ticket", StateKey: stringPtr("tkt-1")},
 			},
 		},
 		Timeline: messaging.TimelineSection{
 			Events: []messaging.Event{
-				{EventID: "$t1", Type: "m.room.message"},                                // no state key — timeline-only
-				{EventID: "$t2", Type: "m.bureau.ticket", StateKey: stringPtr("tkt-2")}, // state event in timeline
+				{EventID: ref.MustParseEventID("$t1"), Type: "m.room.message"},                                // no state key — timeline-only
+				{EventID: ref.MustParseEventID("$t2"), Type: "m.bureau.ticket", StateKey: stringPtr("tkt-2")}, // state event in timeline
 			},
 		},
 	}
@@ -2110,13 +2110,13 @@ func TestCollectStateEvents(t *testing.T) {
 		t.Fatalf("expected 3 state events (2 from state + 1 from timeline), got %d", len(events))
 	}
 	// Verify order: state events first, then timeline state events.
-	if events[0].EventID != "$s1" {
+	if events[0].EventID != ref.MustParseEventID("$s1") {
 		t.Fatalf("first event should be $s1, got %s", events[0].EventID)
 	}
-	if events[1].EventID != "$s2" {
+	if events[1].EventID != ref.MustParseEventID("$s2") {
 		t.Fatalf("second event should be $s2, got %s", events[1].EventID)
 	}
-	if events[2].EventID != "$t2" {
+	if events[2].EventID != ref.MustParseEventID("$t2") {
 		t.Fatalf("third event should be $t2, got %s", events[2].EventID)
 	}
 }
@@ -2172,7 +2172,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 					State: messaging.StateSection{
 						Events: []messaging.Event{
 							{
-								EventID:  "$ci-result",
+								EventID:  ref.MustParseEventID("$ci-result"),
 								Type:     schema.EventTypePipelineResult,
 								StateKey: stringPtr("build-check"),
 								Content: map[string]any{
@@ -2754,7 +2754,7 @@ type writtenEventForGates struct {
 	Content   any
 }
 
-func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	f.events = append(f.events, writtenEventForGates{
 		RoomID:    roomID.String(),
 		EventType: eventType,
@@ -2767,7 +2767,7 @@ func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID
 		default:
 		}
 	}
-	return "$event-" + stateKey, nil
+	return ref.MustParseEventID("$event-" + stateKey), nil
 }
 
 // newGateTestService creates a TicketService for gate evaluation tests

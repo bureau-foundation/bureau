@@ -30,11 +30,11 @@ type credentialProvisionParams struct {
 
 // credentialProvisionResult is the JSON output for credential provision.
 type credentialProvisionResult struct {
-	EventID      string     `json:"event_id"      desc:"published state event ID"`
-	ConfigRoomID ref.RoomID `json:"config_room_id" desc:"config room where credentials were published"`
-	PrincipalID  string     `json:"principal_id"   desc:"full Matrix user ID of the principal"`
-	EncryptedFor []string   `json:"encrypted_for"  desc:"identities that can decrypt the bundle"`
-	Keys         []string   `json:"keys"           desc:"credential names in the bundle"`
+	EventID      ref.EventID `json:"event_id"      desc:"published state event ID"`
+	ConfigRoomID ref.RoomID  `json:"config_room_id" desc:"config room where credentials were published"`
+	PrincipalID  string      `json:"principal_id"   desc:"full Matrix user ID of the principal"`
+	EncryptedFor []string    `json:"encrypted_for"  desc:"identities that can decrypt the bundle"`
+	Keys         []string    `json:"keys"           desc:"credential names in the bundle"`
 }
 
 func provisionCommand() *cli.Command {

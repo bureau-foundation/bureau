@@ -184,14 +184,14 @@ func TestSendMessage(t *testing.T) {
 				t.Error("plain message should not have relates_to")
 			}
 
-			writeJSON(writer, SendEventResponse{EventID: "$event1"})
+			writeJSON(writer, SendEventResponse{EventID: ref.MustParseEventID("$event1")})
 		}))
 
 		eventID, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewTextMessage("hello world"))
 		if err != nil {
 			t.Fatalf("SendMessage failed: %v", err)
 		}
-		if eventID != "$event1" {
+		if eventID != ref.MustParseEventID("$event1") {
 			t.Errorf("unexpected event ID: %s", eventID)
 		}
 	})
@@ -208,24 +208,24 @@ func TestSendMessage(t *testing.T) {
 			if body.RelatesTo.RelType != "m.thread" {
 				t.Errorf("unexpected rel_type: %s", body.RelatesTo.RelType)
 			}
-			if body.RelatesTo.EventID != "$root1" {
+			if body.RelatesTo.EventID != ref.MustParseEventID("$root1") {
 				t.Errorf("unexpected thread root: %s", body.RelatesTo.EventID)
 			}
 			if body.RelatesTo.InReplyTo == nil {
 				t.Fatal("thread reply should have in_reply_to")
 			}
-			if body.RelatesTo.InReplyTo.EventID != "$root1" {
+			if body.RelatesTo.InReplyTo.EventID != ref.MustParseEventID("$root1") {
 				t.Errorf("unexpected in_reply_to: %s", body.RelatesTo.InReplyTo.EventID)
 			}
 
-			writeJSON(writer, SendEventResponse{EventID: "$event2"})
+			writeJSON(writer, SendEventResponse{EventID: ref.MustParseEventID("$event2")})
 		}))
 
-		eventID, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewThreadReply("$root1", "thread response"))
+		eventID, err := session.SendMessage(context.Background(), mustRoomID("!room1:local"), NewThreadReply(ref.MustParseEventID("$root1"), "thread response"))
 		if err != nil {
 			t.Fatalf("SendMessage (thread) failed: %v", err)
 		}
-		if eventID != "$event2" {
+		if eventID != ref.MustParseEventID("$event2") {
 			t.Errorf("unexpected event ID: %s", eventID)
 		}
 	})
@@ -242,7 +242,7 @@ func TestSendStateEvent(t *testing.T) {
 			t.Errorf("unexpected path: %s", request.URL.Path)
 		}
 
-		writeJSON(writer, SendEventResponse{EventID: "$state1"})
+		writeJSON(writer, SendEventResponse{EventID: ref.MustParseEventID("$state1")})
 	}))
 
 	eventID, err := session.SendStateEvent(context.Background(), mustRoomID("!space1:local"), "m.space.child", "!room1:local",
@@ -250,7 +250,7 @@ func TestSendStateEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendStateEvent failed: %v", err)
 	}
-	if eventID != "$state1" {
+	if eventID != ref.MustParseEventID("$state1") {
 		t.Errorf("unexpected event ID: %s", eventID)
 	}
 }
@@ -327,14 +327,14 @@ func TestGetRoomState(t *testing.T) {
 		stateKey2 := ""
 		events := []Event{
 			{
-				EventID:  "$s1",
+				EventID:  ref.MustParseEventID("$s1"),
 				Type:     "m.bureau.machine_key",
 				Sender:   ref.MustParseUserID("@machine/workstation:local"),
 				StateKey: &stateKey1,
 				Content:  map[string]any{"algorithm": "age-x25519", "public_key": "age1test"},
 			},
 			{
-				EventID:  "$s2",
+				EventID:  ref.MustParseEventID("$s2"),
 				Type:     "m.room.power_levels",
 				Sender:   ref.MustParseUserID("@admin:local"),
 				StateKey: &stateKey2,
@@ -381,8 +381,8 @@ func TestRoomMessages(t *testing.T) {
 			Start: "t1",
 			End:   "t2",
 			Chunk: []Event{
-				{EventID: "$msg1", Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
-				{EventID: "$msg2", Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
+				{EventID: ref.MustParseEventID("$msg1"), Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
+				{EventID: ref.MustParseEventID("$msg2"), Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
 			},
 		})
 	}))
@@ -397,7 +397,7 @@ func TestRoomMessages(t *testing.T) {
 	if len(response.Chunk) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(response.Chunk))
 	}
-	if response.Chunk[0].EventID != "$msg1" {
+	if response.Chunk[0].EventID != ref.MustParseEventID("$msg1") {
 		t.Errorf("unexpected first event ID: %s", response.Chunk[0].EventID)
 	}
 }
@@ -414,13 +414,13 @@ func TestThreadMessages(t *testing.T) {
 
 		writeJSON(writer, ThreadMessagesResponse{
 			Chunk: []Event{
-				{EventID: "$reply1", Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
+				{EventID: ref.MustParseEventID("$reply1"), Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
 			},
 			NextBatch: "next-page-token",
 		})
 	}))
 
-	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room1:local"), "$root1", ThreadMessagesOptions{
+	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room1:local"), ref.MustParseEventID("$root1"), ThreadMessagesOptions{
 		Limit: 50,
 	})
 	if err != nil {
@@ -456,7 +456,7 @@ func TestSync(t *testing.T) {
 					mustRoomID("!room1:local"): {
 						Timeline: TimelineSection{
 							Events: []Event{
-								{EventID: "$evt1", Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
+								{EventID: ref.MustParseEventID("$evt1"), Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
 							},
 						},
 					},
@@ -777,7 +777,7 @@ func TestTransactionIDUniqueness(t *testing.T) {
 		}
 		transactionIDs[transactionID] = true
 		callCount++
-		writeJSON(writer, SendEventResponse{EventID: "$evt"})
+		writeJSON(writer, SendEventResponse{EventID: ref.MustParseEventID("$evt")})
 	}))
 
 	for range 5 {

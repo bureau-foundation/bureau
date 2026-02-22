@@ -37,7 +37,7 @@ import (
 type commandDefinition struct {
 	requiredPowerLevel int
 	needsWorkspace     bool
-	handler            func(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID string,
+	handler            func(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID,
 		command schema.CommandMessage) (any, error)
 }
 
@@ -100,7 +100,7 @@ func (d *Daemon) processCommandMessages(ctx context.Context, roomID ref.RoomID, 
 
 // handleCommand is the per-command lifecycle: look up, validate,
 // authorize, execute, and post the result.
-func (d *Daemon) handleCommand(ctx context.Context, roomID ref.RoomID, eventID string, sender ref.UserID, command schema.CommandMessage) {
+func (d *Daemon) handleCommand(ctx context.Context, roomID ref.RoomID, eventID ref.EventID, sender ref.UserID, command schema.CommandMessage) {
 	start := time.Now()
 
 	d.logger.Info("processing command",
@@ -240,7 +240,7 @@ func getNumericField(data map[string]any, key string) float64 {
 
 // postCommandResult posts a successful command result as a threaded
 // reply to the original command message.
-func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, commandEventID string, command schema.CommandMessage, start time.Time, result any) {
+func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, commandEventID ref.EventID, command schema.CommandMessage, start time.Time, result any) {
 	durationMilliseconds := time.Since(start).Milliseconds()
 
 	resultJSON, err := json.Marshal(result)
@@ -274,7 +274,7 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, comma
 
 // postCommandError posts a command error as a threaded reply to the
 // original command message.
-func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, commandEventID string, command schema.CommandMessage, start time.Time, errorMessage string) {
+func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, commandEventID ref.EventID, command schema.CommandMessage, start time.Time, errorMessage string) {
 	durationMilliseconds := time.Since(start).Milliseconds()
 
 	d.logger.Warn("command failed",
@@ -306,7 +306,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 
 // handleWorkspaceList lists local workspace directories under the
 // daemon's workspaceRoot (e.g., /var/bureau/workspace/).
-func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
 	entries, err := os.ReadDir(d.workspaceRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -336,7 +336,7 @@ func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ st
 
 // handleWorkspaceStatus reports the existence and basic metadata of a
 // workspace directory.
-func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 
 	info, err := os.Stat(path)
@@ -367,7 +367,7 @@ func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ 
 
 // handleWorkspaceDu runs du -sh on the workspace directory and returns
 // the output.
-func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -401,7 +401,7 @@ func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ stri
 
 // handleWorkspaceWorktreeList runs git worktree list on the workspace's
 // .bare directory and returns the output.
-func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 	bareDir := filepath.Join(path, ".bare")
 
@@ -435,7 +435,7 @@ func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.Room
 
 // handleWorkspaceFetch runs git fetch --all in the workspace's .bare
 // directory, using flock to serialize concurrent fetches.
-func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID ref.RoomID, _ string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 	bareDir := filepath.Join(path, ".bare")
 

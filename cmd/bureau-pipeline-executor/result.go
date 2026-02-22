@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // resultLog writes structured JSONL to a file during pipeline execution.
@@ -79,7 +81,7 @@ func (r *resultLog) writeStep(index int, name, status string, durationMS int64, 
 }
 
 // writeComplete records successful pipeline completion.
-func (r *resultLog) writeComplete(durationMS int64, logEventID string, outputs map[string]string) {
+func (r *resultLog) writeComplete(durationMS int64, logEventID ref.EventID, outputs map[string]string) {
 	if r == nil {
 		return
 	}
@@ -93,7 +95,7 @@ func (r *resultLog) writeComplete(durationMS int64, logEventID string, outputs m
 }
 
 // writeFailed records pipeline failure.
-func (r *resultLog) writeFailed(failedStep, errorMessage string, durationMS int64, logEventID string) {
+func (r *resultLog) writeFailed(failedStep, errorMessage string, durationMS int64, logEventID ref.EventID) {
 	if r == nil {
 		return
 	}
@@ -110,7 +112,7 @@ func (r *resultLog) writeFailed(failedStep, errorMessage string, durationMS int6
 // writeAborted records a clean pipeline abort (precondition not met).
 // Unlike writeFailed, this indicates the pipeline did not encounter an error
 // — the work was simply not needed because the precondition changed.
-func (r *resultLog) writeAborted(abortedStep, reason string, durationMS int64, logEventID string) {
+func (r *resultLog) writeAborted(abortedStep, reason string, durationMS int64, logEventID ref.EventID) {
 	if r == nil {
 		return
 	}
@@ -164,27 +166,27 @@ type resultCompleteEntry struct {
 	Type       string            `json:"type"`
 	Status     string            `json:"status"`
 	DurationMS int64             `json:"duration_ms"`
-	LogEventID string            `json:"log_event_id"`
+	LogEventID ref.EventID       `json:"log_event_id"`
 	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 
 // resultFailedEntry is the last line when the pipeline fails.
 type resultFailedEntry struct {
-	Type       string `json:"type"`
-	Status     string `json:"status"`
-	Error      string `json:"error"`
-	FailedStep string `json:"failed_step"`
-	DurationMS int64  `json:"duration_ms"`
-	LogEventID string `json:"log_event_id"`
+	Type       string      `json:"type"`
+	Status     string      `json:"status"`
+	Error      string      `json:"error"`
+	FailedStep string      `json:"failed_step"`
+	DurationMS int64       `json:"duration_ms"`
+	LogEventID ref.EventID `json:"log_event_id"`
 }
 
 // resultAbortedEntry is the last line when the pipeline aborts cleanly
 // due to an assert_state precondition mismatch with on_mismatch="abort".
 type resultAbortedEntry struct {
-	Type        string `json:"type"`
-	Status      string `json:"status"`
-	Reason      string `json:"reason"`
-	AbortedStep string `json:"aborted_step"`
-	DurationMS  int64  `json:"duration_ms"`
-	LogEventID  string `json:"log_event_id"`
+	Type        string      `json:"type"`
+	Status      string      `json:"status"`
+	Reason      string      `json:"reason"`
+	AbortedStep string      `json:"aborted_step"`
+	DurationMS  int64       `json:"duration_ms"`
+	LogEventID  ref.EventID `json:"log_event_id"`
 }

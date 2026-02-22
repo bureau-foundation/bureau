@@ -69,7 +69,7 @@ func (session *ProxySession) GetRoomState(ctx context.Context, roomID ref.RoomID
 	return session.client.GetRoomState(ctx, roomID)
 }
 
-func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	return session.client.PutState(ctx, PutStateRequest{
 		Room:      roomID,
 		EventType: eventType,
@@ -78,11 +78,11 @@ func (session *ProxySession) SendStateEvent(ctx context.Context, roomID ref.Room
 	})
 }
 
-func (session *ProxySession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
+func (session *ProxySession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error) {
 	return session.client.SendEvent(ctx, roomID, eventType, content)
 }
 
-func (session *ProxySession) SendMessage(ctx context.Context, roomID ref.RoomID, content messaging.MessageContent) (string, error) {
+func (session *ProxySession) SendMessage(ctx context.Context, roomID ref.RoomID, content messaging.MessageContent) (ref.EventID, error) {
 	return session.client.SendMessage(ctx, roomID, content)
 }
 
@@ -114,7 +114,7 @@ func (session *ProxySession) RoomMessages(ctx context.Context, roomID ref.RoomID
 	return session.client.RoomMessages(ctx, roomID, options)
 }
 
-func (session *ProxySession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
+func (session *ProxySession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID ref.EventID, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
 	return session.client.ThreadMessages(ctx, roomID, threadRootID, options)
 }
 

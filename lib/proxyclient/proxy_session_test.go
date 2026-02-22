@@ -145,7 +145,7 @@ func TestProxySessionSendStateEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendStateEvent: %v", err)
 	}
-	if eventID != "$state1" {
+	if eventID != ref.MustParseEventID("$state1") {
 		t.Errorf("EventID = %q, want $state1", eventID)
 	}
 }
@@ -164,7 +164,7 @@ func TestProxySessionSendMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if eventID != "$msg1" {
+	if eventID != ref.MustParseEventID("$msg1") {
 		t.Errorf("EventID = %q, want $msg1", eventID)
 	}
 }
@@ -183,7 +183,7 @@ func TestProxySessionSendEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}
-	if eventID != "$evt1" {
+	if eventID != ref.MustParseEventID("$evt1") {
 		t.Errorf("EventID = %q, want $evt1", eventID)
 	}
 }
@@ -355,7 +355,7 @@ func TestProxySessionThreadMessages(t *testing.T) {
 	})
 
 	session := testProxySession(t, mux)
-	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room:test"), "$root", messaging.ThreadMessagesOptions{})
+	response, err := session.ThreadMessages(context.Background(), mustRoomID("!room:test"), ref.MustParseEventID("$root"), messaging.ThreadMessagesOptions{})
 	if err != nil {
 		t.Fatalf("ThreadMessages: %v", err)
 	}

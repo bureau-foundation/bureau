@@ -50,7 +50,7 @@ type mockSession struct {
 	resolveAlias func(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 
 	// sendStateEvent is called by Provision to publish the credential event.
-	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
+	sendStateEvent func(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
 }
 
 func (m *mockSession) UserID() ref.UserID { return m.userID }
@@ -77,7 +77,7 @@ func (m *mockSession) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (re
 	return m.resolveAlias(ctx, alias)
 }
 
-func (m *mockSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (m *mockSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	if m.sendStateEvent == nil {
 		panic("SendStateEvent not implemented")
 	}
@@ -88,11 +88,11 @@ func (m *mockSession) WhoAmI(ctx context.Context) (ref.UserID, error) {
 	panic("WhoAmI not implemented")
 }
 
-func (m *mockSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
+func (m *mockSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error) {
 	panic("SendEvent not implemented")
 }
 
-func (m *mockSession) SendMessage(ctx context.Context, roomID ref.RoomID, content messaging.MessageContent) (string, error) {
+func (m *mockSession) SendMessage(ctx context.Context, roomID ref.RoomID, content messaging.MessageContent) (ref.EventID, error) {
 	panic("SendMessage not implemented")
 }
 
@@ -124,7 +124,7 @@ func (m *mockSession) RoomMessages(ctx context.Context, roomID ref.RoomID, optio
 	panic("RoomMessages not implemented")
 }
 
-func (m *mockSession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
+func (m *mockSession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID ref.EventID, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
 	panic("ThreadMessages not implemented")
 }
 
@@ -363,8 +363,8 @@ func TestProvision_SendStateEventFails(t *testing.T) {
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
-			return "", fmt.Errorf("permission denied")
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
+			return ref.EventID{}, fmt.Errorf("permission denied")
 		},
 	}
 	_, err := Provision(context.Background(), session, ProvisionParams{
@@ -412,12 +412,12 @@ func TestProvision_HappyPath(t *testing.T) {
 			}
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 			capturedRoomID = roomID
 			capturedEventType = eventType
 			capturedStateKey = stateKey
 			capturedContent = content
-			return "$event123", nil
+			return ref.MustParseEventID("$event123"), nil
 		},
 	}
 
@@ -432,7 +432,7 @@ func TestProvision_HappyPath(t *testing.T) {
 	}
 
 	// Verify the result fields.
-	if result.EventID != "$event123" {
+	if result.EventID != ref.MustParseEventID("$event123") {
 		t.Errorf("EventID = %q, want %q", result.EventID, "$event123")
 	}
 	if result.ConfigRoomID.String() != "!config:bureau.local" {
@@ -495,8 +495,8 @@ func TestProvision_HappyPathWithEscrowKey(t *testing.T) {
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
-			return "$event456", nil
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
+			return ref.MustParseEventID("$event456"), nil
 		},
 	}
 
@@ -801,8 +801,8 @@ func TestAsProvisionFunc_DelegatesToProvision(t *testing.T) {
 		resolveAlias: func(_ context.Context, _ ref.RoomAlias) (ref.RoomID, error) {
 			return mustRoomID("!config:bureau.local"), nil
 		},
-		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (string, error) {
-			return "$event789", nil
+		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
+			return ref.MustParseEventID("$event789"), nil
 		},
 	}
 

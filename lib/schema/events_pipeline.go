@@ -437,7 +437,7 @@ type PipelineResultContent struct {
 	// the detailed step-by-step execution log. Empty when the pipeline
 	// has no log room configured (which should not happen since the
 	// result event itself is published to the log room).
-	LogEventID string `json:"log_event_id,omitempty"`
+	LogEventID ref.EventID `json:"log_event_id,omitzero"`
 
 	// Outputs contains the pipeline's resolved output values. Each
 	// entry maps an output name to its string value (either inline

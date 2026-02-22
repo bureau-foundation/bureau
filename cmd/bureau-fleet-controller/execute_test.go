@@ -58,13 +58,13 @@ func (f *fakeConfigStore) GetStateEvent(_ context.Context, roomID ref.RoomID, ev
 	return raw, nil
 }
 
-func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	data, err := json.Marshal(content)
 	if err != nil {
-		return "", fmt.Errorf("marshaling content: %w", err)
+		return ref.EventID{}, fmt.Errorf("marshaling content: %w", err)
 	}
 	f.configs[storeKey(roomID.String(), stateKey)] = data
 	f.writes = append(f.writes, configWrite{
@@ -73,7 +73,7 @@ func (f *fakeConfigStore) SendStateEvent(_ context.Context, roomID ref.RoomID, e
 		StateKey:  stateKey,
 		Content:   content,
 	})
-	return "$event-" + stateKey, nil
+	return ref.MustParseEventID("$event-" + stateKey), nil
 }
 
 // seedConfig stores a MachineConfig in the fake so that subsequent reads
@@ -181,7 +181,7 @@ func TestWriteMachineConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeMachineConfig: %v", err)
 	}
-	if eventID == "" {
+	if eventID.IsZero() {
 		t.Error("writeMachineConfig should return a non-empty event ID")
 	}
 
@@ -387,7 +387,7 @@ func TestPlaceHappyPath(t *testing.T) {
 	}
 
 	// Verify pending echo was recorded.
-	if machine.pendingEchoEventID == "" {
+	if machine.pendingEchoEventID.IsZero() {
 		t.Error("machine should have a pending echo event ID after place")
 	}
 }
@@ -611,7 +611,7 @@ func TestUnplaceHappyPath(t *testing.T) {
 	}
 
 	// Verify pending echo was recorded.
-	if machine.pendingEchoEventID == "" {
+	if machine.pendingEchoEventID.IsZero() {
 		t.Error("machine should have a pending echo event ID after unplace")
 	}
 }

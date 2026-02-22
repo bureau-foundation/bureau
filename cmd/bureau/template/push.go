@@ -30,7 +30,7 @@ type templatePushResult struct {
 	RoomAlias    ref.RoomAlias `json:"room_alias"             desc:"target room alias"`
 	RoomID       ref.RoomID    `json:"room_id,omitempty"      desc:"target room Matrix ID"`
 	TemplateName string        `json:"template_name"          desc:"template name"`
-	EventID      string        `json:"event_id,omitempty"     desc:"created state event ID"`
+	EventID      ref.EventID   `json:"event_id,omitempty"     desc:"created state event ID"`
 	DryRun       bool          `json:"dry_run"                desc:"true if push was simulated"`
 }
 

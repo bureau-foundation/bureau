@@ -21,7 +21,7 @@ import (
 type threadLogger struct {
 	session     messaging.Session
 	roomID      ref.RoomID
-	rootEventID string
+	rootEventID ref.EventID
 }
 
 // newThreadLogger creates a thread in the specified room for pipeline
@@ -69,9 +69,9 @@ func newThreadLogger(ctx context.Context, session messaging.Session, room string
 // logEventID returns the root event ID of the pipeline thread, or
 // empty string if thread logging is not configured. The daemon uses
 // this to link command results to the detailed execution log thread.
-func (l *threadLogger) logEventID() string {
+func (l *threadLogger) logEventID() ref.EventID {
 	if l == nil {
-		return ""
+		return ref.EventID{}
 	}
 	return l.rootEventID
 }

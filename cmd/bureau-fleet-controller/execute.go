@@ -18,7 +18,7 @@ import (
 // and writing machine config state events. Tests substitute a fake.
 type configStore interface {
 	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
-	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
 }
 
 // readMachineConfig reads the current MachineConfig from a machine's
@@ -47,15 +47,15 @@ func (fc *FleetController) readMachineConfig(ctx context.Context, machineLocalpa
 
 // writeMachineConfig writes a MachineConfig state event to a machine's
 // config room and returns the event ID assigned by the homeserver.
-func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalpart string, config *schema.MachineConfig) (string, error) {
+func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalpart string, config *schema.MachineConfig) (ref.EventID, error) {
 	configRoomID, exists := fc.configRooms[machineLocalpart]
 	if !exists {
-		return "", fmt.Errorf("no config room for machine %s", machineLocalpart)
+		return ref.EventID{}, fmt.Errorf("no config room for machine %s", machineLocalpart)
 	}
 
 	eventID, err := fc.configStore.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
-		return "", fmt.Errorf("writing machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("writing machine config for %s: %w", machineLocalpart, err)
 	}
 	return eventID, nil
 }

@@ -171,7 +171,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				stateKey:  stateKey,
 			})
 			m.mu.Unlock()
-			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: "$fix"})
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$fix")})
 			return
 		}
 

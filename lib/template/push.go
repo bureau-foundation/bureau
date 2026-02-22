@@ -16,7 +16,7 @@ import (
 type PushResult struct {
 	// EventID is the Matrix event ID of the published m.bureau.template
 	// state event.
-	EventID string
+	EventID ref.EventID
 
 	// RoomID is the Matrix room ID where the template was published.
 	RoomID ref.RoomID

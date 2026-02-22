@@ -26,7 +26,7 @@ import (
 // executor to create a git worktree. The executor runs the
 // dev-worktree-init pipeline, which handles bare repo verification, worktree
 // creation, submodule init, and project-level worktree-init scripts.
-func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}
@@ -112,7 +112,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 // dev-worktree-deinit pipeline, which handles mode validation, optional
 // archiving of uncommitted changes, project-level cleanup scripts, and
 // the actual worktree removal.
-func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID string, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}

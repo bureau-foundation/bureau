@@ -94,7 +94,7 @@ func TestPipelineExecution(t *testing.T) {
 		t.Error("accepted result has empty principal")
 	}
 	// Verify the result threads to the command event.
-	verifyThreadRelation(t, acceptedResult, commandEventID)
+	verifyThreadRelation(t, acceptedResult, commandEventID.String())
 
 	// --- Verify pipeline result ---
 	if status, _ := pipelineResult["status"].(string); status != "success" {
@@ -132,7 +132,7 @@ func TestPipelineExecution(t *testing.T) {
 	}
 
 	// Verify the pipeline result threads to the command event.
-	verifyThreadRelation(t, pipelineResult, commandEventID)
+	verifyThreadRelation(t, pipelineResult, commandEventID.String())
 
 	t.Log("pipeline execution lifecycle verified: command → accepted → sandbox → executor → result")
 }
@@ -238,7 +238,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		t.Error("pipeline result body is empty")
 	}
 
-	verifyThreadRelation(t, pipelineResult, commandEventID)
+	verifyThreadRelation(t, pipelineResult, commandEventID.String())
 
 	t.Log("pipeline failure reporting verified: failing step produces error result with step-level detail")
 }

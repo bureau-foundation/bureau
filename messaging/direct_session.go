@@ -134,14 +134,14 @@ func (s *DirectSession) InviteUser(ctx context.Context, roomID ref.RoomID, userI
 // SendMessage sends a message to a room. The content includes thread context
 // if this is a thread reply (see NewTextMessage and NewThreadReply).
 // Returns the event ID of the sent message.
-func (s *DirectSession) SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (string, error) {
+func (s *DirectSession) SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (ref.EventID, error) {
 	return s.SendEvent(ctx, roomID, "m.room.message", content)
 }
 
 // SendEvent sends an event of any type to a room.
 // Uses Matrix's idempotent PUT with a transaction ID.
 // Returns the event ID.
-func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
+func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error) {
 	transactionID := s.nextTransactionID()
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/%s/%s",
 		url.PathEscape(roomID.String()),
@@ -151,12 +151,12 @@ func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventT
 
 	body, err := s.client.doRequest(ctx, http.MethodPut, path, s.accessToken, content)
 	if err != nil {
-		return "", fmt.Errorf("messaging: send event to %q failed: %w", roomID, err)
+		return ref.EventID{}, fmt.Errorf("messaging: send event to %q failed: %w", roomID, err)
 	}
 
 	var response SendEventResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("messaging: failed to parse send response: %w", err)
+		return ref.EventID{}, fmt.Errorf("messaging: failed to parse send response: %w", err)
 	}
 	return response.EventID, nil
 }
@@ -164,7 +164,7 @@ func (s *DirectSession) SendEvent(ctx context.Context, roomID ref.RoomID, eventT
 // SendStateEvent sends a state event to a room.
 // State events use PUT with the event type and state key in the path.
 // Returns the event ID.
-func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error) {
+func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
 		url.PathEscape(roomID.String()),
 		url.PathEscape(eventType.String()),
@@ -173,12 +173,12 @@ func (s *DirectSession) SendStateEvent(ctx context.Context, roomID ref.RoomID, e
 
 	body, err := s.client.doRequest(ctx, http.MethodPut, path, s.accessToken, content)
 	if err != nil {
-		return "", fmt.Errorf("messaging: send state event to %q failed: %w", roomID, err)
+		return ref.EventID{}, fmt.Errorf("messaging: send state event to %q failed: %w", roomID, err)
 	}
 
 	var response SendEventResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("messaging: failed to parse send state response: %w", err)
+		return ref.EventID{}, fmt.Errorf("messaging: failed to parse send state response: %w", err)
 	}
 	return response.EventID, nil
 }
@@ -251,10 +251,10 @@ func (s *DirectSession) RoomMessages(ctx context.Context, roomID ref.RoomID, opt
 // ThreadMessages fetches all messages in a thread.
 // threadRootID is the event ID of the thread's root message.
 // Uses the /relations endpoint to get events related to the root via m.thread.
-func (s *DirectSession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options ThreadMessagesOptions) (*ThreadMessagesResponse, error) {
+func (s *DirectSession) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID ref.EventID, options ThreadMessagesOptions) (*ThreadMessagesResponse, error) {
 	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/relations/%s/m.thread",
 		url.PathEscape(roomID.String()),
-		url.PathEscape(threadRootID),
+		url.PathEscape(threadRootID.String()),
 	)
 
 	query := url.Values{}

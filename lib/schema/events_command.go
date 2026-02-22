@@ -3,7 +3,11 @@
 
 package schema
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 // Matrix m.room.message msgtype constants for Bureau command messages.
 // Commands are regular m.room.message events with custom msgtypes (not
@@ -85,7 +89,7 @@ type CommandResultMessage struct {
 	DurationMS int64                `json:"duration_ms"`
 	Steps      []PipelineStepResult `json:"steps,omitempty"`
 	Outputs    map[string]string    `json:"outputs,omitempty"`
-	LogEventID string               `json:"log_event_id,omitempty"`
+	LogEventID ref.EventID          `json:"log_event_id,omitzero"`
 	RequestID  string               `json:"request_id,omitempty"`
 	Principal  string               `json:"principal,omitempty"`
 	RelatesTo  *ThreadRelation      `json:"m.relates_to,omitempty"`
@@ -96,23 +100,23 @@ type CommandResultMessage struct {
 // linked via this threading relation so that clients can render the
 // request→response pair as a conversation thread.
 type ThreadRelation struct {
-	RelType       string     `json:"rel_type"`
-	EventID       string     `json:"event_id"`
-	IsFallingBack bool       `json:"is_falling_back,omitempty"`
-	InReplyTo     *InReplyTo `json:"m.in_reply_to,omitempty"`
+	RelType       string      `json:"rel_type"`
+	EventID       ref.EventID `json:"event_id"`
+	IsFallingBack bool        `json:"is_falling_back,omitempty"`
+	InReplyTo     *InReplyTo  `json:"m.in_reply_to,omitempty"`
 }
 
 // InReplyTo identifies the event being replied to within a thread
 // relation. This is the fallback reply target for clients that do
 // not support threads.
 type InReplyTo struct {
-	EventID string `json:"event_id"`
+	EventID ref.EventID `json:"event_id"`
 }
 
 // NewThreadRelation constructs a ThreadRelation for a threaded reply
 // to the given event ID. This matches the structure the daemon uses
 // when posting command results and pipeline results.
-func NewThreadRelation(eventID string) *ThreadRelation {
+func NewThreadRelation(eventID ref.EventID) *ThreadRelation {
 	return &ThreadRelation{
 		RelType:       "m.thread",
 		EventID:       eventID,

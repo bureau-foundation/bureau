@@ -261,29 +261,29 @@ type PutStateRequest struct {
 }
 
 // PutState publishes a state event to a Matrix room. Returns the event ID.
-func (client *Client) PutState(ctx context.Context, request PutStateRequest) (string, error) {
+func (client *Client) PutState(ctx context.Context, request PutStateRequest) (ref.EventID, error) {
 	response, err := client.post(ctx, "/v1/matrix/state", request)
 	if err != nil {
-		return "", fmt.Errorf("put state %s/%s in %s: %w", request.EventType, request.StateKey, request.Room, err)
+		return ref.EventID{}, fmt.Errorf("put state %s/%s in %s: %w", request.EventType, request.StateKey, request.Room, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("put state %s/%s in %s: HTTP %d: %s", request.EventType, request.StateKey, request.Room, response.StatusCode, body)
+		return ref.EventID{}, fmt.Errorf("put state %s/%s in %s: HTTP %d: %s", request.EventType, request.StateKey, request.Room, response.StatusCode, body)
 	}
 
 	var result struct {
-		EventID string `json:"event_id"`
+		EventID ref.EventID `json:"event_id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("put state: parsing response: %w", err)
+		return ref.EventID{}, fmt.Errorf("put state: parsing response: %w", err)
 	}
 	return result.EventID, nil
 }
 
 // SendMessage sends a message to a Matrix room. Returns the event ID.
-func (client *Client) SendMessage(ctx context.Context, roomID ref.RoomID, content any) (string, error) {
+func (client *Client) SendMessage(ctx context.Context, roomID ref.RoomID, content any) (ref.EventID, error) {
 	request := struct {
 		Room    ref.RoomID `json:"room"`
 		Content any        `json:"content"`
@@ -294,26 +294,26 @@ func (client *Client) SendMessage(ctx context.Context, roomID ref.RoomID, conten
 
 	response, err := client.post(ctx, "/v1/matrix/message", request)
 	if err != nil {
-		return "", fmt.Errorf("send message to %s: %w", roomID, err)
+		return ref.EventID{}, fmt.Errorf("send message to %s: %w", roomID, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("send message to %s: HTTP %d: %s", roomID, response.StatusCode, body)
+		return ref.EventID{}, fmt.Errorf("send message to %s: HTTP %d: %s", roomID, response.StatusCode, body)
 	}
 
 	var result struct {
-		EventID string `json:"event_id"`
+		EventID ref.EventID `json:"event_id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("send message: parsing response: %w", err)
+		return ref.EventID{}, fmt.Errorf("send message: parsing response: %w", err)
 	}
 	return result.EventID, nil
 }
 
 // SendTextMessage is a convenience wrapper for plain text messages.
-func (client *Client) SendTextMessage(ctx context.Context, roomID ref.RoomID, text string) (string, error) {
+func (client *Client) SendTextMessage(ctx context.Context, roomID ref.RoomID, text string) (ref.EventID, error) {
 	return client.SendMessage(ctx, roomID, map[string]string{
 		"msgtype": "m.text",
 		"body":    text,
@@ -436,10 +436,10 @@ func (client *Client) RoomMessages(ctx context.Context, roomID ref.RoomID, optio
 }
 
 // ThreadMessages fetches messages in a thread.
-func (client *Client) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
+func (client *Client) ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID ref.EventID, options messaging.ThreadMessagesOptions) (*messaging.ThreadMessagesResponse, error) {
 	query := url.Values{
 		"room":   {roomID.String()},
-		"thread": {threadRootID},
+		"thread": {threadRootID.String()},
 	}
 	if options.From != "" {
 		query.Set("from", options.From)
@@ -550,27 +550,27 @@ func (client *Client) InviteUser(ctx context.Context, roomID ref.RoomID, userID 
 }
 
 // SendEvent sends an event of any type to a room. Returns the event ID.
-func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
+func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error) {
 	response, err := client.post(ctx, "/v1/matrix/event", struct {
 		Room      ref.RoomID    `json:"room"`
 		EventType ref.EventType `json:"event_type"`
 		Content   any           `json:"content"`
 	}{Room: roomID, EventType: eventType, Content: content})
 	if err != nil {
-		return "", fmt.Errorf("send event %s to %s: %w", eventType, roomID, err)
+		return ref.EventID{}, fmt.Errorf("send event %s to %s: %w", eventType, roomID, err)
 	}
 	defer response.Body.Close()
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, roomID, response.StatusCode, body)
+		return ref.EventID{}, fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, roomID, response.StatusCode, body)
 	}
 
 	var result struct {
-		EventID string `json:"event_id"`
+		EventID ref.EventID `json:"event_id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("send event: parsing response: %w", err)
+		return ref.EventID{}, fmt.Errorf("send event: parsing response: %w", err)
 	}
 	return result.EventID, nil
 }

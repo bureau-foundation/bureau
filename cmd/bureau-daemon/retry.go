@@ -35,14 +35,14 @@ const sendEventMaxAttempts = 3
 //
 // The context bounds the total retry time — if the daemon is shutting
 // down, the context cancels and retries stop.
-func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error) {
+func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error) {
 	var lastError error
 	for attempt := 0; attempt < sendEventMaxAttempts; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(1<<(attempt-1)) * time.Second
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return ref.EventID{}, ctx.Err()
 			case <-d.clock.After(backoff):
 			}
 		}
@@ -54,7 +54,7 @@ func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventTyp
 		lastError = err
 
 		if !isTransientError(err) {
-			return "", err
+			return ref.EventID{}, err
 		}
 
 		d.logger.Warn("transient event send failure, retrying",
@@ -64,7 +64,7 @@ func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventTyp
 			"error", err,
 		)
 	}
-	return "", lastError
+	return ref.EventID{}, lastError
 }
 
 // isTransientError returns true for errors that are likely transient

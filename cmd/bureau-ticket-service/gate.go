@@ -86,7 +86,7 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 			continue
 		}
 
-		satisfiedBy := event.EventID
+		satisfiedBy := event.EventID.String()
 		if satisfiedBy == "" {
 			// Fallback: use event type + state key as an
 			// identifier when the event ID is missing
@@ -295,7 +295,7 @@ func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms
 						break
 					}
 
-					satisfiedBy := event.EventID
+					satisfiedBy := event.EventID.String()
 					if satisfiedBy == "" {
 						satisfiedBy = string(event.Type)
 						if event.StateKey != nil {

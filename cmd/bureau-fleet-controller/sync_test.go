@@ -708,7 +708,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 			"service/stt/whisper": placedAssignment,
 		},
 		configRoomID:       mustRoomID("!config-ws:local"),
-		pendingEchoEventID: "$echo-abc",
+		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
@@ -726,7 +726,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{},
 	})
 	staleEvent := messaging.Event{
-		EventID:  "$stale-old-event",
+		EventID:  ref.MustParseEventID("$stale-old-event"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  staleContent,
@@ -744,7 +744,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 	}
 
 	// Pending echo should still be set.
-	if machine.pendingEchoEventID != "$echo-abc" {
+	if machine.pendingEchoEventID != ref.MustParseEventID("$echo-abc") {
 		t.Errorf("pending echo should still be %q, got %q", "$echo-abc", machine.pendingEchoEventID)
 	}
 
@@ -771,7 +771,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 			"service/stt/whisper": placedAssignment,
 		},
 		configRoomID:       mustRoomID("!config-ws:local"),
-		pendingEchoEventID: "$echo-abc",
+		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
@@ -795,7 +795,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 		},
 	})
 	echoEvent := messaging.Event{
-		EventID:  "$echo-abc",
+		EventID:  ref.MustParseEventID("$echo-abc"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  echoContent,
@@ -805,7 +805,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 
 	// Pending echo should be cleared.
 	machine := fc.machines["machine/workstation"]
-	if machine.pendingEchoEventID != "" {
+	if !machine.pendingEchoEventID.IsZero() {
 		t.Errorf("pending echo should be cleared after echo arrival, got %q", machine.pendingEchoEventID)
 	}
 
@@ -828,7 +828,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 			},
 		},
 		configRoomID:       mustRoomID("!config-ws:local"),
-		pendingEchoEventID: "$echo-abc",
+		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
@@ -848,7 +848,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 		},
 	})
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
-		EventID:  "$echo-abc",
+		EventID:  ref.MustParseEventID("$echo-abc"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  echoContent,
@@ -859,7 +859,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{},
 	})
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
-		EventID:  "$later-event",
+		EventID:  ref.MustParseEventID("$later-event"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  emptyContent,
@@ -882,12 +882,12 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	fc.machines["machine/workstation"] = &machineState{
 		assignments:        make(map[string]*schema.PrincipalAssignment),
 		configRoomID:       mustRoomID("!config-ws:local"),
-		pendingEchoEventID: "$echo-first",
+		pendingEchoEventID: ref.MustParseEventID("$echo-first"),
 	}
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	// Simulate a second write overwriting the pending echo.
-	fc.machines["machine/workstation"].pendingEchoEventID = "$echo-second"
+	fc.machines["machine/workstation"].pendingEchoEventID = ref.MustParseEventID("$echo-second")
 
 	// The echo of the first write arrives — should still be skipped
 	// because we're waiting for the second echo.
@@ -895,14 +895,14 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{},
 	})
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
-		EventID:  "$echo-first",
+		EventID:  ref.MustParseEventID("$echo-first"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  firstContent,
 	})
 
 	machine := fc.machines["machine/workstation"]
-	if machine.pendingEchoEventID != "$echo-second" {
+	if machine.pendingEchoEventID != ref.MustParseEventID("$echo-second") {
 		t.Errorf("pending echo should still be %q after first echo, got %q",
 			"$echo-second", machine.pendingEchoEventID)
 	}
@@ -912,13 +912,13 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{},
 	})
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
-		EventID:  "$echo-second",
+		EventID:  ref.MustParseEventID("$echo-second"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  secondContent,
 	})
 
-	if machine.pendingEchoEventID != "" {
+	if !machine.pendingEchoEventID.IsZero() {
 		t.Errorf("pending echo should be cleared after second echo, got %q", machine.pendingEchoEventID)
 	}
 }
@@ -950,7 +950,7 @@ func TestNoPendingEchoPassesThrough(t *testing.T) {
 		},
 	})
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
-		EventID:  "$normal-event",
+		EventID:  ref.MustParseEventID("$normal-event"),
 		Type:     schema.EventTypeMachineConfig,
 		StateKey: stringPtr("machine/workstation"),
 		Content:  configContent,

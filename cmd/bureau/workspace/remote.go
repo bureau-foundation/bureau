@@ -100,10 +100,10 @@ func sendWorkspaceCommand(
 	commandName string,
 	workspace string,
 	parameters map[string]any,
-) (string, string, error) {
+) (ref.EventID, string, error) {
 	requestID, err := cli.GenerateRequestID()
 	if err != nil {
-		return "", "", cli.Internal("generating request ID: %w", err)
+		return ref.EventID{}, "", cli.Internal("generating request ID: %w", err)
 	}
 
 	command := schema.CommandMessage{
@@ -117,7 +117,7 @@ func sendWorkspaceCommand(
 
 	eventID, err := session.SendEvent(ctx, roomID, "m.room.message", command)
 	if err != nil {
-		return "", "", cli.Internal("sending %s command: %w", commandName, err)
+		return ref.EventID{}, "", cli.Internal("sending %s command: %w", commandName, err)
 	}
 
 	return eventID, requestID, nil
@@ -134,7 +134,7 @@ func waitForCommandResult(
 	ctx context.Context,
 	session messaging.Session,
 	roomID ref.RoomID,
-	commandEventID string,
+	commandEventID ref.EventID,
 	requestID string,
 ) (*commandResult, error) {
 	pollInterval := 250 * time.Millisecond

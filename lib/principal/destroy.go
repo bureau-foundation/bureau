@@ -17,7 +17,7 @@ import (
 type DestroyResult struct {
 	// ConfigEventID is the event ID of the updated MachineConfig state
 	// event after removing the principal.
-	ConfigEventID string
+	ConfigEventID ref.EventID
 }
 
 // Destroy removes a principal's assignment from the MachineConfig.

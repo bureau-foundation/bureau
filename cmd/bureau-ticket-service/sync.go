@@ -100,7 +100,7 @@ type roomState struct {
 	//
 	// Keyed by ticket ID (state_key), value is the event ID
 	// returned by SendStateEvent. Cleared when the echo arrives.
-	pendingEchoes map[string]string
+	pendingEchoes map[string]ref.EventID
 
 	// alias is the room's canonical alias (e.g.,
 	// "#iree/general:bureau.local"), resolved once when the room is
@@ -203,7 +203,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 		state = &roomState{
 			config:        config,
 			index:         ticket.NewIndex(),
-			pendingEchoes: make(map[string]string),
+			pendingEchoes: make(map[string]ref.EventID),
 			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
@@ -415,7 +415,7 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID re
 		state = &roomState{
 			config:        config,
 			index:         ticket.NewIndex(),
-			pendingEchoes: make(map[string]string),
+			pendingEchoes: make(map[string]ref.EventID),
 			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state

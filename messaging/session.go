@@ -44,13 +44,13 @@ type Session interface {
 	GetRoomState(ctx context.Context, roomID ref.RoomID) ([]Event, error)
 
 	// SendStateEvent sends a state event to a room. Returns the event ID.
-	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (string, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
 
 	// SendEvent sends an event of any type to a room. Returns the event ID.
-	SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (string, error)
+	SendEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, content any) (ref.EventID, error)
 
 	// SendMessage sends a message to a room. Returns the event ID.
-	SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (string, error)
+	SendMessage(ctx context.Context, roomID ref.RoomID, content MessageContent) (ref.EventID, error)
 
 	// CreateRoom creates a new Matrix room.
 	CreateRoom(ctx context.Context, request CreateRoomRequest) (*CreateRoomResponse, error)
@@ -75,7 +75,7 @@ type Session interface {
 	RoomMessages(ctx context.Context, roomID ref.RoomID, options RoomMessagesOptions) (*RoomMessagesResponse, error)
 
 	// ThreadMessages fetches messages in a thread.
-	ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID string, options ThreadMessagesOptions) (*ThreadMessagesResponse, error)
+	ThreadMessages(ctx context.Context, roomID ref.RoomID, threadRootID ref.EventID, options ThreadMessagesOptions) (*ThreadMessagesResponse, error)
 
 	// Sync performs an incremental sync with the homeserver.
 	Sync(ctx context.Context, options SyncOptions) (*SyncResponse, error)

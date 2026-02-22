@@ -49,7 +49,7 @@ type ProvisionParams struct {
 type ProvisionResult struct {
 	// EventID is the Matrix event ID of the published m.bureau.credentials
 	// state event.
-	EventID string
+	EventID ref.EventID
 
 	// ConfigRoomID is the Matrix room ID of the machine's config room
 	// where the credentials were published.

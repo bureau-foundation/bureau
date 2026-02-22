@@ -975,6 +975,15 @@ func resolvedBinary(t *testing.T, envVar string) string {
 // is stopped first.
 func startProcess(t *testing.T, name, binary string, args ...string) {
 	t.Helper()
+	startProcessWithEnv(t, name, nil, binary, args...)
+}
+
+// startProcessWithEnv starts a binary with additional environment variables.
+// Each entry in extraEnv is a "KEY=VALUE" string appended to the current
+// process environment. Pass nil for no extra variables (equivalent to
+// startProcess).
+func startProcessWithEnv(t *testing.T, name string, extraEnv []string, binary string, args ...string) {
+	t.Helper()
 
 	if binary == "" {
 		t.Fatal("binary path is required")
@@ -983,6 +992,9 @@ func startProcess(t *testing.T, name, binary string, args ...string) {
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start %s: %v", name, err)

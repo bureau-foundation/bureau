@@ -9,11 +9,13 @@ go_library(
         "doc.go",
         "handler.go",
         "main.go",
+        "materialize.go",
         "sync.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent-service",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/artifactstore",
         "//lib/clock",
         "//lib/codec",
         "//lib/ref",

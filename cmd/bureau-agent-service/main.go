@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -52,6 +53,23 @@ func run() error {
 	}
 	defer cleanup()
 
+	// Initialize the artifact client. The agent service requires
+	// artifact access for context materialization — there is no useful
+	// degraded mode without it.
+	artifactSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET")
+	if artifactSocket == "" {
+		return fmt.Errorf("BUREAU_ARTIFACT_SOCKET environment variable is required")
+	}
+	artifactToken := os.Getenv("BUREAU_ARTIFACT_TOKEN")
+	if artifactToken == "" {
+		return fmt.Errorf("BUREAU_ARTIFACT_TOKEN environment variable is required")
+	}
+	artifactClient, err := artifactstore.NewClient(artifactSocket, artifactToken)
+	if err != nil {
+		return fmt.Errorf("creating artifact client: %w", err)
+	}
+	boot.Logger.Info("artifact client initialized", "socket", artifactSocket)
+
 	// Resolve the machine config room. Agent state events live here as
 	// state events keyed by principal localpart. The service may not be
 	// invited yet — the daemon invites services when it resolves room
@@ -85,6 +103,7 @@ func run() error {
 
 	agentService := &AgentService{
 		session:          boot.Session,
+		artifactClient:   artifactClient,
 		clock:            boot.Clock,
 		principalName:    boot.PrincipalName,
 		machineName:      boot.MachineName,
@@ -142,8 +161,9 @@ func run() error {
 type AgentService struct {
 	mutex sync.RWMutex
 
-	session *messaging.DirectSession
-	clock   clock.Clock
+	session        *messaging.DirectSession
+	artifactClient *artifactstore.Client
+	clock          clock.Clock
 
 	principalName    string
 	machineName      string

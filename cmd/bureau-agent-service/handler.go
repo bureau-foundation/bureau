@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // registerActions registers socket protocol actions on the server.
@@ -33,6 +34,7 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 
 	// Authenticated context commit actions.
 	server.HandleAuth("checkpoint-context", agentService.withWriteLock(agentService.handleCheckpointContext))
+	server.HandleAuth("materialize-context", agentService.withReadLock(agentService.handleMaterializeContext))
 
 	// Authenticated metrics actions.
 	server.HandleAuth("get-metrics", agentService.withReadLock(agentService.handleGetMetrics))
@@ -669,6 +671,115 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 	return checkpointContextResponse{ID: commitID}, nil
 }
 
+// --- Context materialization handler ---
+
+// materializeContextRequest is the wire format for the
+// "materialize-context" action. Reconstructs the full conversation
+// from a context commit chain by fetching deltas from the artifact
+// service and concatenating them using format-specific rules.
+type materializeContextRequest struct {
+	Action       string `cbor:"action"`
+	CommitID     string `cbor:"commit_id"`
+	OutputFormat string `cbor:"output_format,omitempty"`
+	StopStrategy string `cbor:"stop_strategy,omitempty"`
+}
+
+// materializeContextResponse is the wire format for the
+// "materialize-context" response. Contains the artifact ref for the
+// concatenated conversation and aggregate statistics from the chain.
+type materializeContextResponse struct {
+	ArtifactRef  string `cbor:"artifact_ref"`
+	Format       string `cbor:"format"`
+	MessageCount int    `cbor:"message_count"`
+	TokenCount   int64  `cbor:"token_count"`
+	CommitCount  int    `cbor:"commit_count"`
+}
+
+func (agentService *AgentService) handleMaterializeContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request materializeContextRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.CommitID == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+
+	stopStrategy := request.StopStrategy
+	if stopStrategy == "" {
+		stopStrategy = stopStrategyCompaction
+	}
+
+	// Walk the commit chain from tip to stop point.
+	chain, err := agentService.walkChain(ctx, request.CommitID, stopStrategy)
+	if err != nil {
+		return nil, fmt.Errorf("walking context chain from %s: %w", request.CommitID, err)
+	}
+
+	// Validate format consistency across the chain. All commits must
+	// share the same format — cross-format translation is not yet
+	// implemented.
+	chainFormat := chain[0].Content.Format
+	for _, entry := range chain[1:] {
+		if entry.Content.Format != chainFormat {
+			return nil, fmt.Errorf(
+				"format mismatch in chain: commit %s has format %q but chain root has %q; "+
+					"cross-format translation is not yet supported",
+				entry.ID, entry.Content.Format, chainFormat,
+			)
+		}
+	}
+
+	// If the caller requested a specific output format, verify it
+	// matches the chain's native format.
+	if request.OutputFormat != "" && request.OutputFormat != chainFormat {
+		return nil, fmt.Errorf(
+			"requested output format %q but chain is in %q; "+
+				"cross-format translation is not yet supported",
+			request.OutputFormat, chainFormat,
+		)
+	}
+
+	// Fetch artifacts and concatenate using format-specific rules.
+	content, contentType, err := agentService.concatenateDeltas(ctx, chain)
+	if err != nil {
+		return nil, fmt.Errorf("concatenating deltas: %w", err)
+	}
+
+	// Store the materialized result as an artifact.
+	artifactRef, err := agentService.storeArtifact(ctx, content, contentType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Aggregate statistics from the chain.
+	var totalMessageCount int
+	var totalTokenCount int64
+	for _, entry := range chain {
+		totalMessageCount += entry.Content.MessageCount
+		totalTokenCount += entry.Content.TokenCount
+	}
+
+	agentService.logger.Info("context materialized",
+		"principal", token.Subject.Localpart(),
+		"tip_commit", request.CommitID,
+		"stop_strategy", stopStrategy,
+		"format", chainFormat,
+		"commit_count", len(chain),
+		"message_count", totalMessageCount,
+		"token_count", totalTokenCount,
+		"artifact_ref", artifactRef,
+	)
+
+	return materializeContextResponse{
+		ArtifactRef:  artifactRef,
+		Format:       chainFormat,
+		MessageCount: totalMessageCount,
+		TokenCount:   totalTokenCount,
+		CommitCount:  len(chain),
+	}, nil
+}
+
 // --- Matrix state helpers ---
 
 // readSessionState reads the m.bureau.agent_session state event for a
@@ -725,6 +836,31 @@ func (agentService *AgentService) readMetricsState(ctx context.Context, principa
 	var content agent.AgentMetricsContent
 	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
 		return nil, fmt.Errorf("unmarshaling agent metrics content: %w", unmarshalError)
+	}
+
+	return &content, nil
+}
+
+// readContextCommit reads a single m.bureau.agent_context_commit state
+// event by its ctx-* ID. Unlike the per-principal state helpers above
+// (which return nil for missing events), this returns an error for
+// missing commits — a missing commit in a chain is a broken chain,
+// never an expected "nothing here yet" case.
+func (agentService *AgentService) readContextCommit(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
+	raw, err := agentService.session.GetStateEvent(
+		ctx, agentService.configRoomID,
+		agent.EventTypeAgentContextCommit, commitID,
+	)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return nil, fmt.Errorf("context commit %q not found", commitID)
+		}
+		return nil, fmt.Errorf("reading context commit %q: %w", commitID, err)
+	}
+
+	var content agent.ContextCommitContent
+	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
+		return nil, fmt.Errorf("unmarshaling context commit %q: %w", commitID, unmarshalError)
 	}
 
 	return &content, nil

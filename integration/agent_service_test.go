@@ -76,8 +76,25 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		t.Fatalf("create socket parent directory: %v", err)
 	}
 
+	// The agent service requires artifact access for context
+	// materialization. Provide a valid token file and socket path so
+	// the artifact client initializes. The client reads the token at
+	// startup but only connects to the socket on demand — this test
+	// exercises session tracking, not materialization, so no artifact
+	// requests are made.
+	artifactTokenFile := filepath.Join(t.TempDir(), "artifact.token")
+	if err := os.WriteFile(artifactTokenFile, []byte("test-artifact-token"), 0600); err != nil {
+		t.Fatalf("write artifact token file: %v", err)
+	}
+	artifactSocketPath := filepath.Join(tempSocketDir(t), "artifact.sock")
+
 	agentServiceBinary := testutil.DataBinary(t, "AGENT_SERVICE_BINARY")
-	startProcess(t, "agent-service", agentServiceBinary,
+	startProcessWithEnv(t, "agent-service",
+		[]string{
+			"BUREAU_ARTIFACT_SOCKET=" + artifactSocketPath,
+			"BUREAU_ARTIFACT_TOKEN=" + artifactTokenFile,
+		},
+		agentServiceBinary,
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machine.Name,
 		"--principal-name", agentServiceLocalpart,

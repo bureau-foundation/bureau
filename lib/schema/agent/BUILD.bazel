@@ -7,6 +7,7 @@ go_library(
     name = "agent",
     srcs = [
         "agent.go",
+        "context_commit.go",
         "doc.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/agent",
@@ -16,7 +17,10 @@ go_library(
 
 go_test(
     name = "agent_test",
-    srcs = ["agent_test.go"],
+    srcs = [
+        "agent_test.go",
+        "context_commit_test.go",
+    ],
     embed = [":agent"],
     deps = ["//lib/ref"],
 )

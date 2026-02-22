@@ -19,7 +19,7 @@
 //   - [EventTypeTicket], [EventTypeTicketConfig] -- work item tracking
 //   - [EventTypeArtifactScope] -- artifact service integration config (content types in schema/artifact)
 //   - [EventTypeAgentSession], [EventTypeAgentContext],
-//     [EventTypeAgentMetrics] -- agent service state
+//     [EventTypeAgentContextCommit], [EventTypeAgentMetrics] -- agent service state
 //
 // [SandboxSpec] is the fully-resolved sandbox configuration sent over
 // the daemon-to-launcher IPC socket. [TemplateRef] and

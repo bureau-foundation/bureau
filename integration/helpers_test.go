@@ -845,23 +845,6 @@ func findAcceptedEvent(t *testing.T, events []messaging.Event) map[string]any {
 	return nil
 }
 
-// findPipelineEvent searches command result events for the pipeline execution
-// result. Pipeline results are distinguished from the "accepted" ack by the
-// presence of an "exit_code" field in the content. Returns the full event
-// content map. Fatals if no pipeline event is found.
-func findPipelineEvent(t *testing.T, events []messaging.Event) map[string]any {
-	t.Helper()
-
-	for _, event := range events {
-		if _, hasExitCode := event.Content["exit_code"]; hasExitCode {
-			return event.Content
-		}
-	}
-
-	t.Fatalf("pipeline event not found among %d command results", len(events))
-	return nil
-}
-
 // --- Pipeline Test Helpers ---
 
 // runnerEnvOnce caches the result of the single nix build invocation so

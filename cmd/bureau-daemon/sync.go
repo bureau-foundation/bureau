@@ -69,6 +69,7 @@ func buildSyncFilter() string {
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
 		schema.EventTypeWorktree,
+		schema.EventTypeTicket,
 		schema.EventTypeAuthorization,
 		schema.EventTypeTemporalGrant,
 		schema.EventTypeFleetService,
@@ -351,6 +352,15 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	for roomID, room := range response.Rooms.Join {
 		d.processCommandMessages(ctx, roomID, room.Timeline.Events)
 	}
+
+	// Scan for open pipeline tickets and create executor sandboxes.
+	// Runs after reconcile (which registers its own tickets in
+	// d.pipelineTickets) and after command processing (which creates
+	// new tickets). The ticket state events from command-created
+	// tickets arrive in a subsequent /sync batch.
+	d.reconcileMu.Lock()
+	d.processPipelineTickets(ctx, response)
+	d.reconcileMu.Unlock()
 }
 
 // processTemporalGrantEvents scans a sync response for m.bureau.temporal_grant

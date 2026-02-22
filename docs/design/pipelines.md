@@ -510,8 +510,9 @@ Result event fields:
 
 **JSONL result log** (`BUREAU_RESULT_PATH`) — a crash-safe local
 backup. Each line is an independent JSON object, preserving completed
-step results even on `SIGKILL`. The daemon reads this as a fallback
-when the executor crashes before updating the ticket or publishing the
+step results even on `SIGKILL`. The executor writes this when the
+environment variable is set, providing a local recovery path for cases
+where the executor crashes before updating the ticket or publishing the
 result event.
 
 ### Thread Logging

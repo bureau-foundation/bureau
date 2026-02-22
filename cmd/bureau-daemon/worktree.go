@@ -4,11 +4,12 @@
 package main
 
 // Daemon handlers for workspace.worktree.add and workspace.worktree.remove.
-// Both are async, pipeline-based operations: the handler validates parameters,
-// returns an "accepted" result immediately, and launches an ephemeral pipeline
-// executor sandbox in a goroutine. The pipeline executor performs the actual
-// git worktree operations, posts threaded progress updates, and the goroutine
-// posts the final result when the executor exits.
+// Both are async, ticket-driven operations: the handler validates parameters,
+// publishes a transitional worktree state event, creates a pip- ticket via
+// the ticket service, and returns "accepted" with the ticket ID. The ticket
+// watcher (processPipelineTickets) picks up the ticket from the next /sync
+// and creates an ephemeral pipeline executor sandbox through the standard
+// daemon lifecycle.
 
 import (
 	"context"
@@ -23,10 +24,9 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 )
 
-// handleWorkspaceWorktreeAdd validates parameters and spawns an async pipeline
-// executor to create a git worktree. The executor runs the
-// dev-worktree-init pipeline, which handles bare repo verification, worktree
-// creation, submodule init, and project-level worktree-init scripts.
+// handleWorkspaceWorktreeAdd validates parameters, publishes transitional
+// "creating" state, and creates a pip- ticket for the dev-worktree-init
+// pipeline. The ticket watcher spawns the executor sandbox.
 func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -57,31 +57,32 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		return nil, fmt.Errorf("project %q has no .bare directory: %w", project, err)
 	}
 
-	// Build the pipeline localpart for the ephemeral executor sandbox.
-	localpart := d.worktreeLocalpart()
-	pipelineRef := "bureau/pipeline:dev-worktree-init"
-
-	// Build a synthetic command with pipeline variables as parameters.
-	// The executor reads these from the sandbox payload.
-	pipelineCommand := schema.CommandMessage{
-		MsgType:   schema.MsgTypeCommand,
-		Body:      command.Body,
-		Command:   "pipeline.execute",
-		RequestID: command.RequestID,
-		Parameters: map[string]any{
-			"pipeline":          pipelineRef,
-			"PROJECT":           project,
-			"WORKTREE_PATH":     worktreePath,
-			"BRANCH":            branch,
-			"WORKSPACE_ROOM_ID": roomID.String(),
-			"MACHINE":           d.machine.Localpart(),
-		},
+	// Discover the ticket service.
+	ticketSocketPath := d.findLocalTicketSocket()
+	if ticketSocketPath == "" {
+		return nil, fmt.Errorf("no ticket service running on this machine (required for pipeline execution)")
 	}
 
-	// Publish the transitional "creating" state before launching the
-	// pipeline. This lets other principals gate on worktree existence
+	// Build an ephemeral Entity for the ticket creation token.
+	localpart := d.worktreeLocalpart()
+	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
+	if err != nil {
+		return nil, fmt.Errorf("invalid worktree localpart: %w", err)
+	}
+
+	pipelineRef := "bureau/pipeline:dev-worktree-init"
+	pipelineVariables := map[string]string{
+		"PROJECT":           project,
+		"WORKTREE_PATH":     worktreePath,
+		"BRANCH":            branch,
+		"WORKSPACE_ROOM_ID": roomID.String(),
+		"MACHINE":           d.machine.Localpart(),
+	}
+
+	// Publish the transitional "creating" state before creating the
+	// ticket. This lets other principals gate on worktree existence
 	// via StartCondition, and ensures the worktree has a state event
-	// even if the pipeline fails to start.
+	// even if the ticket creation fails.
 	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
 		Status:       "creating",
 		Project:      project,
@@ -92,27 +93,34 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		return nil, fmt.Errorf("failed to publish worktree creating state: %w", err)
 	}
 
+	// Create the pip- ticket. The ticket watcher picks it up from
+	// the next /sync and spawns the executor sandbox.
+	ticketID, _, err := d.createPipelineTicket(
+		ctx, ticketSocketPath, pipelineEntity, roomID,
+		pipelineRef, pipelineVariables)
+	if err != nil {
+		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
+	}
+
 	d.logger.Info("workspace.worktree.add accepted",
 		"room_id", roomID,
 		"workspace", command.Workspace,
 		"worktree_path", worktreePath,
 		"branch", branch,
-		"localpart", localpart,
+		"ticket_id", ticketID,
 	)
-
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef, roomID)
 
 	return map[string]any{
 		"status":    "accepted",
-		"principal": localpart,
+		"ticket_id": ticketID,
+		"room":      roomID.String(),
 	}, nil
 }
 
-// handleWorkspaceWorktreeRemove validates parameters and spawns an async
-// pipeline executor to remove a git worktree. The executor runs the
-// dev-worktree-deinit pipeline, which handles mode validation, optional
-// archiving of uncommitted changes, project-level cleanup scripts, and
-// the actual worktree removal.
+// handleWorkspaceWorktreeRemove validates parameters, publishes
+// transitional "removing" state, and creates a pip- ticket for the
+// dev-worktree-deinit pipeline. The ticket watcher spawns the executor
+// sandbox.
 func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -141,27 +149,30 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		project = command.Workspace
 	}
 
-	// Build the pipeline localpart for the ephemeral executor sandbox.
-	localpart := d.worktreeLocalpart()
-	pipelineRef := "bureau/pipeline:dev-worktree-deinit"
-
-	pipelineCommand := schema.CommandMessage{
-		MsgType:   schema.MsgTypeCommand,
-		Body:      command.Body,
-		Command:   "pipeline.execute",
-		RequestID: command.RequestID,
-		Parameters: map[string]any{
-			"pipeline":          pipelineRef,
-			"PROJECT":           project,
-			"WORKTREE_PATH":     worktreePath,
-			"MODE":              mode,
-			"WORKSPACE_ROOM_ID": roomID.String(),
-			"MACHINE":           d.machine.Localpart(),
-		},
+	// Discover the ticket service.
+	ticketSocketPath := d.findLocalTicketSocket()
+	if ticketSocketPath == "" {
+		return nil, fmt.Errorf("no ticket service running on this machine (required for pipeline execution)")
 	}
 
-	// Publish the transitional "removing" state before launching the
-	// pipeline. The deinit pipeline's assert_state step verifies this
+	// Build an ephemeral Entity for the ticket creation token.
+	localpart := d.worktreeLocalpart()
+	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
+	if err != nil {
+		return nil, fmt.Errorf("invalid worktree localpart: %w", err)
+	}
+
+	pipelineRef := "bureau/pipeline:dev-worktree-deinit"
+	pipelineVariables := map[string]string{
+		"PROJECT":           project,
+		"WORKTREE_PATH":     worktreePath,
+		"MODE":              mode,
+		"WORKSPACE_ROOM_ID": roomID.String(),
+		"MACHINE":           d.machine.Localpart(),
+	}
+
+	// Publish the transitional "removing" state before creating the
+	// ticket. The deinit pipeline's assert_state step verifies this
 	// state still holds at execution time, preventing races where
 	// removal was cancelled between queueing and execution.
 	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
@@ -173,19 +184,27 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		return nil, fmt.Errorf("failed to publish worktree removing state: %w", err)
 	}
 
+	// Create the pip- ticket. The ticket watcher picks it up from
+	// the next /sync and spawns the executor sandbox.
+	ticketID, _, err := d.createPipelineTicket(
+		ctx, ticketSocketPath, pipelineEntity, roomID,
+		pipelineRef, pipelineVariables)
+	if err != nil {
+		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
+	}
+
 	d.logger.Info("workspace.worktree.remove accepted",
 		"room_id", roomID,
 		"workspace", command.Workspace,
 		"worktree_path", worktreePath,
 		"mode", mode,
-		"localpart", localpart,
+		"ticket_id", ticketID,
 	)
-
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef, roomID)
 
 	return map[string]any{
 		"status":    "accepted",
-		"principal": localpart,
+		"ticket_id": ticketID,
+		"room":      roomID.String(),
 	}, nil
 }
 

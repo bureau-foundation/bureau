@@ -20,17 +20,14 @@ import (
 //
 //   - Admin publishes a pipeline definition to the pipeline room
 //   - Admin sends a pipeline.execute command to the config room
-//   - Daemon picks it up via /sync, posts "accepted" acknowledgment
-//   - Daemon creates a pip- ticket in the project room via the ticket service
-//   - Daemon creates a bwrap sandbox running bureau-pipeline-executor
+//   - Daemon picks it up via /sync, posts "accepted" with ticket ID
+//   - Ticket watcher creates a bwrap sandbox running bureau-pipeline-executor
 //   - Executor claims the ticket, runs pipeline steps, posts notes, closes ticket
-//   - Executor writes JSONL result, exits
-//   - Daemon reads result, posts threaded pipeline result to Matrix
-//   - Test reads both results and verifies structure
+//   - Test verifies accepted result and closed ticket with correct conclusion
 //
-// This proves the daemon→launcher IPC, bwrap sandbox creation, ticket
-// lifecycle, pipeline executor binary, Nix environment bind mounting,
-// result file flow, and threaded Matrix reply posting all work together.
+// This proves the daemon→launcher IPC, bwrap sandbox creation, ticket-driven
+// pipeline execution, executor binary, Nix environment bind mounting, and
+// ticket lifecycle all work together.
 func TestPipelineExecution(t *testing.T) {
 	t.Parallel()
 
@@ -76,8 +73,6 @@ func TestPipelineExecution(t *testing.T) {
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 	// Create the project room watch before sending the command so it
 	// captures ticket state events that arrive during pipeline execution.
-	// The findPipelineTicket call below uses this watch to find the
-	// closed pip- ticket.
 	projectWatch := watchRoom(t, admin, projectRoomID)
 
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
@@ -95,65 +90,28 @@ func TestPipelineExecution(t *testing.T) {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 
-	// Wait for both command results: the sync "accepted" acknowledgment
-	// and the async pipeline execution result.
-	results := resultWatch.WaitForCommandResults(t, requestID, 2)
+	// Wait for the accepted acknowledgment. The daemon creates a pip-
+	// ticket and returns immediately; the ticket watcher picks up the
+	// ticket from the next /sync and creates the executor sandbox.
+	results := resultWatch.WaitForCommandResults(t, requestID, 1)
 
 	acceptedResult := findAcceptedEvent(t, results)
-	pipelineResult := findPipelineEvent(t, results)
 
 	// --- Verify accepted result ---
 	if status, _ := acceptedResult["status"].(string); status != "success" {
-		t.Errorf("accepted result status = %q, want %q", status, "success")
+		t.Errorf("accepted result status = %q, want %q (error: %v)", status, "success", acceptedResult["error"])
 	}
 	resultMap, _ := acceptedResult["result"].(map[string]any)
 	if resultMap == nil {
 		t.Fatal("accepted result has nil result field")
 	}
-	principalName, _ := resultMap["principal"].(string)
-	if principalName == "" {
-		t.Error("accepted result has empty principal")
+	ticketIDFromResult, _ := resultMap["ticket_id"].(string)
+	if ticketIDFromResult == "" {
+		t.Error("accepted result has empty ticket_id")
 	}
 	verifyThreadRelation(t, acceptedResult, commandEventID.String())
 
-	// --- Verify pipeline result ---
-	if status, _ := pipelineResult["status"].(string); status != "success" {
-		body, _ := pipelineResult["body"].(string)
-		t.Errorf("pipeline result status = %q, want %q (body: %s)", status, "success", body)
-	}
-	exitCode, _ := pipelineResult["exit_code"].(float64)
-	if exitCode != 0 {
-		t.Errorf("pipeline result exit_code = %v, want 0", exitCode)
-	}
-	durationMilliseconds, _ := pipelineResult["duration_ms"].(float64)
-	if durationMilliseconds < 0 {
-		t.Errorf("pipeline result duration_ms = %v, want >= 0", durationMilliseconds)
-	}
-
-	// Verify steps.
-	steps, _ := pipelineResult["steps"].([]any)
-	if len(steps) != 2 {
-		t.Fatalf("pipeline result steps count = %d, want 2", len(steps))
-	}
-	for index, expectedName := range []string{"greet", "farewell"} {
-		step, _ := steps[index].(map[string]any)
-		if step == nil {
-			t.Errorf("step %d is nil", index)
-			continue
-		}
-		name, _ := step["name"].(string)
-		if name != expectedName {
-			t.Errorf("step %d name = %q, want %q", index, name, expectedName)
-		}
-		stepStatus, _ := step["status"].(string)
-		if stepStatus != "ok" {
-			t.Errorf("step %d status = %q, want %q", index, stepStatus, "ok")
-		}
-	}
-
-	verifyThreadRelation(t, pipelineResult, commandEventID.String())
-
-	// --- Verify pip- ticket was created and closed ---
+	// --- Verify pip- ticket was created and closed successfully ---
 	ticketID, ticketContent := findPipelineTicket(t, admin, projectRoomID, &projectWatch, "test-greet")
 	if ticketContent.Status != "closed" {
 		t.Errorf("ticket %s status = %q, want closed", ticketID, ticketContent.Status)
@@ -161,14 +119,19 @@ func TestPipelineExecution(t *testing.T) {
 	if ticketContent.Type != "pipeline" {
 		t.Errorf("ticket %s type = %q, want pipeline", ticketID, ticketContent.Type)
 	}
+	if ticketContent.Pipeline == nil {
+		t.Fatal("ticket has nil pipeline content")
+	}
+	if ticketContent.Pipeline.Conclusion != "success" {
+		t.Errorf("ticket %s pipeline conclusion = %q, want %q", ticketID, ticketContent.Pipeline.Conclusion, "success")
+	}
 
-	t.Log("pipeline execution lifecycle verified: command → accepted → ticket → sandbox → executor → result")
+	t.Log("pipeline execution lifecycle verified: command → accepted → ticket → sandbox → executor → ticket closed")
 }
 
 // TestPipelineExecutionFailure verifies that pipeline step failures are
-// correctly reported through the full stack. A pipeline with a failing step
-// should produce a result with status "error" and the correct step-level
-// failure information. The pip- ticket should still be closed.
+// correctly reported through the ticket lifecycle. A pipeline with a
+// failing step should produce a closed ticket with conclusion "failure".
 func TestPipelineExecutionFailure(t *testing.T) {
 	t.Parallel()
 
@@ -210,8 +173,9 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	// --- Execute pipeline ---
 	requestID := "test-pipeline-fail-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	projectWatch := watchRoom(t, admin, projectRoomID)
 
-	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
+	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: failure test",
@@ -226,65 +190,35 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 
-	results := resultWatch.WaitForCommandResults(t, requestID, 2)
-	pipelineResult := findPipelineEvent(t, results)
-
-	// The executor exits non-zero when a step fails, and the daemon
-	// reports this as an error status.
-	if status, _ := pipelineResult["status"].(string); status != "error" {
-		t.Errorf("pipeline result status = %q, want %q", status, "error")
-	}
-	exitCode, _ := pipelineResult["exit_code"].(float64)
-	if exitCode == 0 {
-		t.Error("pipeline result exit_code = 0, want non-zero for a failing pipeline")
+	// Wait for the accepted acknowledgment.
+	results := resultWatch.WaitForCommandResults(t, requestID, 1)
+	acceptedResult := findAcceptedEvent(t, results)
+	if status, _ := acceptedResult["status"].(string); status != "success" {
+		t.Errorf("accepted result status = %q, want %q (error: %v)", status, "success", acceptedResult["error"])
 	}
 
-	// Verify step details. The first step should succeed, the second
-	// should fail.
-	steps, _ := pipelineResult["steps"].([]any)
-	if len(steps) != 2 {
-		t.Fatalf("pipeline result steps count = %d, want 2", len(steps))
+	// Wait for the ticket to close. The executor reports the failure
+	// through the ticket conclusion, not a daemon-posted command result.
+	ticketID, ticketContent := findPipelineTicket(t, admin, projectRoomID, &projectWatch, "test-fail")
+	if ticketContent.Status != "closed" {
+		t.Errorf("ticket %s status = %q, want closed", ticketID, ticketContent.Status)
+	}
+	if ticketContent.Pipeline == nil {
+		t.Fatal("ticket has nil pipeline content")
+	}
+	if ticketContent.Pipeline.Conclusion != "failure" {
+		t.Errorf("ticket %s pipeline conclusion = %q, want %q", ticketID, ticketContent.Pipeline.Conclusion, "failure")
 	}
 
-	setupStep, _ := steps[0].(map[string]any)
-	if setupStep != nil {
-		name, _ := setupStep["name"].(string)
-		if name != "setup" {
-			t.Errorf("step 0 name = %q, want %q", name, "setup")
-		}
-		stepStatus, _ := setupStep["status"].(string)
-		if stepStatus != "ok" {
-			t.Errorf("step 0 status = %q, want %q", stepStatus, "ok")
-		}
-	}
-
-	failStep, _ := steps[1].(map[string]any)
-	if failStep != nil {
-		name, _ := failStep["name"].(string)
-		if name != "fail-step" {
-			t.Errorf("step 1 name = %q, want %q", name, "fail-step")
-		}
-		stepStatus, _ := failStep["status"].(string)
-		if stepStatus != "failed" {
-			t.Errorf("step 1 status = %q, want %q", stepStatus, "failed")
-		}
-	}
-
-	body, _ := pipelineResult["body"].(string)
-	if body == "" {
-		t.Error("pipeline result body is empty")
-	}
-
-	verifyThreadRelation(t, pipelineResult, commandEventID.String())
-
-	t.Log("pipeline failure reporting verified: failing step produces error result with step-level detail")
+	t.Log("pipeline failure reporting verified: failing step produces closed ticket with failure conclusion")
 }
 
 // TestPipelineParameterPropagation verifies that command parameters flow
 // through the entire chain: command message → daemon → pip- ticket
 // variables → executor → pipeline variable resolution → shell execution.
-// A pipeline step uses a variable from the command parameters; if the step
-// succeeds, the variable was propagated correctly.
+// A pipeline step uses a variable from the command parameters; if the
+// ticket closes with conclusion "success", the variable was propagated
+// correctly through every layer.
 func TestPipelineParameterPropagation(t *testing.T) {
 	t.Parallel()
 
@@ -334,6 +268,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	// --- Execute pipeline with variable ---
 	requestID := "test-pipeline-params-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	projectWatch := watchRoom(t, admin, projectRoomID)
 
 	if _, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
@@ -353,37 +288,26 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 
-	results := resultWatch.WaitForCommandResults(t, requestID, 2)
-	pipelineResult := findPipelineEvent(t, results)
-
-	// If the step succeeded (exit 0), the variable was propagated correctly
-	// through the entire daemon → ticket → executor → shell chain.
-	if status, _ := pipelineResult["status"].(string); status != "success" {
-		body, _ := pipelineResult["body"].(string)
-		exitCode, _ := pipelineResult["exit_code"].(float64)
-		t.Errorf("pipeline result status = %q, want %q (exit_code=%v, body=%s)",
-			status, "success", exitCode, body)
+	// Wait for the accepted acknowledgment.
+	results := resultWatch.WaitForCommandResults(t, requestID, 1)
+	acceptedResult := findAcceptedEvent(t, results)
+	if status, _ := acceptedResult["status"].(string); status != "success" {
+		t.Errorf("accepted result status = %q, want %q (error: %v)", status, "success", acceptedResult["error"])
 	}
 
-	exitCode, _ := pipelineResult["exit_code"].(float64)
-	if exitCode != 0 {
-		t.Errorf("pipeline result exit_code = %v, want 0 (variable propagation failed)", exitCode)
+	// If the ticket closes with conclusion "success", the variable was
+	// propagated correctly through the entire daemon → ticket → executor
+	// → shell chain.
+	ticketID, ticketContent := findPipelineTicket(t, admin, projectRoomID, &projectWatch, "test-params")
+	if ticketContent.Status != "closed" {
+		t.Errorf("ticket %s status = %q, want closed", ticketID, ticketContent.Status)
 	}
-
-	steps, _ := pipelineResult["steps"].([]any)
-	if len(steps) != 1 {
-		t.Fatalf("pipeline result steps count = %d, want 1", len(steps))
+	if ticketContent.Pipeline == nil {
+		t.Fatal("ticket has nil pipeline content")
 	}
-	step, _ := steps[0].(map[string]any)
-	if step != nil {
-		name, _ := step["name"].(string)
-		if name != "verify-project" {
-			t.Errorf("step 0 name = %q, want %q", name, "verify-project")
-		}
-		stepStatus, _ := step["status"].(string)
-		if stepStatus != "ok" {
-			t.Errorf("step 0 status = %q, want %q (PROJECT variable not propagated)", stepStatus, "ok")
-		}
+	if ticketContent.Pipeline.Conclusion != "success" {
+		t.Errorf("ticket %s pipeline conclusion = %q, want %q (PROJECT variable not propagated)",
+			ticketID, ticketContent.Pipeline.Conclusion, "success")
 	}
 
 	t.Log("parameter propagation verified: command parameters flow through daemon → ticket → executor → shell")

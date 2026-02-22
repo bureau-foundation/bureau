@@ -72,6 +72,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
 		pipelineExecutors:     make(map[ref.Entity]bool),
+		pipelineTickets:       make(map[string]ref.Entity),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
 		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
 		lastCredentials:       make(map[ref.Entity]string),

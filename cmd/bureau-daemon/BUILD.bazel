@@ -52,7 +52,6 @@ go_library(
         "//lib/schema",
         "//lib/schema/fleet",
         "//lib/schema/observation",
-        "//lib/schema/pipeline",
         "//lib/schema/ticket",
         "//lib/schema/workspace",
         "//lib/sealed",

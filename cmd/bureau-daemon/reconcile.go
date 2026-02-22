@@ -370,6 +370,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					continue
 				}
 
+				d.pipelineTickets[ticketID] = principal
+
 				d.logger.Info("created pipeline ticket for executor",
 					"principal", principal,
 					"ticket_id", ticketID,
@@ -1564,6 +1566,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 	d.revokeAndCleanupTokens(ctx, principal)
 	delete(d.running, principal)
 	delete(d.pipelineExecutors, principal)
+	d.removePipelineTicketByPrincipal(principal)
 	delete(d.exitWatchers, principal)
 	delete(d.proxyExitWatchers, principal)
 	delete(d.lastSpecs, principal)
@@ -1625,6 +1628,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		d.revokeAndCleanupTokens(ctx, principal)
 		delete(d.running, principal)
 		delete(d.pipelineExecutors, principal)
+		d.removePipelineTicketByPrincipal(principal)
 		delete(d.exitWatchers, principal)
 		delete(d.proxyExitWatchers, principal)
 		delete(d.lastSpecs, principal)

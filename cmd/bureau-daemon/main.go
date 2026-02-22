@@ -303,6 +303,7 @@ func run() error {
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
 		pipelineExecutors:     make(map[ref.Entity]bool),
+		pipelineTickets:       make(map[string]ref.Entity),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
 		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
 		lastCredentials:       make(map[ref.Entity]string),
@@ -564,18 +565,27 @@ type Daemon struct {
 	ephemeralCounter atomic.Uint64
 
 	// pipelineExecutors tracks running principals that are pipeline
-	// executor sandboxes (created via applyPipelineExecutorOverlay).
-	// These principals manage their own lifecycle: they run a pipeline,
-	// publish results, and exit. The reconcile loop must NOT kill them
-	// when their start condition becomes unsatisfied, because the
-	// pipeline itself may have published the state change that
-	// invalidated the condition (e.g., a teardown pipeline sets
-	// workspace status to "archived", which makes the teardown's
-	// "destroying" start condition false). Killing a pipeline executor
-	// mid-execution leaves the workspace in a stuck state with no
-	// pipeline_result event. Pipeline executors are removed from this
-	// set when their sandbox exits (in watchSandboxExit).
+	// executor sandboxes (created via applyPipelineExecutorOverlay or
+	// processPipelineTickets). These principals manage their own
+	// lifecycle: they run a pipeline, publish results, and exit. The
+	// reconcile loop must NOT kill them when their start condition
+	// becomes unsatisfied, because the pipeline itself may have
+	// published the state change that invalidated the condition (e.g.,
+	// a teardown pipeline sets workspace status to "archived", which
+	// makes the teardown's "destroying" start condition false). Killing
+	// a pipeline executor mid-execution leaves the workspace in a
+	// stuck state with no pipeline_result event. Pipeline executors
+	// are removed from this set when their sandbox exits (in
+	// watchSandboxExit).
 	pipelineExecutors map[ref.Entity]bool
+
+	// pipelineTickets maps pip- ticket state keys (e.g., "pip-a3f9")
+	// to the principal entity running the executor for that ticket.
+	// Prevents double-execution: both the /sync pipeline ticket
+	// watcher and reconcile's applyPipelineExecutorOverlay path
+	// register their tickets here. Cleaned up when the executor
+	// sandbox exits (in watchSandboxExit and destroyPrincipal).
+	pipelineTickets map[string]ref.Entity
 
 	// lastCredentials stores the ciphertext from the most recently
 	// deployed m.bureau.credentials state event for each running

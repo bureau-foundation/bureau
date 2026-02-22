@@ -3,18 +3,17 @@
 
 package main
 
-// Pipeline execution: the daemon-side integration that spawns an
-// ephemeral sandbox running bureau-pipeline-executor, waits for it to
-// finish, reads the JSONL result file, and posts structured results as
-// threaded Matrix replies.
+// Pipeline execution: ticket-driven integration for spawning ephemeral
+// bureau-pipeline-executor sandboxes. Command handlers create pip- tickets
+// and return "accepted"; the ticket watcher (processPipelineTickets) picks
+// them up from /sync and creates sandboxes through the standard daemon
+// lifecycle (d.running, exit watchers, clean shutdown).
 //
-// The pipeline executor runs in a proper bwrap sandbox with its own
-// proxy process (holding the daemon's Matrix token via DirectCredentials).
-// The result file is a host-side temporary file bind-mounted RW into the
-// sandbox so the daemon can read it after the sandbox exits.
+// The pipeline executor runs in a bwrap sandbox with its own proxy process
+// (holding the daemon's Matrix token via DirectCredentials). The executor
+// reports all progress via tickets (claim, step notes, close).
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,10 +24,10 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // maxUnixSocketPathLength is the maximum length of a Unix domain socket
@@ -36,11 +35,11 @@ import (
 // last byte must be a null terminator, giving 107 usable bytes.
 const maxUnixSocketPathLength = 107
 
-// handlePipelineExecute validates the pipeline.execute command,
-// starts an async goroutine for the execution lifecycle, and returns
-// an "accepted" result immediately. The goroutine handles sandbox
-// creation, waiting, result reading, threaded result posting, and
-// cleanup.
+// handlePipelineExecute validates the pipeline.execute command, creates
+// a pip- ticket, and returns "accepted" with the ticket ID. The ticket
+// watcher (processPipelineTickets) picks up the ticket from the next
+// /sync and creates the executor sandbox through the standard daemon
+// lifecycle.
 func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -55,18 +54,13 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 		return nil, fmt.Errorf("pipeline executor binary is not executable: %s", d.pipelineExecutorBinary)
 	}
 
-	// Extract the pipeline reference from command parameters. The
-	// executor resolves the pipeline definition from a ref string
-	// (namespace/pipeline:name) via the proxy's Matrix API.
+	// Extract the pipeline reference from command parameters.
 	pipelineRef, _ := command.Parameters["pipeline"].(string)
 	if pipelineRef == "" {
 		return nil, fmt.Errorf("parameter 'pipeline' is required")
 	}
 
 	// The room parameter specifies where the pip- ticket is created.
-	// This is the room where the execution record lives — visible to
-	// agents, triagers, and anyone with room access. The room must
-	// have ticket config with allowed_types including "pipeline".
 	ticketRoomIDString, _ := command.Parameters["room"].(string)
 	if ticketRoomIDString == "" {
 		return nil, fmt.Errorf("parameter 'room' is required (room ID where the pipeline ticket is created)")
@@ -76,27 +70,372 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 		return nil, fmt.Errorf("parameter 'room' is not a valid room ID: %w", err)
 	}
 
-	// Generate an ephemeral principal localpart. The counter ensures
-	// uniqueness; the pipeline ref is logged separately for context.
+	// Discover the ticket service.
+	ticketSocketPath := d.findLocalTicketSocket()
+	if ticketSocketPath == "" {
+		return nil, fmt.Errorf("no ticket service running on this machine (required for pipeline execution)")
+	}
+
+	// Build an ephemeral Entity for the ticket creation token.
+	// The actual executor principal is generated later by the
+	// ticket watcher when it creates the sandbox.
 	localpart := d.pipelineLocalpart()
+	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pipeline localpart: %w", err)
+	}
+
+	// Extract variables from command parameters (string values only,
+	// excluding the pipeline ref and room). Inject MACHINE for
+	// affinity so the ticket watcher knows which daemon should
+	// execute this ticket.
+	pipelineVariables := make(map[string]string)
+	for key, value := range command.Parameters {
+		if key == "pipeline" || key == "room" {
+			continue
+		}
+		if stringValue, ok := value.(string); ok {
+			pipelineVariables[key] = stringValue
+		}
+	}
+	pipelineVariables["MACHINE"] = d.machine.Localpart()
+
+	ticketID, _, err := d.createPipelineTicket(
+		ctx, ticketSocketPath, pipelineEntity, ticketRoomID,
+		pipelineRef, pipelineVariables)
+	if err != nil {
+		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
+	}
 
 	d.logger.Info("pipeline.execute accepted",
 		"room_id", roomID,
-		"localpart", localpart,
-		"pipeline", pipelineRef,
+		"ticket_id", ticketID,
 		"ticket_room", ticketRoomID,
+		"pipeline", pipelineRef,
 		"request_id", command.RequestID,
 	)
 
-	// Start async execution. Uses the daemon's shutdown context (not
-	// the sync cycle's context) so the pipeline survives across sync
-	// iterations but cancels on daemon shutdown.
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, command, localpart, pipelineRef, ticketRoomID)
-
 	return map[string]any{
 		"status":    "accepted",
-		"principal": localpart,
+		"ticket_id": ticketID,
+		"room":      ticketRoomID.String(),
 	}, nil
+}
+
+// removePipelineTicketByPrincipal removes the pipelineTickets entry
+// for the given principal. The map is keyed by ticket state key, so
+// this does a linear scan. The map is always small (one entry per
+// active pipeline executor), so this is not a performance concern.
+func (d *Daemon) removePipelineTicketByPrincipal(principal ref.Entity) {
+	for key, entity := range d.pipelineTickets {
+		if entity == principal {
+			delete(d.pipelineTickets, key)
+			return
+		}
+	}
+}
+
+// processPipelineTickets scans a /sync response for open pipeline
+// tickets and creates executor sandboxes for tickets that belong to
+// this machine. This is the ticket-driven pipeline execution path:
+// command handlers and worktree handlers create pip- tickets and
+// return "accepted" immediately; this function picks them up from the
+// next /sync and spawns the executor through the standard daemon
+// lifecycle (d.running, exit watchers, clean shutdown).
+//
+// Machine affinity is determined by the MACHINE variable in the
+// ticket's PipelineExecutionContent.Variables: the ticket watcher only
+// executes tickets where MACHINE matches this daemon's machine
+// localpart. The reconcile-driven path (applyPipelineExecutorOverlay)
+// creates tickets and sandboxes together in one pass and registers
+// them in d.pipelineTickets, so they are skipped here.
+//
+// Called from processSyncResponse after reconcile and command processing.
+// Caller holds reconcileMu.
+func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging.SyncResponse) {
+	if d.pipelineExecutorBinary == "" {
+		return
+	}
+
+	for roomID, room := range response.Rooms.Join {
+		// Combine state and timeline events — ticket state events
+		// can appear in either section depending on sync gaps.
+		allEvents := make([]messaging.Event, 0, len(room.State.Events)+len(room.Timeline.Events))
+		allEvents = append(allEvents, room.State.Events...)
+		allEvents = append(allEvents, room.Timeline.Events...)
+
+		for _, event := range allEvents {
+			if event.Type != schema.EventTypeTicket {
+				continue
+			}
+			if event.StateKey == nil {
+				continue
+			}
+			stateKey := *event.StateKey
+			if !strings.HasPrefix(stateKey, "pip-") {
+				continue
+			}
+
+			// Already tracked — either by this watcher on a previous
+			// sync or by the reconcile-driven overlay in this sync.
+			if _, tracked := d.pipelineTickets[stateKey]; tracked {
+				continue
+			}
+
+			// Unmarshal the ticket content to check type, status, and
+			// machine affinity.
+			contentBytes, err := json.Marshal(event.Content)
+			if err != nil {
+				d.logger.Warn("failed to marshal ticket event content",
+					"room_id", roomID, "state_key", stateKey, "error", err)
+				continue
+			}
+			var ticketContent ticket.TicketContent
+			if err := json.Unmarshal(contentBytes, &ticketContent); err != nil {
+				d.logger.Warn("failed to unmarshal ticket content",
+					"room_id", roomID, "state_key", stateKey, "error", err)
+				continue
+			}
+
+			if ticketContent.Type != "pipeline" {
+				continue
+			}
+			if ticketContent.Status != "open" {
+				continue
+			}
+			if ticketContent.Pipeline == nil {
+				d.logger.Warn("pipeline ticket has no pipeline content",
+					"room_id", roomID, "state_key", stateKey)
+				continue
+			}
+
+			// Machine affinity: only execute tickets created for this
+			// machine. Command handlers inject MACHINE into the ticket
+			// variables when creating pip- tickets.
+			ticketMachine := ticketContent.Pipeline.Variables["MACHINE"]
+			if ticketMachine != d.machine.Localpart() {
+				continue
+			}
+
+			d.startPipelineExecutor(ctx, roomID, stateKey, &ticketContent)
+		}
+	}
+}
+
+// startPipelineExecutor creates an ephemeral sandbox for a pipeline
+// ticket. The sandbox runs bureau-pipeline-executor with the daemon's
+// own Matrix credentials (DirectCredentials), ticket and artifact
+// service access, and the standard exit watcher lifecycle.
+//
+// Caller holds reconcileMu (called from processPipelineTickets).
+func (d *Daemon) startPipelineExecutor(
+	ctx context.Context,
+	roomID ref.RoomID,
+	ticketStateKey string,
+	ticketContent *ticket.TicketContent,
+) {
+	localpart := d.pipelineLocalpart()
+
+	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
+	if err != nil {
+		d.logger.Error("invalid pipeline localpart",
+			"localpart", localpart, "error", err)
+		return
+	}
+
+	// Validate that the admin socket path fits within the Unix sun_path
+	// limit. This catches misconfiguration early rather than surfacing as
+	// a cryptic "bind: invalid argument" inside the launcher.
+	adminSocketPath := pipelineEntity.AdminSocketPath(d.fleetRunDir)
+	if length := len(adminSocketPath); length > maxUnixSocketPathLength {
+		d.logger.Error("admin socket path exceeds Unix limit",
+			"localpart", localpart,
+			"length", length,
+			"max", maxUnixSocketPathLength,
+			"path", adminSocketPath,
+		)
+		return
+	}
+
+	// Discover service sockets and prepare tokens.
+	ticketSocketPath := d.findLocalTicketSocket()
+	if ticketSocketPath == "" {
+		d.logger.Error("no ticket service running for pipeline executor",
+			"localpart", localpart, "ticket", ticketStateKey)
+		return
+	}
+
+	// Create a temp directory for service tokens. Cleaned up by
+	// the exit watcher when the sandbox exits.
+	tokenDirectory, err := os.MkdirTemp("", "bureau-pipeline-tokens-*")
+	if err != nil {
+		d.logger.Error("creating pipeline token directory",
+			"localpart", localpart, "error", err)
+		return
+	}
+
+	// Mint a ticket service token for ongoing operations (claim,
+	// progress, notes, close, show).
+	ticketToken := &servicetoken.Token{
+		Subject:   pipelineEntity.UserID(),
+		Machine:   d.machine,
+		Audience:  "ticket",
+		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
+		IssuedAt:  d.clock.Now().Unix(),
+		ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+	}
+	ticketTokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, ticketToken)
+	if err != nil {
+		d.logger.Error("minting ticket token for pipeline executor",
+			"localpart", localpart, "error", err)
+		os.RemoveAll(tokenDirectory)
+		return
+	}
+	ticketTokenPath := filepath.Join(tokenDirectory, "ticket.token")
+	if err := os.WriteFile(ticketTokenPath, ticketTokenBytes, 0600); err != nil {
+		d.logger.Error("writing ticket token for pipeline executor",
+			"localpart", localpart, "error", err)
+		os.RemoveAll(tokenDirectory)
+		return
+	}
+
+	// Discover artifact service and mint a token if available.
+	var artifactSocketPath, artifactTokenPath string
+	if socketPath := d.findLocalArtifactSocket(); socketPath != "" {
+		artifactToken := &servicetoken.Token{
+			Subject:   pipelineEntity.UserID(),
+			Machine:   d.machine,
+			Audience:  "artifact",
+			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
+			IssuedAt:  d.clock.Now().Unix(),
+			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+		}
+		tokenBytes, mintErr := servicetoken.Mint(d.tokenSigningPrivateKey, artifactToken)
+		if mintErr != nil {
+			d.logger.Warn("failed to mint artifact token for pipeline executor",
+				"localpart", localpart, "error", mintErr)
+		} else {
+			path := filepath.Join(tokenDirectory, "artifact.token")
+			if writeErr := os.WriteFile(path, tokenBytes, 0600); writeErr != nil {
+				d.logger.Warn("failed to write artifact token for pipeline executor",
+					"localpart", localpart, "error", writeErr)
+			} else {
+				artifactSocketPath = socketPath
+				artifactTokenPath = path
+			}
+		}
+	}
+
+	// Build the sandbox spec.
+	spec := d.buildPipelineExecutorSpec(
+		artifactSocketPath, artifactTokenPath,
+		ticketStateKey, roomID, ticketSocketPath, ticketTokenPath)
+
+	// Build trigger content from the ticket for the executor to read
+	// as trigger.json. The executor extracts Pipeline.PipelineRef and
+	// Pipeline.Variables from this.
+	triggerContent, err := json.Marshal(ticketContent)
+	if err != nil {
+		d.logger.Error("marshaling trigger content for pipeline executor",
+			"localpart", localpart, "error", err)
+		os.RemoveAll(tokenDirectory)
+		return
+	}
+
+	// Create the sandbox with the daemon's own Matrix credentials.
+	credentials := map[string]string{
+		"MATRIX_TOKEN":   d.session.AccessToken(),
+		"MATRIX_USER_ID": d.machine.UserID().String(),
+	}
+
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:            "create-sandbox",
+		Principal:         localpart,
+		DirectCredentials: credentials,
+		SandboxSpec:       spec,
+		TriggerContent:    triggerContent,
+	})
+	if err != nil {
+		d.logger.Error("create-sandbox IPC failed for pipeline executor",
+			"localpart", localpart, "ticket", ticketStateKey, "error", err)
+		os.RemoveAll(tokenDirectory)
+		return
+	}
+	if !response.OK {
+		d.logger.Error("create-sandbox rejected for pipeline executor",
+			"localpart", localpart, "ticket", ticketStateKey, "error", response.Error)
+		os.RemoveAll(tokenDirectory)
+		return
+	}
+
+	// Track the executor in standard daemon lifecycle maps.
+	d.running[pipelineEntity] = true
+	d.pipelineExecutors[pipelineEntity] = true
+	d.pipelineTickets[ticketStateKey] = pipelineEntity
+	d.lastSpecs[pipelineEntity] = spec
+	d.lastActivityAt = d.clock.Now()
+
+	d.logger.Info("pipeline executor sandbox created",
+		"localpart", localpart,
+		"ticket", ticketStateKey,
+		"room_id", roomID,
+		"pipeline_ref", ticketContent.Pipeline.PipelineRef,
+	)
+
+	// Start exit watcher through standard lifecycle. The watcher
+	// cleans up d.running, d.pipelineExecutors, d.pipelineTickets,
+	// and destroys the sandbox when the executor exits.
+	if d.shutdownCtx != nil {
+		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
+		d.exitWatchers[pipelineEntity] = watcherCancel
+		go d.watchPipelineSandboxExit(watcherCtx, pipelineEntity, tokenDirectory)
+	}
+}
+
+// watchPipelineSandboxExit is the exit watcher for pipeline executor
+// sandboxes created by the ticket watcher. It blocks until the sandbox
+// exits, then cleans up lifecycle state and the token directory.
+// This is a slimmer variant of watchSandboxExit: pipeline executors
+// don't have proxy exit watchers, health monitors, or layout watchers.
+func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Entity, tokenDirectory string) {
+	exitCode, exitDescription, exitOutput, waitError := d.launcherWaitSandbox(ctx, principal.AccountLocalpart())
+
+	if waitError != nil {
+		d.logger.Error("waiting for pipeline executor sandbox",
+			"principal", principal, "error", waitError)
+	} else if exitCode != 0 && exitOutput != "" {
+		d.logger.Warn("pipeline executor exited with captured output",
+			"principal", principal,
+			"exit_code", exitCode,
+			"exit_description", exitDescription,
+			"output", exitOutput,
+		)
+	} else {
+		d.logger.Info("pipeline executor exited",
+			"principal", principal,
+			"exit_code", exitCode,
+			"exit_description", exitDescription,
+		)
+	}
+
+	// Clean up the token directory created by startPipelineExecutor.
+	if tokenDirectory != "" {
+		os.RemoveAll(tokenDirectory)
+	}
+
+	d.reconcileMu.Lock()
+	if d.running[principal] {
+		delete(d.running, principal)
+		delete(d.pipelineExecutors, principal)
+		d.removePipelineTicketByPrincipal(principal)
+		delete(d.exitWatchers, principal)
+		delete(d.lastSpecs, principal)
+		d.lastActivityAt = d.clock.Now()
+	}
+	d.reconcileMu.Unlock()
+
+	// Destroy the sandbox.
+	d.destroyPipelineSandbox(ctx, principal)
 }
 
 // pipelineLocalpart generates a unique principal localpart for a
@@ -108,256 +447,10 @@ func (d *Daemon) pipelineLocalpart() string {
 	return fmt.Sprintf("pipeline/%d", id)
 }
 
-// executePipeline is the async lifecycle for a pipeline.execute
-// command. It creates an ephemeral sandbox, waits for the executor
-// to finish, reads the JSONL result file, posts the result as a
-// threaded Matrix reply, and cleans up the sandbox.
-func (d *Daemon) executePipeline(
-	ctx context.Context,
-	roomID ref.RoomID, commandEventID ref.EventID,
-	command schema.CommandMessage,
-	localpart, pipelineRef string,
-	ticketRoomID ref.RoomID,
-) {
-	// Exit immediately if the daemon is already shutting down. The
-	// goroutine was started in handlePipelineExecute; by the time it
-	// is scheduled, the shutdown context may have been cancelled.
-	if err := ctx.Err(); err != nil {
-		d.logger.Info("pipeline execution cancelled before start",
-			"localpart", localpart, "reason", err)
-		return
-	}
-
-	// Construct a fleet-scoped Entity from the pipeline localpart so
-	// destroyPipelineSandbox can use it with Entity-keyed daemon maps.
-	pipelineEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, localpart)
-	if err != nil {
-		d.logger.Error("invalid pipeline localpart",
-			"localpart", localpart, "error", err)
-		return
-	}
-
-	// Validate that the admin socket path (the longest variant) fits
-	// within the Unix sun_path limit. This catches misconfiguration
-	// (overlong fleet names, non-default run dirs) at pipeline start
-	// rather than letting it surface as a cryptic "bind: invalid
-	// argument" inside the launcher.
-	adminSocketPath := pipelineEntity.AdminSocketPath(d.fleetRunDir)
-	if length := len(adminSocketPath); length > maxUnixSocketPathLength {
-		d.postPipelineError(ctx, roomID, commandEventID, command, time.Now(),
-			fmt.Sprintf("admin socket path exceeds Unix limit: %d bytes > %d max (%s)",
-				length, maxUnixSocketPathLength, adminSocketPath))
-		return
-	}
-
-	start := time.Now()
-
-	// Create a temp directory for the result file. This lives on the
-	// host filesystem and is bind-mounted into the sandbox as RW. The
-	// daemon reads it after the sandbox exits.
-	resultDirectory, err := os.MkdirTemp("", "bureau-pipeline-result-*")
-	if err != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("creating result temp directory: %v", err))
-		return
-	}
-	defer os.RemoveAll(resultDirectory)
-
-	resultFilePath := filepath.Join(resultDirectory, "result.jsonl")
-	// Create the empty file so bwrap can bind-mount it.
-	if err := os.WriteFile(resultFilePath, nil, 0644); err != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("creating result file: %v", err))
-		return
-	}
-
-	// Discover and prepare artifact service access for the sandbox.
-	// Best-effort: if no artifact service is running, the executor
-	// runs without artifact support and only inline outputs work.
-	var artifactSocketPath, artifactTokenPath string
-	if socketPath := d.findLocalArtifactSocket(); socketPath != "" {
-		token := &servicetoken.Token{
-			Subject:   pipelineEntity.UserID(),
-			Machine:   d.machine,
-			Audience:  "artifact",
-			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
-			IssuedAt:  d.clock.Now().Unix(),
-			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
-		}
-		tokenBytes, mintErr := servicetoken.Mint(d.tokenSigningPrivateKey, token)
-		if mintErr != nil {
-			d.logger.Warn("failed to mint artifact service token for pipeline executor",
-				"error", mintErr)
-		} else {
-			artifactTokenPath = filepath.Join(resultDirectory, "artifact.token")
-			if writeErr := os.WriteFile(artifactTokenPath, tokenBytes, 0600); writeErr != nil {
-				d.logger.Warn("failed to write artifact token file",
-					"path", artifactTokenPath, "error", writeErr)
-				artifactTokenPath = ""
-			} else {
-				artifactSocketPath = socketPath
-			}
-		}
-	}
-
-	// Create a pip- ticket for this pipeline execution. The executor
-	// operates on tickets: claiming, posting progress, adding notes,
-	// and closing with the terminal outcome. The ticket service must
-	// be running and the target room must have ticket config with
-	// allowed_types including "pipeline".
-	ticketSocketPath := d.findLocalTicketSocket()
-	if ticketSocketPath == "" {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			"no ticket service running on this machine (required for pipeline execution)")
-		return
-	}
-
-	// Extract variables from command parameters (string values only).
-	pipelineVariables := make(map[string]string)
-	for key, value := range command.Parameters {
-		if key == "pipeline" {
-			continue
-		}
-		if stringValue, ok := value.(string); ok {
-			pipelineVariables[key] = stringValue
-		}
-	}
-
-	ticketID, triggerContent, err := d.createPipelineTicket(
-		ctx, ticketSocketPath, pipelineEntity, ticketRoomID,
-		pipelineRef, pipelineVariables)
-	if err != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("creating pipeline ticket: %v", err))
-		return
-	}
-
-	d.logger.Info("created pipeline ticket",
-		"ticket_id", ticketID,
-		"room", ticketRoomID,
-		"pipeline", pipelineRef,
-	)
-
-	// Mint a sandbox-side ticket service token. The executor uses this
-	// for ongoing interactions: claim, progress, notes, close, show.
-	var ticketTokenPath string
-	ticketToken := &servicetoken.Token{
-		Subject:   pipelineEntity.UserID(),
-		Machine:   d.machine,
-		Audience:  "ticket",
-		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
-		IssuedAt:  d.clock.Now().Unix(),
-		ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
-	}
-	ticketTokenBytes, mintError := servicetoken.Mint(d.tokenSigningPrivateKey, ticketToken)
-	if mintError != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("minting ticket service token: %v", mintError))
-		return
-	}
-	ticketTokenPath = filepath.Join(resultDirectory, "ticket.token")
-	if writeError := os.WriteFile(ticketTokenPath, ticketTokenBytes, 0600); writeError != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("writing ticket token file: %v", writeError))
-		return
-	}
-
-	// Build the sandbox spec for the pipeline executor.
-	spec := d.buildPipelineExecutorSpec(
-		resultFilePath, artifactSocketPath, artifactTokenPath,
-		ticketID, ticketRoomID, ticketSocketPath, ticketTokenPath)
-
-	// Build credentials from the daemon's own Matrix session. The
-	// pipeline executor talks to Matrix through its proxy, which needs
-	// a valid token.
-	credentials := map[string]string{
-		"MATRIX_TOKEN":   d.session.AccessToken(),
-		"MATRIX_USER_ID": d.machine.UserID().String(),
-	}
-
-	// Create the ephemeral sandbox.
-	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:            "create-sandbox",
-		Principal:         localpart,
-		DirectCredentials: credentials,
-		SandboxSpec:       spec,
-		TriggerContent:    triggerContent,
-	})
-	if err != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("create-sandbox IPC failed: %v", err))
-		return
-	}
-	if !response.OK {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("create-sandbox rejected: %s", response.Error))
-		return
-	}
-
-	d.logger.Info("pipeline executor sandbox created",
-		"localpart", localpart,
-		"proxy_pid", response.ProxyPID,
-	)
-
-	// Wait for the executor to finish. This blocks until the process
-	// exits or the context is cancelled (daemon shutdown).
-	exitCode, exitDescription, exitOutput, waitError := d.launcherWaitSandbox(ctx, localpart)
-	if waitError != nil {
-		d.postPipelineError(ctx, roomID, commandEventID, command, start,
-			fmt.Sprintf("waiting for pipeline executor: %v", waitError))
-		d.destroyPipelineSandbox(ctx, pipelineEntity)
-		return
-	}
-
-	if exitCode != 0 && exitOutput != "" {
-		d.logger.Warn("pipeline executor exited with captured output",
-			"localpart", localpart,
-			"exit_code", exitCode,
-			"exit_description", exitDescription,
-			"output", exitOutput,
-		)
-	} else {
-		d.logger.Info("pipeline executor exited",
-			"localpart", localpart,
-			"exit_code", exitCode,
-			"exit_description", exitDescription,
-		)
-	}
-
-	// Read the JSONL result file.
-	entries, readError := readPipelineResultFile(resultFilePath)
-	if readError != nil {
-		d.logger.Warn("failed to read pipeline result file",
-			"localpart", localpart,
-			"path", resultFilePath,
-			"error", readError,
-		)
-		// Don't fail — we still have the exit code.
-	}
-
-	// Post the structured result as a threaded reply.
-	d.postPipelineResult(ctx, roomID, commandEventID, command, start,
-		exitCode, exitDescription, exitOutput, entries)
-
-	// Clean up the ephemeral sandbox.
-	d.destroyPipelineSandbox(ctx, pipelineEntity)
-}
-
-// buildPipelineExecutorSpec constructs a SandboxSpec for the pipeline
-// executor. The sandbox provides:
-//   - bwrap isolation with PID namespace
-//   - The pipeline executor binary as the entrypoint
-//   - BUREAU_SANDBOX=1, BUREAU_RESULT_PATH, TERM environment variables
-//   - The result file bind-mounted RW
-//   - The workspace root bind-mounted RW (for git operations)
-//   - The Nix environment (if configured) for toolchain access
-//   - Security defaults: new session, die-with-parent, no-new-privs
-//
 // findLocalArtifactSocket returns the host-side socket path for the
 // local artifact service, or empty string if no artifact service is
-// running on this machine. Uses the same discovery pattern as
-// pushUpstreamConfig: search d.services for a local service with the
-// "content-addressed-store" capability.
+// running on this machine. Searches d.services for a local service
+// with the "content-addressed-store" capability.
 func (d *Daemon) findLocalArtifactSocket() string {
 	for _, service := range d.services {
 		if service.Machine != d.machine {
@@ -485,8 +578,14 @@ func pipelineNameFromRef(pipelineRef string) string {
 	return pipelineRef
 }
 
+// buildPipelineExecutorSpec constructs a SandboxSpec for the pipeline
+// executor. The sandbox provides bwrap isolation with PID namespace,
+// the executor binary as the entrypoint, the workspace root bind-mounted
+// RW for git operations, the Nix environment (if configured) for
+// toolchain access, and security defaults (new session, die-with-parent,
+// no-new-privs). Ticket and artifact service sockets are bind-mounted
+// when available.
 func (d *Daemon) buildPipelineExecutorSpec(
-	resultFilePath string,
 	artifactSocketPath string,
 	artifactTokenPath string,
 	ticketID string,
@@ -498,7 +597,6 @@ func (d *Daemon) buildPipelineExecutorSpec(
 		Command: []string{d.pipelineExecutorBinary},
 		EnvironmentVariables: map[string]string{
 			"BUREAU_SANDBOX":     "1",
-			"BUREAU_RESULT_PATH": "/run/bureau/result.jsonl",
 			"BUREAU_TICKET_ID":   ticketID,
 			"BUREAU_TICKET_ROOM": ticketRoom.String(),
 			"TERM":               "xterm-256color",
@@ -510,9 +608,6 @@ func (d *Daemon) buildPipelineExecutorSpec(
 			// under /nix/store since the more-specific mount coexists with
 			// the /nix/store mount.
 			{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: "ro"},
-			// Result file: bind-mounted RW so the executor can write
-			// JSONL and the daemon reads the host file after exit.
-			{Source: resultFilePath, Dest: "/run/bureau/result.jsonl", Mode: "rw"},
 			// Workspace root: pipeline JSONC references /workspace/${PROJECT}.
 			{Source: d.workspaceRoot, Dest: "/workspace", Mode: "rw"},
 		},
@@ -580,208 +675,4 @@ func (d *Daemon) destroyPipelineSandbox(ctx context.Context, principal ref.Entit
 		return
 	}
 	d.logger.Info("pipeline executor sandbox destroyed", "principal", principal)
-}
-
-// --- Result file reading ---
-
-// pipelineResultEntry is the generic structure for reading JSONL
-// entries from the result file. The Type field determines which
-// additional fields are populated.
-type pipelineResultEntry struct {
-	Type       string            `json:"type"`
-	Pipeline   string            `json:"pipeline,omitempty"`
-	StepCount  int               `json:"step_count,omitempty"`
-	Timestamp  string            `json:"timestamp,omitempty"`
-	Index      int               `json:"index,omitempty"`
-	Name       string            `json:"name,omitempty"`
-	Status     string            `json:"status,omitempty"`
-	DurationMS int64             `json:"duration_ms,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	FailedStep string            `json:"failed_step,omitempty"`
-	LogEventID ref.EventID       `json:"log_event_id,omitempty"`
-	Outputs    map[string]string `json:"outputs,omitempty"`
-}
-
-// readPipelineResultFile reads a JSONL result file and returns the
-// parsed entries. Returns an empty slice (not an error) if the file
-// is empty (executor was killed before writing anything).
-func readPipelineResultFile(path string) ([]pipelineResultEntry, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("opening result file: %w", err)
-	}
-	defer file.Close()
-
-	var entries []pipelineResultEntry
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var entry pipelineResultEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			return entries, fmt.Errorf("parsing result line: %w (line: %s)", err, string(line))
-		}
-		entries = append(entries, entry)
-	}
-	if err := scanner.Err(); err != nil {
-		return entries, fmt.Errorf("reading result file: %w", err)
-	}
-	return entries, nil
-}
-
-// --- Result posting ---
-
-// postPipelineResult posts the pipeline execution outcome as a
-// threaded reply to the original command message. Includes step-level
-// detail from the JSONL result file when available.
-func (d *Daemon) postPipelineResult(
-	ctx context.Context,
-	roomID ref.RoomID, commandEventID ref.EventID,
-	command schema.CommandMessage,
-	start time.Time,
-	exitCode int,
-	exitDescription string,
-	exitOutput string,
-	entries []pipelineResultEntry,
-) {
-	durationMilliseconds := time.Since(start).Milliseconds()
-
-	// Find the terminal entry (complete or failed) for summary info.
-	var terminalEntry *pipelineResultEntry
-	for index := len(entries) - 1; index >= 0; index-- {
-		if entries[index].Type == "complete" || entries[index].Type == "failed" {
-			terminalEntry = &entries[index]
-			break
-		}
-	}
-
-	// Build step summaries from the result entries.
-	var steps []pipeline.PipelineStepResult
-	for _, entry := range entries {
-		if entry.Type != "step" {
-			continue
-		}
-		steps = append(steps, pipeline.PipelineStepResult{
-			Name:       entry.Name,
-			Status:     entry.Status,
-			DurationMS: entry.DurationMS,
-			Error:      entry.Error,
-			Outputs:    entry.Outputs,
-		})
-	}
-
-	// Determine overall status.
-	status := "error"
-	var body string
-	if exitCode == 0 && terminalEntry != nil && terminalEntry.Type == "complete" {
-		status = "success"
-		body = fmt.Sprintf("pipeline.execute: completed in %dms", durationMilliseconds)
-	} else if terminalEntry != nil && terminalEntry.Type == "failed" {
-		body = fmt.Sprintf("pipeline.execute: failed at step %q: %s",
-			terminalEntry.FailedStep, terminalEntry.Error)
-	} else if exitCode != 0 {
-		body = fmt.Sprintf("pipeline.execute: executor exited with code %d", exitCode)
-		if exitDescription != "" {
-			body += fmt.Sprintf(" (%s)", exitDescription)
-		}
-		if exitOutput != "" {
-			truncated := tailLines(exitOutput, maxMatrixOutputLines)
-			body += fmt.Sprintf("\n\nCaptured output (last %d lines):\n%s", countLines(truncated), truncated)
-		}
-	} else {
-		// Exit code 0 but no terminal entry — executor produced no
-		// result file or it was empty.
-		body = "pipeline.execute: completed (no result details)"
-		status = "success"
-	}
-
-	message := schema.CommandResultMessage{
-		MsgType:    schema.MsgTypeCommandResult,
-		Body:       body,
-		Status:     status,
-		ExitCode:   &exitCode,
-		DurationMS: durationMilliseconds,
-		Steps:      steps,
-		RequestID:  command.RequestID,
-		RelatesTo:  schema.NewThreadRelation(commandEventID),
-	}
-
-	if terminalEntry != nil {
-		if !terminalEntry.LogEventID.IsZero() {
-			message.LogEventID = terminalEntry.LogEventID
-		}
-		if len(terminalEntry.Outputs) > 0 {
-			message.Outputs = terminalEntry.Outputs
-		}
-	}
-
-	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
-		d.logger.Error("failed to post pipeline result",
-			"room_id", roomID,
-			"error", err,
-		)
-	}
-}
-
-// postPipelineError posts a pipeline execution error as a threaded
-// reply. Used for failures that happen before or outside the executor
-// (sandbox creation failures, IPC errors, etc.).
-func (d *Daemon) postPipelineError(
-	ctx context.Context,
-	roomID ref.RoomID, commandEventID ref.EventID,
-	command schema.CommandMessage,
-	start time.Time,
-	errorMessage string,
-) {
-	d.logger.Error("pipeline execution failed",
-		"room_id", roomID,
-		"error", errorMessage,
-	)
-
-	durationMilliseconds := time.Since(start).Milliseconds()
-
-	message := schema.CommandResultMessage{
-		MsgType:    schema.MsgTypeCommandResult,
-		Body:       fmt.Sprintf("pipeline.execute: error: %s", errorMessage),
-		Status:     "error",
-		Error:      errorMessage,
-		DurationMS: durationMilliseconds,
-		RequestID:  command.RequestID,
-		RelatesTo:  schema.NewThreadRelation(commandEventID),
-	}
-
-	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
-		d.logger.Error("failed to post pipeline error",
-			"room_id", roomID,
-			"error", err,
-		)
-	}
-}
-
-// postPipelineAccepted posts an immediate "accepted" acknowledgment
-// to the command thread so the sender knows the pipeline is starting.
-// Called by executePipeline before sandbox creation.
-func (d *Daemon) postPipelineAccepted(
-	ctx context.Context,
-	roomID ref.RoomID, commandEventID ref.EventID,
-	command schema.CommandMessage,
-	localpart string,
-) {
-	message := schema.CommandResultMessage{
-		MsgType:   schema.MsgTypeCommandResult,
-		Body:      fmt.Sprintf("pipeline.execute: starting executor as %s", localpart),
-		Status:    "accepted",
-		Principal: localpart,
-		RequestID: command.RequestID,
-		RelatesTo: schema.NewThreadRelation(commandEventID),
-	}
-
-	if _, sendError := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); sendError != nil {
-		d.logger.Error("failed to post pipeline accepted message",
-			"room_id", roomID,
-			"error", sendError,
-		)
-	}
 }

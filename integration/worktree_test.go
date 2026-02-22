@@ -296,12 +296,11 @@ func TestWorkspaceCommands(t *testing.T) {
 
 // TestWorkspaceWorktreeHandlers exercises the daemon's async worktree
 // command handlers (workspace.worktree.add, workspace.worktree.remove).
-// These handlers validate parameters and spawn ephemeral pipeline executor
-// sandboxes. The test verifies:
+// These handlers validate parameters and create pip- tickets via the
+// ticket service. The test verifies:
 //
 //   - Correct validation of the "path" parameter
-//   - The "accepted" acknowledgment is posted immediately
-//   - An ephemeral pipeline executor principal is created
+//   - The "accepted" acknowledgment is posted immediately with a ticket ID
 //   - Invalid parameters are rejected with descriptive errors
 //
 // The pipeline executor may or may not succeed depending on whether git
@@ -333,6 +332,8 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	ctx := t.Context()
 
 	// --- Set up workspace filesystem with bare repo ---
+	// The bare repo must exist before sending worktree commands — the
+	// handler verifies its presence on disk.
 	projectDir := filepath.Join(machine.WorkspaceRoot, "wtproj")
 	bareDir := filepath.Join(projectDir, ".bare")
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
@@ -348,33 +349,17 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		t.Fatalf("git clone --bare: %v", err)
 	}
 
-	// --- Create workspace room ---
-	workspaceAlias := "wtproj"
-	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
+	// --- Deploy ticket service and create workspace via production API ---
+	// The ticket service must be running before workspace.Create so the
+	// CLI can discover it via the service directory and invite it to the
+	// workspace room.
+	deployTicketService(t, admin, fleet, machine, "ws-wt-hdlr")
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
-	if err != nil {
-		t.Fatalf("resolve bureau space: %v", err)
-	}
-
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
-
-	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:    "active",
-			Project:   "wtproj",
-			Machine:   machine.Name,
-			UpdatedAt: "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("publish workspace state: %v", err)
-	}
+	wsResult := createWorkspace(t, admin, machine.Ref, "wtproj/main",
+		"bureau/template:base", nil)
+	workspaceRoomID := wsResult.RoomID
 
 	// --- Test worktree.add accepted ack ---
-	// The daemon posts two results: an immediate "accepted" ack and
-	// the async pipeline result. The pipeline may fail (git is not in
-	// the integration-test-env), so we wait for both and verify the
-	// accepted ack is present.
 	t.Run("add_accepted", func(t *testing.T) {
 		requestID := "wt-add-" + t.Name()
 		resultWatch := watchRoom(t, admin, workspaceRoomID)
@@ -384,7 +369,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.add feature/test-branch",
 				Command:   "workspace.worktree.add",
-				Workspace: "wtproj",
+				Workspace: "wtproj/main",
 				RequestID: requestID,
 				Parameters: map[string]any{
 					"path":   "feature/test-branch",
@@ -395,19 +380,15 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 			t.Fatalf("send workspace.worktree.add: %v", err)
 		}
 
-		// Wait for the accepted ack only. The pipeline result involves
-		// sandbox creation, process startup, and git operations — that
-		// path is tested by TestPipelineExecution. Waiting for it here
-		// adds 10-30s under load and caused pre-commit timeouts.
 		results := resultWatch.WaitForCommandResults(t, requestID, 1)
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 
-		principalName, _ := innerResult["principal"].(string)
-		if principalName == "" {
-			t.Error("accepted result has empty principal")
+		ticketID, _ := innerResult["ticket_id"].(string)
+		if ticketID == "" {
+			t.Error("accepted result has empty ticket_id")
 		}
-		t.Logf("worktree.add accepted, executor principal: %s", principalName)
+		t.Logf("worktree.add accepted, ticket: %s", ticketID)
 	})
 
 	// --- Test worktree.remove accepted ack ---
@@ -420,7 +401,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.remove feature/test-branch",
 				Command:   "workspace.worktree.remove",
-				Workspace: "wtproj",
+				Workspace: "wtproj/main",
 				RequestID: requestID,
 				Parameters: map[string]any{
 					"path": "feature/test-branch",
@@ -435,11 +416,11 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 		acceptedContent := findAcceptedEvent(t, results)
 		innerResult, _ := acceptedContent["result"].(map[string]any)
 
-		principalName, _ := innerResult["principal"].(string)
-		if principalName == "" {
-			t.Error("accepted result has empty principal")
+		ticketID, _ := innerResult["ticket_id"].(string)
+		if ticketID == "" {
+			t.Error("accepted result has empty ticket_id")
 		}
-		t.Logf("worktree.remove accepted, executor principal: %s", principalName)
+		t.Logf("worktree.remove accepted, ticket: %s", ticketID)
 	})
 
 	// --- Test validation: missing path ---
@@ -452,7 +433,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 				MsgType:    schema.MsgTypeCommand,
 				Body:       "workspace.worktree.add (no path)",
 				Command:    "workspace.worktree.add",
-				Workspace:  "wtproj",
+				Workspace:  "wtproj/main",
 				RequestID:  requestID,
 				Parameters: map[string]any{
 					// path intentionally omitted
@@ -487,7 +468,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.add ../escape",
 				Command:   "workspace.worktree.add",
-				Workspace: "wtproj",
+				Workspace: "wtproj/main",
 				RequestID: requestID,
 				Parameters: map[string]any{
 					"path": "../escape",
@@ -522,7 +503,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 				MsgType:   schema.MsgTypeCommand,
 				Body:      "workspace.worktree.remove feature/x (bad mode)",
 				Command:   "workspace.worktree.remove",
-				Workspace: "wtproj",
+				Workspace: "wtproj/main",
 				RequestID: requestID,
 				Parameters: map[string]any{
 					"path": "feature/x",
@@ -740,24 +721,18 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 		t.Fatalf("send workspace.worktree.add: %v", err)
 	}
 
-	// Wait for both the accepted ack and the pipeline result.
-	addResults := addWatch.WaitForCommandResults(t, addRequestID, 2)
+	// Wait for the accepted acknowledgment. The daemon creates a pip-
+	// ticket and returns immediately; the ticket watcher creates the
+	// executor sandbox from the next /sync.
+	addResults := addWatch.WaitForCommandResults(t, addRequestID, 1)
 	addAccepted := findAcceptedEvent(t, addResults)
-	addPipeline := findPipelineEvent(t, addResults)
 
-	addPrincipal, _ := addAccepted["result"].(map[string]any)
-	principalName, _ := addPrincipal["principal"].(string)
-	if principalName == "" {
-		t.Fatal("worktree.add accepted result has empty principal")
+	addResult, _ := addAccepted["result"].(map[string]any)
+	addTicketID, _ := addResult["ticket_id"].(string)
+	if addTicketID == "" {
+		t.Fatal("worktree.add accepted result has empty ticket_id")
 	}
-	t.Logf("worktree.add accepted, executor principal: %s", principalName)
-
-	addStatus, _ := addPipeline["status"].(string)
-	if addStatus != "success" {
-		addError, _ := addPipeline["error"].(string)
-		t.Fatalf("worktree.add pipeline failed: status=%s, error=%s", addStatus, addError)
-	}
-	t.Log("worktree.add pipeline completed successfully")
+	t.Logf("worktree.add accepted, ticket: %s", addTicketID)
 
 	// Verify the worktree state event reached "active".
 	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "active")
@@ -796,24 +771,16 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 		t.Fatalf("send workspace.worktree.remove: %v", err)
 	}
 
-	// Wait for both the accepted ack and the pipeline result.
-	removeResults := removeWatch.WaitForCommandResults(t, removeRequestID, 2)
+	// Wait for the accepted acknowledgment.
+	removeResults := removeWatch.WaitForCommandResults(t, removeRequestID, 1)
 	removeAccepted := findAcceptedEvent(t, removeResults)
-	removePipeline := findPipelineEvent(t, removeResults)
 
-	removePrincipal, _ := removeAccepted["result"].(map[string]any)
-	removePrincipalName, _ := removePrincipal["principal"].(string)
-	if removePrincipalName == "" {
-		t.Fatal("worktree.remove accepted result has empty principal")
+	removeResult, _ := removeAccepted["result"].(map[string]any)
+	removeTicketID, _ := removeResult["ticket_id"].(string)
+	if removeTicketID == "" {
+		t.Fatal("worktree.remove accepted result has empty ticket_id")
 	}
-	t.Logf("worktree.remove accepted, executor principal: %s", removePrincipalName)
-
-	removeStatus, _ := removePipeline["status"].(string)
-	if removeStatus != "success" {
-		removeError, _ := removePipeline["error"].(string)
-		t.Fatalf("worktree.remove pipeline failed: status=%s, error=%s", removeStatus, removeError)
-	}
-	t.Log("worktree.remove pipeline completed successfully")
+	t.Logf("worktree.remove accepted, ticket: %s", removeTicketID)
 
 	// Verify the worktree state event reached "removed".
 	waitForWorktreeStatus(t, admin, workspaceRoomID, "feature/test-branch", "removed")

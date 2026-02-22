@@ -5,15 +5,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -77,139 +80,6 @@ func TestEphemeralCounterSharedAcrossTypes(t *testing.T) {
 	}
 }
 
-func TestReadPipelineResultFile(t *testing.T) {
-	t.Parallel()
-
-	t.Run("complete pipeline", func(t *testing.T) {
-		t.Parallel()
-		directory := t.TempDir()
-		path := filepath.Join(directory, "result.jsonl")
-
-		lines := []string{
-			`{"type":"start","pipeline":"dev-init","step_count":2,"timestamp":"2026-02-10T12:00:00Z"}`,
-			`{"type":"step","index":0,"name":"fetch","status":"ok","duration_ms":1200}`,
-			`{"type":"step","index":1,"name":"setup","status":"ok","duration_ms":800}`,
-			`{"type":"complete","status":"ok","duration_ms":2000,"log_event_id":"$abc123"}`,
-		}
-		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		entries, err := readPipelineResultFile(path)
-		if err != nil {
-			t.Fatalf("readPipelineResultFile: %v", err)
-		}
-
-		if len(entries) != 4 {
-			t.Fatalf("expected 4 entries, got %d", len(entries))
-		}
-
-		// Verify start entry.
-		if entries[0].Type != "start" || entries[0].Pipeline != "dev-init" || entries[0].StepCount != 2 {
-			t.Errorf("start entry: %+v", entries[0])
-		}
-
-		// Verify step entries.
-		if entries[1].Type != "step" || entries[1].Name != "fetch" || entries[1].Status != "ok" {
-			t.Errorf("step 0: %+v", entries[1])
-		}
-		if entries[2].Type != "step" || entries[2].Name != "setup" || entries[2].DurationMS != 800 {
-			t.Errorf("step 1: %+v", entries[2])
-		}
-
-		// Verify complete entry.
-		if entries[3].Type != "complete" || entries[3].LogEventID != ref.MustParseEventID("$abc123") {
-			t.Errorf("complete entry: %+v", entries[3])
-		}
-	})
-
-	t.Run("failed pipeline", func(t *testing.T) {
-		t.Parallel()
-		directory := t.TempDir()
-		path := filepath.Join(directory, "result.jsonl")
-
-		lines := []string{
-			`{"type":"start","pipeline":"deploy","step_count":3,"timestamp":"2026-02-10T12:00:00Z"}`,
-			`{"type":"step","index":0,"name":"build","status":"ok","duration_ms":5000}`,
-			`{"type":"step","index":1,"name":"test","status":"failed","duration_ms":3000,"error":"exit code 1"}`,
-			`{"type":"failed","status":"failed","error":"step failed: exit code 1","failed_step":"test","duration_ms":8000,"log_event_id":"$xyz"}`,
-		}
-		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		entries, err := readPipelineResultFile(path)
-		if err != nil {
-			t.Fatalf("readPipelineResultFile: %v", err)
-		}
-
-		if len(entries) != 4 {
-			t.Fatalf("expected 4 entries, got %d", len(entries))
-		}
-
-		// Verify the failed step has the error.
-		if entries[2].Status != "failed" || entries[2].Error != "exit code 1" {
-			t.Errorf("failed step: %+v", entries[2])
-		}
-
-		// Verify the terminal failed entry.
-		if entries[3].Type != "failed" || entries[3].FailedStep != "test" {
-			t.Errorf("terminal entry: %+v", entries[3])
-		}
-	})
-
-	t.Run("empty file", func(t *testing.T) {
-		t.Parallel()
-		directory := t.TempDir()
-		path := filepath.Join(directory, "result.jsonl")
-
-		if err := os.WriteFile(path, nil, 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		entries, err := readPipelineResultFile(path)
-		if err != nil {
-			t.Fatalf("readPipelineResultFile: %v", err)
-		}
-
-		if len(entries) != 0 {
-			t.Errorf("expected 0 entries for empty file, got %d", len(entries))
-		}
-	})
-
-	t.Run("nonexistent file", func(t *testing.T) {
-		t.Parallel()
-		_, err := readPipelineResultFile("/nonexistent/result.jsonl")
-		if err == nil {
-			t.Fatal("expected error for nonexistent file")
-		}
-	})
-
-	t.Run("partial write (crash mid-pipeline)", func(t *testing.T) {
-		t.Parallel()
-		directory := t.TempDir()
-		path := filepath.Join(directory, "result.jsonl")
-
-		// Only start + one step, no terminal entry.
-		lines := []string{
-			`{"type":"start","pipeline":"crashed","step_count":5,"timestamp":"2026-02-10T12:00:00Z"}`,
-			`{"type":"step","index":0,"name":"step-one","status":"ok","duration_ms":100}`,
-		}
-		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		entries, err := readPipelineResultFile(path)
-		if err != nil {
-			t.Fatalf("readPipelineResultFile: %v", err)
-		}
-
-		if len(entries) != 2 {
-			t.Fatalf("expected 2 entries, got %d", len(entries))
-		}
-	})
-}
-
 func TestBuildPipelineExecutorSpec(t *testing.T) {
 	t.Parallel()
 
@@ -219,7 +89,6 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	spec := daemon.buildPipelineExecutorSpec(
-		"/tmp/result-abc/result.jsonl",
 		"/run/artifact.sock", "/tmp/artifact.token",
 		"pip-a3f9", ref.MustParseRoomID("!pipeline-room:bureau.local"),
 		"/run/ticket.sock", "/tmp/ticket.token",
@@ -237,8 +106,8 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	if spec.EnvironmentVariables["BUREAU_SANDBOX"] != "1" {
 		t.Errorf("BUREAU_SANDBOX = %q, want '1'", spec.EnvironmentVariables["BUREAU_SANDBOX"])
 	}
-	if spec.EnvironmentVariables["BUREAU_RESULT_PATH"] != "/run/bureau/result.jsonl" {
-		t.Errorf("BUREAU_RESULT_PATH = %q", spec.EnvironmentVariables["BUREAU_RESULT_PATH"])
+	if _, hasResultPath := spec.EnvironmentVariables["BUREAU_RESULT_PATH"]; hasResultPath {
+		t.Error("BUREAU_RESULT_PATH should not be set (executor uses tickets, not JSONL)")
 	}
 	if spec.EnvironmentVariables["BUREAU_TICKET_ID"] != "pip-a3f9" {
 		t.Errorf("BUREAU_TICKET_ID = %q, want 'pip-a3f9'", spec.EnvironmentVariables["BUREAU_TICKET_ID"])
@@ -270,17 +139,9 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 		}
 	}
 
-	// Result file mount.
-	resultMount := findMount("/run/bureau/result.jsonl")
-	if resultMount == nil {
-		t.Error("result file mount not found")
-	} else {
-		if resultMount.Source != "/tmp/result-abc/result.jsonl" {
-			t.Errorf("result mount source = %q", resultMount.Source)
-		}
-		if resultMount.Mode != "rw" {
-			t.Errorf("result mount mode = %q, want 'rw'", resultMount.Mode)
-		}
+	// No result file mount (executor uses tickets, not JSONL).
+	if resultMount := findMount("/run/bureau/result.jsonl"); resultMount != nil {
+		t.Error("unexpected result file mount — executor uses tickets for reporting")
 	}
 
 	// Workspace root mount.
@@ -345,7 +206,7 @@ func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 	daemon.pipelineEnvironment = "" // No Nix environment.
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
-	spec := daemon.buildPipelineExecutorSpec("/tmp/result.jsonl",
+	spec := daemon.buildPipelineExecutorSpec(
 		"", "", "pip-1234", ref.MustParseRoomID("!room:test"), "/run/ticket.sock", "/tmp/ticket.token")
 
 	if spec.EnvironmentPath != "" {
@@ -361,7 +222,7 @@ func TestBuildPipelineExecutorSpec_NoArtifact(t *testing.T) {
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
 	// Empty artifact socket/token paths — no artifact service available.
-	spec := daemon.buildPipelineExecutorSpec("/tmp/result.jsonl",
+	spec := daemon.buildPipelineExecutorSpec(
 		"", "", "pip-1234", ref.MustParseRoomID("!room:test"), "/run/ticket.sock", "/tmp/ticket.token")
 
 	// Verify no artifact mounts are present.
@@ -478,13 +339,51 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	}
 	harness.daemon.pipelineExecutorBinary = binaryPath
 
-	// Use a pre-cancelled context for shutdownCtx. The handler starts
-	// an async goroutine that would race against the synchronous result
-	// — the cancelled context makes executePipeline exit immediately,
-	// so only the synchronous "accepted" result is captured.
-	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	harness.daemon.shutdownCtx = cancelledCtx
+	// Set up token signing so createPipelineTicket can mint a service
+	// token for the ticket create call.
+	_, signingKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.tokenSigningPrivateKey = signingKey
+
+	// Set up a mock ticket service. The handler creates pip- tickets
+	// and returns the ticket ID and room.
+	socketDir := testutil.SocketDir(t)
+	harness.daemon.runDir = socketDir
+	harness.daemon.fleetRunDir = harness.daemon.fleet.RunDir(socketDir)
+
+	ticketEntity := testEntity(t, harness.daemon.fleet, "service/ticket/workspace")
+	ticketSocketPath := ticketEntity.SocketPath(harness.daemon.fleetRunDir)
+
+	// Create parent directories for the socket path.
+	if err := os.MkdirAll(filepath.Dir(ticketSocketPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register the ticket service in the daemon's service directory
+	// so findLocalTicketSocket() discovers it.
+	harness.daemon.services["service/ticket/workspace"] = &schema.Service{
+		Principal:    ticketEntity,
+		Machine:      harness.daemon.machine,
+		Capabilities: []string{"dependency-graph"},
+		Protocol:     "cbor",
+	}
+
+	// Start a mock ticket service that handles the "create" action.
+	mockServer := service.NewSocketServer(ticketSocketPath,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)), nil)
+	mockServer.Handle("create", func(ctx context.Context, raw []byte) (any, error) {
+		return ticketCreateResponse{
+			ID:   "pip-test-1234",
+			Room: "!tickets:bureau.local",
+		}, nil
+	})
+
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	t.Cleanup(serverCancel)
+	go mockServer.Serve(serverCtx)
+	<-mockServer.Ready()
 
 	const roomID = "!workspace:test"
 	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
@@ -499,7 +398,9 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
 
-	// The synchronous result should be "accepted".
+	// The handler creates a pip- ticket and returns "accepted" with
+	// the ticket ID. No goroutine, no sandbox creation — the ticket
+	// watcher picks up the ticket from the next /sync.
 	messages := harness.getSentMessages()
 	if len(messages) != 1 {
 		t.Fatalf("expected exactly 1 sent message, got %d", len(messages))
@@ -507,19 +408,23 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 
 	message := messages[0]
 	if message.Content["status"] != "success" {
-		t.Errorf("status = %v, want 'success' (accepted)", message.Content["status"])
+		t.Errorf("status = %v, want 'success' (error: %v)", message.Content["status"], message.Content["error"])
 	}
 
 	result, ok := message.Content["result"].(map[string]any)
 	if !ok {
-		t.Fatalf("result is not a map: %T", message.Content["result"])
+		t.Fatalf("result is not a map: %v", message.Content["result"])
 	}
 	if result["status"] != "accepted" {
 		t.Errorf("result.status = %v, want 'accepted'", result["status"])
 	}
-	principalLocalpart, _ := result["principal"].(string)
-	if !strings.HasPrefix(principalLocalpart, "pipeline/") {
-		t.Errorf("result.principal = %q, want prefix 'pipeline/'", principalLocalpart)
+	ticketID, _ := result["ticket_id"].(string)
+	if ticketID != "pip-test-1234" {
+		t.Errorf("result.ticket_id = %q, want %q", ticketID, "pip-test-1234")
+	}
+	room, _ := result["room"].(string)
+	if room != "!tickets:bureau.local" {
+		t.Errorf("result.room = %q, want %q", room, "!tickets:bureau.local")
 	}
 }
 
@@ -688,146 +593,5 @@ func buildPipelineCommandEvent(eventID ref.EventID, sender ref.UserID, pipelineR
 		Type:    schema.MatrixEventTypeMessage,
 		Sender:  sender,
 		Content: content,
-	}
-}
-
-// TestPostPipelineResult verifies the structure of posted pipeline results.
-func TestPostPipelineResult(t *testing.T) {
-	t.Parallel()
-	harness := newCommandTestHarness(t)
-
-	t.Run("successful pipeline", func(t *testing.T) {
-		entries := []pipelineResultEntry{
-			{Type: "start", Pipeline: "test", StepCount: 2},
-			{Type: "step", Index: 0, Name: "build", Status: "ok", DurationMS: 1000},
-			{Type: "step", Index: 1, Name: "test", Status: "ok", DurationMS: 2000},
-			{Type: "complete", Status: "ok", DurationMS: 3000, LogEventID: ref.MustParseEventID("$log1")},
-		}
-
-		command := schema.CommandMessage{
-			Command:   "pipeline.execute",
-			RequestID: "req-success",
-		}
-
-		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd1"),
-			command, fixedTestTime, 0, "", "", entries)
-
-		messages := harness.getSentMessages()
-		if len(messages) != 1 {
-			t.Fatalf("expected 1 message, got %d", len(messages))
-		}
-
-		content := messages[0].Content
-		if content["status"] != "success" {
-			t.Errorf("status = %v, want 'success'", content["status"])
-		}
-		if content["log_event_id"] != "$log1" {
-			t.Errorf("log_event_id = %v, want '$log1'", content["log_event_id"])
-		}
-		if content["request_id"] != "req-success" {
-			t.Errorf("request_id = %v", content["request_id"])
-		}
-
-		steps, ok := content["steps"].([]any)
-		if !ok {
-			t.Fatalf("steps is not a slice: %T", content["steps"])
-		}
-		if len(steps) != 2 {
-			t.Errorf("expected 2 steps, got %d", len(steps))
-		}
-	})
-
-	t.Run("failed pipeline", func(t *testing.T) {
-		// Clear previous messages.
-		harness.sentMessagesMu.Lock()
-		harness.sentMessages = nil
-		harness.sentMessagesMu.Unlock()
-
-		entries := []pipelineResultEntry{
-			{Type: "start", Pipeline: "deploy", StepCount: 2},
-			{Type: "step", Index: 0, Name: "build", Status: "ok", DurationMS: 1000},
-			{Type: "step", Index: 1, Name: "deploy", Status: "failed", DurationMS: 500, Error: "connection refused"},
-			{Type: "failed", Status: "failed", Error: "step failed", FailedStep: "deploy", DurationMS: 1500},
-		}
-
-		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd2"),
-			schema.CommandMessage{Command: "pipeline.execute"},
-			fixedTestTime, 1, "exit status 1", "", entries)
-
-		messages := harness.getSentMessages()
-		if len(messages) != 1 {
-			t.Fatalf("expected 1 message, got %d", len(messages))
-		}
-
-		content := messages[0].Content
-		if content["status"] != "error" {
-			t.Errorf("status = %v, want 'error'", content["status"])
-		}
-		body, _ := content["body"].(string)
-		if !strings.Contains(body, "deploy") {
-			t.Errorf("body should mention failed step, got: %q", body)
-		}
-	})
-
-	t.Run("no result file (killed)", func(t *testing.T) {
-		harness.sentMessagesMu.Lock()
-		harness.sentMessages = nil
-		harness.sentMessagesMu.Unlock()
-
-		ctx := context.Background()
-		harness.daemon.postPipelineResult(ctx, mustRoomID("!room:test"), ref.MustParseEventID("$cmd3"),
-			schema.CommandMessage{Command: "pipeline.execute"},
-			fixedTestTime, 137, "killed by signal 9", "", nil)
-
-		messages := harness.getSentMessages()
-		if len(messages) != 1 {
-			t.Fatalf("expected 1 message, got %d", len(messages))
-		}
-
-		content := messages[0].Content
-		if content["status"] != "error" {
-			t.Errorf("status = %v, want 'error'", content["status"])
-		}
-		exitCode, ok := content["exit_code"].(float64)
-		if !ok || int(exitCode) != 137 {
-			t.Errorf("exit_code = %v, want 137", content["exit_code"])
-		}
-	})
-}
-
-// fixedTestTime is a deterministic time.Time for pipeline tests. The
-// postPipelineResult function computes elapsed duration from the start parameter,
-// which will yield a near-zero value — fine for verifying structure.
-var fixedTestTime = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-
-// TestPipelineResultSerialization verifies that pipelineResultEntry
-// can round-trip through JSON (matching the executor's output format).
-func TestPipelineResultSerialization(t *testing.T) {
-	t.Parallel()
-
-	original := pipelineResultEntry{
-		Type:       "step",
-		Index:      2,
-		Name:       "deploy",
-		Status:     "failed",
-		DurationMS: 4500,
-		Error:      "connection refused",
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded pipelineResultEntry
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if decoded.Type != original.Type || decoded.Name != original.Name ||
-		decoded.Status != original.Status || decoded.Error != original.Error {
-		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
 	}
 }

@@ -316,15 +316,15 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams)
 		return nil, cli.Internal("publishing workspace state: %w", err)
 	}
 
-	// Enable pipeline ticket management in the workspace room. Workspace
-	// setup and teardown pipelines create pip- tickets to track execution
-	// progress. The ticket config must be in the room before the daemon
-	// creates pip- tickets, and before the ticket service joins — the
-	// ticket service only tracks rooms that have ticket config.
+	// Enable ticket management in the workspace room. Workspace rooms
+	// support both pipeline tickets (pip-* IDs for setup/teardown tracking)
+	// and general work tickets (tkt-* IDs for task/bug/feature tracking).
+	// Pipeline tickets get their type-specific "pip" prefix via
+	// PrefixForType; all other types use the room's configured prefix.
+	// AllowedTypes is left empty to allow all ticket types.
 	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeTicketConfig, "", ticket.TicketConfigContent{
-		Version:      ticket.TicketConfigVersion,
-		Prefix:       "pip",
-		AllowedTypes: []string{"pipeline"},
+		Version: ticket.TicketConfigVersion,
+		Prefix:  "tkt",
 	})
 	if err != nil {
 		return nil, cli.Internal("publishing ticket config: %w", err)

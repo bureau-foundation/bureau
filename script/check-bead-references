@@ -28,6 +28,7 @@ filtered=$(echo "$matches" \
     | grep -v "^\./.bv/" \
     | grep -v "^\./.notes/" \
     | grep -v "^\./lib/ticketui/beads" \
+    | grep -v "^\./lib/schema/ticket/beads" \
     | grep -v "CONTRIBUTING.md" \
     | grep -v "CLAUDE.md" \
     | grep -v "check-bead-references" \

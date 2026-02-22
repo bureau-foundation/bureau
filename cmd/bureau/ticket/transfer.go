@@ -124,11 +124,20 @@ Use --status to export only tickets in a particular state (e.g.
 
 // --- import ---
 
+// importEntry is the per-ticket structure for both the export JSONL
+// format and the service-side import request.
+type importEntry struct {
+	ID      string                     `json:"id"`
+	Content ticketschema.TicketContent `json:"content"`
+}
+
 type importParams struct {
 	TicketConnection
-	Room        string `json:"room" flag:"room,r" desc:"target room ID" required:"true"`
-	File        string `json:"-"    flag:"file,f" desc:"input JSONL file (- for stdin)" required:"true"`
-	ResetStatus bool   `json:"-"    flag:"reset-status" desc:"set all imported tickets to open status"`
+	Room        string `json:"room"   flag:"room,r"       desc:"target room ID" required:"true"`
+	File        string `json:"-"      flag:"file,f"       desc:"input JSONL file (- for stdin)" required:"true"`
+	Beads       bool   `json:"-"      flag:"beads"        desc:"parse input as beads JSONL format (renames IDs to tkt-*)"`
+	BeadsPrefix string `json:"-"      flag:"beads-prefix" desc:"source prefix to replace when using --beads (default: bd)"`
+	ResetStatus bool   `json:"-"      flag:"reset-status" desc:"set all imported tickets to open status"`
 }
 
 func importCommand() *cli.Command {
@@ -150,6 +159,13 @@ Importing into the same room as the source is an upsert — existing
 tickets with matching IDs are overwritten. Importing into a different
 room creates the tickets with the same IDs in the new room.
 
+Use --beads to import from a beads JSONL file (the format produced
+by beads_rust / br / bd). Beads entries are converted to Bureau
+ticket format, with IDs renamed from the beads prefix (default "bd")
+to "tkt". All internal references — blocked_by, parent, and textual
+references in titles, bodies, and notes — are also renamed. Each
+imported ticket records its beads origin for provenance tracking.
+
 All tickets are validated before any are written. If any ticket is
 invalid, none are imported.`,
 		Usage: "bureau ticket import --room ROOM --file FILE [flags]",
@@ -161,6 +177,14 @@ invalid, none are imported.`,
 			{
 				Description: "Import from stdin",
 				Command:     "bureau ticket import --room '!abc:bureau.local' --file -",
+			},
+			{
+				Description: "Import from a beads file",
+				Command:     "bureau ticket import --room '!abc:bureau.local' --file .beads/issues.jsonl --beads",
+			},
+			{
+				Description: "Import beads with custom prefix (non-default beads project)",
+				Command:     "bureau ticket import --room '!abc:bureau.local' --file .beads/issues.jsonl --beads --beads-prefix proj",
 			},
 			{
 				Description: "Import with status reset (all tickets become open)",
@@ -178,6 +202,9 @@ invalid, none are imported.`,
 			if params.File == "" {
 				return cli.Validation("--file is required")
 			}
+			if params.BeadsPrefix != "" && !params.Beads {
+				return cli.Validation("--beads-prefix requires --beads")
+			}
 
 			// Read and parse the JSONL input.
 			input := os.Stdin
@@ -190,49 +217,57 @@ invalid, none are imported.`,
 				input = file
 			}
 
-			type importEntry struct {
-				ID      string                     `json:"id"`
-				Content ticketschema.TicketContent `json:"content"`
-			}
-
-			var entries []importEntry
 			scanner := bufio.NewScanner(input)
 			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-			lineNumber := 0
 
-			for scanner.Scan() {
-				lineNumber++
-				line := scanner.Bytes()
-				if len(line) == 0 {
-					continue
-				}
-
-				var entry importEntry
-				if err := json.Unmarshal(line, &entry); err != nil {
-					return cli.Validation("line %d: invalid JSON: %w", lineNumber, err)
-				}
-				if entry.ID == "" {
-					return cli.Validation("line %d: missing required field: id", lineNumber)
-				}
-				if entry.Content.Title == "" {
-					return cli.Validation("line %d (%s): missing required field: content.title", lineNumber, entry.ID)
-				}
-
-				if params.ResetStatus {
-					entry.Content.Status = "open"
-					entry.Content.Assignee = ref.UserID{}
-					entry.Content.ClosedAt = ""
-					entry.Content.CloseReason = ""
-				}
-
-				entries = append(entries, entry)
+			var entries []importEntry
+			var parseErr error
+			if params.Beads {
+				entries, parseErr = parseBeadsInput(scanner)
+			} else {
+				entries, parseErr = parseExportInput(scanner)
 			}
-			if err := scanner.Err(); err != nil {
-				return cli.Internal("reading input: %w", err)
+			if parseErr != nil {
+				return parseErr
 			}
 
 			if len(entries) == 0 {
 				return cli.Validation("no tickets found in input")
+			}
+
+			// Apply beads ID renaming after parsing. Done as a
+			// separate pass so that all entries are available for
+			// validation before modification.
+			if params.Beads {
+				sourcePrefix := params.BeadsPrefix
+				if sourcePrefix == "" {
+					sourcePrefix = "bd"
+				}
+				const targetPrefix = "tkt"
+
+				for i := range entries {
+					originalID := entries[i].ID
+					entries[i].ID, entries[i].Content = ticketschema.RenameBeadsIDs(
+						entries[i].ID, entries[i].Content,
+						sourcePrefix, targetPrefix,
+					)
+					entries[i].Content.Origin = &ticketschema.TicketOrigin{
+						Source:      "beads",
+						ExternalRef: originalID,
+					}
+				}
+
+				fmt.Fprintf(os.Stderr, "converted %d beads entries (%s-* → %s-*)\n",
+					len(entries), sourcePrefix, targetPrefix)
+			}
+
+			if params.ResetStatus {
+				for i := range entries {
+					entries[i].Content.Status = "open"
+					entries[i].Content.Assignee = ref.UserID{}
+					entries[i].Content.ClosedAt = ""
+					entries[i].Content.CloseReason = ""
+				}
 			}
 
 			// Build the import request. The service-side type uses
@@ -266,4 +301,82 @@ invalid, none are imported.`,
 			return nil
 		},
 	}
+}
+
+// parseExportInput parses JSONL in the export format: each line is
+// {"id": "...", "content": {...}}.
+func parseExportInput(scanner *bufio.Scanner) ([]importEntry, error) {
+	var entries []importEntry
+	lineNumber := 0
+
+	for scanner.Scan() {
+		lineNumber++
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry importEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return nil, cli.Validation("line %d: invalid JSON: %w", lineNumber, err)
+		}
+		if entry.ID == "" {
+			return nil, cli.Validation("line %d: missing required field: id", lineNumber)
+		}
+		if entry.Content.Title == "" {
+			return nil, cli.Validation("line %d (%s): missing required field: content.title", lineNumber, entry.ID)
+		}
+
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, cli.Internal("reading input: %w", err)
+	}
+
+	return entries, nil
+}
+
+// parseBeadsInput parses JSONL in the beads format: each line is a
+// flat JSON object with fields like "id", "title", "status",
+// "issue_type", etc. Converts each entry to the import format using
+// the shared beads-to-ticket conversion.
+func parseBeadsInput(scanner *bufio.Scanner) ([]importEntry, error) {
+	var entries []importEntry
+	lineNumber := 0
+
+	for scanner.Scan() {
+		lineNumber++
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var beads ticketschema.BeadsEntry
+		if err := json.Unmarshal(line, &beads); err != nil {
+			return nil, cli.Validation("line %d: invalid JSON: %w", lineNumber, err)
+		}
+		if beads.ID == "" {
+			return nil, cli.Validation("line %d: missing required field: id", lineNumber)
+		}
+		if beads.Title == "" {
+			return nil, cli.Validation("line %d (%s): missing required field: title", lineNumber, beads.ID)
+		}
+		if beads.Status == "" {
+			return nil, cli.Validation("line %d (%s): missing required field: status", lineNumber, beads.ID)
+		}
+		if beads.IssueType == "" {
+			return nil, cli.Validation("line %d (%s): missing required field: issue_type", lineNumber, beads.ID)
+		}
+
+		content := ticketschema.BeadsToTicketContent(beads)
+		entries = append(entries, importEntry{
+			ID:      beads.ID,
+			Content: content,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, cli.Internal("reading input: %w", err)
+	}
+
+	return entries, nil
 }

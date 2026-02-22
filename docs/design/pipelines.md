@@ -378,95 +378,141 @@ hooks (e.g., `.bureau/pipeline/init`,
 `.bureau/pipeline/worktree-deinit`) via `when` guards and run them when
 present.
 
+## Pipeline Tickets
+
+Pipeline executions are tickets. The pipeline definition
+(`m.bureau.pipeline` state event) is a template. Each invocation is a
+ticket of type `"pipeline"` with a `pip-` prefixed ID. The ticket
+carries the pipeline ref and variable values in its type-specific
+content (see [tickets.md](tickets.md) for the type-specific content
+model). The ticket's lifecycle IS the execution lifecycle.
+
+This unification means pipelines inherit every ticket capability without
+additional mechanisms:
+
+- **Scheduling** — timer gates (cron, interval, one-shot delay)
+- **Dependencies** — `blocked_by` between pipeline tickets
+- **Approval gating** — human gates before execution starts
+- **Progress tracking** — step completion as ticket notes
+- **Assignment** — the executor claims the ticket atomically
+- **Cancellation** — external close of an in_progress ticket
+- **History** — Matrix timeline of the ticket state event
+- **Observability** — the same queries and CLI that work for any ticket
+
+See [tickets.md](tickets.md) "Pipeline Execution" for the full
+lifecycle, cancellation flow, recurring pipeline design, and storage
+evolution path.
+
 ## Execution Model
 
 ### The Executor Binary
 
 `bureau-pipeline-executor` runs inside a bwrap sandbox. It communicates
-with Matrix exclusively through its proxy Unix socket at
-`/run/bureau/proxy.sock` — it never constructs Matrix API URLs
-directly. On startup it:
+with Matrix through its proxy Unix socket at `/run/bureau/proxy.sock`
+and with the ticket service through `/run/bureau/service/ticket.sock`.
+On startup it:
 
 1. Verifies it is running inside a sandbox (`BUREAU_SANDBOX=1`).
-2. Connects to the proxy and calls `whoami` to establish the server name
-   (needed for alias construction in pipeline ref resolution).
-3. Resolves the pipeline definition (see "Pipeline Resolution").
-4. Validates the pipeline structure.
-5. Loads trigger variables from `/run/bureau/trigger.json`.
-6. Loads payload variables from `/run/bureau/payload.json`.
-7. Resolves variables (merging declarations, trigger, payload,
-   environment).
+2. Reads the pipeline ticket content from `/run/bureau/trigger.json`
+   (delivered by the daemon's StartCondition trigger mechanism).
+3. Claims the ticket by transitioning it to `in_progress` via the
+   ticket service socket. If the claim fails (another executor got
+   there first), exits cleanly.
+4. Connects to the proxy and calls `whoami` to establish the server
+   name (needed for alias construction in pipeline ref resolution).
+5. Resolves the pipeline definition from the ticket's `pipeline_ref`
+   (see "Pipeline Resolution").
+6. Validates the pipeline structure.
+7. Resolves variables (merging pipeline declarations, trigger event
+   fields, ticket variables, environment).
 8. Creates the thread logger (if `log` is configured).
-9. Opens the JSONL result log (if `BUREAU_RESULT_PATH` is set).
-10. Executes steps sequentially.
-11. Publishes a `m.bureau.pipeline_result` state event to the log room.
+9. Executes steps sequentially, posting each step's outcome as a
+   note on the ticket and updating the `current_step` /
+   `current_step_name` fields.
+10. Sets the `conclusion` field on the ticket's pipeline content and
+    closes the ticket with a summary close reason.
+11. Publishes an `m.bureau.pipeline_result` state event (keyed by the
+    ticket ID) with detailed step-level results.
+
+The executor concurrently watches its ticket via /sync. If the ticket
+is closed externally during execution, the executor treats this as a
+cancellation: kills the current step's process group, sets
+`conclusion: "cancelled"`, publishes the result event, and exits.
 
 ### Daemon Integration
 
-The daemon is the orchestrator. When it receives a `pipeline.execute`
-command (via Matrix), it:
+The daemon triggers pipeline execution through the standard
+StartCondition mechanism. A pipeline executor template has a
+StartCondition matching ready pipeline tickets:
 
-1. Generates an ephemeral principal localpart
-   (`pipeline/<sanitized-name>/<timestamp>`).
-2. Creates a temporary file on the host for the JSONL result log.
-3. Builds a sandbox spec with the executor binary as entrypoint, the
-   result file bind-mounted read-write, the workspace root
-   bind-mounted read-write, and the Nix environment for toolchain
-   access.
-4. Sends `create-sandbox` to the launcher via IPC, passing the daemon's
-   own Matrix token as `DirectCredentials` for the proxy.
-5. Waits for the sandbox to exit. For non-zero exits, the launcher
-   returns captured terminal output from the executor's tmux pane.
-6. Reads the JSONL result file for structured step-level outcomes.
-7. Posts the result as a threaded Matrix reply to the original command.
-   When the executor crashes (non-zero exit without a result file),
-   the reply includes the captured terminal output so the operator
-   can diagnose the failure.
-8. Destroys the ephemeral sandbox.
+```json
+{
+  "start_condition": {
+    "event_type": "m.bureau.ticket",
+    "content_match": {
+      "type": "pipeline",
+      "status": "open"
+    }
+  }
+}
+```
+
+When the ticket service makes a pipeline ticket ready (gates satisfied,
+no blockers), the state event update flows through /sync. The daemon
+matches it against the executor template's StartCondition and starts a
+sandbox with:
+
+- The executor binary as entrypoint.
+- The ticket content as `trigger.json`.
+- The workspace root bind-mounted read-write.
+- The proxy socket and ticket service socket mounted.
+- The Nix environment for toolchain access.
 
 The executor sandbox is fully isolated: PID namespace, new session,
-die-with-parent, no-new-privs. The only communication channels are the
-proxy socket (for Matrix operations) and the bind-mounted result file
-(for daemon integration).
+die-with-parent, no-new-privs. Communication channels are the proxy
+socket (Matrix operations), the ticket service socket (ticket lifecycle
+updates), and the bind-mounted result file (crash-safe backup).
+
+Room and label scoping on the StartCondition controls which pipeline
+tickets a given executor template handles. A workspace-specific executor
+might match only pipeline tickets in workspace rooms. A CI executor
+might match only tickets with label `"ci"`.
 
 ### Result Reporting
 
-Pipeline execution produces results through two parallel channels:
+Pipeline execution produces results through three channels:
 
-**JSONL result log** (`BUREAU_RESULT_PATH`) — a line-per-event file that
-the daemon reads after the executor exits. Each line is an independent
-JSON object, making the log crash-safe (a `SIGKILL` mid-pipeline
-preserves all completed step results) and streamable (the daemon can
-tail the file for real-time progress). Entry types:
+**Ticket updates** — the primary channel. Step completions are posted
+as ticket notes. The `current_step`, `current_step_name`, and
+`conclusion` fields on the pipeline-specific content track progress
+and outcome. Consumers reading the ticket get real-time visibility
+into execution state.
 
-- `start` — pipeline name, step count, timestamp.
-- `step` — step index, name, status, duration, error.
-- `complete` — success, total duration, log thread event ID.
-- `failed` — error message, failed step name, total duration.
-- `aborted` — reason, aborted step name, total duration.
+**`m.bureau.pipeline_result` state event** — the machine-readable
+companion. Published by the executor when execution finishes. Contains
+per-step timing, outputs, error details, and log thread link. The
+ticket service evaluates pipeline gates against these events:
+`TicketGate.PipelineRef` matches `pipeline_ref`,
+`TicketGate.Conclusion` matches `conclusion`. The result event includes
+a `ticket_id` field linking back to the `pip-` ticket.
 
-**`m.bureau.pipeline_result` state event** — published by the executor
-to the pipeline's log room when execution finishes. This is the
-Matrix-native public record that other services consume. The ticket
-service watches these events to evaluate pipeline gates — a
-`TicketGate` with type `"pipeline"` matches the `pipeline_ref` and
-`conclusion` fields. Gate evaluation happens via `/sync`: when the
-ticket service sees a pipeline result state event change, it re-checks
-all pending pipeline gates in that room.
+Result event fields:
 
-The state event includes:
-
+- `ticket_id` — the `pip-` ticket ID for this execution.
 - `pipeline_ref` — which pipeline was executed.
-- `conclusion` — `"success"`, `"failure"`, or `"aborted"`.
+- `conclusion` — `"success"`, `"failure"`, `"aborted"`, or
+  `"cancelled"`.
 - `started_at`, `completed_at`, `duration_ms` — timing.
 - `step_count` — total steps in the pipeline.
-- `step_results` — per-step name, status, duration, error.
+- `step_results` — per-step name, status, duration, error, outputs.
 - `failed_step`, `error_message` — failure details (when applicable).
 - `log_event_id` — link to the thread logger's root message.
 
-State event publication is best-effort: if the log room is not
-configured or the `putState` call fails, a warning is printed but the
-executor's own exit status is not affected.
+**JSONL result log** (`BUREAU_RESULT_PATH`) — a crash-safe local
+backup. Each line is an independent JSON object, preserving completed
+step results even on `SIGKILL`. The daemon reads this as a fallback
+when the executor crashes before updating the ticket or publishing the
+result event.
 
 ### Thread Logging
 
@@ -484,10 +530,10 @@ Pipeline dev-workspace-init started (4 steps)
 └─ Pipeline dev-workspace-init: complete (12.6s)
 ```
 
-Thread logging provides human-readable observability in the same Matrix
-room where the resource's state events live. An operator reviewing a
-workspace room sees both the state transitions (status: creating →
-active) and the detailed execution log that produced them.
+Thread logging and ticket notes are complementary: the thread provides
+a Matrix-native conversation context (operators can reply to ask
+questions about specific steps), while ticket notes provide structured
+progress that the ticket service indexes for queries.
 
 ## Relationship to Other Design Documents
 
@@ -501,8 +547,10 @@ active) and the detailed execution log that produced them.
   event types.
 - [workspace.md](workspace.md) is the primary consumer: workspace and
   worktree lifecycle is implemented as system pipelines.
-- [tickets.md](tickets.md) defines pipeline gates — the mechanism by
-  which the ticket service watches `m.bureau.pipeline_result` events to
-  coordinate work items.
+- [tickets.md](tickets.md) defines the ticket system that pipeline
+  executions are built on. Pipeline gates evaluate
+  `m.bureau.pipeline_result` events. Pipeline tickets are type
+  `"pipeline"` tickets with `pip-` prefixed IDs. See "Pipeline
+  Execution" in tickets.md for the full unified lifecycle.
 - [observation.md](observation.md) describes the live terminal access
   that operators use to watch and interact with running pipeline steps.

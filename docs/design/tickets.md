@@ -62,7 +62,9 @@ A ticket carries:
   dependencies.
 - **Priority** — 0 (critical) through 4 (backlog).
 - **Type** — `task`, `bug`, `feature`, `epic`, `chore`, `docs`,
-  `question`.
+  `question`, `pipeline`. Types with dedicated semantics carry
+  type-specific content (see
+  [Type-Specific Content](#type-specific-content)).
 - **Labels** — free-form tags for filtering and grouping.
 - **Assignee** — single Matrix user ID. Bureau agents are principals
   with unique identities; one agent works one ticket. Multiple people
@@ -92,11 +94,11 @@ A ticket carries:
 
 ### Ticket IDs
 
-IDs use the prefix `tkt-` followed by a short hash derived from room
-ID, creation timestamp, and title. The prefix is unambiguous: agents
-won't confuse `tkt-a3f9` with a commit hash or a GitHub issue number.
-The prefix is configurable per room via the room's ticket config state
-event.
+IDs use a type-derived prefix followed by a short hash derived from
+room ID, creation timestamp, and title. The prefix provides visual
+disambiguation — agents and operators identify a ticket's nature from
+its ID alone. See [Ticket ID Prefixes](#ticket-id-prefixes) for the
+type-to-prefix mapping.
 
 ### Dependencies and Parent Hierarchy
 
@@ -422,13 +424,76 @@ attachment content on demand via the artifact service socket.
 All blob data flows through the artifact service — Matrix is never
 used as a blob store. See [artifacts.md](artifacts.md).
 
+### Type-Specific Content
+
+Some ticket types carry structured data beyond the universal lifecycle
+fields. This uses a tagged-pointer pattern on `TicketContent`: optional
+pointer fields whose interpretation is determined by the `Type` field.
+At most one type-specific field is non-nil, and `Validate()` enforces
+consistency between the `Type` value and which field is populated.
+
+This pattern works identically in JSON (Matrix state events) and CBOR
+(service socket protocol) — both encoders omit nil pointers with
+`omitempty` and ignore absent fields during decode. The `CanModify`
+version guard protects against field loss when new type-specific
+variants are added: old code that encounters a ticket with an unknown
+type-specific field harmlessly ignores it on read, and refuses to
+modify it.
+
+**Pipeline execution content** (type `"pipeline"`):
+
+- **`pipeline_ref`** — identifies the pipeline definition to execute
+  (e.g., `"bureau/pipeline:dev-workspace-init"`). Resolved by the
+  executor against a pipeline room.
+- **`variables`** — concrete variable values for this execution.
+  Override the pipeline definition's defaults.
+- **`current_step`** — 1-indexed step currently executing. Zero before
+  execution starts. Updated by the executor alongside step notes.
+- **`total_steps`** — total steps in the pipeline definition. Set when
+  the executor resolves the pipeline.
+- **`current_step_name`** — human-readable name of the current step.
+- **`conclusion`** — terminal outcome: `"success"`, `"failure"`,
+  `"aborted"`, or `"cancelled"`. Set when the executor closes the
+  ticket. Mirrors the same field on `m.bureau.pipeline_result` for
+  consumers that read the ticket directly.
+
+Type-specific content for future ticket types (agent context, etc.)
+follows the same pattern: a dedicated struct behind an optional pointer
+field on `TicketContent`.
+
+### Ticket ID Prefixes
+
+Ticket IDs use a prefix derived from the ticket type, followed by a
+short hash. The prefix mapping is a system-level convention:
+
+- `pipeline` → `pip-`
+- `context` → `ctx-`
+- All other types → the room's configured prefix (default `tkt-`)
+
+The prefix provides visual disambiguation: agents and operators can
+identify a ticket's nature from its ID alone (`pip-a3f2` is a pipeline
+execution, `tkt-b7c3` is a work item).
+
 ### Room Configuration
 
 Rooms opt into ticket management via a configuration state event:
 
 - **Event type:** `m.bureau.ticket_config`
 - **State key:** `""` (singleton per room)
-- **Content:** ID prefix (default `tkt`), default labels
+- **Content:** default prefix, allowed types, default labels
+
+Configuration fields:
+
+- **`prefix`** — default ID prefix for generic ticket types (default
+  `tkt`). Types with dedicated prefixes (`pipeline` → `pip`,
+  `context` → `ctx`) use their own prefix regardless of this field.
+- **`allowed_types`** — which ticket types can be created in this
+  room. When empty, all types are allowed. When set, only listed
+  types are accepted. A workspace room might allow
+  `["task", "bug", "pipeline"]`. A dedicated pipeline execution room
+  might allow only `["pipeline"]`.
+- **`default_labels`** — labels applied to new tickets that don't
+  explicitly specify labels.
 
 The ticket service checks for this event to determine whether a room
 has ticket management enabled. No event means no tickets in that room.
@@ -808,6 +873,126 @@ configured across principal templates.
 
 ---
 
+## Pipeline Execution
+
+Pipeline executions are tickets. A pipeline definition
+(`m.bureau.pipeline` state event in a pipeline room) is a template.
+Each invocation of that pipeline is a ticket of type `"pipeline"` with
+a `pip-` prefixed ID, carrying the pipeline ref and variables in its
+type-specific content. The ticket's lifecycle IS the execution's
+lifecycle.
+
+### Execution Flow
+
+1. Something creates a `pip-` ticket: a human via the CLI, an agent,
+   another pipeline's publish step, or the ticket service's auto-rearm
+   on a recurring schedule. The ticket has `type: "pipeline"`, status
+   `open`, and pipeline-specific content (ref, variables).
+
+2. The ticket service validates and indexes the ticket. Gate evaluation
+   runs. When all gates are satisfied and no blockers remain, the
+   ticket is ready.
+
+3. The ticket state event update flows through /sync. A pipeline
+   executor template on the target machine has a StartCondition
+   matching ready pipeline tickets (type, status, room).
+
+4. The daemon fires the trigger, starts a sandbox with the executor
+   binary, and passes the ticket content as `trigger.json`.
+
+5. The executor reads the ticket content, transitions it to
+   `in_progress` (atomic claim with contention detection — if another
+   executor on another machine got there first, the transition fails
+   and this executor exits).
+
+6. The executor resolves the pipeline definition, runs steps
+   sequentially, and posts each step's outcome as a note on the
+   ticket. The `current_step` and `current_step_name` fields in the
+   type-specific content are updated alongside each note.
+
+7. On success: the executor sets `conclusion: "success"` in the
+   pipeline content and closes the ticket. On failure: sets
+   `conclusion: "failure"` and closes. On abort (precondition
+   mismatch): sets `conclusion: "aborted"` and closes.
+
+8. The executor publishes an `m.bureau.pipeline_result` state event
+   (keyed by the ticket ID) with the detailed step-level results.
+   This companion event is the machine-readable record that pipeline
+   gates evaluate against.
+
+No new components are required. The ticket service manages ticket
+lifecycle (which it already does). The daemon's StartCondition
+mechanism triggers execution (which it already does). Pipeline
+execution emerges from their composition.
+
+### Cancellation
+
+Closing a pipeline ticket externally is a cancellation signal:
+
+- **Pre-execution**: the `pip-` ticket is still `open`. Closing it
+  prevents execution — no executor will claim a closed ticket.
+
+- **In-progress**: the executor watches its ticket via /sync. When it
+  sees the ticket closed externally, it kills the current step's
+  process group, sets `conclusion: "cancelled"` (distinct from
+  `"aborted"`, which means a precondition mismatch), publishes the
+  result event, and exits. The close reason on the ticket carries
+  context ("superseded by pip-b7c3", "operator requested stop").
+
+### Recurring Pipelines
+
+Scheduled pipeline execution uses timer gates on pipeline tickets.
+A pipeline ticket with a recurring timer gate cycles through
+executions:
+
+1. Timer gate fires → ticket is ready.
+2. Executor claims it → `in_progress`.
+3. Executor completes → closes with result.
+4. Auto-rearm on close → ticket reopens with a new timer target.
+
+Each cycle is an execution. The Matrix timeline preserves every version
+of the ticket state event, providing a complete history of every run.
+The contention detection on `open → in_progress` prevents
+double-execution if the timer fires while a previous run is still
+going.
+
+For use cases that require per-run identity (parallel executions,
+per-run dependency chains, explicit audit), a scheduler principal
+creates child instance tickets. The schedule ticket is the parent;
+each instance ticket has `parent: <schedule-ticket-id>`. The
+`bureau ticket children` query lists all runs of a schedule.
+
+### Relationship to Pipeline Results
+
+The `m.bureau.pipeline_result` state event continues to exist as a
+companion to the pipeline ticket. The ticket is the lifecycle
+container: scheduling, assignment, dependencies, human-readable
+progress. The result event is the machine-readable output: per-step
+timing, outputs, error details, log thread link.
+
+The result event gains a `ticket_id` field referencing the `pip-`
+ticket. This creates a bidirectional link:
+
+- Ticket → result: the pipeline ref and ticket ID locate the result.
+- Result → ticket: the `ticket_id` field links back.
+
+Pipeline gates can match on result events (unchanged) or use ticket
+gates ("wait for this pipeline ticket to close"). Both mechanisms
+compose with the existing gate evaluation model.
+
+### Storage Evolution
+
+The ticket service is the mandatory read/write path for all ticket
+operations. Consumers interact with tickets exclusively through the
+service's socket API. This positions the system for a future storage
+migration: the ticket service can move ticket storage out of Matrix
+state events (into a local database, a dedicated store, or a
+content-addressed system) while keeping room-level references for
+authorization and discovery. Because all consumers already go through
+the service, this migration is transparent to agents and the CLI.
+
+---
+
 ## Fleet Deployment
 
 The ticket service is a principal. It gets a `PrincipalAssignment` in
@@ -863,9 +1048,11 @@ bureau ticket export --jsonl tickets.jsonl --room ROOM
   principal, discoverable via `#bureau/service`, reachable via Unix
   socket. Service resolution flows through `m.bureau.room_service`
   state events and the daemon's sandbox creation path.
-- [pipelines.md](pipelines.md) — pipeline `publish` steps can create
+- [pipelines.md](pipelines.md) — pipeline definitions are templates;
+  pipeline executions are tickets. Pipeline `publish` steps can create
   or update tickets. Pipeline gates watch for
-  `m.bureau.pipeline_result` events.
+  `m.bureau.pipeline_result` events. See
+  [Pipeline Execution](#pipeline-execution) for the unified model.
 - [artifacts.md](artifacts.md) — ticket attachments reference content
   stored in the artifact service. Large blobs live there, not in the
   ticket state event.

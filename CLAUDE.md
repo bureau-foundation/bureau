@@ -73,6 +73,7 @@ cmd/           Binary entry points:
   bureau-observe-relay/  Observation relay (PTY allocation, tmux attach, ring buffer)
   bureau-proxy-call/     One-shot HTTP request through a proxy socket
   bureau-pipeline-executor/  Pipeline executor for sandboxed step sequencing
+  bureau-telemetry-relay/  Per-machine telemetry collection and forwarding
   bureau-test-agent/     Minimal test agent for integration tests
 integration/   End-to-end integration tests (real homeserver, full daemon+launcher stack)
 deploy/        Deployment configurations (matrix/, buildbarn/, systemd/, test/)

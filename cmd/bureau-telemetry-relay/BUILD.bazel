@@ -1,0 +1,48 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-telemetry-relay_lib",
+    srcs = [
+        "accumulator.go",
+        "buffer.go",
+        "doc.go",
+        "main.go",
+        "shipper.go",
+        "socket.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-telemetry-relay",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/clock",
+        "//lib/codec",
+        "//lib/ref",
+        "//lib/schema/telemetry",
+        "//lib/service",
+        "//lib/servicetoken",
+        "//lib/version",
+    ],
+)
+
+go_test(
+    name = "bureau-telemetry-relay_test",
+    srcs = [
+        "accumulator_test.go",
+        "buffer_test.go",
+        "shipper_test.go",
+    ],
+    embed = [":bureau-telemetry-relay_lib"],
+    deps = [
+        "//lib/clock",
+        "//lib/ref",
+        "//lib/schema/telemetry",
+    ],
+)
+
+go_binary(
+    name = "bureau-telemetry-relay",
+    embed = [":bureau-telemetry-relay_lib"],
+    visibility = ["//visibility:public"],
+)

@@ -80,13 +80,13 @@ Machine (ephemeral)                         Fleet-wide (persistent)
 ┌──────────────────────────────┐           ┌───────────────────────────────┐
 │                              │           │                               │
 │  agents  ──OTLP/HTTP──►┐     │           │  bureau-telemetry-service     │
-│  daemon  ──OTLP/HTTP──►│     │           │  ├─ CBOR ingestion (TCP)      │
-│  proxy   ──OTLP/HTTP──►│     │           │  ├─ SQLite store              │
-│  services──OTLP/HTTP──►│     │           │  ├─ CBOR query socket         │
-│              OR        │     │    TCP    │  ├─ HTTP /metrics (Prometheus)│
-│  Go svcs ──CBOR───────►│     │──────────►│  └─ retention/rotation        │
-│                        │     │   CBOR    │                               │
-│     bureau-telemetry-relay   │  batches  │  fleet controller             │
+│  daemon  ──OTLP/HTTP──►│     │  service  │  ├─ ingest action (CBOR)      │
+│  proxy   ──OTLP/HTTP──►│     │  socket   │  ├─ SQLite store              │
+│  services──OTLP/HTTP──►│     │──────────►│  ├─ CBOR query socket         │
+│              OR        │     │  (daemon  │  ├─ HTTP /metrics (Prometheus)│
+│  Go svcs ──CBOR───────►│     │  routes   │  └─ retention/rotation        │
+│                        │     │  cross-   │                               │
+│     bureau-telemetry-relay   │  machine) │  fleet controller             │
 │      ├─ OTLP/HTTP listener   │           │  ├─ queries telemetry svc     │
 │      ├─ CBOR listener        │           │  │  for placement decisions   │
 │      └─ in-memory buffer     │           │  └─ (no telemetry storage)    │
@@ -106,8 +106,10 @@ ingestion paths:
   protobuf encode/decode round trip.
 
 Both paths feed into a single outbound queue. The relay batches CBOR
-messages and ships them to the telemetry service over the transport
-layer (TCP). When the telemetry service is temporarily unreachable, the
+messages and ships them to the telemetry service via the standard CBOR
+service socket protocol (the daemon handles cross-machine routing
+through the transport layer). When the telemetry service is temporarily
+unreachable, the
 relay buffers in memory with a bounded ring buffer (configurable max
 size, default 64 MB). Old data drops when the buffer fills.
 
@@ -127,9 +129,9 @@ per-machine relays, stores in SQLite, serves queries.
 
 Responsibilities:
 
-- **Ingestion**: Accepts CBOR batches over a TCP listener. Verifies
-  service tokens (same auth as every other Bureau service). Writes to
-  SQLite.
+- **Ingestion**: Accepts CBOR batches via its service socket (`ingest`
+  action). Verifies service tokens (same auth as every other Bureau
+  service). Writes to SQLite.
 - **Storage**: Time-partitioned SQLite tables (one set per day). WAL
   mode for concurrent reads during writes. Configurable retention per
   signal type.
@@ -607,10 +609,11 @@ controller on persistent infrastructure (machines labeled
 a failover mode so the fleet controller re-places it if the hosting
 machine goes offline.
 
-The telemetry service listens on a dedicated TCP port for relay
-connections (separate from its local CBOR query socket). Relays discover
-the telemetry service's transport address from the fleet service
-directory and establish TCP connections for batch shipping.
+The telemetry service uses the standard CBOR service socket for all
+communication, including batch ingestion from relays. Cross-machine
+relay→service calls are routed by the daemon through the transport
+layer, the same as any other Bureau service-to-service communication.
+Relays discover the telemetry service from the fleet service directory.
 
 ---
 

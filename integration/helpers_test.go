@@ -16,6 +16,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,6 +75,25 @@ var (
 	// composeProjectName is unique per process so that concurrent test
 	// runs (e.g., --runs_per_test=N) don't collide on Docker resources.
 	composeProjectName = fmt.Sprintf("bureau-test-%d", os.Getpid())
+)
+
+// Global room IDs resolved once in TestMain from the credential file.
+// Per-test admin users are invited to these rooms during adminSession(t).
+var (
+	globalSpaceRoomID    ref.RoomID
+	globalSystemRoomID   ref.RoomID
+	globalTemplateRoomID ref.RoomID
+	globalPipelineRoomID ref.RoomID
+	globalArtifactRoomID ref.RoomID
+)
+
+// Shared admin session infrastructure. The original @bureau-admin user
+// is kept as a process-lifetime session for bootstrapping per-test admin
+// users (inviting them to global rooms and granting PL 100).
+var (
+	sharedAdmin    *messaging.DirectSession
+	sharedAdminMu  sync.Mutex // protects lazy init of sharedAdmin
+	globalRoomPLMu sync.Mutex // serializes power level read-modify-write on global rooms
 )
 
 var (
@@ -164,6 +185,12 @@ func TestMain(m *testing.M) {
 
 	if err := runBureauSetup(); err != nil {
 		fmt.Fprintf(os.Stderr, "bureau matrix setup failed: %v\n", err)
+		_ = dockerCompose("down", "-v")
+		os.Exit(1)
+	}
+
+	if err := cacheGlobalRoomIDs(); err != nil {
+		fmt.Fprintf(os.Stderr, "cache global room IDs: %v\n", err)
 		_ = dockerCompose("down", "-v")
 		os.Exit(1)
 	}
@@ -394,6 +421,57 @@ func waitForHealthy(timeout time.Duration) error {
 	}
 }
 
+// cacheGlobalRoomIDs reads the credential file written by runBureauSetup
+// and parses global room IDs into package-level vars. Called from TestMain
+// (no *testing.T available) so it returns an error instead of fataling.
+func cacheGlobalRoomIDs() error {
+	file, err := os.Open(credentialFile)
+	if err != nil {
+		return fmt.Errorf("open credential file: %w", err)
+	}
+	defer file.Close()
+
+	credentials := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			credentials[key] = value
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read credential file: %w", err)
+	}
+
+	type roomEntry struct {
+		key    string
+		target *ref.RoomID
+	}
+	entries := []roomEntry{
+		{"MATRIX_SPACE_ROOM", &globalSpaceRoomID},
+		{"MATRIX_SYSTEM_ROOM", &globalSystemRoomID},
+		{"MATRIX_TEMPLATE_ROOM", &globalTemplateRoomID},
+		{"MATRIX_PIPELINE_ROOM", &globalPipelineRoomID},
+		{"MATRIX_ARTIFACT_ROOM", &globalArtifactRoomID},
+	}
+	for _, entry := range entries {
+		raw := credentials[entry.key]
+		if raw == "" {
+			return fmt.Errorf("credential file missing %s", entry.key)
+		}
+		roomID, err := ref.ParseRoomID(raw)
+		if err != nil {
+			return fmt.Errorf("parse %s=%q: %w", entry.key, raw, err)
+		}
+		*entry.target = roomID
+	}
+	return nil
+}
+
 // runBureauSetup runs "bureau matrix setup" against the test homeserver.
 // The registration token is piped via stdin.
 func runBureauSetup() error {
@@ -430,10 +508,109 @@ func runBureauOrFail(t *testing.T, args ...string) string {
 	return output
 }
 
-// adminSession creates an authenticated Matrix session using the credentials
-// written by setup. The caller must close the returned session.
+// adminSession creates a per-test admin user with a unique Matrix account,
+// invites it to all global rooms with PL 100, and returns an authenticated
+// session. Each test gets its own admin user so /sync connections are
+// scoped to that test's rooms, preventing cross-test event pollution and
+// homeserver contention under parallel stress.
+//
+// The caller must close the returned session (or rely on t.Cleanup).
 func adminSession(t *testing.T) *messaging.DirectSession {
 	t.Helper()
+	ctx := t.Context()
+
+	// Register a unique admin account for this test.
+	localpart := uniqueAdminLocalpart(t)
+	account := registerPrincipal(t, localpart, "test-admin-pw")
+	session := principalSession(t, account)
+
+	// Use the shared @bureau-admin to invite the per-test admin to
+	// global rooms and grant PL 100 for invites and state events.
+	shared := getSharedAdminSession(t)
+
+	globalRooms := []ref.RoomID{
+		globalSpaceRoomID,
+		globalSystemRoomID,
+		globalTemplateRoomID,
+		globalPipelineRoomID,
+		globalArtifactRoomID,
+	}
+
+	for _, roomID := range globalRooms {
+		if err := shared.InviteUser(ctx, roomID, account.UserID); err != nil {
+			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				t.Fatalf("invite per-test admin to %s: %v", roomID, err)
+			}
+			// M_FORBIDDEN means already invited — fine.
+		}
+		if _, err := session.JoinRoom(ctx, roomID); err != nil {
+			t.Fatalf("per-test admin join %s: %v", roomID, err)
+		}
+	}
+
+	// Grant PL 100 in all global rooms. The lock serializes the
+	// read-modify-write of m.room.power_levels state events so
+	// concurrent tests don't overwrite each other's PL grants.
+	globalRoomPLMu.Lock()
+	defer globalRoomPLMu.Unlock()
+	for _, roomID := range globalRooms {
+		grantPowerLevel(t, shared, roomID, account.UserID, 100)
+	}
+
+	t.Cleanup(func() { session.Close() })
+	return session
+}
+
+// uniqueAdminLocalpart generates a Matrix localpart unique to this test.
+// Format: admin-<sanitized-test-name>-<4-random-hex-bytes>.
+// The random suffix prevents collisions if two runs of the same test
+// share a homeserver (future-proofing beyond the current per-process
+// Docker Compose isolation).
+func uniqueAdminLocalpart(t *testing.T) string {
+	t.Helper()
+
+	// Sanitize: lowercase, replace disallowed characters with '-'.
+	// Matrix localparts allow [a-z0-9._=/-].
+	name := strings.ToLower(t.Name())
+	var sanitized strings.Builder
+	for _, character := range name {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '/' {
+			sanitized.WriteRune(character)
+		} else {
+			sanitized.WriteByte('-')
+		}
+	}
+
+	// Truncate to keep localpart within reasonable length.
+	truncated := sanitized.String()
+	if len(truncated) > 40 {
+		truncated = truncated[:40]
+	}
+
+	// Append random suffix for uniqueness.
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		t.Fatalf("generate random suffix: %v", err)
+	}
+
+	return "admin-" + truncated + "-" + hex.EncodeToString(randomBytes)
+}
+
+// getSharedAdminSession returns the process-lifetime @bureau-admin session.
+// Lazily initialized on first call. The session is never closed — it lives
+// for the entire test process. Used only for bootstrapping per-test admins
+// (invites and PL grants), never for /sync long-polling.
+func getSharedAdminSession(t *testing.T) *messaging.DirectSession {
+	t.Helper()
+
+	sharedAdminMu.Lock()
+	defer sharedAdminMu.Unlock()
+
+	if sharedAdmin != nil {
+		return sharedAdmin
+	}
 
 	credentials := loadCredentials(t)
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
@@ -464,7 +641,38 @@ func adminSession(t *testing.T) *messaging.DirectSession {
 	if err != nil {
 		t.Fatalf("session from token: %v", err)
 	}
-	return session
+
+	sharedAdmin = session
+	return sharedAdmin
+}
+
+// grantPowerLevel reads the current m.room.power_levels state event in
+// the given room, adds or updates the specified user's power level, and
+// writes the updated event back. Caller must hold globalRoomPLMu.
+func grantPowerLevel(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, userID ref.UserID, level int) {
+	t.Helper()
+	ctx := t.Context()
+
+	powerLevelJSON, err := admin.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
+	if err != nil {
+		t.Fatalf("get power levels for %s: %v", roomID, err)
+	}
+
+	var powerLevels map[string]any
+	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
+		t.Fatalf("unmarshal power levels for %s: %v", roomID, err)
+	}
+
+	users, ok := powerLevels["users"].(map[string]any)
+	if !ok {
+		users = make(map[string]any)
+		powerLevels["users"] = users
+	}
+	users[userID.String()] = level
+
+	if _, err := admin.SendStateEvent(ctx, roomID, "m.room.power_levels", "", powerLevels); err != nil {
+		t.Fatalf("set power level %d for %s in %s: %v", level, userID, roomID, err)
+	}
 }
 
 // adminClient creates a Matrix client using the homeserver URL from the
@@ -696,16 +904,13 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 
 // --- Namespace Room Helpers ---
 
-// resolvePipelineRoom resolves the namespace-scoped pipeline room alias
-// and returns its room ID. Fails the test if the room doesn't exist
-// (it's created during TestMain's bureau matrix setup).
-func resolvePipelineRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
+// resolvePipelineRoom returns the cached pipeline room ID. The room is
+// created during TestMain's bureau matrix setup and its ID is cached in
+// cacheGlobalRoomIDs. The per-test admin is already a member (joined
+// during adminSession).
+func resolvePipelineRoom(t *testing.T, _ *messaging.DirectSession) ref.RoomID {
 	t.Helper()
-	roomID, err := admin.ResolveAlias(t.Context(), testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
-	return roomID
+	return globalPipelineRoomID
 }
 
 // publishPipelineDefinition resolves the pipeline room and publishes a

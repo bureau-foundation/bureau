@@ -98,6 +98,7 @@ type machineOptions struct {
 	HABaseDelay            string     // optional: daemon --ha-base-delay (default "0s" for tests)
 	PipelineExecutorBinary string     // optional: daemon --pipeline-executor-binary
 	PipelineEnvironment    string     // optional: daemon --pipeline-environment (Nix store path)
+	AdminLocalpart         string     // optional: daemon --admin-user (default: derived from admin session)
 }
 
 // principalAccount holds the registration details for a principal Matrix
@@ -266,6 +267,10 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 	if haBaseDelay == "" {
 		haBaseDelay = "0s"
 	}
+	adminLocalpart := options.AdminLocalpart
+	if adminLocalpart == "" {
+		adminLocalpart = "bureau-admin"
+	}
 	daemonArgs := []string{
 		"--homeserver", testHomeserverURL,
 		"--machine-name", machine.Name,
@@ -274,7 +279,7 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 		"--run-dir", machine.RunDir,
 		"--state-dir", machine.StateDir,
 		"--workspace-root", machine.WorkspaceRoot,
-		"--admin-user", "bureau-admin",
+		"--admin-user", adminLocalpart,
 		"--status-interval", statusInterval,
 		"--ha-base-delay", haBaseDelay,
 	}
@@ -299,6 +304,9 @@ func startMachineDaemon(t *testing.T, admin *messaging.DirectSession, machine *t
 	if options.DaemonBinary == "" {
 		t.Fatal("machineOptions.DaemonBinary is required")
 	}
+	if options.AdminLocalpart == "" {
+		options.AdminLocalpart = admin.UserID().Localpart()
+	}
 
 	daemonArgs := buildDaemonArgs(machine, options)
 
@@ -322,6 +330,9 @@ func startMachineDaemonManual(t *testing.T, admin *messaging.DirectSession, mach
 
 	if options.DaemonBinary == "" {
 		t.Fatal("machineOptions.DaemonBinary is required")
+	}
+	if options.AdminLocalpart == "" {
+		options.AdminLocalpart = admin.UserID().Localpart()
 	}
 
 	daemonArgs := buildDaemonArgs(machine, options)

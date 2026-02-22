@@ -180,7 +180,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--server-name", testServerName,
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
-			"--admin-user", "bureau-admin",
+			"--admin-user", admin.UserID().Localpart(),
 			"--status-interval", "2s",
 			"--fleet", fleet.Prefix,
 		)
@@ -250,7 +250,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--server-name", testServerName,
 			"--run-dir", runDir,
 			"--state-dir", stateDir,
-			"--admin-user", "bureau-admin",
+			"--admin-user", admin.UserID().Localpart(),
 			"--status-interval", "2s",
 			"--fleet", fleet.Prefix,
 		)

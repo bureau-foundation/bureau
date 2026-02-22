@@ -75,7 +75,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// --- Create workspace room ---
 	workspaceAlias := "testproj"
-	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
+	adminUserID := admin.UserID()
 
 	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
 	if err != nil {

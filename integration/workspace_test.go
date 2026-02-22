@@ -65,7 +65,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// --- Create the workspace room ---
 	workspaceAlias := "wst/lifecycle"
 	workspaceRoomAlias := ref.MustParseRoomAlias("#wst/lifecycle:" + testServerName)
-	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
+	adminUserID := admin.UserID()
 
 	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
 	if err != nil {

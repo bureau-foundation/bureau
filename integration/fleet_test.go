@@ -99,7 +99,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
 		t.Fatalf("unmarshal power levels: %v", err)
 	}
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := admin.UserID().String()
 	if level, ok := powerLevels.Users[adminUserID]; !ok || level != 100 {
 		t.Errorf("admin power level = %d (present=%v), want 100", level, ok)
 	}
@@ -175,7 +175,7 @@ func TestOperatorFlow(t *testing.T) {
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
 				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin:**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})
@@ -183,13 +183,9 @@ func TestOperatorFlow(t *testing.T) {
 	// Wait for the observe socket to be ready (separate from proxy sockets).
 	waitForFile(t, machine.ObserveSocket)
 
-	// Get the admin's access token for observe socket authentication.
-	credentials := loadCredentials(t)
-	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminToken == "" {
-		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
-	}
-	adminUserID := "@bureau-admin:" + testServerName
+	// Use the per-test admin's credentials for observe socket authentication.
+	adminToken := admin.AccessToken()
+	adminUserID := admin.UserID().String()
 
 	// --- Sub-test: list targets via Go library ---
 	t.Run("ListTargets", func(t *testing.T) {
@@ -460,7 +456,7 @@ func TestCrossMachineObservation(t *testing.T) {
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
 				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{"bureau-admin:**"}},
+				{Actions: []string{"observe/read-write"}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})
@@ -493,13 +489,9 @@ func TestCrossMachineObservation(t *testing.T) {
 	// Wait for the observe socket on the consumer machine.
 	waitForFile(t, consumer.ObserveSocket)
 
-	// Get admin credentials for observe socket authentication.
-	credentials := loadCredentials(t)
-	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminToken == "" {
-		t.Fatal("MATRIX_ADMIN_TOKEN missing from credential file")
-	}
-	adminUserID := "@bureau-admin:" + testServerName
+	// Use the per-test admin's credentials for observe socket authentication.
+	adminToken := admin.AccessToken()
+	adminUserID := admin.UserID().String()
 
 	// --- Sub-test: list targets from consumer shows remote principal ---
 	t.Run("ListRemoteTargets", func(t *testing.T) {

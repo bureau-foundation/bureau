@@ -211,7 +211,7 @@ func TestBootstrapScript(t *testing.T) {
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
 			"--server-name", testServerName,
-			"--admin-user", "bureau-admin",
+			"--admin-user", admin.UserID().Localpart(),
 			"--status-interval", "2s",
 			"--fleet", bootstrapFleet.Prefix,
 		)

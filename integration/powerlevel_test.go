@@ -6,7 +6,6 @@ package integration_test
 import (
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -25,7 +24,7 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	admin := adminSession(t)
 	defer admin.Close()
 
-	adminUserID := ref.MustParseUserID("@bureau-admin:" + testServerName)
+	adminUserID := admin.UserID()
 
 	// Register test users. These get default power level 0 in any room they
 	// join. The machine user will be promoted to PL 50 via room power levels.

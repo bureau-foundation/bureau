@@ -824,7 +824,7 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name 
 	t.Helper()
 
 	ctx := t.Context()
-	adminUserID := "@bureau-admin:" + testServerName
+	adminUserID := admin.UserID().String()
 	ticketServiceUserID := ticketServiceEntity.UserID().String()
 
 	invitees := append([]string{ticketServiceUserID}, additionalInvites...)

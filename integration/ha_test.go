@@ -197,21 +197,32 @@ func TestHALeaseFailover(t *testing.T) {
 	})
 
 	// Wait for someone to acquire the lease. With baseDelay=0 both
-	// machines race and the winner is non-deterministic. We identify
-	// the winner and loser from the lease holder.
-	leaseEvent := fleetWatch.WaitForEvent(t, func(event messaging.Event) bool {
+	// machines race and the winner is non-deterministic.
+	fleetWatch.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != schema.EventTypeHALease {
 			return false
 		}
 		if event.StateKey == nil || *event.StateKey != serviceLocalpart {
 			return false
 		}
-		// Accept only a lease with a valid holder that isn't expired.
-		holder, _ := event.Content["holder"].(string)
-		return holder == machineA.Name || holder == machineB.Name
+		eventHolder, _ := event.Content["holder"].(string)
+		return eventHolder == machineA.Name || eventHolder == machineB.Name
 	}, "initial HA lease acquisition")
 
-	holder, _ := leaseEvent.Content["holder"].(string)
+	// During the race both machines write competing lease claims within
+	// ~1ms. WaitForEvent may fire on the intermediate claim that was
+	// immediately overwritten by the other machine. Read the
+	// authoritative state to determine the actual winner.
+	leaseJSON, err := admin.GetStateEvent(t.Context(), fleet.FleetRoomID,
+		schema.EventTypeHALease, serviceLocalpart)
+	if err != nil {
+		t.Fatalf("get HA lease state: %v", err)
+	}
+	var lease fleetschema.HALeaseContent
+	if err := json.Unmarshal(leaseJSON, &lease); err != nil {
+		t.Fatalf("unmarshal HA lease: %v", err)
+	}
+	holder := lease.Holder
 	t.Logf("initial lease holder: %s", holder)
 
 	var winner, loser *testMachine
